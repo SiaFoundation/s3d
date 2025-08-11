@@ -1,6 +1,7 @@
 name: S3 Compatibility Tests
 on:
   workflow_call:
+  workflow_dispatch:
 
 jobs:
   test:
