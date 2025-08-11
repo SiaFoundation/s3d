@@ -11,3 +11,15 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.11
+      - name: Install Tox
+        run: apt-get install tox
+      - name: Clone test repo
+        run: git clone git@github.com:ceph/s3-tests.git
+      - name: Setup test suite
+        run: S3TEST_CONF=s3tests.conf tox run -vv --notest --conf ./s3-tests
+      - name: Run Tests
+        run: S3TEST_CONF=s3tests.conf tox run --skip-pkg-install --conf ./s3-tests
