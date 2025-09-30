@@ -15,6 +15,7 @@ type s3 struct {
 	logger *zap.Logger
 }
 
+// New creates an instance of the S3 API handler using the provided backend.
 func New(b Backend, logger *zap.Logger) http.Handler {
 	s3 := &s3{
 		logger: logger.Named("s3"),
