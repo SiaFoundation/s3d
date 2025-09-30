@@ -1,4 +1,5 @@
 name: S3 Compatibility Tests
+
 on:
   workflow_call:
   workflow_dispatch:
@@ -9,17 +10,32 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+
     steps:
       - uses: actions/checkout@v4
+
       - name: Install Python
         uses: actions/setup-python@v5
         with:
-          python-version: 3.11
-      - name: Install Tox
-        run: sudo apt-get update && sudo apt-get install -y tox
+          python-version: "3.11"
+
+      - name: Upgrade pip + install tox (v4)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "tox>=4"
+
       - name: Clone test repo
         run: git clone https://github.com/ceph/s3-tests.git
-      - name: Setup test suite
-        run: S3TEST_CONF=s3tests.conf tox run -vv --notest --conf ./s3-tests
+
+      # Create envs, resolve deps, but don't run tests yet (speeds up failure surfacing)
+      - name: Setup test suite (create envs only)
+        env:
+          S3TEST_CONF: s3tests.conf
+        run: tox run -vv --notest -c ./s3-tests
+
       - name: Run Tests
-        run: S3TEST_CONF=s3tests.conf tox run --skip-pkg-install --conf ./s3-tests
+        env:
+          S3TEST_CONF: s3tests.conf
+          # Uncomment if your target requires SigV4:
+          # S3_USE_SIGV4: "True"
+        run: tox run --skip-pkg-install -c ./s3-tests
