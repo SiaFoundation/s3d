@@ -6,7 +6,7 @@ on:
 
 jobs:
   test:
-    name: Test
+    name: Tox
     runs-on: ubuntu-latest
     permissions:
       contents: read
