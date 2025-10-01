@@ -14,6 +14,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to create logger: %v", err)
 	}
-	s3 := s3.New(testutils.NewMemoryBackend(), logger)
-	http.ListenAndServe("127.0.0.1:7777", s3)
+	s3 := s3.New(testutils.NewMemoryBackend(),
+		s3.WithHostBucketBases([]string{"localhost"}),
+		s3.WithLogger(logger))
+	http.ListenAndServe("localhost:7777", s3)
 }
