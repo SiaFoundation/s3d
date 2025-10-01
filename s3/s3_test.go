@@ -64,6 +64,10 @@ func newTester(t testing.TB, optFns ...func(*service.Options)) *s3Tester {
 			o.Region = "us-east-2"
 			o.BaseEndpoint = aws.String(fmt.Sprintf("http://localhost:%s", port))
 			o.UsePathStyle = true
+
+			// TODO: once we have authentication, we should enforce signed
+			// requests on the server and change this to use test credentials.
+			o.Credentials = aws.NewCredentialsCache(aws.AnonymousCredentials{})
 		},
 	}
 	opts = append(opts, optFns...)
