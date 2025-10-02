@@ -14,7 +14,7 @@ import (
 // an expected s3.S3Error. Unfortunately the SDK doesn't expose its internal
 // error type so reflection is not an option and we need to extract the status
 // code from the string.
-func assertS3Error(t testing.TB, expected s3.S3Error, got error) {
+func assertS3Error(t testing.TB, expected s3.Error, got error) {
 	t.Helper()
 	if got == nil {
 		t.Fatal("expected error, got nil")

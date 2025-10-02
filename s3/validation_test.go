@@ -10,7 +10,7 @@ import (
 func TestValidateBucketName(t *testing.T) {
 	type tcase struct {
 		name string
-		err  *S3Error
+		err  *Error
 	}
 
 	baseCases := []tcase{

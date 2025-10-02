@@ -6,10 +6,10 @@ import (
 	"strings"
 )
 
-// This pattern can be used to match both the entire bucket name (including period-
-// separated labels) and the individual label components, presuming you have already
-// split the string by period.
-var bucketNamePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9\.-]+)[a-z0-9]$`)
+// bucketNamePattern can be used to match both the entire bucket name (including
+// period- separated labels) and the individual label components, presuming you
+// have already split the string by period.
+var bucketNamePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]+)[a-z0-9]$`)
 
 // ValidateBucketName applies the rules from the AWS docs:
 // https://docs.aws.amazon.com/AmazonS3/latest/dev/BucketRestrictions.html#bucketnamingrules
