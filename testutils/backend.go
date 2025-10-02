@@ -2,7 +2,6 @@ package testutils
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
@@ -25,7 +24,10 @@ func NewMemoryBackend() *MemoryBackend {
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateBucket.html
 func (b *MemoryBackend) CreateBucket(ctx context.Context, name string) error {
 	if _, exists := b.buckets[name]; exists {
-		return fmt.Errorf("bucket %q already exists", name)
+		// NOTE: Since we don't have multi-user support, all buckets are always
+		// owned by the caller. If that changes, we need to extend the check and
+		// return ErrBucketExists instead.
+		return s3.ErrBucketAlreadyOwnedByYou
 	}
 	b.buckets[name] = struct{}{}
 	return nil
