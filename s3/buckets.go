@@ -34,8 +34,26 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, bucket string) 
 	}
 }
 
+// createBucket handles PUT Bucket requests.
+//
+// https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateBucket.html
+func (s *s3) createBucket(w http.ResponseWriter, r *http.Request, bucket string) error {
+	s.logger.Debug("creating bucket", zap.String("bucket", bucket))
+
+	// TODO: Validate bucket name once we have proper errors to return
+
+	if err := s.backend.CreateBucket(r.Context(), bucket); err != nil {
+		return err
+	}
+
+	w.Header().Set("Location", "/"+bucket)
+	return nil
+}
+
 // listBuckets handles the top-level route with no bucket or object path
 // segments.
+//
+// https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListBuckets.html
 func (s *s3) listBuckets(w http.ResponseWriter, r *http.Request) error {
 	s.logger.Debug("listing buckets")
 
@@ -50,17 +68,4 @@ func (s *s3) listBuckets(w http.ResponseWriter, r *http.Request) error {
 		Owner:   globalUserInfo,
 	}
 	return writeXMLResponse(w, resp)
-}
-
-func (s *s3) createBucket(w http.ResponseWriter, r *http.Request, bucket string) error {
-	s.logger.Debug("creating bucket", zap.String("bucket", bucket))
-
-	// TODO: Validate bucket name once we have proper errors to return
-
-	if err := s.backend.CreateBucket(r.Context(), bucket); err != nil {
-		return err
-	}
-
-	w.Header().Set("Location", "/"+bucket)
-	return nil
 }
