@@ -22,6 +22,7 @@ func NewMemoryBackend() *MemoryBackend {
 
 // CreateBucket creates a new bucket if it doesn't exist yet and returns an
 // error otherwise.
+// https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateBucket.html
 func (b *MemoryBackend) CreateBucket(ctx context.Context, name string) error {
 	if _, exists := b.buckets[name]; exists {
 		return fmt.Errorf("bucket %q already exists", name)
@@ -31,6 +32,7 @@ func (b *MemoryBackend) CreateBucket(ctx context.Context, name string) error {
 }
 
 // ListBuckets lists all available buckets.
+// https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListBuckets.html
 func (b *MemoryBackend) ListBuckets(ctx context.Context) ([]s3.BucketInfo, error) {
 	var buckets []s3.BucketInfo
 	for name := range b.buckets {

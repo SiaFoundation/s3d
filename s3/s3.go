@@ -121,6 +121,8 @@ func (s *s3) hostBucketBaseMiddleware(handler http.Handler) http.Handler {
 // The operation for most of the core functionality is built around HTTP
 // verbs, but outside the core functionality, the clean separation starts
 // to degrade, especially around multipart uploads.
+//
+// https://docs.aws.amazon.com/AmazonS3/latest/API/API_Operations_Amazon_Simple_Storage_Service.html
 func (s *s3) routeBase(w http.ResponseWriter, r *http.Request) {
 	var (
 		path   = strings.TrimPrefix(r.URL.Path, "/")
