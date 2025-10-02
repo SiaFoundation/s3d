@@ -30,7 +30,7 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, bucket string) 
 			return errors.New("createObjectBrowserUpload is not implemented")
 		}
 	default:
-		panic("TODO: implement S3 compliant error handling")
+		return ErrMethodNotAllowed
 	}
 }
 
@@ -40,7 +40,9 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, bucket string) 
 func (s *s3) createBucket(w http.ResponseWriter, r *http.Request, bucket string) error {
 	s.logger.Debug("creating bucket", zap.String("bucket", bucket))
 
-	// TODO: Validate bucket name once we have proper errors to return
+	if err := ValidateBucketName(bucket); err != nil {
+		return err
+	}
 
 	if err := s.backend.CreateBucket(r.Context(), bucket); err != nil {
 		return err

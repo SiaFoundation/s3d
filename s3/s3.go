@@ -13,7 +13,11 @@ import (
 // Backend defines the interface for an S3 backend that data uploaded via the S3
 // API will be stored in.
 type Backend interface {
+	// CreateBucket creates a new bucket with the given name. If the bucket
+	// already exists, ErrBucketAlreadyExists must be returned.
 	CreateBucket(ctx context.Context, name string) error
+
+	// ListBuckets lists all available buckets.
 	ListBuckets(ctx context.Context) ([]BucketInfo, error)
 }
 
@@ -170,7 +174,7 @@ func (s *s3) routeBase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		panic("TODO: implement proper error handling")
+		writeErrorResponse(w, err)
 	}
 }
 
