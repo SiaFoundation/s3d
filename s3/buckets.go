@@ -25,7 +25,7 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, bucket string) 
 		return errors.New("headBucket is not implemented")
 	case "POST":
 		if _, ok := r.URL.Query()["delete"]; ok {
-			return errors.New("deleteBucket is not implemented")
+			return errors.New("deleteMulti is not implemented")
 		} else {
 			return errors.New("createObjectBrowserUpload is not implemented")
 		}
