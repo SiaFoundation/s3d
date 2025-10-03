@@ -40,7 +40,16 @@ func (t *s3Tester) ListBuckets(ctx context.Context) ([]types.Bucket, error) {
 func newTester(t testing.TB, optFns ...func(*service.Options)) *s3Tester {
 	t.Helper()
 
+	const (
+		accessKeyID     = "AKIA7GQ3XN52WQLYDHZP"
+		secretAccessKey = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+	)
+
 	backend := testutils.NewMemoryBackend()
+	if err := backend.AddAccessKey(t.Context(), accessKeyID, secretAccessKey); err != nil {
+		t.Fatal(err)
+	}
+
 	handler := s3.New(backend,
 		s3.WithHostBucketBases([]string{"localhost"}),
 		s3.WithLogger(zaptest.NewLogger(t)))
@@ -62,13 +71,13 @@ func newTester(t testing.TB, optFns ...func(*service.Options)) *s3Tester {
 
 	opts := []func(*service.Options){
 		func(o *service.Options) {
-			o.Region = "us-east-2"
+			o.Region = "us-east-1"
 			o.BaseEndpoint = aws.String(fmt.Sprintf("http://localhost:%s", port))
 			o.UsePathStyle = true
 			o.Credentials = aws.NewCredentialsCache(&credentials.StaticCredentialsProvider{
 				Value: aws.Credentials{
-					AccessKeyID:     "AKIA7GQ3XN52WQLYDHZP",
-					SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+					AccessKeyID:     accessKeyID,
+					SecretAccessKey: secretAccessKey,
 				},
 			})
 		},

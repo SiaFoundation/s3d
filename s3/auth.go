@@ -18,9 +18,13 @@ const (
 	// The payload integrity mechanism that was used.
 	HeaderXAMZContentSHA256 = "X-Amz-Content-Sha256"
 
-	// The date and time when the signature was calculated. The HTTP Date can
-	// also be used but X-AMZ-Date takes precedence.
+	// The date and time when the signature was calculated. Takes precedence
+	// over HeaderDate.
 	HeaderXAMZDate = "X-Amz-Date"
+
+	// HeaderDate is the standard HTTP "Date" header. It is used if
+	// HeaderXAMZDate is not present.
+	HeaderDate = "Date"
 )
 
 // The following constants define the supported "Authorization" header
