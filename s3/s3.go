@@ -68,6 +68,10 @@ func New(b Backend, opts ...Option) http.Handler {
 		handler = s3.hostBucketBaseMiddleware(handler)
 	}
 
+	// authentication middleware
+	// NOTE: This must be the outermost middleware
+	handler = s3.authMiddleware(handler)
+
 	return handler
 }
 
