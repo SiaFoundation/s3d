@@ -34,7 +34,7 @@ func (b *MemoryBackend) AddAccessKey(ctx context.Context, accessKeyID, secretAcc
 // CreateBucket creates a new bucket if it doesn't exist yet and returns an
 // error otherwise.
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateBucket.html
-func (b *MemoryBackend) CreateBucket(ctx context.Context, name string) error {
+func (b *MemoryBackend) CreateBucket(ctx context.Context, accessKeyID, name string) error {
 	if _, exists := b.buckets[name]; exists {
 		// NOTE: Since we don't have multi-user support, all buckets are always
 		// owned by the caller. If that changes, we need to extend the check and
@@ -47,7 +47,7 @@ func (b *MemoryBackend) CreateBucket(ctx context.Context, name string) error {
 
 // ListBuckets lists all available buckets.
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListBuckets.html
-func (b *MemoryBackend) ListBuckets(ctx context.Context) ([]s3.BucketInfo, error) {
+func (b *MemoryBackend) ListBuckets(ctx context.Context, accessKeyID string) ([]s3.BucketInfo, error) {
 	var buckets []s3.BucketInfo
 	for name := range b.buckets {
 		buckets = append(buckets, s3.BucketInfo{
