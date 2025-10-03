@@ -11,6 +11,7 @@ import (
 	"github.com/SiaFoundation/s3d/testutils"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	service "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"go.uber.org/zap/zaptest"
@@ -64,10 +65,12 @@ func newTester(t testing.TB, optFns ...func(*service.Options)) *s3Tester {
 			o.Region = "us-east-2"
 			o.BaseEndpoint = aws.String(fmt.Sprintf("http://localhost:%s", port))
 			o.UsePathStyle = true
-
-			// TODO: once we have authentication, we should enforce signed
-			// requests on the server and change this to use test credentials.
-			o.Credentials = aws.NewCredentialsCache(aws.AnonymousCredentials{})
+			o.Credentials = aws.NewCredentialsCache(&credentials.StaticCredentialsProvider{
+				Value: aws.Credentials{
+					AccessKeyID:     "AKIA7GQ3XN52WQLYDHZP",
+					SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+				},
+			})
 		},
 	}
 	opts = append(opts, optFns...)

@@ -47,7 +47,30 @@ const (
 	ContentStreamingAWS4ECDSAP256SHA256PayloadTrailer = "STREAMING-AWS4-ECDSA-P256-SHA256-PAYLOAD-TRAILER"
 )
 
-func (s *s3) authMiddleware(handler http.Handler) http.Handler {
+// authenticatedHandler is like http.Handler but includes the access key ID of
+// the authenticated user.
+type authenticatedHandler interface {
+	ServeHTTP(w http.ResponseWriter, req *http.Request, accessKeyID string)
+}
+
+// authenticatedHandlerFunc is an adapter to allow the use of ordinary functions
+// as authenticated handlers. If f is a function with the appropriate signature,
+// authenticatedHandlerFunc(f) is an authenticated handler that calls f.
+type authenticatedHandlerFunc func(http.ResponseWriter, *http.Request, string)
+
+// ServeHTTP calls f(w, r, accessKeyID).
+func (f authenticatedHandlerFunc) ServeHTTP(w http.ResponseWriter, r *http.Request, accessKeyID string) {
+	f(w, r, accessKeyID)
+}
+
+// authMiddleware is an HTTP middleware that authenticates requests using AWS v4
+// signing. If authentication is successful, the wrapped handler is called with
+// the access key ID of the authenticated user.
+// - If authentication fails, an error response is sent and the wrapped handler
+// is not called.
+// - If the request is not signed, the wrapped handler is called with an empty
+// access key ID, indicating an anonymous request.
+func (s *s3) authMiddleware(handler authenticatedHandler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, rq *http.Request) {
 		s.logger.Debug("authenticating request",
 			zap.String("method", rq.Method),
@@ -55,6 +78,8 @@ func (s *s3) authMiddleware(handler http.Handler) http.Handler {
 			zap.String(HeaderXAMZContentSHA256, rq.Header.Get(HeaderXAMZContentSHA256)),
 			zap.String(HeaderXAMZDate, rq.Header.Get(HeaderXAMZDate)))
 
-		handler.ServeHTTP(w, rq)
+		var accessKeyID string // TODO: extract from request
+
+		handler.ServeHTTP(w, rq, accessKeyID)
 	})
 }

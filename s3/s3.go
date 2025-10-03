@@ -59,7 +59,7 @@ func New(b Backend, opts ...Option) http.Handler {
 	s3.logger = s3.logger.Named("s3")
 
 	// base router
-	handler := http.Handler(http.HandlerFunc(s3.routeBase))
+	handler := authenticatedHandler(authenticatedHandlerFunc(s3.routeBase))
 
 	// TODO: We might have to wrap the base router in a CORS middleware
 
@@ -69,15 +69,12 @@ func New(b Backend, opts ...Option) http.Handler {
 	}
 
 	// authentication middleware
-	// NOTE: This must be the outermost middleware
-	handler = s3.authMiddleware(handler)
-
-	return handler
+	return s3.authMiddleware(handler)
 }
 
 // hostBucketBaseMiddleware forces the server to use VirtualHost-style bucket URLs:
 // https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingBucket.html
-func (s *s3) hostBucketBaseMiddleware(handler http.Handler) http.Handler {
+func (s *s3) hostBucketBaseMiddleware(handler authenticatedHandler) authenticatedHandler {
 	bases := make([]string, len(s.hostBucketBases))
 	for idx, base := range s.hostBucketBases {
 		bases[idx] = "." + strings.Trim(base, ".")
@@ -97,7 +94,7 @@ func (s *s3) hostBucketBaseMiddleware(handler http.Handler) http.Handler {
 		return "", false
 	}
 
-	return http.HandlerFunc(func(w http.ResponseWriter, rq *http.Request) {
+	return authenticatedHandlerFunc(func(w http.ResponseWriter, rq *http.Request, accessKeyID string) {
 		host, _, err := net.SplitHostPort(rq.Host)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -106,7 +103,7 @@ func (s *s3) hostBucketBaseMiddleware(handler http.Handler) http.Handler {
 
 		bucket, ok := matchBucket(host)
 		if !ok {
-			handler.ServeHTTP(w, rq)
+			handler.ServeHTTP(w, rq, accessKeyID)
 			return
 		}
 		p := rq.URL.Path
@@ -114,7 +111,7 @@ func (s *s3) hostBucketBaseMiddleware(handler http.Handler) http.Handler {
 		if p != "/" {
 			rq.URL.Path += p
 		}
-		handler.ServeHTTP(w, rq)
+		handler.ServeHTTP(w, rq, accessKeyID)
 	})
 }
 
@@ -131,7 +128,7 @@ func (s *s3) hostBucketBaseMiddleware(handler http.Handler) http.Handler {
 // to degrade, especially around multipart uploads.
 //
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_Operations_Amazon_Simple_Storage_Service.html
-func (s *s3) routeBase(w http.ResponseWriter, r *http.Request) {
+func (s *s3) routeBase(w http.ResponseWriter, r *http.Request, accessKeyID string) {
 	var (
 		path   = strings.TrimPrefix(r.URL.Path, "/")
 		parts  = strings.SplitN(path, "/", 2)
