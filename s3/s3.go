@@ -13,12 +13,15 @@ import (
 // Backend defines the interface for an S3 backend that data uploaded via the S3
 // API will be stored in.
 type Backend interface {
-	// CreateBucket creates a new bucket with the given name. If the bucket
-	// already exists, ErrBucketAlreadyExists must be returned.
-	CreateBucket(ctx context.Context, name string) error
+	// CreateBucket creates a new bucket with the given name for the user
+	// identified by the given access key. If the bucket already exists,
+	// [ErrBucketAlreadyExists] or [ErrBucketAlreadyOwnedByYou] must be
+	// returned depending on the ownership of the bucket.
+	CreateBucket(ctx context.Context, accessKeyID, name string) error
 
-	// ListBuckets lists all available buckets.
-	ListBuckets(ctx context.Context) ([]BucketInfo, error)
+	// ListBuckets lists all available buckets for the user identified by the
+	// given access key.
+	ListBuckets(ctx context.Context, accessKeyID string) ([]BucketInfo, error)
 }
 
 type s3 struct {
@@ -167,9 +170,9 @@ func (s *s3) routeBase(w http.ResponseWriter, r *http.Request, accessKeyID strin
 	} else if bucket != "" && object != "" {
 		err = s.routeObject(w, r)
 	} else if bucket != "" {
-		err = s.routeBucket(w, r, bucket)
+		err = s.routeBucket(w, r, accessKeyID, bucket)
 	} else if r.Method == "GET" {
-		err = s.listBuckets(w, r)
+		err = s.listBuckets(w, r, accessKeyID)
 	} else {
 		http.NotFound(w, r)
 		return
