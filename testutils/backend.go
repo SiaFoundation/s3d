@@ -2,6 +2,7 @@ package testutils
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
@@ -9,14 +10,25 @@ import (
 
 // MemoryBackend is an in-memory implementation of the s3 backend for testing.
 type MemoryBackend struct {
-	buckets map[string]struct{}
+	buckets    map[string]struct{}
+	accessKeys map[string]string
 }
 
 // NewMemoryBackend creates a new MemoryBackend.
 func NewMemoryBackend() *MemoryBackend {
 	return &MemoryBackend{
-		buckets: make(map[string]struct{}),
+		accessKeys: make(map[string]string),
+		buckets:    make(map[string]struct{}),
 	}
+}
+
+// AddAccessKey adds a new access key to the backend for authentication.
+func (b *MemoryBackend) AddAccessKey(ctx context.Context, accessKeyID, secretAccessKey string) error {
+	if _, exists := b.accessKeys[accessKeyID]; exists {
+		return errors.New("access key already exists")
+	}
+	b.accessKeys[accessKeyID] = secretAccessKey
+	return nil
 }
 
 // CreateBucket creates a new bucket if it doesn't exist yet and returns an
