@@ -97,7 +97,7 @@ func (s *s3) hostBucketBaseMiddleware(handler authenticatedHandler) authenticate
 		return "", false
 	}
 
-	return authenticatedHandlerFunc(func(w http.ResponseWriter, rq *http.Request, accessKeyID string) {
+	return authenticatedHandlerFunc(func(w http.ResponseWriter, rq *http.Request, accessKeyID *string) {
 		host, _, err := net.SplitHostPort(rq.Host)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -131,7 +131,7 @@ func (s *s3) hostBucketBaseMiddleware(handler authenticatedHandler) authenticate
 // to degrade, especially around multipart uploads.
 //
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_Operations_Amazon_Simple_Storage_Service.html
-func (s *s3) routeBase(w http.ResponseWriter, r *http.Request, accessKeyID string) {
+func (s *s3) routeBase(w http.ResponseWriter, r *http.Request, accessKeyID *string) {
 	var (
 		path   = strings.TrimPrefix(r.URL.Path, "/")
 		parts  = strings.SplitN(path, "/", 2)
