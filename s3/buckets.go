@@ -9,7 +9,12 @@ import (
 
 // routeBucket handles URLs that contain only a bucket path segment, not an
 // object path segment.
-func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID, bucket string) error {
+func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket string) error {
+	validatedKey, err := assertAuthenticated(accessKeyID)
+	if err != nil {
+		return err
+	}
+
 	switch r.Method {
 	case "GET":
 		if _, ok := r.URL.Query()["location"]; ok {
@@ -18,7 +23,7 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID, bu
 			return errors.New("listBucket is not implemented")
 		}
 	case "PUT":
-		return s.createBucket(w, r, accessKeyID, bucket)
+		return s.createBucket(w, r, validatedKey, bucket)
 	case "DELETE":
 		return errors.New("deleteBucket is not implemented")
 	case "HEAD":
@@ -56,10 +61,15 @@ func (s *s3) createBucket(w http.ResponseWriter, r *http.Request, accessKeyID, b
 // segments.
 //
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListBuckets.html
-func (s *s3) listBuckets(w http.ResponseWriter, r *http.Request, accessKeyID string) error {
+func (s *s3) listBuckets(w http.ResponseWriter, r *http.Request, accessKeyID *string) error {
 	s.logger.Debug("listing buckets")
 
-	buckets, err := s.backend.ListBuckets(r.Context(), accessKeyID)
+	validatedKey, err := assertAuthenticated(accessKeyID)
+	if err != nil {
+		return err
+	}
+
+	buckets, err := s.backend.ListBuckets(r.Context(), validatedKey)
 	if err != nil {
 		return err
 	}

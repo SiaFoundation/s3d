@@ -54,16 +54,16 @@ const (
 // authenticatedHandler is like http.Handler but includes the access key ID of
 // the authenticated user.
 type authenticatedHandler interface {
-	ServeHTTP(w http.ResponseWriter, req *http.Request, accessKeyID string)
+	ServeHTTP(w http.ResponseWriter, req *http.Request, accessKeyID *string)
 }
 
 // authenticatedHandlerFunc is an adapter to allow the use of ordinary functions
 // as authenticated handlers. If f is a function with the appropriate signature,
 // authenticatedHandlerFunc(f) is an authenticated handler that calls f.
-type authenticatedHandlerFunc func(http.ResponseWriter, *http.Request, string)
+type authenticatedHandlerFunc func(http.ResponseWriter, *http.Request, *string)
 
 // ServeHTTP calls f(w, r, accessKeyID).
-func (f authenticatedHandlerFunc) ServeHTTP(w http.ResponseWriter, r *http.Request, accessKeyID string) {
+func (f authenticatedHandlerFunc) ServeHTTP(w http.ResponseWriter, r *http.Request, accessKeyID *string) {
 	f(w, r, accessKeyID)
 }
 
@@ -82,8 +82,19 @@ func (s *s3) authMiddleware(handler authenticatedHandler) http.Handler {
 			zap.String(HeaderXAMZContentSHA256, rq.Header.Get(HeaderXAMZContentSHA256)),
 			zap.String(HeaderXAMZDate, rq.Header.Get(HeaderXAMZDate)))
 
-		var accessKeyID string // TODO: extract from request
+		var accessKeyID *string // TODO: extract from request
 
 		handler.ServeHTTP(w, rq, accessKeyID)
 	})
+}
+
+// assertAuthenticated checks if the accessKeyID is not nil, returning an error
+// if it is. If the accessKeyID is valid, it is returned as a string. This adds
+// a layer of safety to ensure that handlers that require authentication are not
+// accidentally called with an empty accessKeyID.
+func assertAuthenticated(accessKeyID *string) (string, error) {
+	if accessKeyID == nil {
+		return "", ErrAccessDenied
+	}
+	return *accessKeyID, nil
 }
