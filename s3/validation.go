@@ -4,6 +4,8 @@ import (
 	"net"
 	"regexp"
 	"strings"
+
+	"github.com/SiaFoundation/s3d/s3/s3errs"
 )
 
 // bucketNamePattern can be used to match both the entire bucket name (including
@@ -23,14 +25,14 @@ var bucketNamePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]+)[a-z0-9]$`)
 // https://tools.ietf.org/html/rfc5890#section-2.3.1
 func ValidateBucketName(name string) error {
 	if len(name) < 3 || len(name) > 63 {
-		return ErrInvalidBucketName
+		return s3errs.ErrInvalidBucketName
 	}
 	if !bucketNamePattern.MatchString(name) {
-		return ErrInvalidBucketName
+		return s3errs.ErrInvalidBucketName
 	}
 
 	if net.ParseIP(name) != nil {
-		return ErrInvalidBucketName
+		return s3errs.ErrInvalidBucketName
 	}
 
 	// Bucket names must be a series of one or more labels. Adjacent labels are
@@ -39,7 +41,7 @@ func ValidateBucketName(name string) error {
 	// lowercase letter or a number.
 	for label := range strings.SplitSeq(name, ".") {
 		if !bucketNamePattern.MatchString(label) {
-			return ErrInvalidBucketName
+			return s3errs.ErrInvalidBucketName
 		}
 	}
 	return nil

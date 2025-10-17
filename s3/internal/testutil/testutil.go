@@ -1,13 +1,16 @@
-package s3_test
+package testutil
 
 import (
 	"context"
 	"fmt"
 	"net"
 	"net/http"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/SiaFoundation/s3d/s3"
+	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/testutils"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -37,7 +40,7 @@ func (t *s3Tester) ListBuckets(ctx context.Context) ([]types.Bucket, error) {
 	return resp.Buckets, err
 }
 
-func newTester(t testing.TB, optFns ...func(*service.Options)) *s3Tester {
+func NewTester(t testing.TB, optFns ...func(*service.Options)) *s3Tester {
 	t.Helper()
 
 	const (
@@ -86,5 +89,33 @@ func newTester(t testing.TB, optFns ...func(*service.Options)) *s3Tester {
 
 	return &s3Tester{
 		client: service.NewFromConfig(cfg, opts...),
+	}
+}
+
+// AssertS3Error is a helper to check an error returned from the AWS SDK against
+// an expected s3.S3Error. Unfortunately the SDK doesn't expose its internal
+// error type so reflection is not an option and we need to extract the status
+// code from the string.
+func AssertS3Error(t testing.TB, expected s3errs.Error, got error) {
+	t.Helper()
+	if got == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	// check status code
+	re := regexp.MustCompile(`StatusCode: (\d{3})`)
+	matches := re.FindStringSubmatch(got.Error())
+	if len(matches) != 2 {
+		t.Fatalf("expected error to contain status code, got: %v", got)
+	}
+	var code int
+	fmt.Sscanf(matches[1], "%d", &code)
+	if code != expected.HTTPStatus {
+		t.Fatalf("expected status code %d, got %d", expected.HTTPStatus, code)
+	}
+
+	// check error
+	if !strings.Contains(got.Error(), expected.Code) {
+		t.Fatalf("expected error code %q, got %q", expected.Code, got.Error())
 	}
 }
