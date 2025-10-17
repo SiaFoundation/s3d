@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
+	"github.com/SiaFoundation/s3d/s3/s3errs"
 )
 
 // MemoryBackend is an in-memory implementation of the s3 backend for testing.
@@ -39,7 +40,7 @@ func (b *MemoryBackend) CreateBucket(ctx context.Context, accessKeyID, name stri
 		// NOTE: Since we don't have multi-user support, all buckets are always
 		// owned by the caller. If that changes, we need to extend the check and
 		// return ErrBucketExists instead.
-		return s3.ErrBucketAlreadyOwnedByYou
+		return s3errs.ErrBucketAlreadyOwnedByYou
 	}
 	b.buckets[name] = struct{}{}
 	return nil

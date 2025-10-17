@@ -1,8 +1,6 @@
-package s3
+package s3errs
 
 import (
-	"encoding/xml"
-	"errors"
 	"fmt"
 	"net/http"
 )
@@ -159,37 +157,3 @@ var (
 	ErrUserKeyMustBeSpecified                         = Error{"UserKeyMustBeSpecified", "Bucket POST must contain the specified form field (check field order).", http.StatusBadRequest}
 	ErrInvalidTag                                     = Error{"InvalidTag", "Tag input is invalid (e.g., duplicates, too long, or system tags).", http.StatusBadRequest}
 )
-
-// ErrorResponse is the standard XML error response returned by S3.
-type ErrorResponse struct {
-	XMLName xml.Name `xml:"Error"`
-
-	Code      string `xml:"Code"`
-	Message   string `xml:"Message,omitempty"`
-	RequestID string `xml:"RequestId,omitempty"`
-	HostID    string `xml:"HostId,omitempty"`
-}
-
-// writeErrorResponse writes an error response to the ResponseWriter. The
-// provided err must not be nil. If err is not an [Error], [ErrInternalError]
-// is used.
-func writeErrorResponse(w http.ResponseWriter, err error) {
-	if err == nil {
-		panic("WriteErrorResponse called with nil error")
-	}
-
-	var s3Err *Error
-	if inner := new(Error); errors.As(err, inner) {
-		s3Err = inner
-	} else {
-		s3Err = &ErrInternalError
-	}
-
-	w.WriteHeader(s3Err.HTTPStatus)
-	writeXMLResponse(w, ErrorResponse{
-		Code:      s3Err.Code,
-		Message:   s3Err.Description,
-		RequestID: "", // unused right now (AWS uses it for diagnostic purposes)
-		HostID:    "", // unused right now (AWS uses it to identify their server)
-	})
-}

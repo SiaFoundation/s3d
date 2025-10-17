@@ -2,11 +2,12 @@ package s3
 
 import (
 	"context"
-	"encoding/xml"
 	"net"
 	"net/http"
 	"strings"
 
+	"github.com/SiaFoundation/s3d/s3/auth"
+	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"go.uber.org/zap"
 )
 
@@ -62,7 +63,7 @@ func New(b Backend, opts ...Option) http.Handler {
 	s3.logger = s3.logger.Named("s3")
 
 	// base router
-	handler := authenticatedHandler(authenticatedHandlerFunc(s3.routeBase))
+	handler := auth.AuthenticatedHandler(auth.AuthenticatedHandlerFunc(s3.routeBase))
 
 	// TODO: We might have to wrap the base router in a CORS middleware
 
@@ -75,9 +76,36 @@ func New(b Backend, opts ...Option) http.Handler {
 	return s3.authMiddleware(handler)
 }
 
+// authMiddleware is an HTTP middleware that authenticates requests using AWS v4
+// signing. If authentication is successful, the wrapped handler is called with
+// the access key ID of the authenticated user.
+// - If authentication fails, an error response is sent and the wrapped handler
+// is not called.
+// - If the request is not signed, the wrapped handler is called with an empty
+// access key ID, indicating an anonymous request.
+func (s s3) authMiddleware(handler auth.AuthenticatedHandler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		s.logger.Debug("authenticating request",
+			zap.String("method", req.Method),
+			zap.String(auth.HeaderAuthorization, req.Header.Get(auth.HeaderAuthorization)),
+			zap.String(auth.HeaderXAMZContentSHA256, req.Header.Get(auth.HeaderXAMZContentSHA256)),
+			zap.String(auth.HeaderXAMZDate, req.Header.Get(auth.HeaderXAMZDate)))
+
+		var accessKeyID *string
+		if req.Header.Get(auth.HeaderAuthorization) != "" {
+			if err := auth.HandleAuth(req); err != nil {
+				writeErrorResponse(w, err)
+				return
+			}
+		}
+
+		handler.ServeHTTP(w, req, accessKeyID)
+	})
+}
+
 // hostBucketBaseMiddleware forces the server to use VirtualHost-style bucket URLs:
 // https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingBucket.html
-func (s *s3) hostBucketBaseMiddleware(handler authenticatedHandler) authenticatedHandler {
+func (s *s3) hostBucketBaseMiddleware(handler auth.AuthenticatedHandler) auth.AuthenticatedHandler {
 	bases := make([]string, len(s.hostBucketBases))
 	for idx, base := range s.hostBucketBases {
 		bases[idx] = "." + strings.Trim(base, ".")
@@ -97,7 +125,7 @@ func (s *s3) hostBucketBaseMiddleware(handler authenticatedHandler) authenticate
 		return "", false
 	}
 
-	return authenticatedHandlerFunc(func(w http.ResponseWriter, rq *http.Request, accessKeyID *string) {
+	return auth.AuthenticatedHandlerFunc(func(w http.ResponseWriter, rq *http.Request, accessKeyID *string) {
 		host, _, err := net.SplitHostPort(rq.Host)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -225,6 +253,17 @@ func (s *s3) routeObject(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
+// assertAuth checks if the accessKeyID is not nil, returning an error if it is.
+// If the accessKeyID is valid, it is returned as a string. This adds a layer of
+// safety to ensure that handlers that require authentication are not
+// accidentally called with an empty accessKeyID.
+func assertAuth(accessKeyID *string) (string, error) {
+	if accessKeyID == nil {
+		return "", s3errs.ErrAccessDenied
+	}
+	return *accessKeyID, nil
+}
+
 func versionFromQuery(qv []string) string {
 	// The versionId subresource may be the string 'null'; this has been
 	// observed coming in via Boto. The S3 documentation for the "DELETE
@@ -235,14 +274,4 @@ func versionFromQuery(qv []string) string {
 		return qv[0]
 	}
 	return ""
-}
-
-func writeXMLResponse(w http.ResponseWriter, resp any) error {
-	w.Header().Set("Content-Type", "application/xml")
-	w.Write([]byte(xml.Header))
-
-	xe := xml.NewEncoder(w)
-	xe.Indent("", "  ")
-
-	return xe.Encode(resp)
 }

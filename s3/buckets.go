@@ -4,13 +4,14 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"go.uber.org/zap"
 )
 
 // routeBucket handles URLs that contain only a bucket path segment, not an
 // object path segment.
 func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket string) error {
-	validatedKey, err := assertAuthenticated(accessKeyID)
+	validatedKey, err := assertAuth(accessKeyID)
 	if err != nil {
 		return err
 	}
@@ -35,7 +36,7 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *st
 			return errors.New("createObjectBrowserUpload is not implemented")
 		}
 	default:
-		return ErrMethodNotAllowed
+		return s3errs.ErrMethodNotAllowed
 	}
 }
 
@@ -64,7 +65,7 @@ func (s *s3) createBucket(w http.ResponseWriter, r *http.Request, accessKeyID, b
 func (s *s3) listBuckets(w http.ResponseWriter, r *http.Request, accessKeyID *string) error {
 	s.logger.Debug("listing buckets")
 
-	validatedKey, err := assertAuthenticated(accessKeyID)
+	validatedKey, err := assertAuth(accessKeyID)
 	if err != nil {
 		return err
 	}
