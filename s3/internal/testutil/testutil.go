@@ -20,11 +20,11 @@ import (
 	"go.uber.org/zap/zaptest"
 )
 
-type s3Tester struct {
+type S3Tester struct {
 	client *service.Client
 }
 
-func (t *s3Tester) CreateBucket(ctx context.Context, bucket string) error {
+func (t *S3Tester) CreateBucket(ctx context.Context, bucket string) error {
 	_, err := t.client.CreateBucket(ctx, &service.CreateBucketInput{
 		Bucket:                    aws.String(bucket),
 		CreateBucketConfiguration: &types.CreateBucketConfiguration{},
@@ -32,7 +32,7 @@ func (t *s3Tester) CreateBucket(ctx context.Context, bucket string) error {
 	return err
 }
 
-func (t *s3Tester) ListBuckets(ctx context.Context) ([]types.Bucket, error) {
+func (t *S3Tester) ListBuckets(ctx context.Context) ([]types.Bucket, error) {
 	resp, err := t.client.ListBuckets(ctx, &service.ListBucketsInput{})
 	if err != nil {
 		return nil, err
@@ -40,7 +40,7 @@ func (t *s3Tester) ListBuckets(ctx context.Context) ([]types.Bucket, error) {
 	return resp.Buckets, err
 }
 
-func NewTester(t testing.TB, optFns ...func(*service.Options)) *s3Tester {
+func NewTester(t testing.TB, optFns ...func(*service.Options)) *S3Tester {
 	t.Helper()
 
 	const (
@@ -87,7 +87,7 @@ func NewTester(t testing.TB, optFns ...func(*service.Options)) *s3Tester {
 	}
 	opts = append(opts, optFns...)
 
-	return &s3Tester{
+	return &S3Tester{
 		client: service.NewFromConfig(cfg, opts...),
 	}
 }

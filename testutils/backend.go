@@ -58,3 +58,11 @@ func (b *MemoryBackend) ListBuckets(ctx context.Context, accessKeyID string) ([]
 	}
 	return buckets, nil
 }
+
+// LoadSecret loads the secret access key for the given access key ID.
+func (b *MemoryBackend) LoadSecret(ctx context.Context, accessKeyID string) (string, error) {
+	if secret, exists := b.accessKeys[accessKeyID]; exists {
+		return secret, nil
+	}
+	return "", s3errs.ErrInvalidAccessKeyId
+}

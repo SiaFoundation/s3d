@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/SiaFoundation/s3d/s3/auth"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
@@ -14,6 +15,8 @@ import (
 // Backend defines the interface for an S3 backend that data uploaded via the S3
 // API will be stored in.
 type Backend interface {
+	auth.KeyStore
+
 	// CreateBucket creates a new bucket with the given name for the user
 	// identified by the given access key. If the bucket already exists,
 	// [ErrBucketAlreadyExists] or [ErrBucketAlreadyOwnedByYou] must be
@@ -93,10 +96,17 @@ func (s s3) authMiddleware(handler auth.AuthenticatedHandler) http.Handler {
 
 		var accessKeyID *string
 		if req.Header.Get(auth.HeaderAuthorization) != "" {
-			if err := auth.HandleAuth(req); err != nil {
+			// NOTE: An empty region is passed here to indicate that every
+			// region is allowed. If we want to support regions in the future,
+			// we need to pass a user-configured region here.
+			region := ""
+
+			akid, err := auth.HandleAuth(req, s.backend, region, time.Now())
+			if err != nil {
 				writeErrorResponse(w, err)
 				return
 			}
+			accessKeyID = &akid
 		}
 
 		handler.ServeHTTP(w, req, accessKeyID)

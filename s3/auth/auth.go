@@ -3,6 +3,7 @@ package auth
 import (
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 )
@@ -69,35 +70,36 @@ func (f AuthenticatedHandlerFunc) ServeHTTP(w http.ResponseWriter, r *http.Reque
 	f(w, r, accessKeyID)
 }
 
-func HandleAuth(req *http.Request) error {
+// HandleAuth inspects the request to determine the authentication type, verfies
+// the signature returns the used access key ID.
+func HandleAuth(req *http.Request, store KeyStore, region string, now time.Time) (string, error) {
 	authHeader := req.Header.Get(HeaderAuthorization)
 	if strings.HasPrefix(authHeader, AuthorizationAWS4HMACSHA256) {
-		return handleAuthV4(req)
+		return handleAuthV4(req, store, region, now)
 	} else if strings.HasPrefix(authHeader, AuthorizationAWS4ECDSAP256SHA256) {
 		return handleAuthV4a(req)
 	} else {
-		return s3errs.ErrUnsupportedSignature
+		return "", s3errs.ErrUnsupportedSignature
 	}
 }
 
 // handleAuthV4 handles AWS Signature Version 4 authentication using HMAC.
-func handleAuthV4(req *http.Request) error {
+func handleAuthV4(req *http.Request, store KeyStore, region string, now time.Time) (string, error) {
 	switch req.Header.Get(HeaderXAMZContentSHA256) {
 	case ContentUnsignedPayload:
-		return s3errs.ErrNotImplemented
+		return "", s3errs.ErrNotImplemented
 	case ContentStreamingUnsignedPayloadTrailer:
-		return s3errs.ErrNotImplemented
+		return "", s3errs.ErrNotImplemented
 	case ContentStreamingAWS4HMACSHA256Payload:
-		return s3errs.ErrNotImplemented
+		return "", s3errs.ErrNotImplemented
 	case ContentStreamingAWS4HMACSHA256PayloadTrailer:
-		return s3errs.ErrNotImplemented
+		return "", s3errs.ErrNotImplemented
 	default:
-		verifyV4SimpleSignature(req)
+		return verifyV4SimpleSignature(req, store, region, now)
 	}
-	return nil
 }
 
 // handleAuthV4a handles AWS Signature Version 4A authentication using ECDSA.
-func handleAuthV4a(_ *http.Request) error {
-	return s3errs.ErrNotImplemented // Signature Version 4A is not implemented
+func handleAuthV4a(_ *http.Request) (string, error) {
+	return "", s3errs.ErrNotImplemented // Signature Version 4A is not implemented
 }
