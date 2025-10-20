@@ -60,7 +60,7 @@ type AuthenticatedHandler interface {
 	ServeHTTP(w http.ResponseWriter, req *http.Request, accessKeyID *string)
 }
 
-// authenticatedHandlerFunc is an adapter to allow the use of ordinary functions
+// AuthenticatedHandlerFunc is an adapter to allow the use of ordinary functions
 // as authenticated handlers. If f is a function with the appropriate signature,
 // authenticatedHandlerFunc(f) is an authenticated handler that calls f.
 type AuthenticatedHandlerFunc func(http.ResponseWriter, *http.Request, *string)

@@ -20,12 +20,17 @@ import (
 // if object matches reserved string, no need to url encode them
 var reservedObjectNames = regexp.MustCompile("^[a-zA-Z0-9-_.~/]+$")
 
+// KeyStore provides an interface for a secure key store.
 type KeyStore interface {
 	// LoadSecret loads the secret key for the given access key ID. If the
 	// access key wasn't found, the error s3errs.ErrInvalidAccessKeyID must be
 	// returned.
-	LoadSecret(ctx context.Context, accessKeyID string) (string, error)
+	LoadSecret(ctx context.Context, accessKeyID string) (SecretAccessKey, error)
 }
+
+// SecretAccessKey represents a secret access key. It is obtained from a
+// KeyStore by calling LoadSecret and should be cleared after usage.
+type SecretAccessKey []byte
 
 // urlEncode encode the strings from UTF-8 byte representations to HTML hex escape sequences
 //
@@ -49,12 +54,12 @@ func urlEncode(pathName string) string {
 			encodedPathname.WriteRune(s)
 			continue
 		default:
-			len := utf8.RuneLen(s)
-			if len < 0 {
+			runeLen := utf8.RuneLen(s)
+			if runeLen < 0 {
 				// if utf8 cannot convert return the same string as is
 				return pathName
 			}
-			u := make([]byte, len)
+			u := make([]byte, runeLen)
 			utf8.EncodeRune(u, s)
 			for _, r := range u {
 				hex := hex.EncodeToString([]byte{r})
@@ -134,16 +139,18 @@ func getSignature(signingKey []byte, stringToSign string) string {
 //
 // NOTE: service and request are hardcoded to "s3" and "aws4_request"
 // respectively since this is s3 auth only.
-func signingKey(secretKey string, t time.Time, region string) []byte {
-	date := sumHMAC([]byte("AWS4"+secretKey), []byte(t.Format(yyyymmdd)))
+func signingKey(secretKey SecretAccessKey, t time.Time, region string) []byte {
+	secret := bytes.Join([][]byte{[]byte("AWS4"), secretKey}, []byte{})
+	defer clear(secret)
+	date := sumHMAC(secret, []byte(t.Format(yyyymmdd)))
 	regionBytes := sumHMAC(date, []byte(region))
 	service := sumHMAC(regionBytes, []byte("s3"))
 	signingKey := sumHMAC(service, []byte("aws4_request"))
 	return signingKey
 }
 
-// getStringToSign a string based on selected query values.
-func getStringToSign(canonicalRequest string, t time.Time, scope string) string {
+// canonicalStringToSign a string based on selected query values.
+func canonicalStringToSign(canonicalRequest string, t time.Time, scope string) string {
 	stringToSign := AuthorizationAWS4HMACSHA256 + "\n" + t.Format(layoutISO8601) + "\n"
 	stringToSign += scope + "\n"
 	canonicalRequestBytes := sha256.Sum256([]byte(canonicalRequest))
@@ -201,6 +208,7 @@ func verifyV4SimpleSignature(req *http.Request, store KeyStore, region string, n
 	if err != nil {
 		return "", err
 	}
+	defer clear(secretKey)
 
 	signedHeaders, err := extractSignedHeaders(req, header.SignedHeaders)
 	if err != nil {
@@ -214,7 +222,7 @@ func verifyV4SimpleSignature(req *http.Request, store KeyStore, region string, n
 	canonicalRequest := canonicalRequest(signedHeaders, payloadHash, req.Form.Encode(), req.URL.Path, req.Method)
 
 	// combine it with the canonical scope to create the string to sign
-	toSign := getStringToSign(canonicalRequest, date, header.Credential.Scope.Canonical())
+	toSign := canonicalStringToSign(canonicalRequest, date, header.Credential.Scope.Canonical())
 
 	// derive the signing key from the secret key using the date and region
 	if region == "" {

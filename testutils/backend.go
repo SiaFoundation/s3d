@@ -3,22 +3,24 @@ package testutils
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
+	"github.com/SiaFoundation/s3d/s3/auth"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 )
 
 // MemoryBackend is an in-memory implementation of the s3 backend for testing.
 type MemoryBackend struct {
 	buckets    map[string]struct{}
-	accessKeys map[string]string
+	accessKeys map[string]auth.SecretAccessKey
 }
 
 // NewMemoryBackend creates a new MemoryBackend.
 func NewMemoryBackend() *MemoryBackend {
 	return &MemoryBackend{
-		accessKeys: make(map[string]string),
+		accessKeys: make(map[string]auth.SecretAccessKey),
 		buckets:    make(map[string]struct{}),
 	}
 }
@@ -28,7 +30,7 @@ func (b *MemoryBackend) AddAccessKey(ctx context.Context, accessKeyID, secretAcc
 	if _, exists := b.accessKeys[accessKeyID]; exists {
 		return errors.New("access key already exists")
 	}
-	b.accessKeys[accessKeyID] = secretAccessKey
+	b.accessKeys[accessKeyID] = auth.SecretAccessKey(secretAccessKey)
 	return nil
 }
 
@@ -60,9 +62,9 @@ func (b *MemoryBackend) ListBuckets(ctx context.Context, accessKeyID string) ([]
 }
 
 // LoadSecret loads the secret access key for the given access key ID.
-func (b *MemoryBackend) LoadSecret(ctx context.Context, accessKeyID string) (string, error) {
+func (b *MemoryBackend) LoadSecret(ctx context.Context, accessKeyID string) (auth.SecretAccessKey, error) {
 	if secret, exists := b.accessKeys[accessKeyID]; exists {
-		return secret, nil
+		return slices.Clone(secret), nil // return a copy to prevent modification
 	}
-	return "", s3errs.ErrInvalidAccessKeyId
+	return nil, s3errs.ErrInvalidAccessKeyId
 }
