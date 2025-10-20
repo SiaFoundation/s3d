@@ -1,11 +1,23 @@
 package auth
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/SiaFoundation/s3d/s3/s3errs"
 )
+
+type mockKeyStore struct {
+}
+
+func (s *mockKeyStore) LoadSecret(_ context.Context, _ string) (SecretAccessKey, error) {
+	return nil, s3errs.ErrInvalidAccessKeyId
+}
 
 func TestParseAuthHeader(t *testing.T) {
 	// Example AWSv4 Authorization header
@@ -44,5 +56,52 @@ func TestParseAuthHeader(t *testing.T) {
 
 	if !reflect.DeepEqual(*parsed, expected) {
 		t.Fatalf("parsed auth header does not match expected\nexpected: %+v\nparsed: %+v", expected, *parsed)
+	}
+}
+
+func TestDateValidation(t *testing.T) {
+	header := make(http.Header)
+	now := time.Now().UTC()
+	header.Set(HeaderAuthorization, fmt.Sprintf("AWS4-HMAC-SHA256 Credential=AKIA7GQ3XN52WQLYDHZP/%s/us-east-1/s3/aws4_request, SignedHeaders=accept-encoding;amz-sdk-invocation-id;amz-sdk-request;content-length;content-type;host;x-amz-content-sha256;x-amz-date, Signature=f66373650f043e2074da14a5439516bdb2fb4cd209d9376ae4c8df139f944100", now.Format(yyyymmdd)))
+	req := &http.Request{Header: header}
+	store := &mockKeyStore{}
+
+	// Case 1: date not set
+	_, err := verifyV4SimpleSignature(req, store, "", now)
+	if !errors.Is(err, s3errs.ErrMissingAuthenticationToken) {
+		t.Fatalf("expected ErrMissingAuthenticationToken, got %v", err)
+	}
+
+	// Case 2: credential date is in the past
+	header.Set(HeaderXAMZDate, now.Add(-24*time.Hour).Format(layoutISO8601))
+	_, err = verifyV4SimpleSignature(req, store, "", now)
+	if !errors.Is(err, s3errs.ErrAuthorizationHeaderMalformed) {
+		t.Fatalf("expected ErrAuthorizationHeaderMalformed, got %v", err)
+	}
+
+	// Case 3: credential date is in the future
+	header.Set(HeaderXAMZDate, now.Add(24*time.Hour).Format(layoutISO8601))
+	_, err = verifyV4SimpleSignature(req, store, "", now)
+	if !errors.Is(err, s3errs.ErrAuthorizationHeaderMalformed) {
+		t.Fatalf("expected ErrAuthorizationHeaderMalformed, got %v", err)
+	}
+
+	// Case 4: date is skewed too far in the past
+	header.Set(HeaderXAMZDate, now.Format(layoutISO8601))
+	_, err = verifyV4SimpleSignature(req, store, "", now.Add(6*time.Minute))
+	if !errors.Is(err, s3errs.ErrRequestTimeTooSkewed) {
+		t.Fatalf("expected ErrAuthorizationHeaderMalformed, got %v", err)
+	}
+
+	// Case 5: date is skewed too far in the future
+	_, err = verifyV4SimpleSignature(req, store, "", now.Add(-6*time.Minute))
+	if !errors.Is(err, s3errs.ErrRequestTimeTooSkewed) {
+		t.Fatalf("expected ErrAuthorizationHeaderMalformed, got %v", err)
+	}
+
+	// Case 6: date is valid but we don't have the access key
+	_, err = verifyV4SimpleSignature(req, store, "", now)
+	if !errors.Is(err, s3errs.ErrInvalidAccessKeyId) {
+		t.Fatal(err)
 	}
 }
