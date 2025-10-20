@@ -20,10 +20,13 @@ import (
 	"go.uber.org/zap/zaptest"
 )
 
+// S3Tester wraps an AWS S3 client configured to talk to an in-memory S3
+// backend.
 type S3Tester struct {
 	client *service.Client
 }
 
+// CreateBucket creates a new S3 bucket.
 func (t *S3Tester) CreateBucket(ctx context.Context, bucket string) error {
 	_, err := t.client.CreateBucket(ctx, &service.CreateBucketInput{
 		Bucket:                    aws.String(bucket),
@@ -32,6 +35,7 @@ func (t *S3Tester) CreateBucket(ctx context.Context, bucket string) error {
 	return err
 }
 
+// ListBuckets lists all S3 buckets of the authenticated user.
 func (t *S3Tester) ListBuckets(ctx context.Context) ([]types.Bucket, error) {
 	resp, err := t.client.ListBuckets(ctx, &service.ListBucketsInput{})
 	if err != nil {
@@ -40,6 +44,8 @@ func (t *S3Tester) ListBuckets(ctx context.Context) ([]types.Bucket, error) {
 	return resp.Buckets, err
 }
 
+// NewTester creates a new S3Tester with an in-memory S3 backend and an AWS
+// client configured to talk to it.
 func NewTester(t testing.TB, optFns ...func(*service.Options)) *S3Tester {
 	t.Helper()
 
