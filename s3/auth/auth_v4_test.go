@@ -24,12 +24,12 @@ func TestParseAuthHeader(t *testing.T) {
 	date, _ := time.Parse("20060102", "20251017")
 	expected := parsedAuthHeader{
 		Credential: credentialHeader{
-			accessKey: "AKIA7GQ3XN52WQLYDHZP",
-			scope: signScope{
-				date:    date,
-				region:  "us-east-1",
-				service: "s3",
-				request: "aws4_request",
+			AccessKeyID: "AKIA7GQ3XN52WQLYDHZP",
+			Scope: signScope{
+				Date:    date,
+				Region:  "us-east-1",
+				Service: "s3",
+				Request: "aws4_request",
 			},
 		},
 		SignedHeaders: []string{
