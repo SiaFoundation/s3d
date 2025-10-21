@@ -1,8 +1,11 @@
 package testutils
 
 import (
+	"bytes"
 	"context"
+	"crypto/md5"
 	"errors"
+	"io"
 	"slices"
 	"time"
 
@@ -11,17 +14,30 @@ import (
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 )
 
-// MemoryBackend is an in-memory implementation of the s3 backend for testing.
-type MemoryBackend struct {
-	buckets    map[string]struct{}
-	accessKeys map[string]auth.SecretAccessKey
-}
+type (
+	// MemoryBackend is an in-memory implementation of the s3 backend for testing.
+	MemoryBackend struct {
+		buckets    map[string]*bucket
+		accessKeys map[string]auth.SecretAccessKey
+	}
+
+	bucket struct {
+		owner   string // access key id of the owner
+		objects map[string]*object
+	}
+
+	object struct {
+		data     []byte
+		metadata map[string]string
+		hash     []byte
+	}
+)
 
 // NewMemoryBackend creates a new MemoryBackend.
 func NewMemoryBackend() *MemoryBackend {
 	return &MemoryBackend{
 		accessKeys: make(map[string]auth.SecretAccessKey),
-		buckets:    make(map[string]struct{}),
+		buckets:    make(map[string]*bucket),
 	}
 }
 
@@ -38,13 +54,89 @@ func (b *MemoryBackend) AddAccessKey(ctx context.Context, accessKeyID, secretAcc
 // error otherwise.
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateBucket.html
 func (b *MemoryBackend) CreateBucket(ctx context.Context, accessKeyID, name string) error {
-	if _, exists := b.buckets[name]; exists {
-		// NOTE: Since we don't have multi-user support, all buckets are always
-		// owned by the caller. If that changes, we need to extend the check and
-		// return ErrBucketExists instead.
+	if _, exists := b.accessKeys[accessKeyID]; !exists {
+		return s3errs.ErrInvalidAccessKeyId
+	} else if bkt, exists := b.buckets[name]; exists && bkt.owner == accessKeyID {
 		return s3errs.ErrBucketAlreadyOwnedByYou
+	} else if exists {
+		return s3errs.ErrBucketAlreadyExists
 	}
-	b.buckets[name] = struct{}{}
+	b.buckets[name] = &bucket{
+		owner: accessKeyID,
+	}
+	return nil
+}
+
+func (b *MemoryBackend) GetObject(ctx context.Context, accessKeyID *string, bucket, object string, requestedRange *s3.ObjectRangeRequest) (*s3.Object, error) {
+	bkt, exists := b.buckets[bucket]
+	if !exists {
+		return nil, s3errs.ErrNoSuchBucket
+	}
+	if accessKeyID == nil || bkt.owner != *accessKeyID {
+		return nil, s3errs.ErrAccessDenied
+	}
+	obj, exists := bkt.objects[object]
+	if !exists {
+		return nil, s3errs.ErrNoSuchKey
+	}
+	size := int64(len(obj.data))
+	rnge, err := requestedRange.Range(size)
+	if err != nil {
+		return nil, err
+	}
+	return &s3.Object{
+		Body:     io.NopCloser(bytes.NewReader(obj.data)),
+		Hash:     obj.hash,
+		Metadata: obj.metadata,
+		Range:    rnge,
+		Size:     size,
+	}, nil
+}
+
+func (b *MemoryBackend) HeadObject(ctx context.Context, accessKeyID *string, bucket, object string, requestedRange *s3.ObjectRangeRequest) (*s3.Object, error) {
+	bkt, exists := b.buckets[bucket]
+	if !exists {
+		return nil, s3errs.ErrNoSuchBucket
+	}
+	if accessKeyID == nil || bkt.owner != *accessKeyID {
+		return nil, s3errs.ErrAccessDenied
+	}
+	obj, exists := bkt.objects[object]
+	if !exists {
+		return nil, s3errs.ErrNoSuchKey
+	}
+	hash := md5.Sum(obj.data)
+	size := int64(len(obj.data))
+	rnge, err := requestedRange.Range(size)
+	if err != nil {
+		return nil, err
+	}
+	return &s3.Object{
+		Body:     nil, // HeadObject does not return a body
+		Hash:     hash[:],
+		Metadata: obj.metadata,
+		Range:    rnge,
+		Size:     size,
+	}, nil
+}
+
+func (b *MemoryBackend) PutMemObject(accessKeyID string, bucket, obj string, data []byte, metadata map[string]string) error {
+	bkt, exists := b.buckets[bucket]
+	if !exists {
+		return s3errs.ErrNoSuchBucket
+	}
+	if bkt.owner != accessKeyID {
+		return s3errs.ErrAccessDenied
+	}
+	if bkt.objects == nil {
+		bkt.objects = make(map[string]*object)
+	}
+	hash := md5.Sum(data)
+	bkt.objects[obj] = &object{
+		data:     slices.Clone(data),
+		hash:     hash[:],
+		metadata: metadata,
+	}
 	return nil
 }
 

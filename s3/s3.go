@@ -23,6 +23,28 @@ type Backend interface {
 	// returned depending on the ownership of the bucket.
 	CreateBucket(ctx context.Context, accessKeyID, name string) error
 
+	// GetObject retrieves the object with the given key from the specified
+	// bucket for the user identified by the given access key. The provided
+	// range is either nil if no range was requested, or contains the requested,
+	// byte range.
+	//
+	// - If the access key does not have permission to access the object,
+	//   [ErrAccessDenied] must be returned. A 'nil' accessKeyID indicates the
+	//   anonymous user.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	//
+	// - If the object with the given key in the specified bucket does not exist,
+	//   [ErrNoSuchKey] must be returned.
+	//
+	// - If the requested range is not satisfiable, [ErrInvalidRange] must be
+	//   returned. You can use the 'Range' method on 'rnge' for that.
+	GetObject(ctx context.Context, accessKeyID *string, bucket, object string, rnge *ObjectRangeRequest) (*Object, error)
+
+	// HeadObject is like GetObject but only retrieves the metadata of the
+	// object and returns an empty body.
+	HeadObject(ctx context.Context, accessKeyID *string, bucket, object string, rnge *ObjectRangeRequest) (*Object, error)
+
 	// ListBuckets lists all available buckets for the user identified by the
 	// given access key.
 	ListBuckets(ctx context.Context, accessKeyID string) ([]BucketInfo, error)
@@ -207,7 +229,7 @@ func (s *s3) routeBase(w http.ResponseWriter, r *http.Request, accessKeyID *stri
 	} else if versionID := versionFromQuery(query["versionId"]); versionID != "" {
 		err = s.routeVersion(w, r)
 	} else if bucket != "" && object != "" {
-		err = s.routeObject(w, r)
+		err = s.routeObject(w, r, accessKeyID, bucket, object)
 	} else if bucket != "" {
 		err = s.routeBucket(w, r, accessKeyID, bucket)
 	} else if r.Method == "GET" {
@@ -249,12 +271,6 @@ func (s *s3) routeVersions(w http.ResponseWriter, r *http.Request) error {
 // routeVersion operates on routes that contain '?versionId=<id>' in the
 // query string.
 func (s *s3) routeVersion(w http.ResponseWriter, r *http.Request) error {
-	return s3errs.ErrNotImplemented
-}
-
-// routeObject oandles URLs that contain both a bucket path segment and an
-// object path segment.
-func (s *s3) routeObject(w http.ResponseWriter, r *http.Request) error {
 	return s3errs.ErrNotImplemented
 }
 
