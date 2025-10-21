@@ -1,7 +1,6 @@
 package s3
 
 import (
-	"errors"
 	"net/http"
 
 	"github.com/SiaFoundation/s3d/s3/s3errs"
@@ -17,23 +16,23 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *st
 	}
 
 	switch r.Method {
-	case "GET":
+	case http.MethodGet:
 		if _, ok := r.URL.Query()["location"]; ok {
-			return errors.New("getBucketLocation is not implemented")
+			return s3errs.ErrNotImplemented // getBucketLocation is not implemented
 		} else {
-			return errors.New("listBucket is not implemented")
+			return s3errs.ErrNotImplemented // listBucket is not implemented
 		}
-	case "PUT":
+	case http.MethodPut:
 		return s.createBucket(w, r, validatedKey, bucket)
-	case "DELETE":
-		return errors.New("deleteBucket is not implemented")
-	case "HEAD":
-		return errors.New("headBucket is not implemented")
-	case "POST":
+	case http.MethodDelete:
+		return s3errs.ErrNotImplemented // deleteBucket is not implemented
+	case http.MethodHead:
+		return s3errs.ErrNotImplemented // headBucket is not implemented
+	case http.MethodPost:
 		if _, ok := r.URL.Query()["delete"]; ok {
-			return errors.New("deleteMulti is not implemented")
+			return s3errs.ErrNotImplemented // deleteMulti is not implemented
 		} else {
-			return errors.New("createObjectBrowserUpload is not implemented")
+			return s3errs.ErrNotImplemented // createObjectBrowserUpload is not implemented
 		}
 	default:
 		return s3errs.ErrMethodNotAllowed

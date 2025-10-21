@@ -2,6 +2,7 @@ package testutil
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"net/http"
@@ -20,10 +21,21 @@ import (
 	"go.uber.org/zap/zaptest"
 )
 
+const (
+	accessKeyID     = "AKIA7GQ3XN52WQLYDHZP"
+	secretAccessKey = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+)
+
 // S3Tester wraps an AWS S3 client configured to talk to an in-memory S3
 // backend.
 type S3Tester struct {
-	client *service.Client
+	backend *testutils.MemoryBackend
+	client  *service.Client
+}
+
+// AddObject adds an object to the in-memory S3 backend.
+func (t *S3Tester) AddObject(bucket, object string, data []byte, metadata map[string]string) error {
+	return t.backend.PutMemObject(accessKeyID, bucket, object, data, metadata)
 }
 
 // CreateBucket creates a new S3 bucket.
@@ -33,6 +45,46 @@ func (t *S3Tester) CreateBucket(ctx context.Context, bucket string) error {
 		CreateBucketConfiguration: &types.CreateBucketConfiguration{},
 	})
 	return err
+}
+
+// GetObject retrieves an object.
+func (t *S3Tester) GetObject(ctx context.Context, bucket, object string) (*s3.Object, error) {
+	resp, err := t.client.GetObject(ctx, &service.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(object),
+	})
+	if err != nil {
+		return nil, err
+	}
+	etag := strings.Trim(*resp.ETag, `"`)
+	hash, err := hex.DecodeString(etag)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode ETag %q: %w", *resp.ETag, err)
+	}
+	return &s3.Object{
+		Body:     resp.Body,
+		Hash:     hash,
+		Metadata: resp.Metadata,
+		//Range:    *resp.ContentRange,
+		Size: *resp.ContentLength,
+	}, nil
+}
+
+// HeadObject retrieves an object.
+func (t *S3Tester) HeadObject(ctx context.Context, bucket, object string) (*s3.Object, error) {
+	resp, err := t.client.HeadObject(ctx, &service.HeadObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(object),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &s3.Object{
+		Hash:     []byte(*resp.ETag),
+		Metadata: resp.Metadata,
+		//Range:    *resp.ContentRange,
+		//Size: *resp.ContentLength,
+	}, nil
 }
 
 // ListBuckets lists all S3 buckets of the authenticated user.
@@ -48,11 +100,6 @@ func (t *S3Tester) ListBuckets(ctx context.Context) ([]types.Bucket, error) {
 // client configured to talk to it.
 func NewTester(t testing.TB, optFns ...func(*service.Options)) *S3Tester {
 	t.Helper()
-
-	const (
-		accessKeyID     = "AKIA7GQ3XN52WQLYDHZP"
-		secretAccessKey = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-	)
 
 	backend := testutils.NewMemoryBackend()
 	if err := backend.AddAccessKey(t.Context(), accessKeyID, secretAccessKey); err != nil {
@@ -94,7 +141,8 @@ func NewTester(t testing.TB, optFns ...func(*service.Options)) *S3Tester {
 	opts = append(opts, optFns...)
 
 	return &S3Tester{
-		client: service.NewFromConfig(cfg, opts...),
+		backend: backend,
+		client:  service.NewFromConfig(cfg, opts...),
 	}
 }
 
