@@ -72,6 +72,11 @@ func (f AuthenticatedHandlerFunc) ServeHTTP(w http.ResponseWriter, r *http.Reque
 
 // HandleAuth inspects the request to determine the authentication type, verfies
 // the signature returns the used access key ID.
+//
+// - 'now' refers to the current time and is used to verify request timestamps
+// - 'region' is the AWS region the request is targeted to. If the region is the
+// empty string, every region is allowed. Otherwise, authentication fails if the
+// region doesn't match the provided one.
 func HandleAuth(req *http.Request, store KeyStore, region string, now time.Time) (string, error) {
 	authHeader := req.Header.Get(HeaderAuthorization)
 	if strings.HasPrefix(authHeader, AuthorizationAWS4HMACSHA256) {
