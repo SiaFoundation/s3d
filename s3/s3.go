@@ -223,44 +223,38 @@ func (s *s3) routeBase(w http.ResponseWriter, r *http.Request, accessKeyID *stri
 // routeMultipartUpload operates on routes that contain '?uploadId=<id>' in the
 // query string.
 func (s *s3) routeMultipartUpload(w http.ResponseWriter, r *http.Request) error {
-	http.Error(w, "routeMultipartUpload is not implemented", http.StatusNotImplemented)
-	return nil
+	return s3errs.ErrNotImplemented
 }
 
 // routeMultipartUploadBase operates on routes that contain '?uploads' in the
 // query string. These routes may or may not have a value for bucket or object;
 // this is validated and handled in the target handler functions.
 func (s *s3) routeMultipartUploadBase(w http.ResponseWriter, r *http.Request) error {
-	http.Error(w, "routeMultipartUploadBase is not implemented", http.StatusNotImplemented)
-	return nil
+	return s3errs.ErrNotImplemented
 }
 
 // routeVersioningBase operates on routes that contain '?versioning' in the
 // query string. These routes may or may not have a value for bucket; this is
 // validated and handled in the target handler functions.
 func (s *s3) routeVersioning(w http.ResponseWriter, r *http.Request) error {
-	http.Error(w, "routeVersioning is not implemented", http.StatusNotImplemented)
-	return nil
+	return s3errs.ErrNotImplemented
 }
 
 // routeVersions operates on routes that contain '?versions' in the query string.
 func (s *s3) routeVersions(w http.ResponseWriter, r *http.Request) error {
-	http.Error(w, "routeVersions is not implemented", http.StatusNotImplemented)
-	return nil
+	return s3errs.ErrNotImplemented
 }
 
 // routeVersion operates on routes that contain '?versionId=<id>' in the
 // query string.
 func (s *s3) routeVersion(w http.ResponseWriter, r *http.Request) error {
-	http.Error(w, "routeVersions is not implemented", http.StatusNotImplemented)
-	return nil
+	return s3errs.ErrNotImplemented
 }
 
 // routeObject oandles URLs that contain both a bucket path segment and an
 // object path segment.
 func (s *s3) routeObject(w http.ResponseWriter, r *http.Request) error {
-	http.Error(w, "routeObject is not implemented", http.StatusNotImplemented)
-	return nil
+	return s3errs.ErrNotImplemented
 }
 
 // assertAuth checks if the accessKeyID is not nil, returning an error if it is.
