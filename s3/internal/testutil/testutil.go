@@ -47,7 +47,7 @@ func (t *S3Tester) CreateBucket(ctx context.Context, bucket string) error {
 	return err
 }
 
-// GetObject retrieves an object.
+// GetObject is a convenience wrapper around the AWS SDK's GetObject API.
 func (t *S3Tester) GetObject(ctx context.Context, bucket, object string, rnge *s3.ObjectRangeRequest) (*s3.Object, error) {
 	resp, err := t.client.GetObject(ctx, &service.GetObjectInput{
 		Bucket: aws.String(bucket),
@@ -81,7 +81,7 @@ func (t *S3Tester) GetObject(ctx context.Context, bucket, object string, rnge *s
 	}, nil
 }
 
-// HeadObject retrieves an object.
+// HeadObject is a convenience wrapper around the AWS SDK's HeadObject API.
 func (t *S3Tester) HeadObject(ctx context.Context, bucket, object string, rnge *s3.ObjectRangeRequest) (*s3.Object, error) {
 	resp, err := t.client.HeadObject(ctx, &service.HeadObjectInput{
 		Bucket: aws.String(bucket),
@@ -201,6 +201,7 @@ func AssertS3Error(t testing.TB, expected s3errs.Error, got error) {
 	}
 }
 
+// parseRange parses a Content-Range header value from a http response.
 func parseRange(s string) (_ *s3.ObjectRange, size int64, _ error) {
 	var start, end int64
 	if _, err := fmt.Sscanf(s, "bytes %d-%d/%d", &start, &end, &size); err != nil {
@@ -212,6 +213,8 @@ func parseRange(s string) (_ *s3.ObjectRange, size int64, _ error) {
 	}, size, nil
 }
 
+// rangeHeader converts an s3.ObjectRangeRequest to a HTTP Range header value to
+// use in AWS SDK calls.
 func rangeHeader(rnge *s3.ObjectRangeRequest) *string {
 	if rnge == nil {
 		return nil
