@@ -48,10 +48,11 @@ func (t *S3Tester) CreateBucket(ctx context.Context, bucket string) error {
 }
 
 // GetObject retrieves an object.
-func (t *S3Tester) GetObject(ctx context.Context, bucket, object string) (*s3.Object, error) {
+func (t *S3Tester) GetObject(ctx context.Context, bucket, object string, rnge *s3.ObjectRangeRequest) (*s3.Object, error) {
 	resp, err := t.client.GetObject(ctx, &service.GetObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(object),
+		Range:  rangeHeader(rnge),
 	})
 	if err != nil {
 		return nil, err
@@ -60,21 +61,32 @@ func (t *S3Tester) GetObject(ctx context.Context, bucket, object string) (*s3.Ob
 	hash, err := hex.DecodeString(etag)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode ETag %q: %w", *resp.ETag, err)
+	}
+	var objRange *s3.ObjectRange
+	var size int64
+	if resp.ContentRange != nil {
+		objRange, size, err = parseRange(*resp.ContentRange)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		size = *resp.ContentLength
 	}
 	return &s3.Object{
 		Body:     resp.Body,
 		Hash:     hash,
 		Metadata: resp.Metadata,
-		//Range:    *resp.ContentRange,
-		Size: *resp.ContentLength,
+		Range:    objRange,
+		Size:     size,
 	}, nil
 }
 
 // HeadObject retrieves an object.
-func (t *S3Tester) HeadObject(ctx context.Context, bucket, object string) (*s3.Object, error) {
+func (t *S3Tester) HeadObject(ctx context.Context, bucket, object string, rnge *s3.ObjectRangeRequest) (*s3.Object, error) {
 	resp, err := t.client.HeadObject(ctx, &service.HeadObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(object),
+		Range:  rangeHeader(rnge),
 	})
 	if err != nil {
 		return nil, err
@@ -84,11 +96,21 @@ func (t *S3Tester) HeadObject(ctx context.Context, bucket, object string) (*s3.O
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode ETag %q: %w", *resp.ETag, err)
 	}
+	var objRange *s3.ObjectRange
+	var size int64
+	if resp.ContentRange != nil {
+		objRange, size, err = parseRange(*resp.ContentRange)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		size = *resp.ContentLength
+	}
 	return &s3.Object{
 		Hash:     hash,
 		Metadata: resp.Metadata,
-		//Range:    *resp.ContentRange,
-		Size: *resp.ContentLength,
+		Range:    objRange,
+		Size:     size,
 	}, nil
 }
 
@@ -177,4 +199,30 @@ func AssertS3Error(t testing.TB, expected s3errs.Error, got error) {
 	if !strings.Contains(got.Error(), expected.Code) {
 		t.Fatalf("expected error code %q, got %q", expected.Code, got.Error())
 	}
+}
+
+func parseRange(s string) (_ *s3.ObjectRange, size int64, _ error) {
+	var start, end int64
+	if _, err := fmt.Sscanf(s, "bytes %d-%d/%d", &start, &end, &size); err != nil {
+		return nil, 0, fmt.Errorf("failed to parse range %q: %w", s, err)
+	}
+	return &s3.ObjectRange{
+		Start:  start,
+		Length: end - start,
+	}, size, nil
+}
+
+func rangeHeader(rnge *s3.ObjectRangeRequest) *string {
+	if rnge == nil {
+		return nil
+	}
+	var s string
+	if rnge.FromEnd {
+		s = fmt.Sprintf("bytes=-%d", rnge.End)
+	} else if rnge.End == -1 {
+		s = fmt.Sprintf("bytes=%d-", rnge.Start)
+	} else {
+		s = fmt.Sprintf("bytes=%d-%d", rnge.Start, rnge.End)
+	}
+	return &s
 }

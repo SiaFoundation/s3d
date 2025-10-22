@@ -17,6 +17,7 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *st
 
 	switch r.Method {
 	case http.MethodGet:
+		// nolint:gocritic
 		if _, ok := r.URL.Query()["location"]; ok {
 			return s3errs.ErrNotImplemented // getBucketLocation is not implemented
 		} else {
@@ -29,6 +30,7 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *st
 	case http.MethodHead:
 		return s3errs.ErrNotImplemented // headBucket is not implemented
 	case http.MethodPost:
+		// nolint:gocritic
 		if _, ok := r.URL.Query()["delete"]; ok {
 			return s3errs.ErrNotImplemented // deleteMulti is not implemented
 		} else {
