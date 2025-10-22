@@ -67,14 +67,19 @@ func (b *MemoryBackend) CreateBucket(ctx context.Context, accessKeyID, name stri
 	return nil
 }
 
+// GetObject retrieves an object from the specified bucket.
 func (b *MemoryBackend) GetObject(ctx context.Context, accessKeyID *string, bucket, object string, requestedRange *s3.ObjectRangeRequest) (*s3.Object, error) {
 	return b.headOrGetObject(ctx, accessKeyID, bucket, object, requestedRange, false)
 }
 
+// HeadObject retrieves metadata about the specified object without returning
+// the object's data.
 func (b *MemoryBackend) HeadObject(ctx context.Context, accessKeyID *string, bucket, object string, requestedRange *s3.ObjectRangeRequest) (*s3.Object, error) {
 	return b.headOrGetObject(ctx, accessKeyID, bucket, object, requestedRange, true)
 }
 
+// PutMemObject puts an object into the specified bucket with the given data and
+// metadata.
 func (b *MemoryBackend) PutMemObject(accessKeyID string, bucket, obj string, data []byte, metadata map[string]string) error {
 	bkt, exists := b.buckets[bucket]
 	if !exists {
@@ -135,7 +140,11 @@ func (b *MemoryBackend) headOrGetObject(_ context.Context, accessKeyID *string, 
 	}
 	var body io.ReadCloser
 	if !head {
-		body = io.NopCloser(bytes.NewReader(obj.data))
+		if rnge == nil {
+			body = io.NopCloser(bytes.NewReader(obj.data))
+		} else {
+			body = io.NopCloser(bytes.NewReader(obj.data[rnge.Start : rnge.Start+rnge.Length]))
+		}
 	}
 	return &s3.Object{
 		Body:     body,

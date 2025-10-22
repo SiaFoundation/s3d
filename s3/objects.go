@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 )
 
+// Object represents an S3 object stored on the backend.
 type Object struct {
 	Body     io.ReadCloser
 	Hash     []byte
@@ -25,8 +26,10 @@ type Object struct {
 // object path segment.
 func (s *s3) routeObject(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket, object string) error {
 	switch r.Method {
-	case http.MethodGet, http.MethodHead:
+	case http.MethodGet:
 		return s.getObject(w, r, accessKeyID, bucket, object, "")
+	case http.MethodHead:
+		return s.headObject(w, r, accessKeyID, bucket, object, "")
 	case http.MethodPut:
 		return s3errs.ErrNotImplemented
 	case http.MethodDelete:
@@ -53,6 +56,9 @@ func (s *s3) getObject(w http.ResponseWriter, r *http.Request, accessKeyID *stri
 		obj, err = s.backend.GetObject(r.Context(), accessKeyID, bucket, object, rnge)
 	} else {
 		return s3errs.ErrNotImplemented // versioning not supported
+	}
+	if err != nil {
+		return err
 	}
 	defer obj.Body.Close()
 
@@ -88,21 +94,25 @@ func (s *s3) headObject(w http.ResponseWriter, r *http.Request, accessKeyID *str
 	} else {
 		return s3errs.ErrNotImplemented // versioning not supported
 	}
+	if err != nil {
+		return err
+	}
 	if obj.Body != nil {
 		_ = obj.Body.Close() // just in case
 	}
 
 	// write headers
-	if err := writeGetOrHeadObjectHeaders(obj, w, r); err != nil {
-		return err
-	}
-	return nil
+	return writeGetOrHeadObjectHeaders(obj, w, r)
 }
 
+// ObjectRange specifies a byte range within an object. The backend can derive
+// this from a ObjectRangeRequest using the size of the object.
 type ObjectRange struct {
 	Start, Length int64
 }
 
+// ObjectRangeRequest specifies a requested byte range within an object. Clients
+// provide this since they don't necessarily know the size of an object.
 type ObjectRangeRequest struct {
 	Start, End int64
 	FromEnd    bool
@@ -127,7 +137,6 @@ func (o *ObjectRangeRequest) Range(size int64) (*ObjectRange, error) {
 		} else {
 			length = end - start + 1
 		}
-
 	} else {
 		// If no start is specified, end specifies the range start relative
 		// to the end of the file.
@@ -167,7 +176,7 @@ func parseRangeHeader(s string) (*ObjectRangeRequest, error) {
 	}
 
 	rnge := strings.TrimSpace(ranges[0])
-	if len(rnge) == 0 {
+	if rnge == "" {
 		return nil, s3errs.ErrInvalidRange
 	}
 
@@ -187,7 +196,6 @@ func parseRangeHeader(s string) (*ObjectRangeRequest, error) {
 			return nil, s3errs.ErrInvalidRange
 		}
 		o.End = i
-
 	} else {
 		i, err := strconv.ParseInt(start, 10, 64)
 		if err != nil || i < 0 {
@@ -215,7 +223,7 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 		w.Header().Set(mk, mv)
 	}
 
-	etag := `"` + hex.EncodeToString(obj.Hash[:]) + `"`
+	etag := `"` + hex.EncodeToString(obj.Hash) + `"`
 	w.Header().Set("ETag", etag)
 
 	if r.Header.Get("If-None-Match") == etag {
