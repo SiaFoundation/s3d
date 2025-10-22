@@ -68,56 +68,11 @@ func (b *MemoryBackend) CreateBucket(ctx context.Context, accessKeyID, name stri
 }
 
 func (b *MemoryBackend) GetObject(ctx context.Context, accessKeyID *string, bucket, object string, requestedRange *s3.ObjectRangeRequest) (*s3.Object, error) {
-	bkt, exists := b.buckets[bucket]
-	if !exists {
-		return nil, s3errs.ErrNoSuchBucket
-	}
-	if accessKeyID == nil || bkt.owner != *accessKeyID {
-		return nil, s3errs.ErrAccessDenied
-	}
-	obj, exists := bkt.objects[object]
-	if !exists {
-		return nil, s3errs.ErrNoSuchKey
-	}
-	size := int64(len(obj.data))
-	rnge, err := requestedRange.Range(size)
-	if err != nil {
-		return nil, err
-	}
-	return &s3.Object{
-		Body:     io.NopCloser(bytes.NewReader(obj.data)),
-		Hash:     obj.hash,
-		Metadata: obj.metadata,
-		Range:    rnge,
-		Size:     size,
-	}, nil
+	return b.headOrGetObject(ctx, accessKeyID, bucket, object, requestedRange, false)
 }
 
 func (b *MemoryBackend) HeadObject(ctx context.Context, accessKeyID *string, bucket, object string, requestedRange *s3.ObjectRangeRequest) (*s3.Object, error) {
-	bkt, exists := b.buckets[bucket]
-	if !exists {
-		return nil, s3errs.ErrNoSuchBucket
-	}
-	if accessKeyID == nil || bkt.owner != *accessKeyID {
-		return nil, s3errs.ErrAccessDenied
-	}
-	obj, exists := bkt.objects[object]
-	if !exists {
-		return nil, s3errs.ErrNoSuchKey
-	}
-	hash := md5.Sum(obj.data)
-	size := int64(len(obj.data))
-	rnge, err := requestedRange.Range(size)
-	if err != nil {
-		return nil, err
-	}
-	return &s3.Object{
-		Body:     nil, // HeadObject does not return a body
-		Hash:     hash[:],
-		Metadata: obj.metadata,
-		Range:    rnge,
-		Size:     size,
-	}, nil
+	return b.headOrGetObject(ctx, accessKeyID, bucket, object, requestedRange, true)
 }
 
 func (b *MemoryBackend) PutMemObject(accessKeyID string, bucket, obj string, data []byte, metadata map[string]string) error {
@@ -159,4 +114,34 @@ func (b *MemoryBackend) LoadSecret(ctx context.Context, accessKeyID string) (aut
 		return slices.Clone(secret), nil // return a copy to prevent modification
 	}
 	return nil, s3errs.ErrInvalidAccessKeyId
+}
+
+func (b *MemoryBackend) headOrGetObject(_ context.Context, accessKeyID *string, bucket, object string, requestedRange *s3.ObjectRangeRequest, head bool) (*s3.Object, error) {
+	bkt, exists := b.buckets[bucket]
+	if !exists {
+		return nil, s3errs.ErrNoSuchBucket
+	}
+	if accessKeyID == nil || bkt.owner != *accessKeyID {
+		return nil, s3errs.ErrAccessDenied
+	}
+	obj, exists := bkt.objects[object]
+	if !exists {
+		return nil, s3errs.ErrNoSuchKey
+	}
+	size := int64(len(obj.data))
+	rnge, err := requestedRange.Range(size)
+	if err != nil {
+		return nil, err
+	}
+	var body io.ReadCloser
+	if !head {
+		body = io.NopCloser(bytes.NewReader(obj.data))
+	}
+	return &s3.Object{
+		Body:     body,
+		Hash:     obj.hash,
+		Metadata: obj.metadata,
+		Range:    rnge,
+		Size:     size,
+	}, nil
 }
