@@ -79,11 +79,16 @@ func (t *S3Tester) HeadObject(ctx context.Context, bucket, object string) (*s3.O
 	if err != nil {
 		return nil, err
 	}
+	etag := strings.Trim(*resp.ETag, `"`)
+	hash, err := hex.DecodeString(etag)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode ETag %q: %w", *resp.ETag, err)
+	}
 	return &s3.Object{
-		Hash:     []byte(*resp.ETag),
+		Hash:     hash,
 		Metadata: resp.Metadata,
 		//Range:    *resp.ContentRange,
-		//Size: *resp.ContentLength,
+		Size: *resp.ContentLength,
 	}, nil
 }
 

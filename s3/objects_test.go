@@ -6,11 +6,12 @@ import (
 	"io"
 	"testing"
 
+	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/internal/testutil"
 	"lukechampine.com/frand"
 )
 
-func TestGetObject(t *testing.T) {
+func TestGetAndHeadObject(t *testing.T) {
 	s3Tester := testutil.NewTester(t)
 
 	// prepare a bucket
@@ -21,25 +22,42 @@ func TestGetObject(t *testing.T) {
 
 	// add object to backend
 	data := frand.Bytes(100)
+	hash := md5.Sum(data)
 	object := "bar"
 	err := s3Tester.AddObject(bucket, object, data, make(map[string]string))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// retrieve object
+	assertObject := func(obj *s3.Object, head bool) {
+		t.Helper()
+
+		if !bytes.Equal(obj.Hash, hash[:]) {
+			t.Fatal("hash mismatch", obj.Hash, hash[:])
+		} else if obj.Size != int64(len(data)) {
+			t.Fatalf("size mismatch: expected %d, got %d", len(data), obj.Size)
+		}
+
+		if !head {
+			if content, err := io.ReadAll(obj.Body); err != nil {
+				t.Fatal(err)
+			} else if !bytes.Equal(content, data) {
+				t.Fatal("data mismatch")
+			}
+		}
+	}
+
+	// GET the object
 	obj, err := s3Tester.GetObject(t.Context(), bucket, object)
 	if err != nil {
 		t.Fatal(err)
 	}
-	hash := md5.Sum(data)
-	if content, err := io.ReadAll(obj.Body); err != nil {
+	assertObject(obj, false)
+
+	// HEAD the object
+	obj, err = s3Tester.HeadObject(t.Context(), bucket, object)
+	if err != nil {
 		t.Fatal(err)
-	} else if !bytes.Equal(content, data) {
-		t.Fatal("data mismatch")
-	} else if !bytes.Equal(obj.Hash, hash[:]) {
-		t.Fatal("hash mismatch")
-	} else if obj.Size != int64(len(data)) {
-		t.Fatalf("size mismatch: expected %d, got %d", len(data), obj.Size)
 	}
+	assertObject(obj, true)
 }
