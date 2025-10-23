@@ -15,23 +15,35 @@ import (
 
 // Object represents an S3 object stored on the backend.
 type Object struct {
-	Body     io.ReadCloser
-	Hash     []byte
-	Metadata map[string]string
-	Range    *ObjectRange
-	Size     int64
+	Body         io.ReadCloser
+	Hash         []byte
+	LastModified time.Time // TODO: set
+	Metadata     map[string]string
+	Range        *ObjectRange
+	Size         int64
 }
 
 // routeObject handles URLs that contain both a bucket path segment and an
 // object path segment.
 func (s *s3) routeObject(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket, object string) error {
+	// routes with optional authentication
 	switch r.Method {
 	case http.MethodGet:
 		return s.getObject(w, r, accessKeyID, bucket, object, "")
 	case http.MethodHead:
 		return s.headObject(w, r, accessKeyID, bucket, object, "")
+	default:
+	}
+
+	validatedKey, err := assertAuth(accessKeyID)
+	if err != nil {
+		return err
+	}
+
+	// routes with mandatory authentication
+	switch r.Method {
 	case http.MethodPut:
-		return s3errs.ErrNotImplemented
+		return s.putObject(w, r, validatedKey, bucket, object)
 	case http.MethodDelete:
 		return s3errs.ErrNotImplemented
 	default:
@@ -103,6 +115,59 @@ func (s *s3) headObject(w http.ResponseWriter, r *http.Request, accessKeyID *str
 
 	// write headers
 	return writeGetOrHeadObjectHeaders(obj, w, r)
+}
+
+func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID string, bucket, object string) (err error) {
+	log := s.logger.With(zap.String("bucket", bucket),
+		zap.String("object", object))
+	log.Debug("put object")
+
+	// extract metadata headers
+	meta, err := metadataHeaders(r.Header, defaultMetadataSizeLimit)
+	if err != nil {
+		return err
+	}
+
+	// content length is mandatory
+	if r.ContentLength < 0 {
+		return s3errs.ErrMissingContentLength
+	}
+
+	hash, err := s.backend.PutObject(r.Context(), accessKeyID, bucket, object, meta, r.Body, r.ContentLength)
+	if err != nil {
+		return err
+	}
+
+	w.Header().Set("ETag", formatETag(hash))
+	return nil
+}
+
+func formatETag(hash []byte) string {
+	return `"` + hex.EncodeToString(hash) + `"`
+}
+
+// metadataHeaders extracts S3 metadata headers from the given HTTP headers.
+func metadataHeaders(headers map[string][]string, sizeLimit int) (map[string]string, error) {
+	meta := make(map[string]string)
+	for hk, hv := range headers {
+		if strings.HasPrefix(hk, "X-Amz-") ||
+			hk == "Content-Type" ||
+			hk == "Content-Disposition" ||
+			hk == "Content-Encoding" {
+			meta[hk] = hv[0]
+		}
+	}
+
+	metaSize := 0
+	for k, v := range meta {
+		metaSize += len(k) + len(v)
+	}
+
+	if sizeLimit > 0 && metaSize > sizeLimit {
+		return meta, s3errs.ErrMetadataTooLarge
+	}
+
+	return meta, nil
 }
 
 // ObjectRange specifies a byte range within an object. The backend can derive

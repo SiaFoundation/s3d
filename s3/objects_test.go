@@ -5,6 +5,7 @@ import (
 	"crypto/md5"
 	"fmt"
 	"io"
+	"reflect"
 	"testing"
 
 	"github.com/SiaFoundation/s3d/s3"
@@ -131,6 +132,44 @@ func TestGetAndHeadObject(t *testing.T) {
 			}
 			assertObject(t, obj, false, tc.rnge)
 		})
+	}
+}
+
+func TestPutObject(t *testing.T) {
+	s3Tester := testutil.NewTester(t)
+
+	// prepare a bucket
+	bucket := "foo"
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// prepare the object to upload
+	data := frand.Bytes(100)
+	hash := md5.Sum(data)
+	object := "bar"
+	metadata := map[string]string{
+		"foo": "bar",
+	}
+
+	// upload the object
+	resp, err := s3Tester.PutObject(t.Context(), bucket, object, bytes.NewReader(data), metadata)
+	if err != nil {
+		t.Fatal(err)
+	} else if !bytes.Equal(resp, hash[:]) {
+		t.Fatalf("hash mismatch: expected %x, got %x", hash, resp)
+	}
+
+	// download the object and verify it
+	obj, err := s3Tester.GetObject(t.Context(), bucket, object, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if !bytes.Equal(obj.Hash, hash[:]) {
+		t.Fatal("hash mismatch", obj.Hash, hash[:])
+	} else if obj.Size != int64(len(data)) {
+		t.Fatalf("size mismatch: expected %d, got %d", len(data), obj.Size)
+	} else if !reflect.DeepEqual(obj.Metadata, metadata) {
+		t.Fatal("metadata mismatch", obj.Metadata)
 	}
 }
 

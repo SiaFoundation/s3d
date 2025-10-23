@@ -2,6 +2,7 @@ package s3
 
 import (
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -48,6 +49,20 @@ type Backend interface {
 	// ListBuckets lists all available buckets for the user identified by the
 	// given access key.
 	ListBuckets(ctx context.Context, accessKeyID string) ([]BucketInfo, error)
+
+	// PutObject puts an object with the given key into the specified bucket.
+	//
+	// - If the access key does not have permission to store the object,
+	//   [ErrAccessDenied] must be returned.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	//
+	// - If the object already exists, it must be overwritten.
+	//   NOTE: Versioning is not supported yet.
+	//
+	// - If the bytes read from 'r' do not match 'contentLength',
+	// [ErrIncompleteBody] must be returned.
+	PutObject(ctx context.Context, accessKeyID string, bucket, object string, meta map[string]string, r io.Reader, contentLength int64) ([]byte, error)
 }
 
 type s3 struct {

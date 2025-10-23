@@ -27,9 +27,10 @@ type (
 	}
 
 	object struct {
-		data     []byte
-		metadata map[string]string
-		hash     []byte
+		data         []byte
+		lastModified time.Time
+		metadata     map[string]string
+		hash         []byte
 	}
 )
 
@@ -78,26 +79,34 @@ func (b *MemoryBackend) HeadObject(ctx context.Context, accessKeyID *string, buc
 	return b.headOrGetObject(ctx, accessKeyID, bucket, object, requestedRange, true)
 }
 
-// PutMemObject puts an object into the specified bucket with the given data and
+// PutObject puts an object into the specified bucket with the given data and
 // metadata.
-func (b *MemoryBackend) PutMemObject(accessKeyID string, bucket, obj string, data []byte, metadata map[string]string) error {
+func (b *MemoryBackend) PutObject(_ context.Context, accessKeyID, bucket, obj string, metadata map[string]string, r io.Reader, contentLength int64) ([]byte, error) {
 	bkt, exists := b.buckets[bucket]
 	if !exists {
-		return s3errs.ErrNoSuchBucket
+		return nil, s3errs.ErrNoSuchBucket
 	}
 	if bkt.owner != accessKeyID {
-		return s3errs.ErrAccessDenied
+		return nil, s3errs.ErrAccessDenied
 	}
 	if bkt.objects == nil {
 		bkt.objects = make(map[string]*object)
 	}
-	hash := md5.Sum(data)
-	bkt.objects[obj] = &object{
-		data:     slices.Clone(data),
-		hash:     hash[:],
-		metadata: metadata,
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return nil, err
+	} else if len(data) != int(contentLength) {
+		return nil, s3errs.ErrIncompleteBody
 	}
-	return nil
+	hash := md5.Sum(data)
+	now := time.Now()
+	bkt.objects[obj] = &object{
+		data:         slices.Clone(data),
+		hash:         hash[:],
+		lastModified: now,
+		metadata:     metadata,
+	}
+	return hash[:], nil
 }
 
 // ListBuckets lists all available buckets.
