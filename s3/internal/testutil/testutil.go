@@ -1,9 +1,11 @@
 package testutil
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"regexp"
@@ -35,7 +37,8 @@ type S3Tester struct {
 
 // AddObject adds an object to the in-memory S3 backend.
 func (t *S3Tester) AddObject(bucket, object string, data []byte, metadata map[string]string) error {
-	return t.backend.PutMemObject(accessKeyID, bucket, object, data, metadata)
+	_, err := t.backend.PutObject(context.Background(), accessKeyID, bucket, object, metadata, bytes.NewReader(data), int64(len(data)))
+	return err
 }
 
 // CreateBucket creates a new S3 bucket.
@@ -121,6 +124,25 @@ func (t *S3Tester) ListBuckets(ctx context.Context) ([]types.Bucket, error) {
 		return nil, err
 	}
 	return resp.Buckets, err
+}
+
+// PutObject is a convenience wrapper around the AWS SDK's PutObject API.
+func (t *S3Tester) PutObject(ctx context.Context, bucket, object string, r io.Reader, meta map[string]string) ([]byte, error) {
+	resp, err := t.client.PutObject(ctx, &service.PutObjectInput{
+		Bucket:   aws.String(bucket),
+		Key:      aws.String(object),
+		Body:     r,
+		Metadata: meta,
+	})
+	if err != nil {
+		return nil, err
+	}
+	etag := strings.Trim(*resp.ETag, `"`)
+	hash, err := hex.DecodeString(etag)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode ETag %q: %w", *resp.ETag, err)
+	}
+	return hash, nil
 }
 
 // NewTester creates a new S3Tester with an in-memory S3 backend and an AWS

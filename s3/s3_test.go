@@ -1,6 +1,7 @@
 package s3_test
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/SiaFoundation/s3d/s3/internal/testutil"
@@ -42,6 +43,10 @@ func TestAccessDenied(t *testing.T) {
 	})
 	assertAccessDenied(t, "ListBuckets", func(t *testing.T, s3 *testutil.S3Tester) error {
 		_, err := s3.ListBuckets(t.Context())
+		return err
+	})
+	assertAccessDenied(t, "PutObject", func(t *testing.T, s3 *testutil.S3Tester) error {
+		_, err := s3.PutObject(t.Context(), "foo", "bar", bytes.NewReader(nil), nil)
 		return err
 	})
 }
