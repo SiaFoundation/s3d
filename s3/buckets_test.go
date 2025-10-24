@@ -13,6 +13,7 @@ func TestBuckets(t *testing.T) {
 		s3Tester := testutil.NewTester(t, func(o *service.Options) {
 			o.UsePathStyle = pathStyle
 		})
+		otherTester := s3Tester.AddAccessKey(t, "foo", "bar")
 
 		// create the bucket
 		err := s3Tester.CreateBucket(t.Context(), "bucket")
@@ -36,6 +37,10 @@ func TestBuckets(t *testing.T) {
 		// creating a bucket with invalid name should fail
 		err = s3Tester.CreateBucket(t.Context(), "invalid_bucket")
 		testutil.AssertS3Error(t, s3errs.ErrInvalidBucketName, err)
+
+		// creating an existing bucket with different account should fail
+		err = otherTester.CreateBucket(t.Context(), "bucket")
+		testutil.AssertS3Error(t, s3errs.ErrBucketAlreadyExists, err)
 	}
 
 	t.Run("VirtualHostedStyle", func(t *testing.T) {

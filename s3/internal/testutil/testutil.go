@@ -31,8 +31,32 @@ const (
 // S3Tester wraps an AWS S3 client configured to talk to an in-memory S3
 // backend.
 type S3Tester struct {
+	cfg     aws.Config
 	backend *testutils.MemoryBackend
 	client  *service.Client
+}
+
+// AddAccessKey adds a new keypair to the in-memory S3 backend and returns a new
+// S3Tester configured to use those credentials.
+func (t *S3Tester) AddAccessKey(tb testing.TB, accessKeyID, secretKey string) *S3Tester {
+	err := t.backend.AddAccessKey(context.Background(), accessKeyID, secretKey)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	client := service.NewFromConfig(t.cfg, func(o *service.Options) {
+		*o = t.client.Options()
+		o.Credentials = aws.NewCredentialsCache(&credentials.StaticCredentialsProvider{
+			Value: aws.Credentials{
+				AccessKeyID:     accessKeyID,
+				SecretAccessKey: secretKey,
+			},
+		})
+	})
+	return &S3Tester{
+		cfg:     t.cfg,
+		backend: t.backend,
+		client:  client,
+	}
 }
 
 // AddObject adds an object to the in-memory S3 backend.

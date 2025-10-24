@@ -10,6 +10,7 @@ import (
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/internal/testutil"
+	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"lukechampine.com/frand"
 )
 
@@ -171,6 +172,15 @@ func TestPutObject(t *testing.T) {
 	} else if !reflect.DeepEqual(obj.Metadata, metadata) {
 		t.Fatal("metadata mismatch", obj.Metadata)
 	}
+
+	// upload to a bucket that doesn't exist
+	_, err = s3Tester.PutObject(t.Context(), "nonexistent", object, bytes.NewReader(data), metadata)
+	testutil.AssertS3Error(t, s3errs.ErrNoSuchBucket, err)
+
+	// upload to a bucket that we don't own
+	otherTester := s3Tester.AddAccessKey(t, "foo", "bar")
+	_, err = otherTester.PutObject(t.Context(), bucket, object, bytes.NewReader(data), metadata)
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
 }
 
 func TestRangeRequest(t *testing.T) {
