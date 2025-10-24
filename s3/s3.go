@@ -65,6 +65,15 @@ type Backend interface {
 	//   returned. You can use the 'Range' method on 'rnge' for that.
 	GetObject(ctx context.Context, accessKeyID *string, bucket, object string, rnge *ObjectRangeRequest) (*Object, error)
 
+	// HeadBucket checks if the bucket with the given name exists and is
+	// accessible for the user identified by the given access key.
+	//
+	// - If the access key does not have permission to access the bucket,
+	//   [ErrAccessDenied] must be returned.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	HeadBucket(ctx context.Context, accessKeyID, name string) error
+
 	// HeadObject is like GetObject but only retrieves the metadata of the
 	// object and returns an empty body.
 	HeadObject(ctx context.Context, accessKeyID *string, bucket, object string, rnge *ObjectRangeRequest) (*Object, error)
@@ -92,6 +101,7 @@ type s3 struct {
 	backend         Backend
 	hostBucketBases []string
 	logger          *zap.Logger
+	region          string
 }
 
 // Option is a configuration option for the S3 API handler.
@@ -111,6 +121,15 @@ func WithLogger(logger *zap.Logger) Option {
 func WithHostBucketBases(bases []string) Option {
 	return func(s *s3) {
 		s.hostBucketBases = bases
+	}
+}
+
+// WithRegion sets the AWS region for the S3 API handler. If empty, all regions
+// are allowed during authentication. If set, only requests signed for the given
+// region will be accepted.
+func WithRegion(region string) Option {
+	return func(s *s3) {
+		s.region = region
 	}
 }
 
@@ -156,10 +175,8 @@ func (s s3) authMiddleware(handler auth.AuthenticatedHandler) http.Handler {
 
 		var accessKeyID *string
 		if req.Header.Get(auth.HeaderAuthorization) != "" {
-			// NOTE: An empty region is passed here to indicate that every
-			// region is allowed. If we want to support regions in the future,
-			// we need to pass a user-configured region here.
-			region := ""
+			// NOTE: If 'region' is empty here, all regions are allowed.
+			region := s.region
 
 			akid, err := auth.HandleAuth(req, s.backend, region, time.Now())
 			if err != nil {

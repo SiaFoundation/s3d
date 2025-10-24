@@ -19,7 +19,7 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *st
 	case http.MethodGet:
 		// nolint:gocritic
 		if _, ok := r.URL.Query()["location"]; ok {
-			return s3errs.ErrNotImplemented // getBucketLocation is not implemented
+			return s.bucketLocation(w, r, bucket)
 		} else {
 			return s3errs.ErrNotImplemented // listBucket is not implemented
 		}
@@ -28,7 +28,7 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *st
 	case http.MethodDelete:
 		return s.deleteBucket(w, r, validatedKey, bucket)
 	case http.MethodHead:
-		return s3errs.ErrNotImplemented // headBucket is not implemented
+		return s.headBucket(w, r, validatedKey, bucket)
 	case http.MethodPost:
 		// nolint:gocritic
 		if _, ok := r.URL.Query()["delete"]; ok {
@@ -39,6 +39,25 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *st
 	default:
 		return s3errs.ErrMethodNotAllowed
 	}
+}
+
+// bucketLocation handles GET Bucket location requests.
+//
+// https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketLocation.html
+func (s *s3) bucketLocation(w http.ResponseWriter, r *http.Request, bucket string) error {
+	s.logger.Debug("getting bucket location", zap.String("bucket", bucket))
+
+	region := s.region
+	if region == "" {
+		// Per AWS S3 API, "null" is used for the us-east-1 region. So we use it
+		// here as a default as well.
+		region = "null"
+	}
+
+	return writeXMLResponse(w, GetBucketLocation{
+		Xmlns:              "http://s3.amazonaws.com/doc/2006-03-01/",
+		LocationConstraint: region,
+	})
 }
 
 // createBucket handles PUT Bucket requests.
@@ -67,6 +86,14 @@ func (s *s3) deleteBucket(w http.ResponseWriter, r *http.Request, accessKeyID, b
 	}
 	w.WriteHeader(http.StatusNoContent)
 	return nil
+}
+
+// headBucket handles HEAD Bucket requests.
+//
+// https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadBucket.html
+func (s *s3) headBucket(w http.ResponseWriter, r *http.Request, accessKeyID, bucket string) error {
+	s.logger.Debug("heading bucket", zap.String("bucket", bucket))
+	return s.backend.HeadBucket(r.Context(), accessKeyID, bucket)
 }
 
 // listBuckets handles the top-level route with no bucket or object path

@@ -65,6 +65,14 @@ func (t *S3Tester) AddObject(bucket, object string, data []byte, metadata map[st
 	return err
 }
 
+// BucketLocation gets the location of an S3 bucket.
+func (t *S3Tester) BucketLocation(ctx context.Context, bucket string) (string, error) {
+	resp, err := t.client.GetBucketLocation(ctx, &service.GetBucketLocationInput{
+		Bucket: aws.String(bucket),
+	})
+	return string(resp.LocationConstraint), err
+}
+
 // CreateBucket creates a new S3 bucket.
 func (t *S3Tester) CreateBucket(ctx context.Context, bucket string) error {
 	_, err := t.client.CreateBucket(ctx, &service.CreateBucketInput{
@@ -124,6 +132,14 @@ func (t *S3Tester) GetObject(ctx context.Context, bucket, object string, rnge *s
 		Range:        objRange,
 		Size:         size,
 	}, nil
+}
+
+// HeadBucket is a convenience wrapper around the AWS SDK's HeadBucket API.
+func (t *S3Tester) HeadBucket(ctx context.Context, bucket string) error {
+	_, err := t.client.HeadBucket(ctx, &service.HeadBucketInput{
+		Bucket: aws.String(bucket),
+	})
+	return err
 }
 
 // HeadObject is a convenience wrapper around the AWS SDK's HeadObject API.
@@ -250,6 +266,23 @@ func AssertS3Error(t testing.TB, expected s3errs.Error, got error) {
 	}
 
 	// check status code
+	AssertS3StatusCode(t, expected, got)
+
+	// check error
+	if !strings.Contains(got.Error(), expected.Code) {
+		t.Fatalf("expected error code %q, got %q", expected.Code, got.Error())
+	}
+}
+
+// AssertS3StatusCode is similar to AssertS3Error but meant to be used for
+// responses from HEAD endpoints which can't return the full error.
+func AssertS3StatusCode(t testing.TB, expected s3errs.Error, got error) {
+	t.Helper()
+	if got == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	// check status code
 	re := regexp.MustCompile(`StatusCode: (\d{3})`)
 	matches := re.FindStringSubmatch(got.Error())
 	if len(matches) != 2 {
@@ -259,11 +292,6 @@ func AssertS3Error(t testing.TB, expected s3errs.Error, got error) {
 	fmt.Sscanf(matches[1], "%d", &code)
 	if code != expected.HTTPStatus {
 		t.Fatalf("expected status code %d, got %d", expected.HTTPStatus, code)
-	}
-
-	// check error
-	if !strings.Contains(got.Error(), expected.Code) {
-		t.Fatalf("expected error code %q, got %q", expected.Code, got.Error())
 	}
 }
 
