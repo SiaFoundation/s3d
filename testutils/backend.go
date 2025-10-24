@@ -156,10 +156,11 @@ func (b *MemoryBackend) headOrGetObject(_ context.Context, accessKeyID *string, 
 		}
 	}
 	return &s3.Object{
-		Body:     body,
-		Hash:     obj.hash,
-		Metadata: obj.metadata,
-		Range:    rnge,
-		Size:     size,
+		Body:         body,
+		Hash:         obj.hash,
+		LastModified: obj.lastModified,
+		Metadata:     obj.metadata,
+		Range:        rnge,
+		Size:         size,
 	}, nil
 }

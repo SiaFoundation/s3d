@@ -17,7 +17,7 @@ import (
 type Object struct {
 	Body         io.ReadCloser
 	Hash         []byte
-	LastModified time.Time // TODO: set
+	LastModified time.Time
 	Metadata     map[string]string
 	Range        *ObjectRange
 	Size         int64
@@ -308,6 +308,7 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 	} else {
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", obj.Size))
 	}
+	w.Header().Set("Last-Modified", obj.LastModified.UTC().Format(http.TimeFormat))
 
 	return nil
 }

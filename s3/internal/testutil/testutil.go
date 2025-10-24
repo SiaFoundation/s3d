@@ -100,11 +100,12 @@ func (t *S3Tester) GetObject(ctx context.Context, bucket, object string, rnge *s
 		size = *resp.ContentLength
 	}
 	return &s3.Object{
-		Body:     resp.Body,
-		Hash:     hash,
-		Metadata: resp.Metadata,
-		Range:    objRange,
-		Size:     size,
+		Body:         resp.Body,
+		Hash:         hash,
+		LastModified: *resp.LastModified,
+		Metadata:     resp.Metadata,
+		Range:        objRange,
+		Size:         size,
 	}, nil
 }
 
@@ -134,10 +135,11 @@ func (t *S3Tester) HeadObject(ctx context.Context, bucket, object string, rnge *
 		size = *resp.ContentLength
 	}
 	return &s3.Object{
-		Hash:     hash,
-		Metadata: resp.Metadata,
-		Range:    objRange,
-		Size:     size,
+		Hash:         hash,
+		LastModified: *resp.LastModified,
+		Metadata:     resp.Metadata,
+		Range:        objRange,
+		Size:         size,
 	}, nil
 }
 
