@@ -129,7 +129,7 @@ func TestGetAndHeadObject(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			assertObject(t, obj, true, tc.rnge)
+			assertObject(t, obj, false, tc.rnge)
 		})
 	}
 }
