@@ -22,7 +22,7 @@ type Object struct {
 	Size     int64
 }
 
-// routeObject oandles URLs that contain both a bucket path segment and an
+// routeObject handles URLs that contain both a bucket path segment and an
 // object path segment.
 func (s *s3) routeObject(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket, object string) error {
 	switch r.Method {

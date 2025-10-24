@@ -209,7 +209,7 @@ func parseRange(s string) (_ *s3.ObjectRange, size int64, _ error) {
 	}
 	return &s3.ObjectRange{
 		Start:  start,
-		Length: end - start,
+		Length: end - start + 1,
 	}, size, nil
 }
 
