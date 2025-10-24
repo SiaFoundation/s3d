@@ -26,8 +26,8 @@ type (
 type (
 	// BucketInfo represents an S3 bucket
 	BucketInfo struct {
-		Name         string    `xml:"Name"`
-		CreationDate time.Time `xml:"CreationDate"`
+		Name         string      `xml:"Name"`
+		CreationDate ContentTime `xml:"CreationDate"`
 	}
 
 	// ListBucketsResponse is the response to a ListBuckets request
@@ -38,3 +38,20 @@ type (
 		Buckets []BucketInfo `xml:"Buckets>Bucket"`
 	}
 )
+
+type ContentTime struct {
+	time.Time
+}
+
+func NewContentTime(t time.Time) ContentTime {
+	return ContentTime{t}
+}
+
+func (c ContentTime) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
+	// This is the format expected by the aws xml code, not the default.
+	if !c.IsZero() {
+		var s = c.UTC().Format("2006-01-02T15:04:05.999Z")
+		return e.EncodeElement(s, start)
+	}
+	return nil
+}

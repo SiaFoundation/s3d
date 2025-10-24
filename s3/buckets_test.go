@@ -1,6 +1,7 @@
 package s3_test
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/SiaFoundation/s3d/s3/internal/testutil"
@@ -30,6 +31,12 @@ func TestBuckets(t *testing.T) {
 			t.Fatalf("unexpected buckets: %v", buckets)
 		}
 
+		// add an object to the bucket
+		_, err = s3Tester.PutObject(t.Context(), "bucket", "key", bytes.NewReader([]byte("value")), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
 		// creating it again should fail
 		err = s3Tester.CreateBucket(t.Context(), "bucket")
 		testutil.AssertS3Error(t, s3errs.ErrBucketAlreadyOwnedByYou, err)
@@ -41,6 +48,22 @@ func TestBuckets(t *testing.T) {
 		// creating an existing bucket with different account should fail
 		err = otherTester.CreateBucket(t.Context(), "bucket")
 		testutil.AssertS3Error(t, s3errs.ErrBucketAlreadyExists, err)
+
+		// deleting the bucket should fail since it's not empty
+		err = s3Tester.DeleteBucket(t.Context(), "bucket")
+		testutil.AssertS3Error(t, s3errs.ErrBucketNotEmpty, err)
+
+		// delete the object
+		err = s3Tester.DeleteObject(t.Context(), "bucket", "key")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// now deleting the bucket should succeed
+		err = s3Tester.DeleteBucket(t.Context(), "bucket")
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	t.Run("VirtualHostedStyle", func(t *testing.T) {
