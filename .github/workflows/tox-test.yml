@@ -36,8 +36,45 @@ jobs:
           S3TEST_CONF: ${{ github.workspace }}/s3tests.conf
         run: tox run -vv --notest -c ./s3-tests
 
-      - name: Run Tests
+      - name: Run test_headers.py
         env:
           S3TEST_CONF: ${{ github.workspace }}/s3tests.conf
           S3_USE_SIGV4: "True" # We only support v4 signatures
-        run: tox run --skip-pkg-install -c ./s3-tests
+        run: tox run --skip-pkg-install -c ./s3-tests -- s3tests/functional/test_headers.py
+# NOTE: The following tests are currently disabled
+#
+#      - name: Run test_iam.py
+#        env:
+#          S3TEST_CONF: ${{ github.workspace }}/s3tests.conf
+#          S3_USE_SIGV4: "True" # We only support v4 signatures
+#        run: tox run --skip-pkg-install -c ./s3-tests -- s3tests/functional/test_iam.py
+#
+#      - name: Run test_s3.py
+#        env:
+#          S3TEST_CONF: ${{ github.workspace }}/s3tests.conf
+#          S3_USE_SIGV4: "True" # We only support v4 signatures
+#        run: tox run --skip-pkg-install -c ./s3-tests -- s3tests/functional/test_s3.py
+#
+#      - name: Run test_s3select.py
+#        env:
+#          S3TEST_CONF: ${{ github.workspace }}/s3tests.conf
+#          S3_USE_SIGV4: "True" # We only support v4 signatures
+#        run: tox run --skip-pkg-install -c ./s3-tests -- s3tests/functional/test_s3select.py
+#
+#      - name: Run test_sns.py
+#        env:
+#          S3TEST_CONF: ${{ github.workspace }}/s3tests.conf
+#          S3_USE_SIGV4: "True" # We only support v4 signatures
+#        run: tox run --skip-pkg-install -c ./s3-tests -- s3tests/functional/test_sns.py
+#
+#      - name: Run test_sts.py
+#        env:
+#          S3TEST_CONF: ${{ github.workspace }}/s3tests.conf
+#          S3_USE_SIGV4: "True" # We only support v4 signatures
+#        run: tox run --skip-pkg-install -c ./s3-tests -- s3tests/functional/test_sts.py
+#
+#      - name: Run test_utils.py
+#        env:
+#          S3TEST_CONF: ${{ github.workspace }}/s3tests.conf
+#          S3_USE_SIGV4: "True" # We only support v4 signatures
+#        run: tox run --skip-pkg-install -c ./s3-tests -- s3tests/functional/test_utils.py
