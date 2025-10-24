@@ -58,3 +58,10 @@ func (c ContentTime) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
 	}
 	return nil
 }
+
+// GetBucketLocation is the response to a GetBucketLocation request.
+type GetBucketLocation struct {
+	XMLName            xml.Name `xml:"LocationConstraint"`
+	Xmlns              string   `xml:"xmlns,attr"`
+	LocationConstraint string   `xml:",chardata"`
+}

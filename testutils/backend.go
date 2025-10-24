@@ -106,6 +106,17 @@ func (b *MemoryBackend) GetObject(ctx context.Context, accessKeyID *string, buck
 	return b.headOrGetObject(ctx, accessKeyID, bucket, object, requestedRange, false)
 }
 
+// HeadBucket checks if the specified bucket exists and is owned by the user.
+func (b *MemoryBackend) HeadBucket(ctx context.Context, accessKeyID, bucket string) error {
+	bkt, exists := b.buckets[bucket]
+	if !exists {
+		return s3errs.ErrNoSuchBucket
+	} else if bkt.owner != accessKeyID {
+		return s3errs.ErrAccessDenied
+	}
+	return nil
+}
+
 // HeadObject retrieves metadata about the specified object without returning
 // the object's data.
 func (b *MemoryBackend) HeadObject(ctx context.Context, accessKeyID *string, bucket, object string, requestedRange *s3.ObjectRangeRequest) (*s3.Object, error) {
