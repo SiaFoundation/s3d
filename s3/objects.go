@@ -23,6 +23,21 @@ type Object struct {
 	Size         int64
 }
 
+// ObjectDeleteResult contains information about the result of a DeleteObject
+// operation.
+type ObjectDeleteResult struct {
+	// Specifies whether the versioned object that was permanently deleted was
+	// (true) or was not (false) a delete marker. In a simple DELETE, this
+	// header indicates whether (true) or not (false) a delete marker was
+	// created.
+	IsDeleteMarker bool
+
+	// Returns the version ID of the delete marker created as a result of the
+	// DELETE operation. If you delete a specific object version, the value
+	// returned by this header is the version ID of the object version deleted.
+	VersionID string
+}
+
 // routeObject handles URLs that contain both a bucket path segment and an
 // object path segment.
 func (s *s3) routeObject(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket, object string) error {
@@ -49,19 +64,6 @@ func (s *s3) routeObject(w http.ResponseWriter, r *http.Request, accessKeyID *st
 	default:
 		return s3errs.ErrMethodNotAllowed
 	}
-}
-
-type ObjectDeleteResult struct {
-	// Specifies whether the versioned object that was permanently deleted was
-	// (true) or was not (false) a delete marker. In a simple DELETE, this
-	// header indicates whether (true) or not (false) a delete marker was
-	// created.
-	IsDeleteMarker bool
-
-	// Returns the version ID of the delete marker created as a result of the
-	// DELETE operation. If you delete a specific object version, the value
-	// returned by this header is the version ID of the object version deleted.
-	VersionID string
 }
 
 func (s *s3) deleteObject(w http.ResponseWriter, r *http.Request, accessKeyID string, bucket, object string) error {

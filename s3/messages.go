@@ -39,14 +39,17 @@ type (
 	}
 )
 
+// ContentTime is a wrapper around time.Time to provide custom XML marshalling.
 type ContentTime struct {
 	time.Time
 }
 
+// NewContentTime creates a new ContentTime instance.
 func NewContentTime(t time.Time) ContentTime {
 	return ContentTime{t}
 }
 
+// MarshalXML implements custom XML marshalling for ContentTime.
 func (c ContentTime) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
 	// This is the format expected by the aws xml code, not the default.
 	if !c.IsZero() {
