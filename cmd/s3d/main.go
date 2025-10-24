@@ -28,5 +28,5 @@ func main() {
 	s3 := s3.New(backend,
 		s3.WithHostBucketBases([]string{"localhost"}),
 		s3.WithLogger(logger))
-	http.ListenAndServe("localhost:7777", s3)
+	http.ListenAndServe("localhost:8000", s3)
 }
