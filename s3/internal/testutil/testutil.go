@@ -221,7 +221,7 @@ func rangeHeader(rnge *s3.ObjectRangeRequest) *string {
 	}
 	var s string
 	if rnge.FromEnd {
-		s = fmt.Sprintf("bytes=-%d", rnge.End)
+		s = fmt.Sprintf("bytes=-%d", rnge.Start)
 	} else if rnge.End == -1 {
 		s = fmt.Sprintf("bytes=%d-", rnge.Start)
 	} else {
