@@ -7,6 +7,7 @@ import (
 	"io"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/internal/testutil"
@@ -15,6 +16,7 @@ import (
 )
 
 func TestGetAndHeadObject(t *testing.T) {
+	now := time.Now().UTC().Add(-time.Second)
 	s3Tester := testutil.NewTester(t)
 
 	// prepare a bucket
@@ -59,6 +61,8 @@ func TestGetAndHeadObject(t *testing.T) {
 			t.Fatal("hash mismatch", obj.Hash, hash[:])
 		} else if obj.Size != int64(len(data)) {
 			t.Fatalf("size mismatch: expected %d, got %d", len(data), obj.Size)
+		} else if obj.LastModified.Before(now) {
+			t.Fatal("last modified not set", obj.LastModified)
 		}
 
 		// NOTE: The S3 client trims away the x-amz-meta- prefix when returning user
