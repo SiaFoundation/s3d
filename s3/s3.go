@@ -103,6 +103,7 @@ func (s s3) authMiddleware(handler auth.AuthenticatedHandler) http.Handler {
 
 			akid, err := auth.HandleAuth(req, s.backend, region, time.Now())
 			if err != nil {
+				s.logger.Debug("authentication failed", zap.Error(err))
 				writeErrorResponse(w, err)
 				return
 			}
