@@ -24,6 +24,29 @@ type Backend interface {
 	// returned depending on the ownership of the bucket.
 	CreateBucket(ctx context.Context, accessKeyID, name string) error
 
+	// DeleteBucket deletes the bucket with the given name for the user
+	// identified by the given access key.
+	//
+	// - If the access key does not have permission to delete the bucket,
+	//   [ErrAccessDenied] must be returned.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	//
+	// - If the bucket is not empty, [ErrBucketNotEmpty] must be returned.
+	DeleteBucket(ctx context.Context, accessKeyID, name string) error
+
+	// DeleteObject deletes the object with the given key from the specified
+	// bucket for the user identified by the given access key.
+	//
+	// - If the access key does not have permission to delete the object,
+	//   [ErrAccessDenied] must be returned.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	//
+	// - If the object with the given key in the specified bucket does not exist,
+	//   [ErrNoSuchKey] must be returned.
+	DeleteObject(ctx context.Context, accessKeyID, bucket, object string) (*ObjectDeleteResult, error)
+
 	// GetObject retrieves the object with the given key from the specified
 	// bucket for the user identified by the given access key. The provided
 	// range is either nil if no range was requested, or contains the requested,
@@ -240,7 +263,7 @@ func (s *s3) routeBase(w http.ResponseWriter, r *http.Request, accessKeyID *stri
 	} else if _, ok := query["versioning"]; ok {
 		err = s.routeVersioning(w, r)
 	} else if _, ok := query["versions"]; ok {
-		err = s.routeVersions(w, r)
+		err = s.routeVersions(w, r, accessKeyID, bucket)
 	} else if versionID := versionFromQuery(query["versionId"]); versionID != "" {
 		err = s.routeVersion(w, r)
 	} else if bucket != "" && object != "" {
@@ -279,8 +302,17 @@ func (s *s3) routeVersioning(w http.ResponseWriter, r *http.Request) error {
 }
 
 // routeVersions operates on routes that contain '?versions' in the query string.
-func (s *s3) routeVersions(w http.ResponseWriter, r *http.Request) error {
-	return s3errs.ErrNotImplemented
+func (s *s3) routeVersions(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket string) error {
+	validatedKey, err := assertAuth(accessKeyID)
+	if err != nil {
+		return err
+	}
+	switch r.Method {
+	case http.MethodGet:
+		return s.listBucketVersions(w, r, validatedKey, bucket)
+	default:
+		return s3errs.ErrMethodNotAllowed
+	}
 }
 
 // routeVersion operates on routes that contain '?versionId=<id>' in the

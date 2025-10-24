@@ -45,10 +45,42 @@ func (s *s3) routeObject(w http.ResponseWriter, r *http.Request, accessKeyID *st
 	case http.MethodPut:
 		return s.putObject(w, r, validatedKey, bucket, object)
 	case http.MethodDelete:
-		return s3errs.ErrNotImplemented
+		return s.deleteObject(w, r, validatedKey, bucket, object)
 	default:
 		return s3errs.ErrMethodNotAllowed
 	}
+}
+
+type ObjectDeleteResult struct {
+	// Specifies whether the versioned object that was permanently deleted was
+	// (true) or was not (false) a delete marker. In a simple DELETE, this
+	// header indicates whether (true) or not (false) a delete marker was
+	// created.
+	IsDeleteMarker bool
+
+	// Returns the version ID of the delete marker created as a result of the
+	// DELETE operation. If you delete a specific object version, the value
+	// returned by this header is the version ID of the object version deleted.
+	VersionID string
+}
+
+func (s *s3) deleteObject(w http.ResponseWriter, r *http.Request, accessKeyID string, bucket, object string) error {
+	log := s.logger.With(zap.String("bucket", bucket),
+		zap.String("object", object))
+	log.Debug("delete object")
+
+	result, err := s.backend.DeleteObject(r.Context(), accessKeyID, bucket, object)
+	if err != nil {
+		return err
+	}
+
+	w.Header().Set("x-amz-delete-marker", fmt.Sprint(result.IsDeleteMarker))
+	if result.VersionID != "" {
+		w.Header().Set("x-amz-version-id", string(result.VersionID))
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+	return nil
 }
 
 func (s *s3) getObject(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket, object, version string) error {

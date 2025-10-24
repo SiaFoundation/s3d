@@ -26,7 +26,7 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *st
 	case http.MethodPut:
 		return s.createBucket(w, r, validatedKey, bucket)
 	case http.MethodDelete:
-		return s3errs.ErrNotImplemented // deleteBucket is not implemented
+		return s.deleteBucket(w, r, validatedKey, bucket)
 	case http.MethodHead:
 		return s3errs.ErrNotImplemented // headBucket is not implemented
 	case http.MethodPost:
@@ -59,6 +59,16 @@ func (s *s3) createBucket(w http.ResponseWriter, r *http.Request, accessKeyID, b
 	return nil
 }
 
+func (s *s3) deleteBucket(w http.ResponseWriter, r *http.Request, accessKeyID, bucket string) error {
+	s.logger.Debug("deleting bucket", zap.String("bucket", bucket))
+
+	if err := s.backend.DeleteBucket(r.Context(), accessKeyID, bucket); err != nil {
+		return err
+	}
+	w.WriteHeader(http.StatusNoContent)
+	return nil
+}
+
 // listBuckets handles the top-level route with no bucket or object path
 // segments.
 //
@@ -82,4 +92,8 @@ func (s *s3) listBuckets(w http.ResponseWriter, r *http.Request, accessKeyID *st
 		Owner:   globalUserInfo,
 	}
 	return writeXMLResponse(w, resp)
+}
+
+func (s *s3) listBucketVersions(w http.ResponseWriter, r *http.Request, accessKeyID string, bucket string) error {
+	return s3errs.ErrNotImplemented
 }

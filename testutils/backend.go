@@ -68,6 +68,39 @@ func (b *MemoryBackend) CreateBucket(ctx context.Context, accessKeyID, name stri
 	return nil
 }
 
+// DeleteBucket deletes the specified bucket if it exists, is owned by the user
+// requesting deletion and is empty.
+func (b *MemoryBackend) DeleteBucket(ctx context.Context, accessKeyID, name string) error {
+	bkt, exists := b.buckets[name]
+	if !exists {
+		return s3errs.ErrNoSuchBucket
+	} else if bkt.owner != accessKeyID {
+		return s3errs.ErrAccessDenied
+	} else if len(bkt.objects) > 0 {
+		return s3errs.ErrBucketNotEmpty
+	}
+	delete(b.buckets, name)
+	return nil
+}
+
+// DeleteObject deletes the specified object from the given bucket.
+func (b *MemoryBackend) DeleteObject(ctx context.Context, accessKeyID, bucket, object string) (*s3.ObjectDeleteResult, error) {
+	bkt, exists := b.buckets[bucket]
+	if !exists {
+		return nil, s3errs.ErrNoSuchBucket
+	} else if bkt.owner != accessKeyID {
+		return nil, s3errs.ErrAccessDenied
+	}
+	if _, exists := bkt.objects[object]; !exists {
+		return nil, s3errs.ErrNoSuchKey
+	}
+	delete(bkt.objects, object)
+	return &s3.ObjectDeleteResult{
+		IsDeleteMarker: false,
+		VersionID:      "",
+	}, nil
+}
+
 // GetObject retrieves an object from the specified bucket.
 func (b *MemoryBackend) GetObject(ctx context.Context, accessKeyID *string, bucket, object string, requestedRange *s3.ObjectRangeRequest) (*s3.Object, error) {
 	return b.headOrGetObject(ctx, accessKeyID, bucket, object, requestedRange, false)
@@ -116,7 +149,7 @@ func (b *MemoryBackend) ListBuckets(ctx context.Context, accessKeyID string) ([]
 	for name := range b.buckets {
 		buckets = append(buckets, s3.BucketInfo{
 			Name:         name,
-			CreationDate: time.Now().UTC(),
+			CreationDate: s3.NewContentTime(time.Now()),
 		})
 	}
 	return buckets, nil

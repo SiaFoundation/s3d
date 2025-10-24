@@ -74,6 +74,23 @@ func (t *S3Tester) CreateBucket(ctx context.Context, bucket string) error {
 	return err
 }
 
+// DeleteBucket deletes an S3 bucket.
+func (t *S3Tester) DeleteBucket(ctx context.Context, bucket string) error {
+	_, err := t.client.DeleteBucket(ctx, &service.DeleteBucketInput{
+		Bucket: aws.String(bucket),
+	})
+	return err
+}
+
+// DeleteObject deletes an S3 object.
+func (t *S3Tester) DeleteObject(ctx context.Context, bucket, object string) error {
+	_, err := t.client.DeleteObject(ctx, &service.DeleteObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(object),
+	})
+	return err
+}
+
 // GetObject is a convenience wrapper around the AWS SDK's GetObject API.
 func (t *S3Tester) GetObject(ctx context.Context, bucket, object string, rnge *s3.ObjectRangeRequest) (*s3.Object, error) {
 	resp, err := t.client.GetObject(ctx, &service.GetObjectInput{
