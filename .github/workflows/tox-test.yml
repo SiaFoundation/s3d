@@ -43,6 +43,12 @@ jobs:
         run: |
           nohup go run ./cmd/s3d/main.go > s3d.log 2>&1 &
           echo $! > s3d.pid
+          sleep 1
+          if ! kill -0 $(cat s3d.pid); then
+            echo "s3d failed to start. Logs:"
+            cat s3d.log
+            exit 1
+          fi
 
       - name: Run test_headers.py
         env:
@@ -89,10 +95,12 @@ jobs:
       #        run: tox run --skip-pkg-install -c ./s3-tests -- s3tests/functional/test_utils.py
 
       - name: Kill s3d
+        if: always()
         run: |
           kill $(cat s3d.pid) || true
 
       - name: Upload s3d logs as artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: s3d-logs
