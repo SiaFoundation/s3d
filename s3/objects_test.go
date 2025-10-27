@@ -295,5 +295,4 @@ func TestListObjects(t *testing.T) {
 			}
 		})
 	}
-
 }

@@ -6,6 +6,8 @@ import (
 	"strings"
 )
 
+// Prefix represents an optional prefix and delimiter for listing objects in a
+// bucket.
 type Prefix struct {
 	HasPrefix bool
 	Prefix    string
@@ -27,6 +29,8 @@ func prefixFromQuery(query url.Values) Prefix {
 	return prefix
 }
 
+// NewPrefix creates a new Prefix from the given optional prefix and delimiter
+// strings.
 func NewPrefix(prefix, delim *string) (p Prefix) {
 	if prefix != nil {
 		p.HasPrefix, p.Prefix = true, *prefix
@@ -34,12 +38,6 @@ func NewPrefix(prefix, delim *string) (p Prefix) {
 	if delim != nil {
 		p.HasDelimiter, p.Delimiter = true, *delim
 	}
-	return p
-}
-
-func NewFolderPrefix(prefix string) (p Prefix) {
-	p.HasPrefix, p.Prefix = true, prefix
-	p.HasDelimiter, p.Delimiter = true, "/"
 	return p
 }
 
@@ -65,8 +63,8 @@ func (p Prefix) FilePrefix() (path, remaining string, ok bool) {
 	}
 }
 
-// PrefixMatch checks whether key starts with prefix. If the prefix does not
-// match, nil is returned.
+// Match checks whether key starts with prefix. If the prefix does not match,
+// nil is returned.
 //
 // It is a best-effort attempt to implement the prefix/delimiter matching found
 // in S3.
@@ -118,7 +116,6 @@ func (p Prefix) Match(key string) *PrefixMatch {
 			if !strings.HasPrefix(keyParts[i], preParts[i]) {
 				return nil
 			}
-
 		} else {
 			if keyParts[i] != preParts[i] {
 				return nil
@@ -146,6 +143,7 @@ func (p Prefix) String() string {
 	}
 }
 
+// PrefixMatch describes a successful match of a key against a Prefix.
 type PrefixMatch struct {
 	// Input key passed to PrefixMatch.
 	Key string
@@ -156,8 +154,4 @@ type PrefixMatch struct {
 
 	// The longest matched part of the key.
 	MatchedPart string
-}
-
-func (match *PrefixMatch) AsCommonPrefix() CommonPrefix {
-	return CommonPrefix{Prefix: match.MatchedPart}
 }
