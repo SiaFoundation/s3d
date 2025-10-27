@@ -1,11 +1,16 @@
 package s3
 
 const (
+	// KeySizeLimit defines the maximum size of an S3 object key's name.
+	//
 	// From https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingMetadata.html:
 	// The name for a key is a sequence of Unicode characters whose UTF-8
 	// encoding is at most 1024 bytes long.
 	KeySizeLimit = 1024
 
+	// MetadataSizeLimit defines the maximum size of the metadata associated
+	// with an S3 object.
+	//
 	// From https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingMetadata.html:
 	// Within the PUT request header, the user-defined metadata is limited to 2
 	// KB in size. The size of user-defined metadata is measured by taking the
