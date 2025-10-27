@@ -73,6 +73,7 @@ type (
 		Prefix string `xml:"Prefix"`
 	}
 
+	// Content represents an S3 object in a bucket listing.
 	Content struct {
 		Key          string       `xml:"Key"`
 		LastModified ContentTime  `xml:"LastModified"`
@@ -82,6 +83,7 @@ type (
 		Owner        *UserInfo    `xml:"Owner,omitempty"`
 	}
 
+	// ListObjectsV2Result is the response to a ListObjectsV2 request.
 	ListObjectsV2Result struct {
 		ListObjectsResultBase
 
@@ -102,6 +104,7 @@ type (
 		StartAfter string `xml:"StartAfter,omitempty"`
 	}
 
+	// ListObjectsResultBase is the common part of a listing response.
 	ListObjectsResultBase struct {
 		XMLName xml.Name `xml:"ListBucketResult"`
 		Xmlns   string   `xml:"xmlns,attr"`
@@ -132,9 +135,13 @@ type (
 		Contents       []*Content     `xml:"Contents"`
 	}
 
+	// StorageClass represents the storage class of an S3 object. If not specified,
+	// it defaults to "STANDARD".
 	StorageClass string
 )
 
+// MarshalXML implements custom XML marshalling for StorageClass to override the
+// empty value.
 func (s StorageClass) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
 	if s == "" {
 		s = "STANDARD"

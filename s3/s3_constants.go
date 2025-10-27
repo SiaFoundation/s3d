@@ -19,6 +19,11 @@ const (
 )
 
 const (
-	MaxBucketKeys        = 1000
+	// MaxBucketKeys is the maximum number of object keys from a bucket that can
+	// be retrieved in one call to ListObjects.
+	MaxBucketKeys = 1000
+
+	// DefaultMaxBucketKeys is the default number of object keys from a bucket
+	// retrieved by ListObjects if no limit is specified.
 	DefaultMaxBucketKeys = 1000
 )

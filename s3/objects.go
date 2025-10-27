@@ -154,6 +154,7 @@ func (s *s3) headObject(w http.ResponseWriter, r *http.Request, accessKeyID *str
 	return writeGetOrHeadObjectHeaders(obj, w, r)
 }
 
+// ObjectsListResult contains the result of a ListObjects operation.
 type ObjectsListResult struct {
 	CommonPrefixes []CommonPrefix
 	Contents       []*Content
@@ -166,14 +167,19 @@ type ObjectsListResult struct {
 	prefixes map[string]bool
 }
 
+// NewObjectsListResult creates a new, empty ObjectsListResult. Use Add and
+// AddPrefix to populate it.
 func NewObjectsListResult() *ObjectsListResult {
 	return &ObjectsListResult{}
 }
 
+// Add adds an object to the result.
 func (b *ObjectsListResult) Add(item *Content) {
 	b.Contents = append(b.Contents, item)
 }
 
+// AddPrefix adds a common prefix to the result. If the prefix has already been
+// added, this is a no-op.
 func (b *ObjectsListResult) AddPrefix(prefix string) {
 	if b.prefixes == nil {
 		b.prefixes = map[string]bool{}
@@ -264,6 +270,7 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID strin
 	return nil
 }
 
+// FormatETag formats the given hash as an S3 ETag string.
 func FormatETag(hash []byte) string {
 	return `"` + hex.EncodeToString(hash) + `"`
 }
@@ -292,15 +299,16 @@ func metadataHeaders(headers map[string][]string, sizeLimit int) (map[string]str
 	return meta, nil
 }
 
+// ListObjectsPage specifies pagination options for listing objects in a bucket.
 type ListObjectsPage struct {
-	// specifies the key in the bucket that represents the last item in
-	// the previous page. The first key in the returned page will be the
-	// next lexicographically (UTF-8 binary) sorted key after Marker.
-	// If HasMarker is true, this must be non-empty.
+	// Marker specifies the key in the bucket that represents the last item in
+	// the previous page. The first key in the returned page will be the next
+	// lexicographically (UTF-8 binary) sorted key after Marker. If HasMarker is
+	// true, this must be non-empty.
 	Marker *string
 
-	// sets the maximum number of keys returned in the response body. The
-	// response might contain fewer keys, but will never contain more. If
+	// MaxKeys sets the maximum number of keys returned in the response body.
+	// The response might contain fewer keys, but will never contain more. If
 	// additional keys satisfy the search criteria, but were not returned
 	// because max-keys was exceeded, the response contains
 	// <isTruncated>true</isTruncated>. To return the additional keys, see
@@ -379,7 +387,6 @@ func listObjectsPageFromQuery(query url.Values) (page ListObjectsPage, rerr erro
 			return page, s3errs.ErrInvalidArgument
 		}
 		page.Marker = aws.String(string(tok))
-
 	} else if _, hasMarker := query["start-after"]; hasMarker {
 		// List Objects V2 uses start-after if continuation-token is missing:
 		page.Marker = aws.String(query.Get("start-after"))
@@ -388,7 +395,7 @@ func listObjectsPageFromQuery(query url.Values) (page ListObjectsPage, rerr erro
 	return page, nil
 }
 
-func parseClampedInt(in string, defaultValue, min, max int64) (int64, error) {
+func parseClampedInt(in string, defaultValue, minValue, maxValue int64) (int64, error) {
 	var v int64
 	if in == "" {
 		v = defaultValue
@@ -400,10 +407,10 @@ func parseClampedInt(in string, defaultValue, min, max int64) (int64, error) {
 		}
 	}
 
-	if v < min {
-		v = min
-	} else if v > max {
-		v = max
+	if v < minValue {
+		v = minValue
+	} else if v > maxValue {
+		v = maxValue
 	}
 
 	return v, nil
