@@ -216,6 +216,7 @@ func NewTester(t testing.TB, optFns ...func(*service.Options)) *S3Tester {
 	opts = append(opts, optFns...)
 
 	return &S3Tester{
+		cfg:     cfg,
 		backend: backend,
 		client:  service.NewFromConfig(cfg, opts...),
 	}
