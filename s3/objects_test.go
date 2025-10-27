@@ -3,6 +3,7 @@ package s3_test
 import (
 	"bytes"
 	"crypto/md5"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"reflect"
@@ -176,6 +177,16 @@ func TestPutObject(t *testing.T) {
 	} else if !reflect.DeepEqual(obj.Metadata, metadata) {
 		t.Fatal("metadata mismatch", obj.Metadata)
 	}
+
+	// upload with a key that is too large
+	_, err = s3Tester.PutObject(t.Context(), bucket, hex.EncodeToString(frand.Bytes(s3.KeySizeLimit)), bytes.NewReader(data), nil)
+	testutil.AssertS3Error(t, s3errs.ErrKeyTooLongError, err)
+
+	// upload with metadata that is too large
+	_, err = s3Tester.PutObject(t.Context(), bucket, "too-much-meta", bytes.NewReader(data), map[string]string{
+		"too-much": hex.EncodeToString(frand.Bytes(s3.MetadataSizeLimit)),
+	})
+	testutil.AssertS3Error(t, s3errs.ErrMetadataTooLarge, err)
 
 	// upload to a bucket that doesn't exist
 	_, err = s3Tester.PutObject(t.Context(), "nonexistent", object, bytes.NewReader(data), metadata)

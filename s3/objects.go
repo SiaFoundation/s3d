@@ -122,8 +122,13 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID strin
 		zap.String("object", object))
 	log.Debug("put object")
 
+	// check key length
+	if len(object) > KeySizeLimit {
+		return s3errs.ErrKeyTooLongError
+	}
+
 	// extract metadata headers
-	meta, err := metadataHeaders(r.Header, defaultMetadataSizeLimit)
+	meta, err := metadataHeaders(r.Header, MetadataSizeLimit)
 	if err != nil {
 		return err
 	}
