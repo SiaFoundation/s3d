@@ -242,3 +242,58 @@ func TestRangeRequest(t *testing.T) {
 		})
 	}
 }
+
+func TestListObjects(t *testing.T) {
+	s3Tester := testutil.NewTester(t)
+
+	// prepare a bucket
+	bucket := "foo"
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// upload a few objects
+	keys := []string{"foo", "foo/baz", "foo/bar"}
+	for _, key := range keys {
+		_, err := s3Tester.PutObject(t.Context(), bucket, key, bytes.NewReader([]byte{}), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	tests := []struct {
+		name      string
+		prefix    *string
+		marker    *string
+		maxKeys   int64
+		truncated bool
+		result    []string
+	}{
+		{
+			name:   "All",
+			result: []string{"foo", "foo/bar", "foo/baz"},
+		},
+		{
+			name:      "WithMaxKeys",
+			maxKeys:   2,
+			result:    []string{"foo", "foo/bar"},
+			truncated: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := s3Tester.ListObjectsV2(t.Context(), bucket, tc.prefix, s3.ListObjectsPage{
+				Marker:  tc.marker,
+				MaxKeys: tc.maxKeys,
+			})
+			if err != nil {
+				t.Fatal(err)
+			} else if len(resp.Contents) != len(tc.result) {
+				t.Fatalf("expected %d objects, got %d", len(tc.result), len(resp.Contents))
+			} else if *resp.IsTruncated != tc.truncated {
+				t.Fatalf("expected truncated=%v, got %v", tc.truncated, *resp.IsTruncated)
+			}
+		})
+	}
+
+}

@@ -1,15 +1,18 @@
 package s3
 
 import (
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"go.uber.org/zap"
 )
 
@@ -151,6 +154,86 @@ func (s *s3) headObject(w http.ResponseWriter, r *http.Request, accessKeyID *str
 	return writeGetOrHeadObjectHeaders(obj, w, r)
 }
 
+type ObjectsListResult struct {
+	CommonPrefixes []CommonPrefix
+	Contents       []*Content
+	IsTruncated    bool
+	NextMarker     string
+
+	// prefixes maintains an index of prefixes that have already been seen.
+	// This is a convenience for backend implementers like s3bolt and s3mem,
+	// which operate on a full, flat list of keys.
+	prefixes map[string]bool
+}
+
+func NewObjectsListResult() *ObjectsListResult {
+	return &ObjectsListResult{}
+}
+
+func (b *ObjectsListResult) Add(item *Content) {
+	b.Contents = append(b.Contents, item)
+}
+
+func (b *ObjectsListResult) AddPrefix(prefix string) {
+	if b.prefixes == nil {
+		b.prefixes = map[string]bool{}
+	} else if b.prefixes[prefix] {
+		return
+	}
+	b.prefixes[prefix] = true
+	b.CommonPrefixes = append(b.CommonPrefixes, CommonPrefix{Prefix: prefix})
+}
+
+func (s *s3) listObjectsV2(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket string) error {
+	log := s.logger.With(zap.String("bucket", bucket))
+	log.Debug("list objects")
+
+	// parse arguments
+	q := r.URL.Query()
+	prefix := prefixFromQuery(q)
+	page, err := listObjectsPageFromQuery(q)
+	if err != nil {
+		return err
+	}
+
+	// list objects
+	objects, err := s.backend.ListObjects(r.Context(), accessKeyID, bucket, prefix, page)
+	if err != nil {
+		return err
+	}
+
+	// prepare result
+	var result = &ListObjectsV2Result{
+		ListObjectsResultBase: ListObjectsResultBase{
+			Xmlns:          "http://s3.amazonaws.com/doc/2006-03-01/",
+			Name:           bucket,
+			CommonPrefixes: objects.CommonPrefixes,
+			Contents:       objects.Contents,
+			IsTruncated:    objects.IsTruncated,
+			Delimiter:      prefix.Delimiter,
+			Prefix:         prefix.Prefix,
+			MaxKeys:        page.MaxKeys,
+		},
+		KeyCount:          int64(len(objects.CommonPrefixes) + len(objects.Contents)),
+		StartAfter:        q.Get("start-after"),
+		ContinuationToken: q.Get("continuation-token"),
+	}
+	if objects.NextMarker != "" {
+		// We are just cheating with these continuation tokens; they're just the NextMarker
+		// from v1 in disguise! That may change at any time and should not be relied upon
+		// though.
+		result.NextContinuationToken = base64.URLEncoding.EncodeToString([]byte(objects.NextMarker))
+	}
+
+	// if fetch-owner is not set, redact owner information
+	if _, ok := q["fetch-owner"]; !ok {
+		for _, v := range result.Contents {
+			v.Owner = nil
+		}
+	}
+	return writeXMLResponse(w, result)
+}
+
 func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID string, bucket, object string) (err error) {
 	log := s.logger.With(zap.String("bucket", bucket),
 		zap.String("object", object))
@@ -177,11 +260,11 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID strin
 		return err
 	}
 
-	w.Header().Set("ETag", formatETag(hash))
+	w.Header().Set("ETag", FormatETag(hash))
 	return nil
 }
 
-func formatETag(hash []byte) string {
+func FormatETag(hash []byte) string {
 	return `"` + hex.EncodeToString(hash) + `"`
 }
 
@@ -207,6 +290,23 @@ func metadataHeaders(headers map[string][]string, sizeLimit int) (map[string]str
 	}
 
 	return meta, nil
+}
+
+type ListObjectsPage struct {
+	// specifies the key in the bucket that represents the last item in
+	// the previous page. The first key in the returned page will be the
+	// next lexicographically (UTF-8 binary) sorted key after Marker.
+	// If HasMarker is true, this must be non-empty.
+	Marker *string
+
+	// sets the maximum number of keys returned in the response body. The
+	// response might contain fewer keys, but will never contain more. If
+	// additional keys satisfy the search criteria, but were not returned
+	// because max-keys was exceeded, the response contains
+	// <isTruncated>true</isTruncated>. To return the additional keys, see
+	// key-marker and version-id-marker.
+	//
+	MaxKeys int64
 }
 
 // ObjectRange specifies a byte range within an object. The backend can derive
@@ -258,6 +358,55 @@ func (o *ObjectRangeRequest) Range(size int64) (*ObjectRange, error) {
 	}
 
 	return &ObjectRange{Start: start, Length: length}, nil
+}
+
+func listObjectsPageFromQuery(query url.Values) (page ListObjectsPage, rerr error) {
+	maxKeys, err := parseClampedInt(query.Get("max-keys"), DefaultMaxBucketKeys, 0, MaxBucketKeys)
+	if err != nil {
+		return page, err
+	}
+
+	page.MaxKeys = maxKeys
+
+	if _, hasMarker := query["continuation-token"]; hasMarker {
+		// list Objects V2 uses continuation-token preferentially, or
+		// start-after if continuation-token is missing. continuation-token is
+		// an opaque value that looks like this: 1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM=.
+		// This just looks like base64 junk so we just cheat and base64 encode
+		// the next marker and hide it in a continuation-token.
+		tok, err := base64.URLEncoding.DecodeString(query.Get("continuation-token"))
+		if err != nil {
+			return page, s3errs.ErrInvalidArgument
+		}
+		page.Marker = aws.String(string(tok))
+
+	} else if _, hasMarker := query["start-after"]; hasMarker {
+		// List Objects V2 uses start-after if continuation-token is missing:
+		page.Marker = aws.String(query.Get("start-after"))
+	}
+
+	return page, nil
+}
+
+func parseClampedInt(in string, defaultValue, min, max int64) (int64, error) {
+	var v int64
+	if in == "" {
+		v = defaultValue
+	} else {
+		var err error
+		v, err = strconv.ParseInt(in, 10, 0)
+		if err != nil {
+			return defaultValue, s3errs.ErrInvalidArgument
+		}
+	}
+
+	if v < min {
+		v = min
+	} else if v > max {
+		v = max
+	}
+
+	return v, nil
 }
 
 // parseRangeHeader parses a single byte range from the Range header.

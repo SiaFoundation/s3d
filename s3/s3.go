@@ -82,6 +82,17 @@ type Backend interface {
 	// given access key.
 	ListBuckets(ctx context.Context, accessKeyID string) ([]BucketInfo, error)
 
+	// ListObjects lists objects in the specified bucket for the user identified
+	// by the given access key. The backend should use the prefix to limit the
+	// contents of the bucket and sort the results into the Contents and
+	// CommonPrefixes fields of the returned ObjectsListResult.
+	//
+	// - If the access key does not have permission to list objects in the bucket,
+	//   [ErrAccessDenied] must be returned.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	ListObjects(ctx context.Context, accessKeyID *string, bucket string, prefix Prefix, page ListObjectsPage) (*ObjectsListResult, error)
+
 	// PutObject puts an object with the given key into the specified bucket.
 	//
 	// - If the access key does not have permission to store the object,

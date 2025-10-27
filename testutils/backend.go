@@ -6,7 +6,9 @@ import (
 	"crypto/md5"
 	"errors"
 	"io"
+	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
@@ -27,6 +29,7 @@ type (
 	}
 
 	object struct {
+		name         string
 		data         []byte
 		lastModified time.Time
 		metadata     map[string]string
@@ -123,6 +126,65 @@ func (b *MemoryBackend) HeadObject(ctx context.Context, accessKeyID *string, buc
 	return b.headOrGetObject(ctx, accessKeyID, bucket, object, requestedRange, true)
 }
 
+// ListObjects lists objects in the specified bucket that match the given prefix
+// and pagination settings.
+func (b *MemoryBackend) ListObjects(ctx context.Context, accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error) {
+	bkt, exists := b.buckets[bucket]
+	if !exists {
+		return nil, s3errs.ErrNoSuchBucket
+	} else if accessKeyID == nil || bkt.owner != *accessKeyID {
+		return nil, s3errs.ErrAccessDenied
+	}
+
+	// flatten the objects into a slice and sort them lexicographically
+	objects := slices.Collect(maps.Values(bkt.objects))
+	slices.SortFunc(objects, func(a, b *object) int {
+		return strings.Compare(a.name, b.name)
+	})
+
+	result := s3.NewObjectsListResult()
+
+	var cntr int64
+	var lastMatchedPart string
+
+	for _, obj := range objects {
+		match := prefix.Match(obj.name)
+		switch {
+		case match == nil:
+			continue
+		case match.CommonPrefix:
+			if match.MatchedPart == lastMatchedPart {
+				continue // should not count towards keys
+			}
+			if cntr < page.MaxKeys {
+				result.AddPrefix(match.MatchedPart)
+			}
+			lastMatchedPart = match.MatchedPart
+		default:
+			if cntr < page.MaxKeys {
+				result.Add(&s3.Content{
+					Key:          obj.name,
+					LastModified: s3.NewContentTime(obj.lastModified),
+					ETag:         s3.FormatETag(obj.hash),
+					Size:         int64(len(obj.data)),
+				})
+			}
+		}
+
+		cntr++
+		if page.MaxKeys > 0 {
+			if cntr == page.MaxKeys {
+				result.NextMarker = obj.name
+			} else if cntr > page.MaxKeys {
+				result.IsTruncated = true
+				break
+			}
+		}
+	}
+
+	return result, nil
+}
+
 // PutObject puts an object into the specified bucket with the given data and
 // metadata.
 func (b *MemoryBackend) PutObject(_ context.Context, accessKeyID, bucket, obj string, metadata map[string]string, r io.Reader, contentLength int64) ([]byte, error) {
@@ -145,6 +207,7 @@ func (b *MemoryBackend) PutObject(_ context.Context, accessKeyID, bucket, obj st
 	hash := md5.Sum(data)
 	now := time.Now()
 	bkt.objects[obj] = &object{
+		name:         obj,
 		data:         slices.Clone(data),
 		hash:         hash[:],
 		lastModified: now,

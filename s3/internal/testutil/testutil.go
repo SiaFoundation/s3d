@@ -185,6 +185,21 @@ func (t *S3Tester) ListBuckets(ctx context.Context) ([]types.Bucket, error) {
 	return resp.Buckets, err
 }
 
+// ListObjectsV2 is a convenience wrapper around the AWS SDK's ListObjectsV2 API.
+func (t *S3Tester) ListObjectsV2(ctx context.Context, bucket string, prefix *string, page s3.ListObjectsPage) (*service.ListObjectsV2Output, error) {
+	var maxKeys *int32
+	if page.MaxKeys > 0 {
+		maxKeys = aws.Int32(int32(page.MaxKeys))
+	}
+	resp, err := t.client.ListObjectsV2(ctx, &service.ListObjectsV2Input{
+		Bucket:            aws.String(bucket),
+		ContinuationToken: page.Marker,
+		MaxKeys:           maxKeys,
+		Prefix:            prefix,
+	})
+	return resp, err
+}
+
 // PutObject is a convenience wrapper around the AWS SDK's PutObject API.
 func (t *S3Tester) PutObject(ctx context.Context, bucket, object string, r io.Reader, meta map[string]string) ([]byte, error) {
 	resp, err := t.client.PutObject(ctx, &service.PutObjectInput{

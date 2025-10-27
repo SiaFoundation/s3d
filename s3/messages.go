@@ -65,3 +65,79 @@ type GetBucketLocation struct {
 	Xmlns              string   `xml:"xmlns,attr"`
 	LocationConstraint string   `xml:",chardata"`
 }
+
+type (
+	// CommonPrefix is used in Bucket.CommonPrefixes to list partial delimited keys
+	// that represent pseudo-directories.
+	CommonPrefix struct {
+		Prefix string `xml:"Prefix"`
+	}
+
+	Content struct {
+		Key          string       `xml:"Key"`
+		LastModified ContentTime  `xml:"LastModified"`
+		ETag         string       `xml:"ETag"`
+		Size         int64        `xml:"Size"`
+		StorageClass StorageClass `xml:"StorageClass,omitempty"`
+		Owner        *UserInfo    `xml:"Owner,omitempty"`
+	}
+
+	ListObjectsV2Result struct {
+		ListObjectsResultBase
+
+		// If ContinuationToken was sent with the request, it is included in the
+		// response.
+		ContinuationToken string `xml:"ContinuationToken,omitempty"`
+
+		// Returns the number of keys included in the response. The value is always
+		// less than or equal to the MaxKeys value.
+		KeyCount int64 `xml:"KeyCount,omitempty"`
+
+		// If the response is truncated, Amazon S3 returns this parameter with a
+		// continuation token. You can specify the token as the continuation-token
+		// in your next request to retrieve the next set of keys.
+		NextContinuationToken string `xml:"NextContinuationToken,omitempty"`
+
+		// If StartAfter was sent with the request, it is included in the response.
+		StartAfter string `xml:"StartAfter,omitempty"`
+	}
+
+	ListObjectsResultBase struct {
+		XMLName xml.Name `xml:"ListBucketResult"`
+		Xmlns   string   `xml:"xmlns,attr"`
+
+		// Name of the bucket.
+		Name string `xml:"Name"`
+
+		// Specifies whether (true) or not (false) all of the results were
+		// returned. If the number of results exceeds that specified by MaxKeys,
+		// all of the results might not be returned.
+		IsTruncated bool `xml:"IsTruncated"`
+
+		// Causes keys that contain the same string between the prefix and the
+		// first occurrence of the delimiter to be rolled up into a single result
+		// element in the CommonPrefixes collection. These rolled-up keys are not
+		// returned elsewhere in the response.
+		//
+		// NOTE: Each rolled-up result in CommonPrefixes counts as only one return
+		// against the MaxKeys value. (BW: been waiting to find some confirmation of
+		// that for a while!)
+		Delimiter string `xml:"Delimiter,omitempty"`
+
+		Prefix string `xml:"Prefix"`
+
+		MaxKeys int64 `xml:"MaxKeys,omitempty"`
+
+		CommonPrefixes []CommonPrefix `xml:"CommonPrefixes,omitempty"`
+		Contents       []*Content     `xml:"Contents"`
+	}
+
+	StorageClass string
+)
+
+func (s StorageClass) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
+	if s == "" {
+		s = "STANDARD"
+	}
+	return e.EncodeElement(string(s), start)
+}
