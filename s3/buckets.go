@@ -21,7 +21,7 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *st
 		if _, ok := r.URL.Query()["location"]; ok {
 			return s.bucketLocation(w, r, bucket)
 		} else {
-			return s3errs.ErrNotImplemented // listBucket is not implemented
+			return s.listObjectsV2(w, r, accessKeyID, bucket)
 		}
 	case http.MethodPut:
 		return s.createBucket(w, r, validatedKey, bucket)

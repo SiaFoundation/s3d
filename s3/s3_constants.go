@@ -17,3 +17,8 @@ const (
 	// sum of the number of bytes in the UTF-8 encoding of each key and value.
 	MetadataSizeLimit = 2000
 )
+
+const (
+	MaxBucketKeys        = 1000
+	DefaultMaxBucketKeys = 1000
+)
