@@ -3,6 +3,7 @@ package s3_test
 import (
 	"bytes"
 	"crypto/md5"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -261,23 +262,50 @@ func TestListObjects(t *testing.T) {
 		}
 	}
 
+	ptr := func(s string) *string {
+		return &s
+	}
+
+	assertMarkersEqual := func(t *testing.T, isBase64 bool, expected, actual *string) {
+		t.Helper()
+		if expected == nil && actual == nil {
+			return
+		} else if (expected == nil) != (actual == nil) {
+			t.Fatalf("expected marker %v, got %v", expected, actual)
+		}
+		if isBase64 {
+			var decoded []byte
+			var err error
+			decoded, err = base64.URLEncoding.DecodeString(*actual)
+			if err != nil {
+				t.Fatalf("failed to decode expected marker %v: %v", *expected, err)
+			}
+			*actual = string(decoded)
+		}
+		if *expected != *actual {
+			t.Fatalf("expected marker %v, got %v", *expected, *actual)
+		}
+	}
+
 	tests := []struct {
-		name      string
-		prefix    *string
-		marker    *string
-		maxKeys   int64
-		truncated bool
-		result    []string
+		name       string
+		prefix     *string
+		marker     *string
+		nextMarker *string
+		maxKeys    int64
+		truncated  bool
+		result     []string
 	}{
 		{
 			name:   "All",
 			result: []string{"foo", "foo/bar", "foo/baz"},
 		},
 		{
-			name:      "WithMaxKeys",
-			maxKeys:   2,
-			result:    []string{"foo", "foo/bar"},
-			truncated: true,
+			name:       "WithMaxKeys",
+			maxKeys:    2,
+			result:     []string{"foo", "foo/bar"},
+			truncated:  true,
+			nextMarker: ptr("foo/bar"),
 		},
 	}
 	for _, tc := range tests {
@@ -294,20 +322,22 @@ func TestListObjects(t *testing.T) {
 				} else if *resp.IsTruncated != tc.truncated {
 					t.Fatalf("expected truncated=%v, got %v", tc.truncated, *resp.IsTruncated)
 				}
+				assertMarkersEqual(t, true, tc.nextMarker, resp.NextContinuationToken)
 			})
 
 			t.Run("ListObjectVersions", func(t *testing.T) {
-				versions, err := s3Tester.ListObjectVersions(t.Context(), bucket, tc.prefix, s3.ListObjectsPage{
+				resp, err := s3Tester.ListObjectVersions(t.Context(), bucket, tc.prefix, s3.ListObjectsPage{
 					Marker:  tc.marker,
 					MaxKeys: tc.maxKeys,
 				})
 				if err != nil {
 					t.Fatal(err)
-				} else if len(versions.Versions) != len(tc.result) {
-					t.Fatalf("expected %d objects, got %d", len(tc.result), len(versions.Versions))
-				} else if *versions.IsTruncated != tc.truncated {
-					t.Fatalf("expected truncated=%v, got %v", tc.truncated, *versions.IsTruncated)
+				} else if len(resp.Versions) != len(tc.result) {
+					t.Fatalf("expected %d objects, got %d", len(tc.result), len(resp.Versions))
+				} else if *resp.IsTruncated != tc.truncated {
+					t.Fatalf("expected truncated=%v, got %v", tc.truncated, *resp.IsTruncated)
 				}
+				assertMarkersEqual(t, false, tc.nextMarker, resp.NextKeyMarker)
 			})
 		})
 	}
