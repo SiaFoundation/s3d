@@ -282,17 +282,33 @@ func TestListObjects(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			resp, err := s3Tester.ListObjectsV2(t.Context(), bucket, tc.prefix, s3.ListObjectsPage{
-				Marker:  tc.marker,
-				MaxKeys: tc.maxKeys,
+			t.Run("ListObjectsV2", func(t *testing.T) {
+				resp, err := s3Tester.ListObjectsV2(t.Context(), bucket, tc.prefix, s3.ListObjectsPage{
+					Marker:  tc.marker,
+					MaxKeys: tc.maxKeys,
+				})
+				if err != nil {
+					t.Fatal(err)
+				} else if len(resp.Contents) != len(tc.result) {
+					t.Fatalf("expected %d objects, got %d", len(tc.result), len(resp.Contents))
+				} else if *resp.IsTruncated != tc.truncated {
+					t.Fatalf("expected truncated=%v, got %v", tc.truncated, *resp.IsTruncated)
+				}
 			})
-			if err != nil {
-				t.Fatal(err)
-			} else if len(resp.Contents) != len(tc.result) {
-				t.Fatalf("expected %d objects, got %d", len(tc.result), len(resp.Contents))
-			} else if *resp.IsTruncated != tc.truncated {
-				t.Fatalf("expected truncated=%v, got %v", tc.truncated, *resp.IsTruncated)
-			}
+
+			t.Run("ListObjectVersions", func(t *testing.T) {
+				versions, err := s3Tester.ListObjectVersions(t.Context(), bucket, tc.prefix, s3.ListObjectsPage{
+					Marker:  tc.marker,
+					MaxKeys: tc.maxKeys,
+				})
+				if err != nil {
+					t.Fatal(err)
+				} else if len(versions.Versions) != len(tc.result) {
+					t.Fatalf("expected %d objects, got %d", len(tc.result), len(versions.Versions))
+				} else if *versions.IsTruncated != tc.truncated {
+					t.Fatalf("expected truncated=%v, got %v", tc.truncated, *versions.IsTruncated)
+				}
+			})
 		})
 	}
 }

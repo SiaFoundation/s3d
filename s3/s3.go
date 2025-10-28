@@ -331,13 +331,9 @@ func (s *s3) routeVersioning(w http.ResponseWriter, r *http.Request) error {
 
 // routeVersions operates on routes that contain '?versions' in the query string.
 func (s *s3) routeVersions(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket string) error {
-	validatedKey, err := assertAuth(accessKeyID)
-	if err != nil {
-		return err
-	}
 	switch r.Method {
 	case http.MethodGet:
-		return s.listBucketVersions(w, r, validatedKey, bucket)
+		return s.listObjectVersions(w, r, accessKeyID, bucket)
 	default:
 		return s3errs.ErrMethodNotAllowed
 	}

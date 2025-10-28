@@ -120,7 +120,3 @@ func (s *s3) listBuckets(w http.ResponseWriter, r *http.Request, accessKeyID *st
 	}
 	return writeXMLResponse(w, resp)
 }
-
-func (s *s3) listBucketVersions(w http.ResponseWriter, r *http.Request, accessKeyID string, bucket string) error {
-	return s3errs.ErrNotImplemented
-}

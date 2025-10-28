@@ -104,6 +104,65 @@ type (
 		StartAfter string `xml:"StartAfter,omitempty"`
 	}
 
+	Version struct {
+		XMLName      xml.Name    `xml:"Version"`
+		Key          string      `xml:"Key"`
+		VersionID    string      `xml:"VersionId"`
+		IsLatest     bool        `xml:"IsLatest"`
+		LastModified ContentTime `xml:"LastModified,omitempty"`
+		Size         int64       `xml:"Size"`
+
+		// According to the S3 docs, this is always STANDARD for a Version:
+		StorageClass StorageClass `xml:"StorageClass"`
+
+		ETag  string    `xml:"ETag"`
+		Owner *UserInfo `xml:"Owner,omitempty"`
+	}
+
+	ListBucketVersionsResult struct {
+		XMLName        xml.Name       `xml:"ListObjectVersionsResult"`
+		Xmlns          string         `xml:"xmlns,attr"`
+		Name           string         `xml:"Name"`
+		Delimiter      string         `xml:"Delimiter,omitempty"`
+		Prefix         string         `xml:"Prefix,omitempty"`
+		CommonPrefixes []CommonPrefix `xml:"CommonPrefixes,omitempty"`
+		IsTruncated    bool           `xml:"IsTruncated"`
+		MaxKeys        int64          `xml:"MaxKeys"`
+
+		// Marks the last Key returned in a truncated response.
+		KeyMarker string `xml:"KeyMarker,omitempty"`
+
+		// When the number of responses exceeds the value of MaxKeys, NextKeyMarker
+		// specifies the first key not returned that satisfies the search criteria.
+		// Use this value for the key-marker request parameter in a subsequent
+		// request.
+		NextKeyMarker string `xml:"NextKeyMarker,omitempty"`
+
+		// Marks the last version of the Key returned in a truncated response.
+		VersionIDMarker string `xml:"VersionIdMarker,omitempty"`
+
+		// When the number of responses exceeds the value of MaxKeys,
+		// NextVersionIdMarker specifies the first object version not returned that
+		// satisfies the search criteria. Use this value for the version-id-marker
+		// request parameter in a subsequent request.
+		NextVersionIDMarker string `xml:"NextVersionIdMarker,omitempty"`
+
+		// AWS responds with a list of either <Version> or <DeleteMarker> objects. The order
+		// needs to be preserved and they need to be direct of ListBucketVersionsResult:
+		//	<ListBucketVersionsResult>
+		//		<DeleteMarker ... />
+		//		<Version ... />
+		//		<DeleteMarker ... />
+		//		<Version ... />
+		//	</ListBucketVersionsResult>
+		Versions []Version
+
+		// prefixes maintains an index of prefixes that have already been seen.
+		// This is a convenience for backend implementers like s3bolt and s3mem,
+		// which operate on a full, flat list of keys.
+		prefixes map[string]bool
+	}
+
 	// ListObjectsResultBase is the common part of a listing response.
 	ListObjectsResultBase struct {
 		XMLName xml.Name `xml:"ListBucketResult"`
