@@ -240,6 +240,51 @@ func (s *s3) listObjectsV2(w http.ResponseWriter, r *http.Request, accessKeyID *
 	return writeXMLResponse(w, result)
 }
 
+func (s *s3) listObjectVersions(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket string) error {
+	log := s.logger.With(zap.String("bucket", bucket))
+	log.Debug("list object versions")
+
+	// parse arguments
+	q := r.URL.Query()
+	prefix := prefixFromQuery(q)
+	page, err := listObjectsPageFromQuery(q)
+	if err != nil {
+		return err
+	}
+
+	// list objects
+	objects, err := s.backend.ListObjects(r.Context(), accessKeyID, bucket, prefix, page)
+	if err != nil {
+		return err
+	}
+
+	// prepare result
+	result := ListBucketVersionsResult{
+		Xmlns:           "http://s3.amazonaws.com/doc/2006-03-01/",
+		Name:            bucket,
+		CommonPrefixes:  objects.CommonPrefixes,
+		Versions:        []Version{},
+		IsTruncated:     objects.IsTruncated,
+		Delimiter:       prefix.Delimiter,
+		Prefix:          prefix.Prefix,
+		MaxKeys:         page.MaxKeys,
+		KeyMarker:       objects.NextMarker,
+		VersionIDMarker: "", // versioning not supported
+	}
+	for _, obj := range objects.Contents {
+		result.Versions = append(result.Versions, Version{
+			Key:          obj.Key,
+			VersionID:    "null", // versioning not supported
+			IsLatest:     true,   // versioning not supported
+			LastModified: obj.LastModified,
+			Size:         obj.Size,
+			ETag:         obj.ETag,
+			Owner:        obj.Owner,
+		})
+	}
+	return writeXMLResponse(w, result)
+}
+
 func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID string, bucket, object string) (err error) {
 	log := s.logger.With(zap.String("bucket", bucket),
 		zap.String("object", object))
