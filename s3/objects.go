@@ -225,9 +225,9 @@ func (s *s3) listObjectsV2(w http.ResponseWriter, r *http.Request, accessKeyID *
 		ContinuationToken: q.Get("continuation-token"),
 	}
 	if objects.NextMarker != "" {
-		// We are just cheating with these continuation tokens; they're just the NextMarker
-		// from v1 in disguise! That may change at any time and should not be relied upon
-		// though.
+		// S3 continuation tokens are opaque base64-like values, so we just
+		// base64 encode the next marker and hand it out as a continuation
+		// token.
 		result.NextContinuationToken = base64.URLEncoding.EncodeToString([]byte(objects.NextMarker))
 	}
 
@@ -259,7 +259,7 @@ func (s *s3) listObjectVersions(w http.ResponseWriter, r *http.Request, accessKe
 	}
 
 	// prepare result
-	result := ListBucketVersionsResult{
+	result := ListObjectVersionsResult{
 		Xmlns:           "http://s3.amazonaws.com/doc/2006-03-01/",
 		Name:            bucket,
 		CommonPrefixes:  objects.CommonPrefixes,
@@ -268,7 +268,7 @@ func (s *s3) listObjectVersions(w http.ResponseWriter, r *http.Request, accessKe
 		Delimiter:       prefix.Delimiter,
 		Prefix:          prefix.Prefix,
 		MaxKeys:         page.MaxKeys,
-		KeyMarker:       objects.NextMarker,
+		NextKeyMarker:   objects.NextMarker,
 		VersionIDMarker: "", // versioning not supported
 	}
 	for _, obj := range objects.Contents {

@@ -119,7 +119,7 @@ type (
 		Owner *UserInfo `xml:"Owner,omitempty"`
 	}
 
-	ListBucketVersionsResult struct {
+	ListObjectVersionsResult struct {
 		XMLName        xml.Name       `xml:"ListObjectVersionsResult"`
 		Xmlns          string         `xml:"xmlns,attr"`
 		Name           string         `xml:"Name"`
@@ -128,9 +128,6 @@ type (
 		CommonPrefixes []CommonPrefix `xml:"CommonPrefixes,omitempty"`
 		IsTruncated    bool           `xml:"IsTruncated"`
 		MaxKeys        int64          `xml:"MaxKeys"`
-
-		// Marks the last Key returned in a truncated response.
-		KeyMarker string `xml:"KeyMarker,omitempty"`
 
 		// When the number of responses exceeds the value of MaxKeys, NextKeyMarker
 		// specifies the first key not returned that satisfies the search criteria.
