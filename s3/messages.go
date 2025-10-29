@@ -104,6 +104,7 @@ type (
 		StartAfter string `xml:"StartAfter,omitempty"`
 	}
 
+	// Version represents a version of an S3 object.
 	Version struct {
 		XMLName      xml.Name    `xml:"Version"`
 		Key          string      `xml:"Key"`
@@ -119,6 +120,7 @@ type (
 		Owner *UserInfo `xml:"Owner,omitempty"`
 	}
 
+	// ListObjectVersionsResult is the response to a ListObjectVersions request.
 	ListObjectVersionsResult struct {
 		XMLName        xml.Name       `xml:"ListObjectVersionsResult"`
 		Xmlns          string         `xml:"xmlns,attr"`

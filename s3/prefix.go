@@ -111,7 +111,7 @@ func (p Prefix) Match(key string) *PrefixMatch {
 	matched := 0
 
 	last := len(preParts) - 1
-	for i := 0; i < len(preParts); i++ {
+	for i := range preParts {
 		if i == last {
 			if !strings.HasPrefix(keyParts[i], preParts[i]) {
 				return nil
