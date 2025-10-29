@@ -49,4 +49,14 @@ func TestAccessDenied(t *testing.T) {
 		_, err := s3.PutObject(t.Context(), "foo", "bar", bytes.NewReader(nil), nil)
 		return err
 	})
+
+	// object routes
+	assertAccessDenied(t, "DeleteObject", func(t *testing.T, s3 *testutil.S3Tester) error {
+		err := s3.DeleteObject(t.Context(), "bucket", "object")
+		return err
+	})
+	assertAccessDenied(t, "DeleteObjects", func(t *testing.T, s3 *testutil.S3Tester) error {
+		_, err := s3.DeleteObjects(t.Context(), "bucket", []string{"object1", "object2"}, nil)
+		return err
+	})
 }

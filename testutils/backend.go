@@ -104,6 +104,33 @@ func (b *MemoryBackend) DeleteObject(ctx context.Context, accessKeyID, bucket, o
 	}, nil
 }
 
+// DeleteObjects deletes multiple objects from the specified bucket.
+func (b *MemoryBackend) DeleteObjects(ctx context.Context, accessKeyID, bucket string, objects []s3.ObjectID) (*s3.ObjectsDeleteResult, error) {
+	bkt, exists := b.buckets[bucket]
+	if !exists {
+		return nil, s3errs.ErrNoSuchBucket
+	} else if bkt.owner != accessKeyID {
+		return nil, s3errs.ErrAccessDenied
+	}
+	var res s3.ObjectsDeleteResult
+	for _, obj := range objects {
+		if _, exists := bkt.objects[obj.Key]; !exists {
+			res.Error = append(res.Error, s3.ErrorResult{
+				Key:     obj.Key,
+				Code:    s3errs.ErrNoSuchKey.Code,
+				Message: s3errs.ErrNoSuchKey.Description,
+			})
+		} else {
+			delete(bkt.objects, obj.Key)
+			res.Deleted = append(res.Deleted, s3.ObjectID{
+				Key:       obj.Key,
+				VersionID: "", // versioning isn't supported
+			})
+		}
+	}
+	return &res, nil
+}
+
 // GetObject retrieves an object from the specified bucket.
 func (b *MemoryBackend) GetObject(ctx context.Context, accessKeyID *string, bucket, object string, requestedRange *s3.ObjectRangeRequest) (*s3.Object, error) {
 	return b.headOrGetObject(ctx, accessKeyID, bucket, object, requestedRange, false)
