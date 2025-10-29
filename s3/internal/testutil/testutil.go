@@ -198,7 +198,13 @@ func (t *S3Tester) ListObjectsV2(ctx context.Context, bucket string, prefix, del
 		MaxKeys:           maxKeys,
 		Prefix:            prefix,
 	})
-	return resp, err
+	if err != nil {
+		return nil, err
+	}
+	for i := range resp.Contents {
+		*resp.Contents[i].ETag = strings.Trim(*resp.Contents[i].ETag, `"`)
+	}
+	return resp, nil
 }
 
 // ListObjectVersions is a convenience wrapper around the AWS SDK's ListObjectVersions API.
@@ -215,7 +221,13 @@ func (t *S3Tester) ListObjectVersions(ctx context.Context, bucket string, prefix
 		Prefix:          prefix,
 		VersionIdMarker: nil, // versions not supported
 	})
-	return resp, err
+	if err != nil {
+		return nil, err
+	}
+	for i := range resp.Versions {
+		*resp.Versions[i].ETag = strings.Trim(*resp.Versions[i].ETag, `"`)
+	}
+	return resp, nil
 }
 
 // PutObject is a convenience wrapper around the AWS SDK's PutObject API.
