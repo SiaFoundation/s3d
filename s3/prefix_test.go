@@ -13,42 +13,41 @@ func TestPrefixMatch(t *testing.T) {
 
 	for idx, tc := range []struct {
 		key    string
-		p      *string
-		d      *string
+		prefix *string
+		delim  *string
 		out    *string
 		common bool
 	}{
-		{key: "foo/bar", p: s("foo"), d: s("/"), out: s("foo/"), common: true},
-		{key: "foo/bar", p: s("foo/ba"), d: s("/"), out: s("foo/bar")},
-		{key: "foo/bar", p: s("foo/ba/"), d: s("/"), out: nil},
-		{key: "foo/bar", p: s("/"), d: s("/"), out: s("foo/"), common: true},
+		{key: "foo/bar", prefix: s("foo"), delim: s("/"), out: s("foo/"), common: true},
+		{key: "foo/bar", prefix: s("foo/ba"), delim: s("/"), out: s("foo/bar")},
+		{key: "foo/bar", prefix: s("foo/ba/"), delim: s("/"), out: nil},
+		{key: "foo/bar", prefix: s("/"), delim: s("/"), out: s("foo/"), common: true},
 
-		// without a delimiter, it's just a boring ol' prefix match:
-		{key: "foo/bar", p: s("foo/b"), out: s("foo/b")},
-		{key: "foo/bar", p: s("foo/"), out: s("foo/")},
-		{key: "foo/bar", p: s("foo"), out: s("foo")},
-		{key: "foo/bar", p: s("fo"), out: s("fo")},
-		{key: "foo/bar", p: s("f"), out: s("f")},
-		{key: "foo/bar", p: s("q"), out: nil},
+		// without a delimiter, it's just a prefix match:
+		{key: "foo/bar", prefix: s("foo/b"), out: s("foo/b")},
+		{key: "foo/bar", prefix: s("foo/"), out: s("foo/")},
+		{key: "foo/bar", prefix: s("foo"), out: s("foo")},
+		{key: "foo/bar", prefix: s("fo"), out: s("fo")},
+		{key: "foo/bar", prefix: s("f"), out: s("f")},
+		{key: "foo/bar", prefix: s("q"), out: nil},
 
 		// this could be a source of trouble - does "no prefix" mean "match
 		// everything" or "match nothing"? What about "empty prefix"? For now,
 		// these cases simply document what the curret algorithm is expected to
 		// do, but this needs further exploration:
-		{key: "foo/bar", p: nil, out: s("foo/bar")},
-		{key: "foo/bar", p: s(""), out: s("")},
+		{key: "foo/bar", prefix: nil, out: s("foo/bar")},
+		{key: "foo/bar", prefix: s(""), out: s("")},
 	} {
 		t.Run("", func(t *testing.T) {
 			prefix := Prefix{
-				HasPrefix:    tc.p != nil,
-				HasDelimiter: tc.d != nil,
-				Prefix:       unwrapStr(tc.p),
-				Delimiter:    unwrapStr(tc.d),
+				HasPrefix:    tc.prefix != nil,
+				HasDelimiter: tc.delim != nil,
+				Prefix:       unwrapStr(tc.prefix),
+				Delimiter:    unwrapStr(tc.delim),
 			}
 
-			var match PrefixMatch
-			matched := prefix.Match(tc.key)
-			if (tc.out == nil) != (matched == nil) {
+			match := prefix.Match(tc.key)
+			if (tc.out == nil) != (match == nil) {
 				t.Fatal("prefix match failed at index", idx)
 			}
 			if tc.out != nil {

@@ -450,7 +450,6 @@ func listObjectVersionsPageFromQuery(query url.Values) (page ListObjectsPage, re
 	page.Marker = aws.String(query.Get("key-marker"))
 
 	return page, nil
-
 }
 
 func parseClampedInt(in string, defaultValue, minValue, maxValue int64) (int64, error) {
