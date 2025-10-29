@@ -15,6 +15,7 @@ import (
 	"github.com/SiaFoundation/s3d/s3/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"lukechampine.com/frand"
 )
 
@@ -274,6 +275,18 @@ func TestListObjects(t *testing.T) {
 		return ptr(base64.URLEncoding.EncodeToString([]byte(*s)))
 	}
 
+	assertCommonPrefixesEqual := func(t *testing.T, expected []string, actual []types.CommonPrefix) {
+		t.Helper()
+		if len(expected) != len(actual) {
+			t.Fatalf("expected %d common prefixes, got %d", len(expected), len(actual))
+		}
+		for i := range expected {
+			if expected[i] != *actual[i].Prefix {
+				t.Fatalf("expected common prefix %v, got %v", expected[i], actual[i])
+			}
+		}
+	}
+
 	assertMarkersEqual := func(t *testing.T, isBase64 bool, expected, actual *string) {
 		t.Helper()
 		if expected == nil && actual == nil {
@@ -323,6 +336,17 @@ func TestListObjects(t *testing.T) {
 			marker:  aws.String("foo/bar"),
 			objects: []string{"foo/baz"},
 		},
+		{
+			name:    "Prefix",
+			prefix:  ptr("foo/b"),
+			objects: []string{"foo/bar", "foo/baz"},
+		},
+		{
+			name:           "Delimiter",
+			delimiter:      ptr("/"),
+			objects:        []string{"foo"},
+			commonPrefixes: []string{"foo/"},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -338,6 +362,12 @@ func TestListObjects(t *testing.T) {
 				} else if *resp.IsTruncated != tc.truncated {
 					t.Fatalf("expected truncated=%v, got %v", tc.truncated, *resp.IsTruncated)
 				}
+				for i := range tc.objects {
+					if *resp.Contents[i].Key != tc.objects[i] {
+						t.Fatalf("expected object %v, got %v", tc.objects[i], *resp.Contents[i].Key)
+					}
+				}
+				assertCommonPrefixesEqual(t, tc.commonPrefixes, resp.CommonPrefixes)
 				assertMarkersEqual(t, true, tc.nextMarker, resp.NextContinuationToken)
 			})
 
@@ -353,6 +383,12 @@ func TestListObjects(t *testing.T) {
 				} else if *resp.IsTruncated != tc.truncated {
 					t.Fatalf("expected truncated=%v, got %v", tc.truncated, *resp.IsTruncated)
 				}
+				for i := range tc.objects {
+					if *resp.Versions[i].Key != tc.objects[i] {
+						t.Fatalf("expected object %v, got %v", tc.objects[i], *resp.Versions[i].Key)
+					}
+				}
+				assertCommonPrefixesEqual(t, tc.commonPrefixes, resp.CommonPrefixes)
 				assertMarkersEqual(t, false, tc.nextMarker, resp.NextKeyMarker)
 			})
 		})
