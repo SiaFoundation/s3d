@@ -63,7 +63,7 @@ var (
 	ErrInvalidBucketName                              = Error{"InvalidBucketName", "The specified bucket name is not valid.", http.StatusBadRequest}
 	ErrInvalidBucketOwnerAWSAccountID                 = Error{"InvalidBucketOwnerAWSAccountID", "Expected bucket owner must be an AWS account ID.", http.StatusBadRequest}
 	ErrInvalidBucketState                             = Error{"InvalidBucketState", "Request is not valid for the bucket’s current state.", http.StatusConflict}
-	ErrInvalidDigest                                  = Error{"InvalidDigest", "Provided Content-MD5/checksum is not valid.", http.StatusForbidden}
+	ErrInvalidDigest                                  = Error{"InvalidDigest", "Provided Content-MD5/checksum is not valid.", http.StatusBadRequest}
 	ErrInvalidEncryptionAlgorithmError                = Error{"InvalidEncryptionAlgorithmError", "Encryption request is not valid; valid value is AES256.", http.StatusBadRequest}
 	ErrInvalidHostHeader                              = Error{"InvalidHostHeader", "Host headers used the incorrect addressing style.", http.StatusBadRequest}
 	ErrInvalidHttpMethod                              = Error{"InvalidHttpMethod", "Request used an unexpected HTTP method.", http.StatusBadRequest}

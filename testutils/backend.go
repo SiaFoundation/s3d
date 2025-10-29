@@ -33,7 +33,7 @@ type (
 		data         []byte
 		lastModified time.Time
 		metadata     map[string]string
-		hash         []byte
+		contentMD5   [16]byte
 	}
 )
 
@@ -191,7 +191,7 @@ func (b *MemoryBackend) ListObjects(ctx context.Context, accessKeyID *string, bu
 				result.Add(&s3.Content{
 					Key:          obj.name,
 					LastModified: s3.NewContentTime(obj.lastModified),
-					ETag:         s3.FormatETag(obj.hash),
+					ETag:         s3.FormatETag(obj.contentMD5[:]),
 					Size:         int64(len(obj.data)),
 				})
 			}
@@ -213,7 +213,7 @@ func (b *MemoryBackend) ListObjects(ctx context.Context, accessKeyID *string, bu
 
 // PutObject puts an object into the specified bucket with the given data and
 // metadata.
-func (b *MemoryBackend) PutObject(_ context.Context, accessKeyID, bucket, obj string, metadata map[string]string, r io.Reader, contentLength int64) ([]byte, error) {
+func (b *MemoryBackend) PutObject(_ context.Context, accessKeyID, bucket, obj string, r io.Reader, opts s3.PutObjectOptions) (*s3.PutObjectResult, error) {
 	bkt, exists := b.buckets[bucket]
 	if !exists {
 		return nil, s3errs.ErrNoSuchBucket
@@ -227,19 +227,25 @@ func (b *MemoryBackend) PutObject(_ context.Context, accessKeyID, bucket, obj st
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return nil, err
-	} else if len(data) != int(contentLength) {
+	} else if len(data) != int(opts.ContentLength) {
 		return nil, s3errs.ErrIncompleteBody
 	}
-	hash := md5.Sum(data)
-	now := time.Now()
+
+	contentMD5 := md5.Sum(data)
+	if opts.ContentMD5 != nil && !bytes.Equal(contentMD5[:], opts.ContentMD5[:]) {
+		return nil, s3errs.ErrInvalidDigest
+	}
+
 	bkt.objects[obj] = &object{
 		name:         obj,
 		data:         slices.Clone(data),
-		hash:         hash[:],
-		lastModified: now,
-		metadata:     metadata,
+		contentMD5:   contentMD5,
+		lastModified: time.Now(),
+		metadata:     opts.Meta,
 	}
-	return hash[:], nil
+	return &s3.PutObjectResult{
+		ContentMD5: contentMD5,
+	}, nil
 }
 
 // ListBuckets lists all available buckets.
@@ -290,7 +296,7 @@ func (b *MemoryBackend) headOrGetObject(_ context.Context, accessKeyID *string, 
 	}
 	return &s3.Object{
 		Body:         body,
-		Hash:         obj.hash,
+		ContentMD5:   obj.contentMD5,
 		LastModified: obj.lastModified,
 		Metadata:     obj.metadata,
 		Range:        rnge,

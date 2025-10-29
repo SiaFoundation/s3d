@@ -116,8 +116,11 @@ type Backend interface {
 	//   NOTE: Versioning is not supported yet.
 	//
 	// - If the bytes read from 'r' do not match 'contentLength',
-	// [ErrIncompleteBody] must be returned.
-	PutObject(ctx context.Context, accessKeyID string, bucket, object string, meta map[string]string, r io.Reader, contentLength int64) ([]byte, error)
+	//   [ErrIncompleteBody] must be returned.
+	//
+	// - If ContentMD5 is set in opts, and the MD5 checksum of the data read
+	//   from 'r' does not match, [ErrBadDigest] must be returned.
+	PutObject(ctx context.Context, accessKeyID string, bucket, object string, r io.Reader, opts PutObjectOptions) (*PutObjectResult, error)
 }
 
 type s3 struct {

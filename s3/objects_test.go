@@ -61,8 +61,8 @@ func TestGetAndHeadObject(t *testing.T) {
 		}
 
 		expected := data[start : end+1]
-		if !bytes.Equal(obj.Hash, hash[:]) {
-			t.Fatal("hash mismatch", obj.Hash, hash[:])
+		if obj.ContentMD5 != hash {
+			t.Fatal("hash mismatch", obj.ContentMD5, hash[:])
 		} else if obj.Size != int64(len(data)) {
 			t.Fatalf("size mismatch: expected %d, got %d", len(data), obj.Size)
 		} else if obj.LastModified.Before(now) {
@@ -173,8 +173,8 @@ func TestPutObject(t *testing.T) {
 	obj, err := s3Tester.GetObject(t.Context(), bucket, object, nil)
 	if err != nil {
 		t.Fatal(err)
-	} else if !bytes.Equal(obj.Hash, hash[:]) {
-		t.Fatal("hash mismatch", obj.Hash, hash[:])
+	} else if obj.ContentMD5 != hash {
+		t.Fatal("hash mismatch", obj.ContentMD5, hash[:])
 	} else if obj.Size != int64(len(data)) {
 		t.Fatalf("size mismatch: expected %d, got %d", len(data), obj.Size)
 	} else if !reflect.DeepEqual(obj.Metadata, metadata) {

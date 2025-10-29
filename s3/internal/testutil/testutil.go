@@ -61,7 +61,10 @@ func (t *S3Tester) AddAccessKey(tb testing.TB, accessKeyID, secretKey string) *S
 
 // AddObject adds an object to the in-memory S3 backend.
 func (t *S3Tester) AddObject(bucket, object string, data []byte, metadata map[string]string) error {
-	_, err := t.backend.PutObject(context.Background(), accessKeyID, bucket, object, metadata, bytes.NewReader(data), int64(len(data)))
+	_, err := t.backend.PutObject(context.Background(), accessKeyID, bucket, object, bytes.NewReader(data), s3.PutObjectOptions{
+		ContentLength: int64(len(data)),
+		Meta:          metadata,
+	})
 	return err
 }
 
@@ -129,7 +132,8 @@ func (t *S3Tester) GetObject(ctx context.Context, bucket, object string, rnge *s
 		return nil, err
 	}
 	etag := strings.Trim(*resp.ETag, `"`)
-	hash, err := hex.DecodeString(etag)
+	var contentMD5 [16]byte
+	_, err = hex.Decode(contentMD5[:], []byte(etag))
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode ETag %q: %w", *resp.ETag, err)
 	}
@@ -145,7 +149,7 @@ func (t *S3Tester) GetObject(ctx context.Context, bucket, object string, rnge *s
 	}
 	return &s3.Object{
 		Body:         resp.Body,
-		Hash:         hash,
+		ContentMD5:   contentMD5,
 		LastModified: *resp.LastModified,
 		Metadata:     resp.Metadata,
 		Range:        objRange,
@@ -172,7 +176,8 @@ func (t *S3Tester) HeadObject(ctx context.Context, bucket, object string, rnge *
 		return nil, err
 	}
 	etag := strings.Trim(*resp.ETag, `"`)
-	hash, err := hex.DecodeString(etag)
+	var contentMD5 [16]byte
+	_, err = hex.Decode(contentMD5[:], []byte(etag))
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode ETag %q: %w", *resp.ETag, err)
 	}
@@ -187,7 +192,7 @@ func (t *S3Tester) HeadObject(ctx context.Context, bucket, object string, rnge *
 		size = *resp.ContentLength
 	}
 	return &s3.Object{
-		Hash:         hash,
+		ContentMD5:   contentMD5,
 		LastModified: *resp.LastModified,
 		Metadata:     resp.Metadata,
 		Range:        objRange,
