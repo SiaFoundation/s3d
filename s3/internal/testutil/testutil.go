@@ -99,6 +99,25 @@ func (t *S3Tester) DeleteObject(ctx context.Context, bucket, object string) erro
 	return err
 }
 
+// DeleteObjects deletes multiple S3 objects at once. If quiet is set to true,
+// the response will only contain errors.
+func (t *S3Tester) DeleteObjects(ctx context.Context, bucket string, objects []string, quiet *bool) (*service.DeleteObjectsOutput, error) {
+	var objs []types.ObjectIdentifier
+	for _, o := range objects {
+		objs = append(objs, types.ObjectIdentifier{
+			Key: aws.String(o),
+		})
+	}
+	resp, err := t.client.DeleteObjects(ctx, &service.DeleteObjectsInput{
+		Bucket: aws.String(bucket),
+		Delete: &types.Delete{
+			Objects: objs,
+			Quiet:   quiet,
+		},
+	})
+	return resp, err
+}
+
 // GetObject is a convenience wrapper around the AWS SDK's GetObject API.
 func (t *S3Tester) GetObject(ctx context.Context, bucket, object string, rnge *s3.ObjectRangeRequest) (*s3.Object, error) {
 	resp, err := t.client.GetObject(ctx, &service.GetObjectInput{

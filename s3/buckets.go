@@ -32,7 +32,7 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *st
 	case http.MethodPost:
 		// nolint:gocritic
 		if _, ok := r.URL.Query()["delete"]; ok {
-			return s3errs.ErrNotImplemented // deleteMulti is not implemented
+			return s.deleteObjects(w, r, *accessKeyID, bucket)
 		} else {
 			return s3errs.ErrNotImplemented // createObjectBrowserUpload is not implemented
 		}

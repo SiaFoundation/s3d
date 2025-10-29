@@ -3,6 +3,7 @@ package s3
 import (
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
@@ -109,6 +110,38 @@ func (s *s3) deleteObject(w http.ResponseWriter, r *http.Request, accessKeyID st
 
 	w.WriteHeader(http.StatusNoContent)
 	return nil
+}
+
+func (s *s3) deleteObjects(w http.ResponseWriter, r *http.Request, accessKeyID string, bucket string) error {
+	log := s.logger.With(zap.String("bucket", bucket))
+	log.Debug("delete objects")
+
+	var req DeleteRequest
+	if err := decodeXMLBody(r.Body, &req); err != nil {
+		return err
+	}
+
+	if len(req.Objects) > MaxBucketKeys {
+		return s3errs.ErrMalformedXML
+	}
+
+	for _, obj := range req.Objects {
+		if obj.VersionID == "null" {
+			obj.VersionID = ""
+		} else if obj.VersionID != "" {
+			return s3errs.ErrNotImplemented // versioning not supported
+		}
+	}
+
+	res, err := s.backend.DeleteObjects(r.Context(), accessKeyID, bucket, req.Objects)
+	if err != nil {
+		return err
+	}
+
+	if req.Quiet {
+		res.Deleted = nil
+	}
+	return writeXMLResponse(w, res)
 }
 
 func (s *s3) getObject(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket, object, version string) error {
@@ -434,6 +467,16 @@ func (o *ObjectRangeRequest) Range(size int64) (*ObjectRange, error) {
 	}
 
 	return &ObjectRange{Start: start, Length: length}, nil
+}
+
+func decodeXMLBody(r io.Reader, v interface{}) error {
+	// limit reader to prevent attacks
+	limited := io.LimitReader(r, 1<<20) // 1 MiB should be enough for any S3 XML body
+	decoder := xml.NewDecoder(limited)
+	if err := decoder.Decode(&v); err != nil {
+		return s3errs.ErrMalformedXML
+	}
+	return nil
 }
 
 func listObjectsPageFromQuery(query url.Values) (page ListObjectsPage, rerr error) {

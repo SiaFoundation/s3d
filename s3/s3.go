@@ -47,6 +47,19 @@ type Backend interface {
 	//   [ErrNoSuchKey] must be returned.
 	DeleteObject(ctx context.Context, accessKeyID, bucket, object string) (*ObjectDeleteResult, error)
 
+	// DeleteObjects deletes multiple objects from the specified bucket for the
+	// user identified by the given access key.
+	//
+	// - If the access key does not have permission to delete the objects,
+	//   [ErrAccessDenied] must be returned.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	//
+	// - If any of the objects with the given keys in the specified bucket do not
+	//   exist, they must be reported in the returned ObjectsDeleteResult using
+	//   the [ErrNoSuchKey] error.
+	DeleteObjects(ctx context.Context, accessKeyID, bucket string, objects []ObjectID) (*ObjectsDeleteResult, error)
+
 	// GetObject retrieves the object with the given key from the specified
 	// bucket for the user identified by the given access key. The provided
 	// range is either nil if no range was requested, or contains the requested,
@@ -259,6 +272,14 @@ func (s *s3) hostBucketBaseMiddleware(handler auth.AuthenticatedHandler) auth.Au
 //
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_Operations_Amazon_Simple_Storage_Service.html
 func (s *s3) routeBase(w http.ResponseWriter, r *http.Request, accessKeyID *string) {
+	// close and drain the request body to allow connection reuse
+	defer func() {
+		if r.Body != nil {
+			_, _ = io.Copy(io.Discard, r.Body)
+			_ = r.Body.Close()
+		}
+	}()
+
 	var (
 		path   = strings.TrimPrefix(r.URL.Path, "/")
 		parts  = strings.SplitN(path, "/", 2)

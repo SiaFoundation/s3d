@@ -205,3 +205,45 @@ func (s StorageClass) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
 	}
 	return e.EncodeElement(string(s), start)
 }
+
+type (
+	// ObjectID represents an object to be deleted in a multi-delete request.
+	ObjectID struct {
+		Key string `xml:"Key"`
+
+		// nolint:tagliatelle
+		VersionID string `xml:"VersionId,omitempty" json:"VersionId,omitempty"`
+	}
+
+	// DeleteRequest represents a multi delete request.
+	DeleteRequest struct {
+		Objects []ObjectID `xml:"Object"`
+
+		// Quiet is used to enable quiet mode for the request.
+		//
+		// By default, the operation uses verbose mode in which the response
+		// includes the result of deletion of each key in your request. In quiet
+		// mode the response includes only keys where the delete operation
+		// encountered an error. For a successful deletion, the operation does not
+		// return any information about the delete in the response body.
+		Quiet bool `xml:"Quiet"`
+	}
+
+	// ObjectsDeleteResult contains the response from a multi delete operation.
+	ObjectsDeleteResult struct {
+		XMLName xml.Name      `xml:"DeleteResult"`
+		Deleted []ObjectID    `xml:"Deleted"`
+		Error   []ErrorResult `xml:",omitempty"`
+	}
+
+	// ErrorResult represents an error encountered while deleting an object
+	// during a multi delete operation.
+	ErrorResult struct {
+		XMLName   xml.Name `xml:"Error"`
+		Key       string   `xml:"Key,omitempty"`
+		Code      string   `xml:"Code,omitempty"`
+		Message   string   `xml:"Message,omitempty"`
+		Resource  string   `xml:"Resource,omitempty"`
+		RequestID string   `xml:"RequestId,omitempty"`
+	}
+)
