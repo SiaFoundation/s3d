@@ -84,7 +84,7 @@ func HandleAuth(req *http.Request, store KeyStore, region string, now time.Time)
 	} else if strings.HasPrefix(authHeader, AuthorizationAWS4ECDSAP256SHA256) {
 		return handleAuthV4a(req)
 	} else {
-		return "", s3errs.ErrUnsupportedSignature
+		return "", s3errs.ErrInvalidDigest
 	}
 }
 

@@ -54,7 +54,7 @@ jobs:
         env:
           S3TEST_CONF: ${{ github.workspace }}/s3tests.conf
           S3_USE_SIGV4: "True" # We only support v4 signatures
-        run: tox run --skip-pkg-install -c ./s3-tests -- s3tests/functional/test_headers.py
+        run: tox run --skip-pkg-install -c ./s3-tests -- s3tests/functional/test_headers.py -m "not auth_aws2"
 
       # NOTE: The following tests are currently disabled
       #
