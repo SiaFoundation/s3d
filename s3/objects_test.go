@@ -14,6 +14,7 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"lukechampine.com/frand"
 )
 
@@ -266,6 +267,13 @@ func TestListObjects(t *testing.T) {
 		return &s
 	}
 
+	toBase64 := func(s *string) *string {
+		if s == nil {
+			return nil
+		}
+		return ptr(base64.URLEncoding.EncodeToString([]byte(*s)))
+	}
+
 	assertMarkersEqual := func(t *testing.T, isBase64 bool, expected, actual *string) {
 		t.Helper()
 		if expected == nil && actual == nil {
@@ -290,35 +298,43 @@ func TestListObjects(t *testing.T) {
 	tests := []struct {
 		name       string
 		prefix     *string
+		delimiter  *string
 		marker     *string
 		nextMarker *string
 		maxKeys    int64
-		truncated  bool
-		result     []string
+
+		truncated      bool
+		objects        []string
+		commonPrefixes []string
 	}{
 		{
-			name:   "All",
-			result: []string{"foo", "foo/bar", "foo/baz"},
+			name:    "All",
+			objects: []string{"foo", "foo/bar", "foo/baz"},
 		},
 		{
-			name:       "WithMaxKeys",
+			name:       "MaxKeys",
 			maxKeys:    2,
-			result:     []string{"foo", "foo/bar"},
+			objects:    []string{"foo", "foo/bar"},
 			truncated:  true,
 			nextMarker: ptr("foo/bar"),
+		},
+		{
+			name:    "Marker",
+			marker:  aws.String("foo/bar"),
+			objects: []string{"foo/baz"},
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Run("ListObjectsV2", func(t *testing.T) {
-				resp, err := s3Tester.ListObjectsV2(t.Context(), bucket, tc.prefix, s3.ListObjectsPage{
-					Marker:  tc.marker,
+				resp, err := s3Tester.ListObjectsV2(t.Context(), bucket, tc.prefix, tc.delimiter, s3.ListObjectsPage{
+					Marker:  toBase64(tc.marker),
 					MaxKeys: tc.maxKeys,
 				})
 				if err != nil {
 					t.Fatal(err)
-				} else if len(resp.Contents) != len(tc.result) {
-					t.Fatalf("expected %d objects, got %d", len(tc.result), len(resp.Contents))
+				} else if len(resp.Contents) != len(tc.objects) {
+					t.Fatalf("expected %d objects, got %d", len(tc.objects), len(resp.Contents))
 				} else if *resp.IsTruncated != tc.truncated {
 					t.Fatalf("expected truncated=%v, got %v", tc.truncated, *resp.IsTruncated)
 				}
@@ -326,14 +342,14 @@ func TestListObjects(t *testing.T) {
 			})
 
 			t.Run("ListObjectVersions", func(t *testing.T) {
-				resp, err := s3Tester.ListObjectVersions(t.Context(), bucket, tc.prefix, s3.ListObjectsPage{
+				resp, err := s3Tester.ListObjectVersions(t.Context(), bucket, tc.prefix, tc.delimiter, s3.ListObjectsPage{
 					Marker:  tc.marker,
 					MaxKeys: tc.maxKeys,
 				})
 				if err != nil {
 					t.Fatal(err)
-				} else if len(resp.Versions) != len(tc.result) {
-					t.Fatalf("expected %d objects, got %d", len(tc.result), len(resp.Versions))
+				} else if len(resp.Versions) != len(tc.objects) {
+					t.Fatalf("expected %d objects, got %d", len(tc.objects), len(resp.Versions))
 				} else if *resp.IsTruncated != tc.truncated {
 					t.Fatalf("expected truncated=%v, got %v", tc.truncated, *resp.IsTruncated)
 				}

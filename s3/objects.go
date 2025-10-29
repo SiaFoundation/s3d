@@ -247,7 +247,7 @@ func (s *s3) listObjectVersions(w http.ResponseWriter, r *http.Request, accessKe
 	// parse arguments
 	q := r.URL.Query()
 	prefix := prefixFromQuery(q)
-	page, err := listObjectsPageFromQuery(q)
+	page, err := listObjectVersionsPageFromQuery(q)
 	if err != nil {
 		return err
 	}
@@ -438,6 +438,19 @@ func listObjectsPageFromQuery(query url.Values) (page ListObjectsPage, rerr erro
 	}
 
 	return page, nil
+}
+
+func listObjectVersionsPageFromQuery(query url.Values) (page ListObjectsPage, rerr error) {
+	maxKeys, err := parseClampedInt(query.Get("max-keys"), DefaultMaxBucketKeys, 0, MaxBucketKeys)
+	if err != nil {
+		return page, err
+	}
+
+	page.MaxKeys = maxKeys
+	page.Marker = aws.String(query.Get("key-marker"))
+
+	return page, nil
+
 }
 
 func parseClampedInt(in string, defaultValue, minValue, maxValue int64) (int64, error) {
