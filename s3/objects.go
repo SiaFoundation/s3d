@@ -20,7 +20,7 @@ import (
 // Object represents an S3 object stored on the backend.
 type Object struct {
 	Body         io.ReadCloser
-	Hash         []byte
+	ContentMD5   [16]byte
 	LastModified time.Time
 	Metadata     map[string]string
 	Range        *ObjectRange
@@ -63,6 +63,20 @@ func prefixFromQuery(query url.Values) Prefix {
 	prefix.HasPrefix = prefix.HasPrefix && prefix.Prefix != ""
 	prefix.HasDelimiter = prefix.HasDelimiter && prefix.Delimiter != ""
 	return prefix
+}
+
+// PutObjectResult contains information about the result of a PutObject
+// operation.
+type PutObjectResult struct {
+	// ContentMD5 is the MD5 checksum of the object data.
+	ContentMD5 [16]byte
+}
+
+// PutObjectOptions contains options for a PutObject operation.
+type PutObjectOptions struct {
+	Meta          map[string]string
+	ContentLength int64
+	ContentMD5    *[16]byte
 }
 
 // routeObject handles URLs that contain both a bucket path segment and an
@@ -362,12 +376,25 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID strin
 		return s3errs.ErrMissingContentLength
 	}
 
-	hash, err := s.backend.PutObject(r.Context(), accessKeyID, bucket, object, meta, r.Body, r.ContentLength)
+	// extract Content-MD5 header
+	var contentMD5 *[16]byte
+	if md5Base64 := r.Header.Get("Content-MD5"); md5Base64 != "" {
+		contentMD5 = new([16]byte)
+		if _, err := base64.StdEncoding.Decode(contentMD5[:], []byte(md5Base64)); err != nil {
+			return s3errs.ErrInvalidDigest
+		}
+	}
+
+	res, err := s.backend.PutObject(r.Context(), accessKeyID, bucket, object, r.Body, PutObjectOptions{
+		ContentLength: r.ContentLength,
+		ContentMD5:    contentMD5,
+		Meta:          meta,
+	})
 	if err != nil {
 		return err
 	}
 
-	w.Header().Set("ETag", FormatETag(hash))
+	w.Header().Set("ETag", FormatETag(res.ContentMD5[:]))
 	return nil
 }
 
@@ -606,7 +633,7 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 		w.Header().Set(mk, mv)
 	}
 
-	etag := `"` + hex.EncodeToString(obj.Hash) + `"`
+	etag := FormatETag(obj.ContentMD5[:])
 	w.Header().Set("ETag", etag)
 
 	if r.Header.Get("If-None-Match") == etag {

@@ -84,7 +84,12 @@ func HandleAuth(req *http.Request, store KeyStore, region string, now time.Time)
 	} else if strings.HasPrefix(authHeader, AuthorizationAWS4ECDSAP256SHA256) {
 		return handleAuthV4a(req)
 	} else {
-		return "", s3errs.ErrInvalidDigest
+		// NOTE: S3 does something interesting here. You'd expect AccessDenied,
+		// but for some reason it returns an ErrInvalidDigest with 403. Even
+		// though ErrInvalidDigest is usually returned with a 400.
+		err := s3errs.ErrInvalidDigest
+		err.HTTPStatus = http.StatusForbidden
+		return "", err
 	}
 }
 
