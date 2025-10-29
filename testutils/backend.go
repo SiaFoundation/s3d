@@ -233,7 +233,7 @@ func (b *MemoryBackend) PutObject(_ context.Context, accessKeyID, bucket, obj st
 
 	contentMD5 := md5.Sum(data)
 	if opts.ContentMD5 != nil && !bytes.Equal(contentMD5[:], opts.ContentMD5[:]) {
-		return nil, s3errs.ErrInvalidDigest
+		return nil, s3errs.ErrBadDigest
 	}
 
 	bkt.objects[obj] = &object{
