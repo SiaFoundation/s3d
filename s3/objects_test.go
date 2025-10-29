@@ -256,6 +256,7 @@ func TestListObjects(t *testing.T) {
 	}
 
 	// upload a few objects
+	const etag = "d41d8cd98f00b204e9800998ecf8427e"
 	keys := []string{"foo", "foo/baz", "foo/bar"}
 	for _, key := range keys {
 		_, err := s3Tester.PutObject(t.Context(), bucket, key, bytes.NewReader([]byte{}), nil)
@@ -365,6 +366,8 @@ func TestListObjects(t *testing.T) {
 				for i := range tc.objects {
 					if *resp.Contents[i].Key != tc.objects[i] {
 						t.Fatalf("expected object %v, got %v", tc.objects[i], *resp.Contents[i].Key)
+					} else if *resp.Contents[i].ETag != etag {
+						t.Fatalf("expected ETag %q, got %q", etag, *resp.Contents[i].ETag)
 					}
 				}
 				assertCommonPrefixesEqual(t, tc.commonPrefixes, resp.CommonPrefixes)
