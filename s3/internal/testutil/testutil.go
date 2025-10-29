@@ -186,7 +186,7 @@ func (t *S3Tester) ListBuckets(ctx context.Context) ([]types.Bucket, error) {
 }
 
 // ListObjectsV2 is a convenience wrapper around the AWS SDK's ListObjectsV2 API.
-func (t *S3Tester) ListObjectsV2(ctx context.Context, bucket string, prefix *string, page s3.ListObjectsPage) (*service.ListObjectsV2Output, error) {
+func (t *S3Tester) ListObjectsV2(ctx context.Context, bucket string, prefix, delimiter *string, page s3.ListObjectsPage) (*service.ListObjectsV2Output, error) {
 	var maxKeys *int32
 	if page.MaxKeys > 0 {
 		maxKeys = aws.Int32(int32(page.MaxKeys))
@@ -194,6 +194,7 @@ func (t *S3Tester) ListObjectsV2(ctx context.Context, bucket string, prefix *str
 	resp, err := t.client.ListObjectsV2(ctx, &service.ListObjectsV2Input{
 		Bucket:            aws.String(bucket),
 		ContinuationToken: page.Marker,
+		Delimiter:         delimiter,
 		MaxKeys:           maxKeys,
 		Prefix:            prefix,
 	})
@@ -201,13 +202,14 @@ func (t *S3Tester) ListObjectsV2(ctx context.Context, bucket string, prefix *str
 }
 
 // ListObjectVersions is a convenience wrapper around the AWS SDK's ListObjectVersions API.
-func (t *S3Tester) ListObjectVersions(ctx context.Context, bucket string, prefix *string, page s3.ListObjectsPage) (*service.ListObjectVersionsOutput, error) {
+func (t *S3Tester) ListObjectVersions(ctx context.Context, bucket string, prefix, delimiter *string, page s3.ListObjectsPage) (*service.ListObjectVersionsOutput, error) {
 	var maxKeys *int32
 	if page.MaxKeys > 0 {
 		maxKeys = aws.Int32(int32(page.MaxKeys))
 	}
 	resp, err := t.client.ListObjectVersions(ctx, &service.ListObjectVersionsInput{
 		Bucket:          aws.String(bucket),
+		Delimiter:       delimiter,
 		KeyMarker:       page.Marker,
 		MaxKeys:         maxKeys,
 		Prefix:          prefix,

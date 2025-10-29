@@ -142,6 +142,13 @@ func (b *MemoryBackend) ListObjects(ctx context.Context, accessKeyID *string, bu
 		return strings.Compare(a.name, b.name)
 	})
 
+	// apply marker
+	if page.Marker != nil {
+		for len(objects) > 0 && strings.Compare(*page.Marker, objects[0].name) >= 0 {
+			objects = objects[1:]
+		}
+	}
+
 	result := s3.NewObjectsListResult()
 
 	var cntr int64
