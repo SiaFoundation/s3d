@@ -378,7 +378,8 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID strin
 
 	// extract Content-MD5 header
 	var contentMD5 *[16]byte
-	if md5Base64 := r.Header.Get("Content-MD5"); md5Base64 != "" {
+	if _, exists := r.Header["Content-Md5"]; exists {
+		md5Base64 := r.Header.Get("Content-Md5")
 		contentMD5 = new([16]byte)
 		if n, err := base64.StdEncoding.Decode(contentMD5[:], []byte(md5Base64)); err != nil || n != len(contentMD5) {
 			return s3errs.ErrInvalidDigest
