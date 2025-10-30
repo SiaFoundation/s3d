@@ -6,8 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"net"
-	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"strings"
 	"testing"
@@ -276,6 +275,16 @@ func (t *S3Tester) PutObject(ctx context.Context, bucket, object string, r io.Re
 // NewTester creates a new S3Tester with an in-memory S3 backend and an AWS
 // client configured to talk to it.
 func NewTester(t testing.TB, optFns ...func(*service.Options)) *S3Tester {
+	return newTester(t, false, optFns...)
+}
+
+// NewTester creates a new S3Tester with an in-memory S3 backend and an AWS
+// client configured to talk to it over TLS.
+func NewTesterTLS(t testing.TB, optFns ...func(*service.Options)) *S3Tester {
+	return newTester(t, true, optFns...)
+}
+
+func newTester(t testing.TB, tls bool, optFns ...func(*service.Options)) *S3Tester {
 	t.Helper()
 
 	backend := testutils.NewMemoryBackend()
@@ -286,16 +295,14 @@ func NewTester(t testing.TB, optFns ...func(*service.Options)) *S3Tester {
 	handler := s3.New(backend,
 		s3.WithHostBucketBases([]string{"localhost"}),
 		s3.WithLogger(zaptest.NewLogger(t)))
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	go func() {
-		http.Serve(listener, handler)
-	}()
 
-	listenerAddr := listener.Addr().String()
-	_, port, _ := net.SplitHostPort(listenerAddr)
+	server := httptest.NewUnstartedServer(handler)
+	if tls {
+		server.StartTLS()
+	} else {
+		server.Start()
+	}
+	t.Cleanup(server.Close)
 
 	cfg, err := config.LoadDefaultConfig(t.Context())
 	if err != nil {
@@ -305,7 +312,8 @@ func NewTester(t testing.TB, optFns ...func(*service.Options)) *S3Tester {
 	opts := []func(*service.Options){
 		func(o *service.Options) {
 			o.Region = "us-east-1"
-			o.BaseEndpoint = aws.String(fmt.Sprintf("http://localhost:%s", port))
+			o.HTTPClient = server.Client()
+			o.BaseEndpoint = &server.URL
 			o.UsePathStyle = true
 			o.Credentials = aws.NewCredentialsCache(&credentials.StaticCredentialsProvider{
 				Value: aws.Credentials{
