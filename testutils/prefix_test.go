@@ -35,7 +35,7 @@ func TestPrefixMatch(t *testing.T) {
 
 		// this could be a source of trouble - does "no prefix" mean "match
 		// everything" or "match nothing"? What about "empty prefix"? For now,
-		// these cases simply document what the curret algorithm is expected to
+		// these cases simply document what the current algorithm is expected to
 		// do, but this needs further exploration:
 		{key: "foo/bar", prefix: nil, out: s("foo/bar")},
 		{key: "foo/bar", prefix: s(""), out: s("")},
