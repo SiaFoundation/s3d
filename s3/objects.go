@@ -41,6 +41,29 @@ type ObjectDeleteResult struct {
 	VersionID string
 }
 
+// Prefix represents an optional prefix and delimiter for listing objects in a
+// bucket.
+type Prefix struct {
+	HasPrefix bool
+	Prefix    string
+
+	HasDelimiter bool
+	Delimiter    string
+}
+
+func prefixFromQuery(query url.Values) Prefix {
+	prefix := Prefix{
+		Prefix:    query.Get("prefix"),
+		Delimiter: query.Get("delimiter"),
+	}
+	_, prefix.HasPrefix = query["prefix"]
+	_, prefix.HasDelimiter = query["delimiter"]
+
+	prefix.HasPrefix = prefix.HasPrefix && prefix.Prefix != ""
+	prefix.HasDelimiter = prefix.HasDelimiter && prefix.Delimiter != ""
+	return prefix
+}
+
 // routeObject handles URLs that contain both a bucket path segment and an
 // object path segment.
 func (s *s3) routeObject(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket, object string) error {
