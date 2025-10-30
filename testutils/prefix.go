@@ -1,37 +1,14 @@
-package s3
+package testutils
 
 import (
-	"fmt"
-	"net/url"
 	"strings"
+
+	"github.com/SiaFoundation/s3d/s3"
 )
 
-// Prefix represents an optional prefix and delimiter for listing objects in a
-// bucket.
-type Prefix struct {
-	HasPrefix bool
-	Prefix    string
-
-	HasDelimiter bool
-	Delimiter    string
-}
-
-func prefixFromQuery(query url.Values) Prefix {
-	prefix := Prefix{
-		Prefix:    query.Get("prefix"),
-		Delimiter: query.Get("delimiter"),
-	}
-	_, prefix.HasPrefix = query["prefix"]
-	_, prefix.HasDelimiter = query["delimiter"]
-
-	prefix.HasPrefix = prefix.HasPrefix && prefix.Prefix != ""
-	prefix.HasDelimiter = prefix.HasDelimiter && prefix.Delimiter != ""
-	return prefix
-}
-
-// NewPrefix creates a new Prefix from the given optional prefix and delimiter
+// newPrefix creates a new Prefix from the given optional prefix and delimiter
 // strings.
-func NewPrefix(prefix, delim *string) (p Prefix) {
+func newPrefix(prefix, delim *string) (p s3.Prefix) {
 	if prefix != nil {
 		p.HasPrefix, p.Prefix = true, *prefix
 	}
@@ -41,7 +18,7 @@ func NewPrefix(prefix, delim *string) (p Prefix) {
 	return p
 }
 
-// FilePrefix returns the path portion, then the remaining portion of the
+// filePrefix returns the path portion, then the remaining portion of the
 // Prefix if the Delimiter is "/". If the Delimiter is not set, or not "/",
 // ok will be false.
 //
@@ -50,7 +27,7 @@ func NewPrefix(prefix, delim *string) (p Prefix) {
 //	/foo/bar/  : path: /foo/bar  remaining: ""
 //	/foo/bar/b : path: /foo/bar  remaining: "b"
 //	/foo/bar   : path: /foo      remaining: "bar"
-func (p Prefix) FilePrefix() (path, remaining string, ok bool) {
+func filePrefix(p s3.Prefix) (path, remaining string, ok bool) {
 	if !p.HasPrefix || !p.HasDelimiter || p.Delimiter != "/" {
 		return "", "", p.Delimiter == "/"
 	}
@@ -63,7 +40,7 @@ func (p Prefix) FilePrefix() (path, remaining string, ok bool) {
 	}
 }
 
-// Match checks whether key starts with prefix. If the prefix does not match,
+// match checks whether key starts with a prefix. If the prefix does not match,
 // nil is returned.
 //
 // It is a best-effort attempt to implement the prefix/delimiter matching found
@@ -71,17 +48,17 @@ func (p Prefix) FilePrefix() (path, remaining string, ok bool) {
 //
 // To check whether the key belongs in Contents or CommonPrefixes, compare the
 // result to key.
-func (p Prefix) Match(key string) *PrefixMatch {
+func match(p s3.Prefix, key string) *prefixMatch {
 	if !p.HasPrefix && !p.HasDelimiter {
 		// If there is no prefix in the search, the match is the prefix:
-		return &PrefixMatch{Key: key, MatchedPart: key}
+		return &prefixMatch{Key: key, MatchedPart: key}
 	}
 
 	if !p.HasDelimiter {
 		// If the request does not contain a delimiter, prefix matching is a
 		// simple string prefix:
 		if strings.HasPrefix(key, p.Prefix) {
-			return &PrefixMatch{Key: key, MatchedPart: p.Prefix}
+			return &prefixMatch{Key: key, MatchedPart: p.Prefix}
 		}
 		return nil
 	}
@@ -132,19 +109,11 @@ func (p Prefix) Match(key string) *PrefixMatch {
 	if appendDelim {
 		out += p.Delimiter
 	}
-	return &PrefixMatch{Key: key, CommonPrefix: out != key, MatchedPart: out}
+	return &prefixMatch{Key: key, CommonPrefix: out != key, MatchedPart: out}
 }
 
-func (p Prefix) String() string {
-	if p.HasDelimiter {
-		return fmt.Sprintf("prefix:%q, delim:%q", p.Prefix, p.Delimiter)
-	} else {
-		return fmt.Sprintf("prefix:%q", p.Prefix)
-	}
-}
-
-// PrefixMatch describes a successful match of a key against a Prefix.
-type PrefixMatch struct {
+// prefixMatch describes a successful match of a key against a Prefix.
+type prefixMatch struct {
 	// Input key passed to PrefixMatch.
 	Key string
 
