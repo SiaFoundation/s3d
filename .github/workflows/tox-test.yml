@@ -41,7 +41,7 @@ jobs:
 
       - name: Launch s3d and save pid
         run: |
-          nohup go run ./cmd/s3d/main.go > s3d.log 2>&1 &
+          nohup go run ./cmd/s3d-tox/main.go > s3d.log 2>&1 &
           echo $! > s3d.pid
           sleep 1
           if ! kill -0 $(cat s3d.pid); then
