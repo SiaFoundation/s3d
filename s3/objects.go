@@ -125,10 +125,10 @@ func (s *s3) deleteObjects(w http.ResponseWriter, r *http.Request, accessKeyID s
 		return s3errs.ErrMalformedXML
 	}
 
-	for _, obj := range req.Objects {
-		if obj.VersionID == "null" {
-			obj.VersionID = ""
-		} else if obj.VersionID != "" {
+	for i := range req.Objects {
+		if req.Objects[i].VersionID == "null" {
+			req.Objects[i].VersionID = ""
+		} else if req.Objects[i].VersionID != "" {
 			return s3errs.ErrNotImplemented // versioning not supported
 		}
 	}
