@@ -55,15 +55,20 @@ jobs:
           S3TEST_CONF: ${{ github.workspace }}/s3tests.conf
           S3_USE_SIGV4: "True" # We only support v4 signatures
 
-        # We ignore tests that require AWSv2 signatures since s3d only supports
-        # v4
-        # We also ignore tests around the "Expect" header since Go's http server
-        # doesn't give us enough control over it. S3 ignores bad Expect headers,
-        # but Go's http server responds with "417 Expectation Failed" instead.
+        # We ignore the following tests
+        # - The ones that require AWSv2 signatures since s3d only supports
+        #   v4
+        # - Tests around the "Expect" header since Go's http server
+        #   doesn't give us enough control over it. S3 ignores bad Expect headers,
+        #   but Go's http server responds with "417 Expectation Failed" instead.
+        # - Tests that are marked as "fails_on_rgw" since they are known to fail
+        #   due to the tests not being able to correctly manipulate request
+        #   headers.
+        # - Tests around ACLs since s3d currently does not implement ACL handling.
         run: |
           tox run --skip-pkg-install -c ./s3-tests -- s3tests/functional/test_headers.py \
-            -m "not auth_aws2" \
-            -k "not bad_expect"
+            -m "not auth_aws2 and not fails_on_rgw" \
+            -k "not _create_bad_expect_ and not _acl"
 
       # NOTE: The following tests are currently disabled
       #
