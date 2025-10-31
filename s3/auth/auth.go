@@ -25,6 +25,13 @@ const (
 	// over HeaderDate.
 	HeaderXAMZDate = "X-Amz-Date"
 
+	// HeaderXAMZDecodedContentLength contains the decoded content length of an
+	// aws-chunked encoded request.
+	HeaderXAMZDecodedContentLength = "X-Amz-Decoded-Content-Length"
+
+	// HeaderXAMZTrailer contains the expected headers of the payload trailer
+	HeaderXAMZTrailer = "X-Amz-Trailer"
+
 	// HeaderDate is the standard HTTP "Date" header. It is used if
 	// HeaderXAMZDate is not present.
 	HeaderDate = "Date"
@@ -108,15 +115,12 @@ func handleAuthV4(req *http.Request, store KeyStore, region string, now time.Tim
 	// case1: payload is not signed at all
 	case ContentUnsignedPayload:
 		return "", s3errs.ErrNotImplemented
-	// case2: payload is not signed and contains a trailer with a checksum
-	case ContentStreamingUnsignedPayloadTrailer:
-		return "", s3errs.ErrNotImplemented
-	// case3: payload is signed using SigV4 chunked encoding
-	case ContentStreamingAWS4HMACSHA256Payload:
-		return "", s3errs.ErrNotImplemented
-	// case4: payload is signed using SigV4 chunked encoding with a trailer
-	case ContentStreamingAWS4HMACSHA256PayloadTrailer:
-		return "", s3errs.ErrNotImplemented
+	// case2-4: payload is streamed and possibly signed or has a trailer with
+	// additional headers
+	case ContentStreamingUnsignedPayloadTrailer,
+		ContentStreamingAWS4HMACSHA256Payload,
+		ContentStreamingAWS4HMACSHA256PayloadTrailer:
+		return accessKeyID, handleAuthV4Streaming(req)
 	// case5: the x-amz-content-sha256 header contains the actual payload hash
 	default:
 		return accessKeyID, nil
