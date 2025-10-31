@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SiaFoundation/s3d/s3/auth"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"go.uber.org/zap"
@@ -73,10 +74,15 @@ type PutObjectResult struct {
 }
 
 // PutObjectOptions contains options for a PutObject operation.
+//
+// ContentMD5 and ContentSHA256 are optional checksums of the object data. If
+// set, the backend needs to validate the data against the provided checksums
+// and return an error if they don't match.
 type PutObjectOptions struct {
 	Meta          map[string]string
 	ContentLength int64
 	ContentMD5    *[16]byte
+	ContentSHA256 *[32]byte
 }
 
 // routeObject handles URLs that contain both a bucket path segment and an
@@ -386,9 +392,16 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID strin
 		}
 	}
 
+	// extract SHA256 checksum from "X-Amz-Content-Sha256" header if present
+	contentSHA256, err := auth.Sha256HashFromRequest(r)
+	if err != nil {
+		return err
+	}
+
 	res, err := s.backend.PutObject(r.Context(), accessKeyID, bucket, object, r.Body, PutObjectOptions{
 		ContentLength: r.ContentLength,
 		ContentMD5:    contentMD5,
+		ContentSHA256: contentSHA256,
 		Meta:          meta,
 	})
 	if err != nil {

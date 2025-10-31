@@ -179,7 +179,7 @@ func sumHMAC(key []byte, data []byte) []byte {
 	return hash.Sum(nil)
 }
 
-func verifyV4SimpleSignature(req *http.Request, store KeyStore, region string, now time.Time) (string, error) {
+func verifyV4SignedRequest(req *http.Request, store KeyStore, region string, now time.Time) (string, error) {
 	// for the simple signature, we expect the full payload hash to be provided
 	// in the header
 	payloadHash := req.Header.Get(HeaderXAMZContentSHA256)
