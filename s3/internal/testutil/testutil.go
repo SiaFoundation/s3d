@@ -275,16 +275,16 @@ func (t *S3Tester) PutObject(ctx context.Context, bucket, object string, r io.Re
 // NewTester creates a new S3Tester with an in-memory S3 backend and an AWS
 // client configured to talk to it.
 func NewTester(t testing.TB, optFns ...func(*service.Options)) *S3Tester {
-	return newTester(t, false, optFns...)
+	return newTesterWithTLS(t, false, optFns...)
 }
 
-// NewTester creates a new S3Tester with an in-memory S3 backend and an AWS
+// NewTesterTLS creates a new S3Tester with an in-memory S3 backend and an AWS
 // client configured to talk to it over TLS.
 func NewTesterTLS(t testing.TB, optFns ...func(*service.Options)) *S3Tester {
-	return newTester(t, true, optFns...)
+	return newTesterWithTLS(t, true, optFns...)
 }
 
-func newTester(t testing.TB, tls bool, optFns ...func(*service.Options)) *S3Tester {
+func newTesterWithTLS(t testing.TB, tls bool, optFns ...func(*service.Options)) *S3Tester {
 	t.Helper()
 
 	backend := testutils.NewMemoryBackend()
