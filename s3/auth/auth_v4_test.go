@@ -67,40 +67,40 @@ func TestDateValidation(t *testing.T) {
 	store := &mockKeyStore{}
 
 	// Case 1: date not set
-	_, err := verifyV4SimpleSignature(req, store, "", now)
+	_, err := verifyV4SignedRequest(req, store, "", now)
 	if !errors.Is(err, s3errs.ErrMissingAuthenticationToken) {
 		t.Fatalf("expected ErrMissingAuthenticationToken, got %v", err)
 	}
 
 	// Case 2: credential date is in the past
 	header.Set(HeaderXAMZDate, now.Add(-24*time.Hour).Format(layoutISO8601))
-	_, err = verifyV4SimpleSignature(req, store, "", now)
+	_, err = verifyV4SignedRequest(req, store, "", now)
 	if !errors.Is(err, s3errs.ErrAuthorizationHeaderMalformed) {
 		t.Fatalf("expected ErrAuthorizationHeaderMalformed, got %v", err)
 	}
 
 	// Case 3: credential date is in the future
 	header.Set(HeaderXAMZDate, now.Add(24*time.Hour).Format(layoutISO8601))
-	_, err = verifyV4SimpleSignature(req, store, "", now)
+	_, err = verifyV4SignedRequest(req, store, "", now)
 	if !errors.Is(err, s3errs.ErrAuthorizationHeaderMalformed) {
 		t.Fatalf("expected ErrAuthorizationHeaderMalformed, got %v", err)
 	}
 
 	// Case 4: date is skewed too far in the past
 	header.Set(HeaderXAMZDate, now.Format(layoutISO8601))
-	_, err = verifyV4SimpleSignature(req, store, "", now.Add(6*time.Minute))
+	_, err = verifyV4SignedRequest(req, store, "", now.Add(6*time.Minute))
 	if !errors.Is(err, s3errs.ErrRequestTimeTooSkewed) {
 		t.Fatalf("expected ErrAuthorizationHeaderMalformed, got %v", err)
 	}
 
 	// Case 5: date is skewed too far in the future
-	_, err = verifyV4SimpleSignature(req, store, "", now.Add(-6*time.Minute))
+	_, err = verifyV4SignedRequest(req, store, "", now.Add(-6*time.Minute))
 	if !errors.Is(err, s3errs.ErrRequestTimeTooSkewed) {
 		t.Fatalf("expected ErrAuthorizationHeaderMalformed, got %v", err)
 	}
 
 	// Case 6: date is valid but we don't have the access key
-	_, err = verifyV4SimpleSignature(req, store, "", now)
+	_, err = verifyV4SignedRequest(req, store, "", now)
 	if !errors.Is(err, s3errs.ErrInvalidAccessKeyId) {
 		t.Fatal(err)
 	}

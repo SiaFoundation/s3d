@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"encoding/hex"
 	"net/http"
 	"strings"
 	"time"
@@ -95,21 +96,56 @@ func HandleAuth(req *http.Request, store KeyStore, region string, now time.Time)
 
 // handleAuthV4 handles AWS Signature Version 4 authentication using HMAC.
 func handleAuthV4(req *http.Request, store KeyStore, region string, now time.Time) (string, error) {
+	// verify the signed request first
+	accessKeyID, err := verifyV4SignedRequest(req, store, region, now)
+	if err != nil {
+		return "", err
+	}
+
+	// at this point the signature is valid, but we still need to check if the
+	// signed payload matches
 	switch req.Header.Get(HeaderXAMZContentSHA256) {
+	// case1: payload is not signed at all
 	case ContentUnsignedPayload:
 		return "", s3errs.ErrNotImplemented
+	// case2: payload is not signed and contains a trailer with a checksum
 	case ContentStreamingUnsignedPayloadTrailer:
 		return "", s3errs.ErrNotImplemented
+	// case3: payload is signed using SigV4 chunked encoding
 	case ContentStreamingAWS4HMACSHA256Payload:
 		return "", s3errs.ErrNotImplemented
+	// case4: payload is signed using SigV4 chunked encoding with a trailer
 	case ContentStreamingAWS4HMACSHA256PayloadTrailer:
 		return "", s3errs.ErrNotImplemented
+	// case5: the x-amz-content-sha256 header contains the actual payload hash
 	default:
-		return verifyV4SimpleSignature(req, store, region, now)
+		return accessKeyID, nil
 	}
 }
 
 // handleAuthV4a handles AWS Signature Version 4A authentication using ECDSA.
 func handleAuthV4a(_ *http.Request) (string, error) {
 	return "", s3errs.ErrNotImplemented // Signature Version 4A is not implemented
+}
+
+// Sha256HashFromRequest extracts the SHA256 hash of the payload from the
+// request if available. This hash should then be used to verify the integrity
+// of the payload.
+func Sha256HashFromRequest(req *http.Request) (*[32]byte, error) {
+	h := req.Header.Get(HeaderXAMZContentSHA256)
+	switch h {
+	case ContentUnsignedPayload,
+		ContentStreamingUnsignedPayloadTrailer,
+		ContentStreamingAWS4HMACSHA256Payload,
+		ContentStreamingAWS4HMACSHA256PayloadTrailer:
+		return nil, nil
+	default:
+	}
+	hash, err := hex.DecodeString(h)
+	if err != nil {
+		return nil, s3errs.ErrInvalidDigest
+	} else if len(hash) != 32 {
+		return nil, s3errs.ErrInvalidDigest
+	}
+	return (*[32]byte)(hash), nil
 }

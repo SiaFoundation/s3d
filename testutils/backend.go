@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5"
+	"crypto/sha256"
 	"errors"
 	"io"
 	"maps"
@@ -233,6 +234,10 @@ func (b *MemoryBackend) PutObject(_ context.Context, accessKeyID, bucket, obj st
 
 	contentMD5 := md5.Sum(data)
 	if opts.ContentMD5 != nil && !bytes.Equal(contentMD5[:], opts.ContentMD5[:]) {
+		return nil, s3errs.ErrBadDigest
+	}
+	contentSHA256 := sha256.Sum256(data)
+	if opts.ContentSHA256 != nil && *opts.ContentSHA256 != contentSHA256 {
 		return nil, s3errs.ErrBadDigest
 	}
 
