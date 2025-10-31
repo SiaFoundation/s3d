@@ -43,12 +43,16 @@ jobs:
         run: |
           nohup go run ./cmd/s3d-tox/main.go > s3d.log 2>&1 &
           echo $! > s3d.pid
-          sleep 1
-          if ! kill -0 $(cat s3d.pid); then
-            echo "s3d failed to start. Logs:"
-            cat s3d.log
-            exit 1
-          fi
+
+          # wait a bit to let s3d start
+          for i in {1..10}; do
+            if kill -0 $(cat s3d.pid); then
+              sleep 1
+              if nc -z localhost 8000; then
+                break
+              fi
+            fi
+          done
 
       - name: Run test_headers.py
         env:
