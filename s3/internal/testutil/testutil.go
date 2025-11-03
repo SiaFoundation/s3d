@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"strings"
 	"testing"
@@ -73,6 +74,25 @@ func (t *S3Tester) BucketLocation(ctx context.Context, bucket string) (string, e
 		Bucket: aws.String(bucket),
 	})
 	return string(resp.LocationConstraint), err
+}
+
+// CopyObject is a convenience wrapper around the AWS SDK's CopyObject API.
+func (t *S3Tester) CopyObject(ctx context.Context, srcBucket, srcObject, dstBucket, dstObject string, meta map[string]string) ([]byte, error) {
+	resp, err := t.client.CopyObject(ctx, &service.CopyObjectInput{
+		CopySource: aws.String(fmt.Sprintf("%s/%s", srcBucket, url.QueryEscape(srcObject))),
+		Bucket:     aws.String(dstBucket),
+		Key:        aws.String(dstObject),
+		Metadata:   meta,
+	})
+	if err != nil {
+		return nil, err
+	}
+	etag := strings.Trim(*resp.CopyObjectResult.ETag, `"`)
+	hash, err := hex.DecodeString(etag)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode ETag %q: %w", *resp.CopyObjectResult.ETag, err)
+	}
+	return hash, nil
 }
 
 // CreateBucket creates a new S3 bucket.

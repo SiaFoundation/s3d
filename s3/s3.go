@@ -18,6 +18,24 @@ import (
 type Backend interface {
 	auth.KeyStore
 
+	// CopyObject copies an object from the source bucket and object key to the
+	// destination bucket and object key. The provided metadata map contains any
+	// metadata that should be merged into the copied object except for the
+	// x-amz-acl header.
+	//
+	// - If the source bucket does not exist, [ErrNoSuchBucket] must be returned.
+	//
+	// - If the source object does not exist, [ErrNoSuchKey] must be returned.
+	//
+	// - If the destination bucket does not exist, [ErrNoSuchBucket] must be returned.
+	//
+	// - If the access key does not have permission to read the source object or
+	//   write to the destination bucket, [ErrAccessDenied] must be returned.
+	//
+	// - If the source and destination are the same, the object is kept but its metadata
+	//   is replaced with the provided metadata.
+	CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, meta map[string]string) (*CopyObjectResult, error)
+
 	// CreateBucket creates a new bucket with the given name for the user
 	// identified by the given access key. If the bucket already exists,
 	// [ErrBucketAlreadyExists] or [ErrBucketAlreadyOwnedByYou] must be
@@ -45,7 +63,7 @@ type Backend interface {
 	//
 	// - If the object with the given key in the specified bucket does not exist,
 	//   [ErrNoSuchKey] must be returned.
-	DeleteObject(ctx context.Context, accessKeyID, bucket, object string) (*ObjectDeleteResult, error)
+	DeleteObject(ctx context.Context, accessKeyID, bucket, object string) (*DeleteObjectResult, error)
 
 	// DeleteObjects deletes multiple objects from the specified bucket for the
 	// user identified by the given access key.
