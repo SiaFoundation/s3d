@@ -114,7 +114,7 @@ func handleAuthV4(req *http.Request, store KeyStore, region string, now time.Tim
 	switch req.Header.Get(HeaderXAMZContentSHA256) {
 	// case1: payload is not signed at all
 	case ContentUnsignedPayload:
-		return "", s3errs.ErrNotImplemented
+		return accessKeyID, nil
 	// case2-4: payload is streamed and possibly signed or has a trailer with
 	// additional headers
 	case ContentStreamingUnsignedPayloadTrailer,
