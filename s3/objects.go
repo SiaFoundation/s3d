@@ -456,7 +456,7 @@ func listObjectsPageFromQuery(query url.Values) (page ListObjectsPage, rerr erro
 		}
 		page.Marker = aws.String(string(tok))
 	} else if _, hasMarker := query["start-after"]; hasMarker {
-		// List Objects V2 uses start-after if continuation-token is missing:
+		// list Objects V2 uses start-after if continuation-token is missing:
 		page.Marker = aws.String(query.Get("start-after"))
 	}
 
