@@ -147,7 +147,7 @@ type (
 		NextVersionIDMarker string `xml:"NextVersionIdMarker,omitempty"`
 
 		// AWS responds with a list of either <Version> or <DeleteMarker> objects. The order
-		// needs to be preserved and they need to be direct of ListBucketVersionsResult:
+		// needs to be preserved:
 		//	<ListBucketVersionsResult>
 		//		<DeleteMarker ... />
 		//		<Version ... />
@@ -181,8 +181,7 @@ type (
 		// returned elsewhere in the response.
 		//
 		// NOTE: Each rolled-up result in CommonPrefixes counts as only one return
-		// against the MaxKeys value. (BW: been waiting to find some confirmation of
-		// that for a while!)
+		// against the MaxKeys value.
 		Delimiter string `xml:"Delimiter,omitempty"`
 
 		Prefix string `xml:"Prefix"`
