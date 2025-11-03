@@ -55,6 +55,45 @@ func (b *MemoryBackend) AddAccessKey(ctx context.Context, accessKeyID, secretAcc
 	return nil
 }
 
+// CopyObject copies an object from the source bucket/object to the destination.
+// https://docs.aws.amazon.com/AmazonS3/latest/API/API_CopyObject.html
+func (b *MemoryBackend) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, meta map[string]string) (*s3.CopyObjectResult, error) {
+	srcBkt, exists := b.buckets[srcBucket]
+	if !exists {
+		return nil, s3errs.ErrNoSuchBucket
+	} else if srcBkt.owner != accessKeyID {
+		return nil, s3errs.ErrAccessDenied
+	}
+	dstBkt, exists := b.buckets[dstBucket]
+	if !exists {
+		return nil, s3errs.ErrNoSuchBucket
+	} else if dstBkt.owner != accessKeyID {
+		return nil, s3errs.ErrAccessDenied
+	}
+	srcObjct, exists := srcBkt.objects[srcObject]
+	if exists {
+		for k, v := range srcObjct.metadata {
+			meta[k] = v // merge metadata
+		}
+	}
+	if _, exists := dstBkt.objects[dstObject]; !exists {
+		dstBkt.objects = make(map[string]*object)
+	}
+	dstObjct := &object{
+		name:         dstObject,
+		data:         slices.Clone(srcObjct.data),
+		lastModified: time.Now(),
+		metadata:     meta,
+		contentMD5:   srcObjct.contentMD5,
+	}
+	b.buckets[dstBucket].objects[dstObject] = dstObjct
+	return &s3.CopyObjectResult{
+		ContentMD5:   dstObjct.contentMD5,
+		LastModified: dstObjct.lastModified,
+		VersionID:    "", // versioning isn't supported
+	}, nil
+}
+
 // CreateBucket creates a new bucket if it doesn't exist yet and returns an
 // error otherwise.
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateBucket.html
@@ -88,7 +127,7 @@ func (b *MemoryBackend) DeleteBucket(ctx context.Context, accessKeyID, name stri
 }
 
 // DeleteObject deletes the specified object from the given bucket.
-func (b *MemoryBackend) DeleteObject(ctx context.Context, accessKeyID, bucket, object string) (*s3.ObjectDeleteResult, error) {
+func (b *MemoryBackend) DeleteObject(ctx context.Context, accessKeyID, bucket, object string) (*s3.DeleteObjectResult, error) {
 	bkt, exists := b.buckets[bucket]
 	if !exists {
 		return nil, s3errs.ErrNoSuchBucket
@@ -99,7 +138,7 @@ func (b *MemoryBackend) DeleteObject(ctx context.Context, accessKeyID, bucket, o
 		return nil, s3errs.ErrNoSuchKey
 	}
 	delete(bkt.objects, object)
-	return &s3.ObjectDeleteResult{
+	return &s3.DeleteObjectResult{
 		IsDeleteMarker: false,
 		VersionID:      "",
 	}, nil

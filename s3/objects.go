@@ -28,9 +28,17 @@ type Object struct {
 	Size         int64
 }
 
-// ObjectDeleteResult contains information about the result of a DeleteObject
+// CopyObjectResult contains information about the result of a CopyObject
 // operation.
-type ObjectDeleteResult struct {
+type CopyObjectResult struct {
+	ContentMD5   [16]byte
+	LastModified time.Time
+	VersionID    string
+}
+
+// DeleteObjectResult contains information about the result of a DeleteObject
+// operation.
+type DeleteObjectResult struct {
 	// Specifies whether the versioned object that was permanently deleted was
 	// (true) or was not (false) a delete marker. In a simple DELETE, this
 	// header indicates whether (true) or not (false) a delete marker was
@@ -111,6 +119,53 @@ func (s *s3) routeObject(w http.ResponseWriter, r *http.Request, accessKeyID *st
 	default:
 		return s3errs.ErrMethodNotAllowed
 	}
+}
+
+func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, accessKeyID, dstBucket, dstObject string, meta map[string]string) error {
+	source := meta["X-Amz-Copy-Source"]
+	log := s.logger.With(zap.String("dstBucket", dstBucket),
+		zap.String("dstObject", dstObject),
+		zap.String("source", source),
+	)
+	log.Debug("copy object")
+
+	if len(source) > KeySizeLimit {
+		return s3errs.ErrKeyTooLongError
+	}
+
+	// parse source
+	parts := strings.SplitN(strings.TrimPrefix(source, "/"), "/", 2)
+	if len(parts) != 2 {
+		return s3errs.ErrInvalidArgument
+	}
+	srcBucket := parts[0]
+	srcObject := strings.SplitN(parts[1], "?", 2)[0]
+
+	srcObject, err := url.QueryUnescape(srcObject)
+	if err != nil {
+		return err
+	}
+
+	if dir := r.Header.Get("x-amz-metadata-directive"); dir != "COPY" && dir != "" {
+		return s3errs.ErrNotImplemented // only COPY is supported
+	}
+
+	result, err := s.backend.CopyObject(r.Context(), accessKeyID, srcBucket, srcObject, dstBucket, dstObject, meta)
+	if err != nil {
+		return err
+	}
+
+	if result.VersionID != "" {
+		w.Header().Set("x-amz-copy-source-version-id", string(result.VersionID))
+		w.Header().Set("x-amz-version-id", string(result.VersionID))
+	}
+
+	etag := FormatETag(result.ContentMD5[:])
+	w.Header().Set("ETag", etag)
+	return writeXMLResponse(w, ObjectCopyResult{
+		ETag:         etag,
+		LastModified: NewContentTime(result.LastModified),
+	})
 }
 
 func (s *s3) deleteObject(w http.ResponseWriter, r *http.Request, accessKeyID string, bucket, object string) error {
@@ -375,6 +430,10 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID strin
 	meta, err := metadataHeaders(r.Header, MetadataSizeLimit)
 	if err != nil {
 		return err
+	}
+
+	if _, ok := meta["X-Amz-Copy-Source"]; ok {
+		return s.copyObject(w, r, accessKeyID, bucket, object, meta)
 	}
 
 	// content length is mandatory

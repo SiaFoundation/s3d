@@ -212,6 +212,70 @@ func TestPutObject(t *testing.T) {
 	})
 }
 
+func TestCopyObject(t *testing.T) {
+	s3Tester := testutil.NewTester(t)
+	data := frand.Bytes(100)
+	hash := md5.Sum(data)
+
+	// prepare a bucket
+	srcBucket := "srcbucket"
+	if err := s3Tester.CreateBucket(t.Context(), srcBucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// prepare the object to upload
+	srcObject := "srcobject"
+	metadata := map[string]string{
+		"foo": "bar",
+	}
+
+	// upload the object
+	resp, err := s3Tester.PutObject(t.Context(), srcBucket, srcObject, bytes.NewReader(data), metadata)
+	if err != nil {
+		t.Fatal(err)
+	} else if !bytes.Equal(resp, hash[:]) {
+		t.Fatalf("hash mismatch: expected %x, got %x", hash, resp)
+	}
+
+	var dstBucket, dstObject = "dstbucket", "dstobject"
+
+	// copying before creating the destination bucket should fail
+	_, err = s3Tester.CopyObject(t.Context(), srcBucket, srcObject, dstBucket, dstObject, nil)
+	testutil.AssertS3Error(t, s3errs.ErrNoSuchBucket, err)
+
+	// create destination bucket and try again
+	if err := s3Tester.CreateBucket(t.Context(), dstBucket); err != nil {
+		t.Fatal(err)
+	}
+	dstMeta := map[string]string{
+		"baz": "qux",
+	}
+	copyTime := time.Now().UTC()
+	time.Sleep(time.Second)
+	etag, err := s3Tester.CopyObject(t.Context(), srcBucket, srcObject, dstBucket, dstObject, dstMeta)
+	if err != nil {
+		t.Fatal(err)
+	} else if !bytes.Equal(etag, hash[:]) {
+		t.Fatalf("etag mismatch: expected %x, got %x", hash, etag)
+	}
+
+	// fetch the copied object and verify it
+	obj, err := s3Tester.GetObject(t.Context(), dstBucket, dstObject, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if fetched, err := io.ReadAll(obj.Body); err != nil {
+		t.Fatal(err)
+	} else if !bytes.Equal(data, fetched) {
+		t.Fatal("data mismatch")
+	} else if len(obj.Metadata) != 2 || obj.Metadata["foo"] != "bar" || obj.Metadata["baz"] != "qux" {
+		t.Fatalf("metadata mismatch: %+v", obj.Metadata)
+	} else if obj.ContentMD5 != hash {
+		t.Fatal("hash mismatch", obj.ContentMD5, hash[:])
+	} else if obj.LastModified.Before(copyTime) {
+		t.Fatalf("last modified mismatch: expected after %v, got %v", copyTime, obj.LastModified)
+	}
+}
+
 func TestRangeRequest(t *testing.T) {
 	for idx, tc := range []struct {
 		inst, inend  int64
