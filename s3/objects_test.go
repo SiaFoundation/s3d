@@ -274,6 +274,33 @@ func TestCopyObject(t *testing.T) {
 	} else if obj.LastModified.Before(copyTime) {
 		t.Fatalf("last modified mismatch: expected after %v, got %v", copyTime, obj.LastModified)
 	}
+
+	// copy an object that doesn't exist
+	_, err = s3Tester.CopyObject(t.Context(), srcBucket, "nonexistent", dstBucket, dstBucket, nil)
+	testutil.AssertS3Error(t, s3errs.ErrNoSuchKey, err)
+
+	// copy an object to the same bucket and key, adding additional metadata
+	additionalMeta := map[string]string{
+		"new-key": "new-value",
+	}
+	etag, err = s3Tester.CopyObject(t.Context(), dstBucket, dstObject, dstBucket, dstObject, additionalMeta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	obj, err = s3Tester.GetObject(t.Context(), dstBucket, dstObject, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if fetched, err := io.ReadAll(obj.Body); err != nil {
+		t.Fatal(err)
+	} else if !bytes.Equal(data, fetched) {
+		t.Fatal("data mismatch")
+	} else if len(obj.Metadata) != 3 || obj.Metadata["foo"] != "bar" || obj.Metadata["baz"] != "qux" || obj.Metadata["new-key"] != "new-value" {
+		t.Fatalf("metadata mismatch: %+v", obj.Metadata)
+	} else if obj.ContentMD5 != hash {
+		t.Fatal("hash mismatch", obj.ContentMD5, hash[:])
+	} else if obj.LastModified.Before(copyTime) {
+		t.Fatalf("last modified mismatch: expected after %v, got %v", copyTime, obj.LastModified)
+	}
 }
 
 func TestRangeRequest(t *testing.T) {

@@ -71,8 +71,12 @@ func (b *MemoryBackend) CopyObject(ctx context.Context, accessKeyID, srcBucket, 
 		return nil, s3errs.ErrAccessDenied
 	}
 	srcObjct, exists := srcBkt.objects[srcObject]
-	if exists {
-		for k, v := range srcObjct.metadata {
+	if !exists {
+		return nil, s3errs.ErrNoSuchKey
+	}
+
+	for k, v := range srcObjct.metadata {
+		if _, exists := meta[k]; !exists {
 			meta[k] = v // merge metadata
 		}
 	}

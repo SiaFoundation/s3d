@@ -33,7 +33,7 @@ type Backend interface {
 	//   write to the destination bucket, [ErrAccessDenied] must be returned.
 	//
 	// - If the source and destination are the same, the object is kept but its metadata
-	//   is replaced with the provided metadata.
+	//   is merged with the provided metadata.
 	CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, meta map[string]string) (*CopyObjectResult, error)
 
 	// CreateBucket creates a new bucket with the given name for the user
