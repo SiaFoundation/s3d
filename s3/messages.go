@@ -5,6 +5,10 @@ import (
 	"time"
 )
 
+// Null is used by S3 to represent an explicit empty value in XML responses.
+// Such as a VersionID or location.
+const Null = "null"
+
 // globalUserInfo is a static placeholder for all responses requiring user info.
 // Once we add authentication, this will be passed tied to the authenticated
 // user and persisted in the backend.

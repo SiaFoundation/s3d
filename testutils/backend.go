@@ -114,19 +114,11 @@ func (b *MemoryBackend) DeleteObjects(ctx context.Context, accessKeyID, bucket s
 	}
 	var res s3.ObjectsDeleteResult
 	for _, obj := range objects {
-		if _, exists := bkt.objects[obj.Key]; !exists {
-			res.Error = append(res.Error, s3.ErrorResult{
-				Key:     obj.Key,
-				Code:    s3errs.ErrNoSuchKey.Code,
-				Message: s3errs.ErrNoSuchKey.Description,
-			})
-		} else {
-			delete(bkt.objects, obj.Key)
-			res.Deleted = append(res.Deleted, s3.ObjectID{
-				Key:       obj.Key,
-				VersionID: "", // versioning isn't supported
-			})
-		}
+		delete(bkt.objects, obj.Key)
+		res.Deleted = append(res.Deleted, s3.ObjectID{
+			Key:       obj.Key,
+			VersionID: "", // versioning isn't supported
+		})
 	}
 	return &res, nil
 }

@@ -51,7 +51,7 @@ func (s *s3) bucketLocation(w http.ResponseWriter, r *http.Request, bucket strin
 	if region == "" {
 		// Per AWS S3 API, "null" is used for the us-east-1 region. So we use it
 		// here as a default as well.
-		region = "null"
+		region = Null
 	}
 
 	return writeXMLResponse(w, GetBucketLocation{
