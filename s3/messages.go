@@ -256,7 +256,7 @@ type (
 	// ObjectCopyResult contains the response from a CopyObject operation.
 	ObjectCopyResult struct {
 		XMLName      xml.Name    `xml:"CopyObjectResult"`
-		ETag         string      `xml:"ETag,omitempty"`
+		ETag         string      `xml:"ETag"`
 		LastModified ContentTime `xml:"LastModified,omitempty"`
 	}
 )
