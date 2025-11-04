@@ -126,7 +126,7 @@ func (s *s3) deleteObjects(w http.ResponseWriter, r *http.Request, accessKeyID s
 	}
 
 	for i := range req.Objects {
-		if req.Objects[i].VersionID == "null" {
+		if req.Objects[i].VersionID == Null {
 			req.Objects[i].VersionID = ""
 		} else if req.Objects[i].VersionID != "" {
 			return s3errs.ErrNotImplemented // versioning not supported
@@ -330,8 +330,8 @@ func (s *s3) listObjectVersions(w http.ResponseWriter, r *http.Request, accessKe
 	for _, obj := range objects.Contents {
 		result.Versions = append(result.Versions, Version{
 			Key:          obj.Key,
-			VersionID:    "null", // versioning not supported
-			IsLatest:     true,   // versioning not supported
+			VersionID:    Null, // versioning not supported
+			IsLatest:     true, // versioning not supported
 			LastModified: obj.LastModified,
 			Size:         obj.Size,
 			ETag:         obj.ETag,

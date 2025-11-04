@@ -427,30 +427,18 @@ func TestDeleteObjects(t *testing.T) {
 			t.Fatalf("expected deleted key %v, got %v", key, *deleted.Key)
 		}
 	}
-	assertMissing := func(t *testing.T, key string, delErr types.Error) {
-		t.Helper()
-		if *delErr.Key != key {
-			t.Fatalf("expected missing key %v, got %v", key, *delErr.Key)
-		} else if *delErr.Code != s3errs.ErrNoSuchKey.Code {
-			t.Fatalf("expected missing key error code %v, got %v", s3errs.ErrNoSuchKey.Code, *delErr.Code)
-		} else if *delErr.Message != s3errs.ErrNoSuchKey.Description {
-			t.Fatalf("expected missing key error message %v, got %v", s3errs.ErrNoSuchKey.Description, *delErr.Message)
-		}
-	}
 
 	// delete a few objects, including one that doesn't exist
 	delKeys := []string{"2", "4", "nonexistent"}
 	resp, err := s3Tester.DeleteObjects(t.Context(), bucket, delKeys, nil)
 	if err != nil {
 		t.Fatal(err)
-	} else if len(resp.Deleted) != 2 {
-		t.Fatalf("expected 2 deleted objects, got %d", len(resp.Deleted))
-	} else if len(resp.Errors) != 1 {
-		t.Fatalf("expected 1 error, got %d", len(resp.Errors))
+	} else if len(resp.Deleted) != 3 {
+		t.Fatalf("expected 3 deleted objects, got %d", len(resp.Deleted))
 	}
 	assertDeleted(t, "2", resp.Deleted[0])
 	assertDeleted(t, "4", resp.Deleted[1])
-	assertMissing(t, "nonexistent", resp.Errors[0])
+	assertDeleted(t, "nonexistent", resp.Deleted[2])
 
 	// verify deleted objects are gone and others remain
 	objs, err := s3Tester.ListObjectsV2(t.Context(), bucket, nil, nil, s3.ListObjectsPage{})

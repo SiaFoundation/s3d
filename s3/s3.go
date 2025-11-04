@@ -56,8 +56,7 @@ type Backend interface {
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
 	//
 	// - If any of the objects with the given keys in the specified bucket do not
-	//   exist, they must be reported in the returned ObjectsDeleteResult using
-	//   the [ErrNoSuchKey] error.
+	//   exist, they must still be reported as deleted.
 	DeleteObjects(ctx context.Context, accessKeyID, bucket string, objects []ObjectID) (*ObjectsDeleteResult, error)
 
 	// GetObject retrieves the object with the given key from the specified
@@ -383,7 +382,7 @@ func versionFromQuery(qv []string) string {
 	// object" endpoint describes a 'null' version explicitly, but we don't
 	// want backend implementers to have to special-case this string, so
 	// let's hide it in here:
-	if len(qv) > 0 && qv[0] != "" && qv[0] != "null" {
+	if len(qv) > 0 && qv[0] != "" && qv[0] != Null {
 		return qv[0]
 	}
 	return ""

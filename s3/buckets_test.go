@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	service "github.com/aws/aws-sdk-go-v2/service/s3"
@@ -38,7 +39,7 @@ func TestBuckets(t *testing.T) {
 		location, err := s3Tester.BucketLocation(t.Context(), bucket)
 		if err != nil {
 			t.Fatal(err)
-		} else if location != "null" {
+		} else if location != s3.Null {
 			t.Fatalf("unexpected location: %q", location)
 		}
 
