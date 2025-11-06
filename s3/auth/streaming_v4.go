@@ -2,7 +2,12 @@ package auth
 
 import (
 	"bufio"
+	"crypto/sha1"
+	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
+	"hash"
+	"hash/crc32"
 	"io"
 	"net/http"
 	"strconv"
@@ -24,13 +29,21 @@ func handleAuthV4Streaming(req *http.Request) error {
 		}
 	}
 
-	// TODO: This is where we should check if HeaderXAMZTrailer is set and parse
-	// it. Then we'd add it to the chunked reader to make sure the reader can
-	// validate that the trailer only contains headers previously specified.
+	// parse x-amz-trailer which contains the expected trailer headers
+	xAmzTrailer := req.Header.Get(HeaderXAMZTrailer)
+	if xAmzTrailer == "" {
+		return s3errs.ErrInvalidArgument
+	}
+
+	// parse the headers
+	expectedHeaders := make(map[string]struct{})
+	for h := range strings.SplitSeq(xAmzTrailer, ",") {
+		expectedHeaders[http.CanonicalHeaderKey(h)] = struct{}{}
+	}
 
 	switch req.Header.Get(HeaderXAMZContentSHA256) {
 	case ContentStreamingUnsignedPayloadTrailer:
-		req.Body = io.NopCloser(newChunkedPayloadTrailerReader(req.Body))
+		req.Body = io.NopCloser(newChunkedPayloadTrailerReader(req.Body, expectedHeaders))
 	case ContentStreamingAWS4HMACSHA256Payload:
 		return s3errs.ErrNotImplemented
 	case ContentStreamingAWS4HMACSHA256PayloadTrailer:
@@ -53,18 +66,46 @@ func handleAuthV4Streaming(req *http.Request) error {
 // compare the checksum in the trailer to the computed one and have Read return
 // an appropriate error if there is a mismatch.
 type chunkedPayloadTrailerReader struct {
-	br             *bufio.Reader
-	chunkRemain    int64
-	donePayload    bool
-	trailersParsed bool
+	br              *bufio.Reader
+	chunkRemain     int64
+	donePayload     bool
+	expectedHeaders map[string]struct{}
+
+	crc32Hasher  hash.Hash32
+	crc32CHasher hash.Hash32
+	sha1Hasher   hash.Hash
+	sha256Hasher hash.Hash
 }
 
 // newChunkedPayloadTrailerReader wraps r. r should be the raw HTTP message body
 // with Content-Encoding: aws-chunked.
-func newChunkedPayloadTrailerReader(r io.Reader) *chunkedPayloadTrailerReader {
+func newChunkedPayloadTrailerReader(r io.Reader, expectedHeaders map[string]struct{}) *chunkedPayloadTrailerReader {
+	var crc32Hasher hash.Hash32
+	if _, exists := expectedHeaders[xAmzChecksumCrc32]; exists {
+		crc32Hasher = crc32.New(crc32.MakeTable(crc32.IEEE))
+	}
+	var crc32CHasher hash.Hash32
+	if _, exists := expectedHeaders[xAmzChecksumCrc32C]; exists {
+		crc32CHasher = crc32.New(crc32.MakeTable(crc32.Castagnoli))
+	}
+	var sha1Hasher hash.Hash
+	if _, exists := expectedHeaders[xAmzChecksumSha1]; exists {
+		sha1Hasher = sha1.New()
+	}
+	var sha256Hasher hash.Hash
+	if _, exists := expectedHeaders[xAmzChecksumSha256]; exists {
+		sha256Hasher = sha256.New()
+	}
+
 	return &chunkedPayloadTrailerReader{
-		br:          bufio.NewReader(r),
-		chunkRemain: 0,
+		br:              bufio.NewReader(r),
+		chunkRemain:     0,
+		expectedHeaders: expectedHeaders,
+
+		crc32Hasher:  crc32Hasher,
+		crc32CHasher: crc32CHasher,
+		sha1Hasher:   sha1Hasher,
+		sha256Hasher: sha256Hasher,
 	}
 }
 
@@ -88,7 +129,10 @@ func (u *chunkedPayloadTrailerReader) Read(p []byte) (int, error) {
 			return 0, err
 		}
 		if size == 0 {
-			// TODO: This is where the trailer should be parsed
+			_, err := u.assertTrailerHeaders(u.expectedHeaders)
+			if err != nil {
+				return 0, err
+			}
 			return 0, io.EOF
 		}
 		u.chunkRemain = size
@@ -109,6 +153,9 @@ func (u *chunkedPayloadTrailerReader) Read(p []byte) (int, error) {
 		return n, err
 	}
 
+	// update hashers with read data
+	u.updateHashers(p[:n])
+
 	// if we just finished this chunk, expect a trailing CRLF.
 	if u.chunkRemain == 0 {
 		if err := expectCRLF(u.br); err != nil {
@@ -116,6 +163,73 @@ func (u *chunkedPayloadTrailerReader) Read(p []byte) (int, error) {
 		}
 	}
 	return n, nil
+}
+
+// assertTrailerHeaders reads and asserts trailer headers from br match
+// expectedHeaders.
+func (u *chunkedPayloadTrailerReader) assertTrailerHeaders(expectedHeaders map[string]struct{}) (http.Header, error) {
+	parsedHeaders := make(http.Header)
+
+	for {
+		// read a line from the buffer
+		line, err := readCRLFLine(u.br)
+		if err != nil {
+			return nil, s3errs.ErrInvalidArgument
+		}
+
+		// an empty line indicates the end of the headers
+		if line == "" {
+			break
+		}
+
+		// split the line into key and value
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			return nil, s3errs.ErrInvalidArgument
+		}
+
+		key := http.CanonicalHeaderKey(strings.TrimSpace(parts[0]))
+		value := strings.TrimSpace(parts[1])
+
+		// check if the header is expected
+		if _, ok := expectedHeaders[key]; !ok {
+			return nil, s3errs.ErrInvalidArgument
+		}
+
+		// add the header to the parsed headers
+		parsedHeaders.Add(key, value)
+	}
+
+	// ensure all expected headers are present
+	for expected := range expectedHeaders {
+		h, ok := parsedHeaders[expected]
+		if !ok {
+			return nil, fmt.Errorf("missing expected trailer header: %q", expected)
+		}
+
+		// verify checksum headers
+		if expected == xAmzChecksumCrc32 {
+			if chksum := base64.StdEncoding.EncodeToString(u.crc32Hasher.Sum(nil)); h[0] != chksum {
+				return nil, s3errs.ErrBadDigest
+			}
+		}
+		if expected == xAmzChecksumCrc32C {
+			if chksum := base64.StdEncoding.EncodeToString(u.crc32CHasher.Sum(nil)); h[0] != chksum {
+				return nil, s3errs.ErrBadDigest
+			}
+		}
+		if expected == xAmzChecksumSha1 {
+			if chksum := base64.StdEncoding.EncodeToString(u.sha1Hasher.Sum(nil)); h[0] != chksum {
+				return nil, s3errs.ErrBadDigest
+			}
+		}
+		if expected == xAmzChecksumSha256 {
+			if chksum := base64.StdEncoding.EncodeToString(u.sha256Hasher.Sum(nil)); h[0] != chksum {
+				return nil, s3errs.ErrBadDigest
+			}
+		}
+	}
+	return parsedHeaders, nil
 }
 
 func expectCRLF(br *bufio.Reader) error {
@@ -157,4 +271,21 @@ func readCRLFLine(br *bufio.Reader) (string, error) {
 		return "", fmt.Errorf("malformed chunk header: missing CRLF")
 	}
 	return string(b[:len(b)-2]), nil // strip CRLF
+}
+
+// updateHashers updates all active hashers with data to later verify against
+// trailer checksums.
+func (u *chunkedPayloadTrailerReader) updateHashers(data []byte) {
+	if u.crc32Hasher != nil {
+		_, _ = u.crc32Hasher.Write(data)
+	}
+	if u.crc32CHasher != nil {
+		_, _ = u.crc32CHasher.Write(data)
+	}
+	if u.sha1Hasher != nil {
+		_, _ = u.sha1Hasher.Write(data)
+	}
+	if u.sha256Hasher != nil {
+		_, _ = u.sha256Hasher.Write(data)
+	}
 }
