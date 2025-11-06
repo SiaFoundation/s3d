@@ -43,7 +43,7 @@ func handleAuthV4Streaming(req *http.Request) error {
 
 	switch req.Header.Get(HeaderXAMZContentSHA256) {
 	case ContentStreamingUnsignedPayloadTrailer:
-		req.Body = io.NopCloser(newChunkedPayloadTrailerReader(req.Body, expectedHeaders))
+		req.Body = newChunkedPayloadTrailerReader(req.Body, expectedHeaders)
 	case ContentStreamingAWS4HMACSHA256Payload:
 		return s3errs.ErrNotImplemented
 	case ContentStreamingAWS4HMACSHA256PayloadTrailer:
@@ -62,6 +62,7 @@ func handleAuthV4Streaming(req *http.Request) error {
 // It implements io.Reader for the payload bytes.
 type chunkedPayloadTrailerReader struct {
 	br              *bufio.Reader
+	r               io.Closer // io.Closer to avoid reading from it rather than br
 	chunkRemain     int64
 	done            bool
 	expectedHeaders map[string]struct{}
@@ -74,7 +75,7 @@ type chunkedPayloadTrailerReader struct {
 
 // newChunkedPayloadTrailerReader wraps r. r should be the raw HTTP message body
 // with Content-Encoding: aws-chunked.
-func newChunkedPayloadTrailerReader(r io.Reader, expectedHeaders map[string]struct{}) *chunkedPayloadTrailerReader {
+func newChunkedPayloadTrailerReader(r io.ReadCloser, expectedHeaders map[string]struct{}) *chunkedPayloadTrailerReader {
 	var crc32Hasher hash.Hash32
 	if _, exists := expectedHeaders[xAmzChecksumCrc32]; exists {
 		crc32Hasher = crc32.New(crc32.MakeTable(crc32.IEEE))
@@ -93,6 +94,7 @@ func newChunkedPayloadTrailerReader(r io.Reader, expectedHeaders map[string]stru
 	}
 
 	return &chunkedPayloadTrailerReader{
+		r:               r,
 		br:              bufio.NewReader(r),
 		chunkRemain:     0,
 		expectedHeaders: expectedHeaders,
@@ -102,6 +104,11 @@ func newChunkedPayloadTrailerReader(r io.Reader, expectedHeaders map[string]stru
 		sha1Hasher:   sha1Hasher,
 		sha256Hasher: sha256Hasher,
 	}
+}
+
+// Close closes the underlying reader.
+func (r *chunkedPayloadTrailerReader) Close() error {
+	return r.r.Close()
 }
 
 // Read streams only the payload bytes. Once the payload is exhausted,
