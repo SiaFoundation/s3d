@@ -37,6 +37,14 @@ const (
 	HeaderDate = "Date"
 )
 
+// The following constants define the supported checksum header names.
+const (
+	xAmzChecksumCrc32  = "X-Amz-Checksum-Crc32"
+	xAmzChecksumCrc32C = "X-Amz-Checksum-Crc32C"
+	xAmzChecksumSha1   = "X-Amz-Checksum-Sha1"
+	xAmzChecksumSha256 = "X-Amz-Checksum-Sha256"
+)
+
 // The following constants define the supported "Authorization" header values
 const (
 	AuthorizationAWS4HMACSHA256 = "AWS4-HMAC-SHA256" // SigV4
