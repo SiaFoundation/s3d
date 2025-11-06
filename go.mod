@@ -8,6 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.18.20
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.89.1
 	go.uber.org/zap v1.27.0
+	gopkg.in/yaml.v3 v3.0.1
 	lukechampine.com/frand v1.5.1
 )
 
