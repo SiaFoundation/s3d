@@ -2,38 +2,49 @@ package sia
 
 import (
 	"context"
-	"crypto/pbkdf2"
-	"crypto/sha256"
 	"fmt"
 	"io"
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/auth"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"go.uber.org/zap"
 )
 
-var _ s3.Backend = (*Sia)(nil)
+// Option is a configuration option for the S3 API handler.
+type Option func(*Sia)
+
+// WithLogger sets the logger for the S3 API handler.
+func WithLogger(logger *zap.Logger) Option {
+	return func(s *Sia) {
+		s.logger = logger.Named("sia")
+	}
+}
 
 // Sia implements the s3.Backend interface for storing data on Sia.
 type Sia struct {
+	logger *zap.Logger
+
 	accessKey string
 	secretKey auth.SecretAccessKey
 }
 
 // New creates a new Sia backend instance.
-func New(ctx context.Context, accessKey, secretKey string) (*Sia, error) {
+func New(ctx context.Context, accessKey, secretKey string, opts ...Option) (*Sia, error) {
 	if accessKey == "" || secretKey == "" {
 		return nil, fmt.Errorf("sia backend requires both access key and secret key")
 	}
 
-	derived, err := pbkdf2.Key(sha256.New, secretKey, []byte("s3d-secret-key"), 4096, 32)
-	if err != nil {
-		return nil, err
-	}
-	return &Sia{
+	sia := &Sia{
+		logger:    zap.NewNop(),
 		accessKey: accessKey,
-		secretKey: auth.SecretAccessKey(derived),
-	}, nil
+		secretKey: auth.SecretAccessKey(secretKey),
+	}
+	for _, opt := range opts {
+		opt(sia)
+	}
+
+	return sia, nil
 }
 
 // LoadSecret loads the secret key for the given access key ID. If the access

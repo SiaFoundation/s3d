@@ -154,7 +154,7 @@ type Option func(*s3)
 // WithLogger sets the logger for the S3 API handler.
 func WithLogger(logger *zap.Logger) Option {
 	return func(s *s3) {
-		s.logger = logger
+		s.logger = logger.Named("s3")
 	}
 }
 
@@ -186,7 +186,6 @@ func New(b Backend, opts ...Option) http.Handler {
 	for _, opt := range opts {
 		opt(s3)
 	}
-	s3.logger = s3.logger.Named("s3")
 
 	// base router
 	handler := auth.AuthenticatedHandler(auth.AuthenticatedHandlerFunc(s3.routeBase))
