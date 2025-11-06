@@ -12,9 +12,12 @@ import (
 	"runtime"
 	"syscall"
 
+	"github.com/SiaFoundation/s3d/build"
 	"github.com/SiaFoundation/s3d/s3"
+	"github.com/SiaFoundation/s3d/sia"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"lukechampine.com/flagg"
 )
 
 const (
@@ -43,18 +46,57 @@ var cfg = Config{
 			EnableANSI: runtime.GOOS != "windows",
 		},
 	},
-	S3: S3{
+	Sia: Sia{
 		AccessKey: os.Getenv(accessKeyEnv),
 		SecretKey: os.Getenv(secretKeyEnv),
 	},
+	S3: S3{},
 }
 
 func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
+	rootCmd := flagg.Root
+	versionCmd := flagg.New("version", ``)
+	configCmd := flagg.New("config", ``)
+
+	// attempt to load the config, command line flags will override any values
+	// set in the config file
+	configPath := tryLoadConfig()
+
 	// determine the data directory
 	cfg.Directory = dataDirectory(cfg.Directory)
+
+	cmd := flagg.Parse(flagg.Tree{
+		Cmd: rootCmd,
+		Sub: []flagg.Tree{
+			{Cmd: versionCmd},
+			{Cmd: configCmd},
+		},
+	})
+
+	switch cmd {
+	case versionCmd:
+		if len(cmd.Args()) != 0 {
+			cmd.Usage()
+			return
+		}
+
+		fmt.Println("s3d", build.Version())
+		fmt.Println("Commit:", build.Commit())
+		fmt.Println("Build Date:", build.Time())
+		return
+	case configCmd:
+		if len(cmd.Args()) != 0 {
+			cmd.Usage()
+			return
+		}
+
+		runConfigCmd(configPath)
+		return
+	case rootCmd:
+	}
 
 	var logCores []zapcore.Core
 
@@ -74,7 +116,7 @@ func main() {
 	if cfg.Log.File.Enabled {
 		// normalize log path
 		if cfg.Log.File.Path == "" {
-			cfg.Log.File.Path = filepath.Join(cfg.Directory, "indexd.log")
+			cfg.Log.File.Path = filepath.Join(cfg.Directory, "s3d.log")
 		}
 
 		// configure file logging
@@ -109,7 +151,12 @@ func main() {
 	}
 	defer adminAPIListener.Close()
 
-	s3Handler := s3.New(nil, s3.WithHostBucketBases(cfg.S3.HostBases),
+	backend, err := sia.New(ctx, cfg.Sia.AccessKey, cfg.Sia.SecretKey)
+	if err != nil {
+		checkFatalError("failed to create Sia backend", err)
+	}
+
+	s3Handler := s3.New(backend, s3.WithHostBucketBases(cfg.S3.HostBases),
 		s3.WithLogger(log))
 
 	server := http.Server{
@@ -160,11 +207,11 @@ func dataDirectory(fp string) string {
 	// default to the operating system's application directory
 	switch runtime.GOOS {
 	case "windows":
-		return filepath.Join(os.Getenv("APPDATA"), "indexd")
+		return filepath.Join(os.Getenv("APPDATA"), "s3d")
 	case "darwin":
-		return filepath.Join(os.Getenv("HOME"), "Library", "Application Support", "indexd")
+		return filepath.Join(os.Getenv("HOME"), "Library", "Application Support", "s3d")
 	case "linux", "freebsd", "openbsd":
-		return filepath.Join(string(filepath.Separator), "var", "lib", "indexd")
+		return filepath.Join(string(filepath.Separator), "var", "lib", "s3d")
 	default:
 		return "."
 	}
@@ -200,7 +247,7 @@ func startLocalhostListener(listenAddr string, log *zap.Logger) (l net.Listener,
 }
 
 // tryLoadConfig tries to load the config file. It will try multiple locations
-// based on GOOS starting with PWD/indexd.yml. If the file does not exist, it will
+// based on GOOS starting with PWD/s3d.yml. If the file does not exist, it will
 // try the next location. If an error occurs while loading the file, it will
 // print the error and exit. If the config is successfully loaded, the path to
 // the config file is returned.
@@ -221,21 +268,21 @@ func tryConfigPaths() []string {
 	}
 
 	paths := []string{
-		"indexd.yml",
+		"s3d.yml",
 	}
 	if str := os.Getenv(dataDirEnvVar); str != "" {
-		paths = append(paths, filepath.Join(str, "indexd.yml"))
+		paths = append(paths, filepath.Join(str, "s3d.yml"))
 	}
 
 	switch runtime.GOOS {
 	case "windows":
-		paths = append(paths, filepath.Join(os.Getenv("APPDATA"), "indexd", "indexd.yml"))
+		paths = append(paths, filepath.Join(os.Getenv("APPDATA"), "s3d", "s3d.yml"))
 	case "darwin":
-		paths = append(paths, filepath.Join(os.Getenv("HOME"), "Library", "Application Support", "indexd", "indexd.yml"))
+		paths = append(paths, filepath.Join(os.Getenv("HOME"), "Library", "Application Support", "s3d", "s3d.yml"))
 	case "linux", "freebsd", "openbsd":
 		paths = append(paths,
-			filepath.Join(string(filepath.Separator), "etc", "indexd", "indexd.yml"),
-			filepath.Join(string(filepath.Separator), "var", "lib", "indexd", "indexd.yml"), // old default for the Linux service
+			filepath.Join(string(filepath.Separator), "etc", "s3d", "s3d.yml"),
+			filepath.Join(string(filepath.Separator), "var", "lib", "s3d", "s3d.yml"), // old default for the Linux service
 		)
 	}
 	return paths
