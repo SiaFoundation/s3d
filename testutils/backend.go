@@ -233,7 +233,7 @@ func (b *MemoryBackend) PutObject(_ context.Context, accessKeyID, bucket, obj st
 	}
 
 	contentMD5 := md5.Sum(data)
-	if opts.ContentMD5 != nil && !bytes.Equal(contentMD5[:], opts.ContentMD5[:]) {
+	if opts.ContentMD5 != nil && *opts.ContentMD5 != contentMD5 {
 		return nil, s3errs.ErrBadDigest
 	}
 	contentSHA256 := sha256.Sum256(data)
