@@ -107,7 +107,7 @@ func runConfigCmd(fp string) {
 
 	fmt.Println("")
 	if cfg.AppSecret != "" {
-		fmt.Println(ansiStyle("33m", "A app secret is already set."))
+		fmt.Println(ansiStyle("33m", "An app secret is already set."))
 		if promptYesNo("Would you like to change your app secret?") {
 			setAppSecret()
 		}
@@ -237,7 +237,7 @@ func setKeypair() {
 
 	for {
 		fmt.Println("Please choose the secret key.")
-		fmt.Println("Tis will be used for authentication with the S3 API.")
+		fmt.Println("This will be used for authentication with the S3 API.")
 		fmt.Println("(It must be between 32 and 128 characters.)")
 		cfg.Sia.SecretKey = readPasswordInput("Enter password")
 		if len(cfg.Sia.SecretKey) >= 32 && len(cfg.Sia.SecretKey) <= 128 {
