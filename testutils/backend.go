@@ -234,7 +234,10 @@ func (b *MemoryBackend) ListObjects(ctx context.Context, accessKeyID *string, bu
 				Key:          obj.name,
 				LastModified: s3.NewContentTime(obj.lastModified),
 				ETag:         s3.FormatETag(obj.contentMD5[:]),
-				Size:         int64(len(obj.data)),
+				Owner: &s3.UserInfo{
+					ID: bkt.owner,
+				},
+				Size: int64(len(obj.data)),
 			})
 		}
 
