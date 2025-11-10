@@ -350,6 +350,8 @@ func (s *s3) listObjectsV2(w http.ResponseWriter, r *http.Request, accessKeyID *
 	page, err := listObjectsPageFromQuery(q)
 	if err != nil {
 		return err
+	} else if prefix.Delimiter != "" && prefix.Delimiter != "/" {
+		return s3errs.ErrNotImplemented // only "/" delimiter is supported
 	}
 
 	// list objects
