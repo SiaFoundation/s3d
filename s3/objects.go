@@ -354,6 +354,11 @@ func (s *s3) listObjectsV2(w http.ResponseWriter, r *http.Request, accessKeyID *
 		return s3errs.ErrNotImplemented // only "/" delimiter is supported
 	}
 
+	// don't allow unordered listing with delimiter
+	if _, unordered := q["allow-unordered"]; unordered && prefix.Delimiter != "" {
+		return s3errs.ErrInvalidArgument
+	}
+
 	// list objects
 	objects, err := s.backend.ListObjects(r.Context(), accessKeyID, bucket, prefix, page)
 	if err != nil {
@@ -394,7 +399,7 @@ func (s *s3) listObjectsV2(w http.ResponseWriter, r *http.Request, accessKeyID *
 	}
 
 	// if fetch-owner is not set, redact owner information
-	if fo, set := r.Form["fetch-owner"]; !set || fo[0] == "false" {
+	if fo, set := q["fetch-owner"]; !set || fo[0] == "false" {
 		for _, v := range result.Contents {
 			v.Owner = nil
 		}
