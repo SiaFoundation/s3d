@@ -205,16 +205,8 @@ func (b *MemoryBackend) ListObjects(ctx context.Context, accessKeyID *string, bu
 		return strings.Compare(a.name, b.name)
 	})
 
-	// apply marker
-	if page.Marker != nil {
-		for len(objects) > 0 && strings.Compare(*page.Marker, objects[0].name) >= 0 {
-			objects = objects[1:]
-		}
-	}
+	result := s3.NewObjectsListResult(page.MaxKeys)
 
-	result := s3.NewObjectsListResult()
-
-	var cntr int64
 	var lastMatchedPart string
 
 	for _, obj := range objects {
@@ -223,33 +215,32 @@ func (b *MemoryBackend) ListObjects(ctx context.Context, accessKeyID *string, bu
 		case match == nil:
 			continue
 		case match.CommonPrefix:
+			if page.Marker != nil && strings.Compare(*page.Marker, match.MatchedPart) >= 0 {
+				continue
+			}
 			if match.MatchedPart == lastMatchedPart {
 				continue // should not count towards keys
 			}
-			if cntr < page.MaxKeys {
-				result.AddPrefix(match.MatchedPart)
-			}
+			result.AddPrefix(match.MatchedPart)
 			lastMatchedPart = match.MatchedPart
 		default:
-			if cntr < page.MaxKeys {
-				result.Add(&s3.Content{
-					Key:          obj.name,
-					LastModified: s3.NewContentTime(obj.lastModified),
-					ETag:         s3.FormatETag(obj.contentMD5[:]),
-					Size:         int64(len(obj.data)),
-				})
+			if page.Marker != nil && strings.Compare(*page.Marker, obj.name) >= 0 {
+				continue
 			}
+			result.Add(&s3.Content{
+				Key:          obj.name,
+				LastModified: s3.NewContentTime(obj.lastModified),
+				ETag:         s3.FormatETag(obj.contentMD5[:]),
+				Size:         int64(len(obj.data)),
+			})
 		}
 
-		cntr++
-		if page.MaxKeys > 0 {
-			if cntr == page.MaxKeys {
-				result.NextMarker = obj.name
-			} else if cntr > page.MaxKeys {
-				result.IsTruncated = true
-				break
-			}
+		if result.IsTruncated {
+			break
 		}
+	}
+	if !result.IsTruncated {
+		result.NextMarker = ""
 	}
 
 	return result, nil
