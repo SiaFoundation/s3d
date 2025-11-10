@@ -206,6 +206,9 @@ func (b *MemoryBackend) ListObjects(ctx context.Context, accessKeyID *string, bu
 	})
 
 	result := s3.NewObjectsListResult(page.MaxKeys)
+	if page.MaxKeys == 0 {
+		return result, nil
+	}
 
 	var lastMatchedPart string
 
