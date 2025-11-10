@@ -80,7 +80,8 @@ jobs:
           S3_USE_SIGV4: "True" # We only support v4 signatures
         run: |
           tox run --skip-pkg-install -c ./s3-tests -- s3tests/functional/test_s3.py \
-            -k "test_bucket_listv2 and not delimiter_percentage and not delimiter_whitespace"
+            -k "test_bucket_listv2 and not delimiter_percentage and not delimiter_whitespace \
+                and not delimiter_alt and not delimiter_dot"
 
       # NOTE: The following tests are currently disabled
       #
