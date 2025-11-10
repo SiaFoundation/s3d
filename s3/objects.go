@@ -394,7 +394,7 @@ func (s *s3) listObjectsV2(w http.ResponseWriter, r *http.Request, accessKeyID *
 	}
 
 	// if fetch-owner is not set, redact owner information
-	if _, ok := q["fetch-owner"]; !ok {
+	if fo := r.Header.Get("fetch-owner"); fo == "false" || fo == "" {
 		for _, v := range result.Contents {
 			v.Owner = nil
 		}
