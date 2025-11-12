@@ -24,19 +24,25 @@ func WithLogger(logger *zap.Logger) Option {
 // Sia implements the s3.Backend interface for storing data on Sia.
 type Sia struct {
 	logger *zap.Logger
+	store  Store
 
 	accessKey string
 	secretKey auth.SecretAccessKey
 }
 
+// Store represents the storage backend used by the Sia backend.
+type Store any
+
 // New creates a new Sia backend instance.
-func New(ctx context.Context, accessKey, secretKey string, opts ...Option) (*Sia, error) {
+func New(ctx context.Context, store Store, accessKey, secretKey string, opts ...Option) (*Sia, error) {
 	if accessKey == "" || secretKey == "" {
 		return nil, fmt.Errorf("sia backend requires both access key and secret key")
 	}
 
 	sia := &Sia{
-		logger:    zap.NewNop(),
+		logger: zap.NewNop(),
+		store:  store,
+
 		accessKey: accessKey,
 		secretKey: auth.SecretAccessKey(secretKey),
 	}
