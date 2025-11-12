@@ -73,6 +73,10 @@ func (s *s3) createBucket(w http.ResponseWriter, r *http.Request, accessKeyID, b
 	q := r.URL.Query()
 	if _, hasACL := q["acl"]; hasACL {
 		return s3errs.ErrNotImplemented // ACLs are not implemented
+	} else if _, hasPolicy := q["policy"]; hasPolicy {
+		return s3errs.ErrNotImplemented // Bucket policies are not implemented
+	} else if _, hasLifecycle := q["lifecycle"]; hasLifecycle {
+		return s3errs.ErrNotImplemented // Bucket lifecycles are not implemented
 	}
 
 	if err := s.backend.CreateBucket(r.Context(), accessKeyID, bucket); err != nil {
