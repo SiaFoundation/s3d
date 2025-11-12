@@ -377,7 +377,7 @@ func (s *s3) listObjectsV2(w http.ResponseWriter, r *http.Request, accessKeyID *
 
 	// continuation token should be omitted if not set, but if it is set to an
 	// empty string, it should still be included.
-	var continuationToken *string = nil
+	var continuationToken *string
 	if _, hasToken := q["continuation-token"]; hasToken {
 		token := q.Get("continuation-token")
 		continuationToken = &token
@@ -407,7 +407,7 @@ func (s *s3) listObjectsV2(w http.ResponseWriter, r *http.Request, accessKeyID *
 	}
 
 	// if fetch-owner is not set, redact owner information
-	if fo, set := q["fetch-owner"]; !set || fo[0] == "false" {
+	if fo, set := q["fetch-owner"]; !set || (len(fo) > 0 && fo[0] == "false") {
 		for _, v := range result.Contents {
 			v.Owner = nil
 		}

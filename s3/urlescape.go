@@ -42,16 +42,6 @@ func urlEscape(s string) string {
 		t = make([]byte, required)
 	}
 
-	if hexCount == 0 {
-		copy(t, s)
-		for i := 0; i < len(s); i++ {
-			if s[i] == ' ' {
-				t[i] = '+'
-			}
-		}
-		return string(t)
-	}
-
 	const upperhex = "0123456789ABCDEF"
 
 	j := 0
