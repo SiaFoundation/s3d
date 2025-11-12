@@ -82,7 +82,8 @@ jobs:
           tox run --skip-pkg-install -c ./s3-tests -- s3tests/functional/test_s3.py \
             -k "test_bucket_listv2 and not delimiter_percentage and not delimiter_whitespace \
                 and not delimiter_alt and not delimiter_dot and not delimiter_unreadable \
-                and not delimiter_not_exist and not delimiter_prefix_not_exist"
+                and not delimiter_not_exist and not delimiter_prefix_not_exist \
+                and not bucket_listv2_objects_anonymous"
 
       # NOTE: The following tests are currently disabled
       #

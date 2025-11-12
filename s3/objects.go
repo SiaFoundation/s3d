@@ -375,6 +375,14 @@ func (s *s3) listObjectsV2(w http.ResponseWriter, r *http.Request, accessKeyID *
 		}
 	}
 
+	// continuation token should be omitted if not set, but if it is set to an
+	// empty string, it should still be included.
+	var continuationToken *string = nil
+	if _, hasToken := q["continuation-token"]; hasToken {
+		token := q.Get("continuation-token")
+		continuationToken = &token
+	}
+
 	// prepare result
 	var result = &ListObjectsV2Result{
 		ListObjectsResultBase: ListObjectsResultBase{
@@ -389,7 +397,7 @@ func (s *s3) listObjectsV2(w http.ResponseWriter, r *http.Request, accessKeyID *
 		},
 		KeyCount:          int64(len(objects.CommonPrefixes) + len(objects.Contents)),
 		StartAfter:        q.Get("start-after"),
-		ContinuationToken: q.Get("continuation-token"),
+		ContinuationToken: continuationToken,
 	}
 	if objects.NextMarker != "" {
 		// S3 continuation tokens are opaque base64-like values, so we just

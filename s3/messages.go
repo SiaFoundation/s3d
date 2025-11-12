@@ -93,7 +93,7 @@ type (
 
 		// If ContinuationToken was sent with the request, it is included in the
 		// response.
-		ContinuationToken string `xml:"ContinuationToken,omitempty"`
+		ContinuationToken *string `xml:"ContinuationToken,omitempty"`
 
 		// Returns the number of keys included in the response. The value is always
 		// less than or equal to the MaxKeys value.
