@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/md5"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"maps"
@@ -15,13 +16,15 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/auth"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"lukechampine.com/frand"
 )
 
 type (
 	// MemoryBackend is an in-memory implementation of the s3 backend for testing.
 	MemoryBackend struct {
-		buckets    map[string]*bucket
-		accessKeys map[string]auth.SecretAccessKey
+		buckets          map[string]*bucket
+		accessKeys       map[string]auth.SecretAccessKey
+		multipartUploads map[string]*multipartUpload
 	}
 
 	bucket struct {
@@ -36,13 +39,21 @@ type (
 		metadata     map[string]string
 		contentMD5   [16]byte
 	}
+
+	multipartUpload struct {
+		bucket    string
+		key       string
+		metadata  map[string]string
+		createdAt time.Time
+	}
 )
 
 // NewMemoryBackend creates a new MemoryBackend.
 func NewMemoryBackend() *MemoryBackend {
 	return &MemoryBackend{
-		accessKeys: make(map[string]auth.SecretAccessKey),
-		buckets:    make(map[string]*bucket),
+		accessKeys:       make(map[string]auth.SecretAccessKey),
+		buckets:          make(map[string]*bucket),
+		multipartUploads: make(map[string]*multipartUpload),
 	}
 }
 
@@ -290,6 +301,32 @@ func (b *MemoryBackend) PutObject(_ context.Context, accessKeyID, bucket, obj st
 	}
 	return &s3.PutObjectResult{
 		ContentMD5: contentMD5,
+	}, nil
+}
+
+// CreateMultipartUpload creates a new multipart upload.
+func (b *MemoryBackend) CreateMultipartUpload(_ context.Context, accessKeyID, bucket, key string, opts s3.CreateMultipartUploadOptions) (*s3.CreateMultipartUploadResult, error) {
+	bkt, exists := b.buckets[bucket]
+	if !exists {
+		return nil, s3errs.ErrNoSuchBucket
+	}
+	if bkt.owner != accessKeyID {
+		return nil, s3errs.ErrAccessDenied
+	}
+
+	var entropy [8]byte
+	frand.Read(entropy[:])
+	uploadID := hex.EncodeToString(entropy[:])
+
+	b.multipartUploads[uploadID] = &multipartUpload{
+		bucket:    bucket,
+		key:       key,
+		metadata:  opts.Meta,
+		createdAt: time.Now(),
+	}
+
+	return &s3.CreateMultipartUploadResult{
+		UploadID: uploadID,
 	}, nil
 }
 

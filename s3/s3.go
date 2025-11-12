@@ -139,6 +139,18 @@ type Backend interface {
 	// - If ContentMD5 is set in opts, and the MD5 checksum of the data read
 	//   from 'r' does not match, [ErrBadDigest] must be returned.
 	PutObject(ctx context.Context, accessKeyID string, bucket, object string, r io.Reader, opts PutObjectOptions) (*PutObjectResult, error)
+
+	// CreateMultipartUpload creates a new multipart upload for the specified
+	// key in the specified bucket.
+	//
+	// - If the access key does not have permission to store the object,
+	//   [ErrAccessDenied] must be returned.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	//
+	// - If the supplied metadata exceeds what the backend supports,
+	//   [ErrMetadataTooLarge] must be returned.
+	CreateMultipartUpload(ctx context.Context, accessKeyID, bucket, object string, opts CreateMultipartUploadOptions) (*CreateMultipartUploadResult, error)
 }
 
 type s3 struct {
@@ -325,9 +337,9 @@ func (s *s3) routeBase(w http.ResponseWriter, r *http.Request, accessKeyID *stri
 	// https://docs.aws.amazon.com/AmazonS3/latest/API/RESTCommonResponseHeaders.html.
 	//
 	if uploadID := query.Get("uploadId"); uploadID != "" {
-		err = s.routeMultipartUpload(w, r)
+		err = s.routeMultipartUpload(w, r, accessKeyID, bucket, object, uploadID)
 	} else if _, ok := query["uploads"]; ok {
-		err = s.routeMultipartUploadBase(w, r)
+		err = s.routeMultipartUploadBase(w, r, accessKeyID, bucket, object)
 	} else if _, ok := query["versioning"]; ok {
 		err = s.routeVersioning(w, r)
 	} else if _, ok := query["versions"]; ok {
@@ -347,19 +359,6 @@ func (s *s3) routeBase(w http.ResponseWriter, r *http.Request, accessKeyID *stri
 	if err != nil {
 		writeErrorResponse(w, err)
 	}
-}
-
-// routeMultipartUpload operates on routes that contain '?uploadId=<id>' in the
-// query string.
-func (s *s3) routeMultipartUpload(w http.ResponseWriter, r *http.Request) error {
-	return s3errs.ErrNotImplemented
-}
-
-// routeMultipartUploadBase operates on routes that contain '?uploads' in the
-// query string. These routes may or may not have a value for bucket or object;
-// this is validated and handled in the target handler functions.
-func (s *s3) routeMultipartUploadBase(w http.ResponseWriter, r *http.Request) error {
-	return s3errs.ErrNotImplemented
 }
 
 // routeVersioningBase operates on routes that contain '?versioning' in the

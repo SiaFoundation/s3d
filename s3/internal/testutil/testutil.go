@@ -292,6 +292,16 @@ func (t *S3Tester) PutObject(ctx context.Context, bucket, object string, r io.Re
 	return hash, nil
 }
 
+// CreateMultipartUpload is a convenience wrapper around the AWS SDK's
+// CreateMultipartUpload API.
+func (t *S3Tester) CreateMultipartUpload(ctx context.Context, bucket, object string, meta map[string]string) (*service.CreateMultipartUploadOutput, error) {
+	return t.client.CreateMultipartUpload(ctx, &service.CreateMultipartUploadInput{
+		Bucket:   aws.String(bucket),
+		Key:      aws.String(object),
+		Metadata: meta,
+	})
+}
+
 // NewTester creates a new S3Tester with an in-memory S3 backend and an AWS
 // client configured to talk to it.
 func NewTester(t testing.TB, optFns ...func(*service.Options)) *S3Tester {
