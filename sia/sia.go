@@ -126,3 +126,8 @@ func (s *Sia) ListObjects(ctx context.Context, accessKeyID *string, bucket strin
 func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object string, r io.Reader, opts s3.PutObjectOptions) (*s3.PutObjectResult, error) {
 	return nil, s3errs.ErrNotImplemented
 }
+
+// CreateMultipartUpload creates a new multipart upload.
+func (s *Sia) CreateMultipartUpload(ctx context.Context, accessKeyID, bucket, object string, opts s3.CreateMultipartUploadOptions) (*s3.CreateMultipartUploadResult, error) {
+	return nil, s3errs.ErrNotImplemented
+}
