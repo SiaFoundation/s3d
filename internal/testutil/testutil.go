@@ -14,7 +14,6 @@ import (
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
-	"github.com/SiaFoundation/s3d/testutils"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -32,7 +31,7 @@ const (
 // backend.
 type S3Tester struct {
 	cfg     aws.Config
-	backend *testutils.MemoryBackend
+	backend *MemoryBackend
 	client  *service.Client
 }
 
@@ -317,7 +316,7 @@ func NewTesterTLS(t testing.TB, optFns ...func(*service.Options)) *S3Tester {
 func newTesterWithTLS(t testing.TB, tls bool, optFns ...func(*service.Options)) *S3Tester {
 	t.Helper()
 
-	backend := testutils.NewMemoryBackend()
+	backend := NewMemoryBackend()
 	if err := backend.AddAccessKey(t.Context(), accessKeyID, secretAccessKey); err != nil {
 		t.Fatal(err)
 	}
