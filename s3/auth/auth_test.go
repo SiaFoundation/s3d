@@ -3,7 +3,7 @@ package auth_test
 import (
 	"testing"
 
-	"github.com/SiaFoundation/s3d/s3/internal/testutil"
+	"github.com/SiaFoundation/s3d/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	service "github.com/aws/aws-sdk-go-v2/service/s3"

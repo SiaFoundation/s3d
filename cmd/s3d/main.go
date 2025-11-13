@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/pbkdf2"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net"
@@ -16,6 +18,10 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/sia"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
+	"go.sia.tech/core/types"
+	"go.sia.tech/coreutils/wallet"
+	"go.sia.tech/indexd/api/app"
+	"go.sia.tech/indexd/sdk"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"lukechampine.com/flagg"
@@ -50,6 +56,8 @@ var cfg = Config{
 	Sia: Sia{
 		AccessKey: os.Getenv(accessKeyEnv),
 		SecretKey: os.Getenv(secretKeyEnv),
+
+		IndexerURL: "https://app.sia.storage",
 	},
 	S3: S3{},
 }
@@ -158,7 +166,36 @@ func main() {
 	}
 	defer store.Close()
 
-	backend, err := sia.New(ctx, store, cfg.Sia.AccessKey, cfg.Sia.SecretKey)
+	pk, err := loadPrivateKey(cfg.AppSecret)
+	if err != nil {
+		log.Fatal("failed to load private key", zap.Error(err))
+	}
+
+	resp, connected, err := sdk.Connect(ctx, cfg.Sia.IndexerURL, pk, app.RegisterAppRequest{
+		Name:        "S3d",
+		Description: "A S3-compatible storage service backed by Sia",
+		LogoURL:     "https://example.com/logo.png",
+		ServiceURL:  "https://example.com/service",
+	})
+	if err != nil {
+		log.Fatal("failed to connect app", zap.Error(err))
+	} else if !connected {
+		log.Info("please approve app connection", zap.String("url", resp.ResponseURL))
+		connected, err := resp.WaitForApproval(ctx)
+		if err != nil {
+			log.Fatal("failed to wait for app approval", zap.Error(err))
+		}
+		if !connected {
+			log.Fatal("user denied app connection")
+		}
+	}
+
+	sdkClient, err := sdk.NewSDK(cfg.Sia.IndexerURL, pk, sdk.WithLogger(log.Named("sdk")))
+	if err != nil {
+		log.Fatal("failed to create SDK client", zap.Error(err))
+	}
+
+	backend, err := sia.New(ctx, sdkClient, store, cfg.Sia.AccessKey, cfg.Sia.SecretKey)
 	if err != nil {
 		checkFatalError("failed to create Sia backend", err)
 	}
@@ -319,4 +356,17 @@ func humanEncoder(showColors bool) zapcore.Encoder {
 	cfg.StacktraceKey = ""
 	cfg.CallerKey = ""
 	return zapcore.NewConsoleEncoder(cfg)
+}
+
+func loadPrivateKey(appSecret string) (types.PrivateKey, error) {
+	if appSecret == "" {
+		return types.PrivateKey{}, fmt.Errorf("app secret is required")
+	}
+	derived, err := pbkdf2.Key(sha256.New, appSecret, []byte("s3d-pk-salt"), 4096, 32)
+	if err != nil {
+		return types.PrivateKey{}, fmt.Errorf("failed to derive key: %w", err)
+	}
+	var seed [32]byte
+	copy(seed[:], derived)
+	return wallet.KeyFromSeed(&seed, 0), nil
 }
