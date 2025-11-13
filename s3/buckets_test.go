@@ -14,9 +14,9 @@ func TestBuckets(t *testing.T) {
 	const bucket = "bucket"
 
 	run := func(t *testing.T, pathStyle bool) {
-		s3Tester := testutil.NewTester(t, func(o *service.Options) {
+		s3Tester := testutil.NewTester(t, testutil.WithServiceOptions(func(o *service.Options) {
 			o.UsePathStyle = pathStyle
-		})
+		}))
 		otherTester := s3Tester.AddAccessKey(t, "foo", "bar")
 
 		// check that the bucket doesn't exist yet
