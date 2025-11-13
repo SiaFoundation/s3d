@@ -5,8 +5,8 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/SiaFoundation/s3d/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3"
-	"github.com/SiaFoundation/s3d/testutils"
 	"go.uber.org/zap"
 )
 
@@ -37,7 +37,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to create logger: %v", err)
 	}
-	backend := testutils.NewMemoryBackend()
+	backend := testutil.NewMemoryBackend()
 
 	for _, pair := range toxKeyPairs {
 		err = backend.AddAccessKey(context.Background(), pair.AccessKey, pair.SecretKey)

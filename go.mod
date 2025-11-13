@@ -8,6 +8,8 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.18.21
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.90.0
 	github.com/mattn/go-sqlite3 v1.14.32
+	go.sia.tech/core v0.18.1
+	go.sia.tech/coreutils v0.18.7
 	go.sia.tech/indexd v0.0.4-0.20251113131811-6f46e888c7bd
 	go.uber.org/zap v1.27.0
 	golang.org/x/term v0.36.0
@@ -39,8 +41,6 @@ require (
 	github.com/quic-go/qpack v0.5.1 // indirect
 	github.com/quic-go/quic-go v0.56.0 // indirect
 	github.com/quic-go/webtransport-go v0.9.0 // indirect
-	go.sia.tech/core v0.18.1 // indirect
-	go.sia.tech/coreutils v0.18.7 // indirect
 	go.sia.tech/jape v0.14.1 // indirect
 	go.sia.tech/mux v1.4.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
