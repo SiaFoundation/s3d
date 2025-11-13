@@ -207,7 +207,7 @@ func TestPutObject(t *testing.T) {
 	})
 
 	t.Run("https", func(t *testing.T) {
-		s3Tester := testutil.NewTesterTLS(t)
+		s3Tester := testutil.NewTester(t, testutil.WithTLS())
 		test(t, s3Tester)
 	})
 }
