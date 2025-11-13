@@ -301,20 +301,49 @@ func (t *S3Tester) CreateMultipartUpload(ctx context.Context, bucket, object str
 	})
 }
 
-// NewTester creates a new S3Tester with an in-memory S3 backend and an AWS
-// client configured to talk to it.
-func NewTester(t testing.TB, optFns ...func(*service.Options)) *S3Tester {
-	return newTesterWithTLS(t, false, optFns...)
+type testerCfg struct {
+	backend     s3.Backend
+	serviceOpts []func(*service.Options)
+	tls         bool
 }
 
-// NewTesterTLS creates a new S3Tester with an in-memory S3 backend and an AWS
-// client configured to talk to it over TLS.
-func NewTesterTLS(t testing.TB, optFns ...func(*service.Options)) *S3Tester {
-	return newTesterWithTLS(t, true, optFns...)
+type TesterOption func(*testerCfg)
+
+func WithServiceOptions(opts ...func(*service.Options)) TesterOption {
+	return func(cfg *testerCfg) {
+		cfg.serviceOpts = opts
+	}
 }
 
-func newTesterWithTLS(t testing.TB, tls bool, optFns ...func(*service.Options)) *S3Tester {
+func WithTLS() TesterOption {
+	return func(cfg *testerCfg) {
+		cfg.tls = true
+	}
+}
+
+// NewTester creates a new S3Tester and a AWS client configured to talk to it.
+func NewTester(t testing.TB, opts ...TesterOption) *S3Tester {
+	return newTester(t, opts...)
+}
+
+// NewTester creates a new S3Tester and a AWS client configured to talk to it
+// over TLS.
+func NewTesterTLS(t testing.TB, opts ...TesterOption) *S3Tester {
+	opts = append(opts, WithTLS())
+	return newTester(t, opts...)
+}
+
+func newTester(t testing.TB, opts ...TesterOption) *S3Tester {
 	t.Helper()
+
+	cfg := &testerCfg{
+		backend:     NewMemoryBackend(),
+		serviceOpts: nil,
+		tls:         false,
+	}
+	for _, opt := range opts {
+		opt(cfg)
+	}
 
 	backend := NewMemoryBackend()
 	if err := backend.AddAccessKey(t.Context(), accessKeyID, secretAccessKey); err != nil {
@@ -326,19 +355,19 @@ func newTesterWithTLS(t testing.TB, tls bool, optFns ...func(*service.Options)) 
 		s3.WithLogger(zaptest.NewLogger(t)))
 
 	server := httptest.NewUnstartedServer(handler)
-	if tls {
+	if cfg.tls {
 		server.StartTLS()
 	} else {
 		server.Start()
 	}
 	t.Cleanup(server.Close)
 
-	cfg, err := config.LoadDefaultConfig(t.Context())
+	awsCfg, err := config.LoadDefaultConfig(t.Context())
 	if err != nil {
 		t.Fatalf("unable to load SDK config, %v", err)
 	}
 
-	opts := []func(*service.Options){
+	s3Opts := []func(*service.Options){
 		func(o *service.Options) {
 			o.Region = "us-east-1"
 			o.HTTPClient = server.Client()
@@ -352,12 +381,12 @@ func newTesterWithTLS(t testing.TB, tls bool, optFns ...func(*service.Options)) 
 			})
 		},
 	}
-	opts = append(opts, optFns...)
+	s3Opts = append(s3Opts, cfg.serviceOpts...)
 
 	return &S3Tester{
-		cfg:     cfg,
+		cfg:     awsCfg,
 		backend: backend,
-		client:  service.NewFromConfig(cfg, opts...),
+		client:  service.NewFromConfig(awsCfg, cfg.serviceOpts...),
 	}
 }
 

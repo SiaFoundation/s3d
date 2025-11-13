@@ -10,9 +10,9 @@ import (
 )
 
 func TestAnonymousCredentials(t *testing.T) {
-	s3Tester := testutil.NewTester(t, func(o *service.Options) {
+	s3Tester := testutil.NewTester(t, testutil.WithServiceOptions(func(o *service.Options) {
 		o.Credentials = aws.AnonymousCredentials{}
-	})
+	}))
 
 	// attempt to create a bucket, should fail with [ErrAccessDenied]
 	err := s3Tester.CreateBucket(t.Context(), "bucket")
