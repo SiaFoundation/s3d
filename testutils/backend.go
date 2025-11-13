@@ -19,6 +19,11 @@ import (
 	"lukechampine.com/frand"
 )
 
+const (
+	// ETagSize is the size of an ETag in bytes.
+	ETagSize = 16
+)
+
 type (
 	// MemoryBackend is an in-memory implementation of the s3 backend for testing.
 	MemoryBackend struct {
@@ -372,12 +377,92 @@ func (b *MemoryBackend) UploadPart(_ context.Context, accessKeyID, bucket, key, 
 	}
 
 	upload.parts[opts.PartNumber] = &multipartPart{
-		data:       data,
+		data:       slices.Clone(data),
 		contentMD5: contentMD5,
 	}
 
 	return &s3.UploadPartResult{
 		ContentMD5: contentMD5,
+	}, nil
+}
+
+// CompleteMultipartUpload assembles the uploaded parts into the final object.
+func (b *MemoryBackend) CompleteMultipartUpload(_ context.Context, accessKeyID, bucket, key, uploadID string, parts []s3.CompletedPart) (*s3.CompleteMultipartUploadResult, error) {
+	bkt, exists := b.buckets[bucket]
+	if !exists {
+		return nil, s3errs.ErrNoSuchBucket
+	}
+	if bkt.owner != accessKeyID {
+		return nil, s3errs.ErrAccessDenied
+	}
+	upload, exists := b.multipartUploads[uploadID]
+	if !exists {
+		return nil, s3errs.ErrNoSuchUpload
+	}
+	if upload.bucket != bucket || upload.key != key {
+		return nil, s3errs.ErrNoSuchUpload
+	}
+	if len(parts) == 0 {
+		return nil, s3errs.ErrInvalidRequest
+	}
+
+	// validate parts
+	var prev, totalSize int
+	objHash := make([]byte, 0, len(parts)*ETagSize)
+	for i, completed := range parts {
+		if i > 0 && completed.PartNumber <= prev {
+			return nil, s3errs.ErrInvalidPartOrder
+		}
+		prev = completed.PartNumber
+
+		part, found := upload.parts[completed.PartNumber]
+		if !found {
+			return nil, s3errs.ErrInvalidPart
+		} else if part.contentMD5 != completed.ETag {
+			return nil, s3errs.ErrInvalidPart
+		}
+
+		lastPart := i == len(parts)-1
+		if !lastPart && int64(len(part.data)) < s3.MinUploadPartSize {
+			return nil, s3errs.ErrEntityTooSmall
+		}
+
+		totalSize += len(part.data)
+		objHash = append(objHash, part.contentMD5[:]...)
+	}
+
+	// collect object data
+	objData := make([]byte, 0, totalSize)
+	for _, completed := range parts {
+		objData = append(objData, upload.parts[completed.PartNumber].data...)
+	}
+	objMD5 := md5.Sum(objData)
+
+	// calculate final ETag
+	var etag string
+	if len(parts) == 1 {
+		etag = s3.FormatETag(objMD5[:])
+	} else {
+		multipartMD5 := md5.Sum(objHash)
+		etag = s3.FormatMultipartETag(multipartMD5[:], len(parts))
+	}
+
+	// store the object
+	if bkt.objects == nil {
+		bkt.objects = make(map[string]*object)
+	}
+	bkt.objects[key] = &object{
+		name:         key,
+		data:         objData,
+		lastModified: time.Now(),
+		metadata:     upload.metadata,
+		contentMD5:   objMD5,
+	}
+	delete(b.multipartUploads, uploadID)
+
+	return &s3.CompleteMultipartUploadResult{
+		ETag:       etag,
+		ContentMD5: objMD5,
 	}, nil
 }
 

@@ -166,6 +166,27 @@ type Backend interface {
 	// - If ContentMD5 or ContentSHA256 are set in opts, and the checksums of
 	//   the data read from 'r' do not match, [ErrBadDigest] must be returned.
 	UploadPart(ctx context.Context, accessKeyID, bucket, object, uploadID string, r io.Reader, opts UploadPartOptions) (*UploadPartResult, error)
+
+	// CompleteMultipartUpload completes a multipart upload by assembling the
+	// previously uploaded parts into the final object.
+	//
+	// - If the access key does not have permission to write to the object,
+	//   [ErrAccessDenied] must be returned.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	//
+	// - If the multipart upload ID is not known or no longer active,
+	//   [ErrNoSuchUpload] must be returned.
+	//
+	// - If any referenced part is missing or its ETag does not match,
+	//   [ErrInvalidPart] must be returned.
+	//
+	// - If the list of parts is not strictly ordered by part number,
+	//   [ErrInvalidPartOrder] must be returned.
+	//
+	// - If any part other than the last is smaller than the minimum allowed
+	//   size, [ErrEntityTooSmall] must be returned.
+	CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, object, uploadID string, parts []CompletedPart) (*CompleteMultipartUploadResult, error)
 }
 
 type s3 struct {
