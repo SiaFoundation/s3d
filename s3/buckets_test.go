@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/SiaFoundation/s3d/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3"
-	"github.com/SiaFoundation/s3d/s3/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	service "github.com/aws/aws-sdk-go-v2/service/s3"
 )
