@@ -14,10 +14,18 @@ func TestBuckets(t *testing.T) {
 	const bucket = "bucket"
 
 	run := func(t *testing.T, pathStyle bool) {
+		// prepare a backend with 2 keypairs
+		backend := testutil.NewMemoryBackend(
+			testutil.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
+			testutil.WithKeyPair("foo", "bar"),
+		)
+
 		s3Tester := testutil.NewTester(t, testutil.WithServiceOptions(func(o *service.Options) {
 			o.UsePathStyle = pathStyle
-		}))
-		otherTester := s3Tester.AddAccessKey(t, "foo", "bar")
+		}), testutil.WithBackend(backend))
+
+		// create another valid keypair and a tester to use it
+		otherTester := s3Tester.ChangeAccessKey(t, "foo", "bar")
 
 		// check that the bucket doesn't exist yet
 		err := s3Tester.HeadBucket(t.Context(), bucket)

@@ -34,17 +34,13 @@ const (
 // backend.
 type S3Tester struct {
 	cfg     aws.Config
-	backend *MemoryBackend
+	backend s3.Backend
 	client  *service.Client
 }
 
-// AddAccessKey adds a new keypair to the in-memory S3 backend and returns a new
-// S3Tester configured to use those credentials.
-func (t *S3Tester) AddAccessKey(tb testing.TB, accessKeyID, secretKey string) *S3Tester {
-	err := t.backend.AddAccessKey(context.Background(), accessKeyID, secretKey)
-	if err != nil {
-		tb.Fatal(err)
-	}
+// ChangeAccessKey creates a copy of the tester that uses the provided keypair
+// to access the S3 API.
+func (t *S3Tester) ChangeAccessKey(tb testing.TB, accessKeyID, secretKey string) *S3Tester {
 	client := service.NewFromConfig(t.cfg, func(o *service.Options) {
 		*o = t.client.Options()
 		o.Credentials = aws.NewCredentialsCache(&credentials.StaticCredentialsProvider{
@@ -339,7 +335,7 @@ func NewTester(t testing.TB, opts ...TesterOption) *S3Tester {
 	t.Helper()
 
 	cfg := &testerCfg{
-		backend:     NewMemoryBackend(),
+		backend:     nil,
 		serviceOpts: nil,
 		tls:         false,
 	}
@@ -347,12 +343,15 @@ func NewTester(t testing.TB, opts ...TesterOption) *S3Tester {
 		opt(cfg)
 	}
 
-	backend := NewMemoryBackend()
-	if err := backend.AddAccessKey(t.Context(), AccessKeyID, SecretAccessKey); err != nil {
-		t.Fatal(err)
+	if cfg.backend == nil {
+		backend := NewMemoryBackend()
+		if err := backend.AddAccessKey(t.Context(), AccessKeyID, SecretAccessKey); err != nil {
+			t.Fatal(err)
+		}
+		cfg.backend = backend
 	}
 
-	handler := s3.New(backend,
+	handler := s3.New(cfg.backend,
 		s3.WithHostBucketBases([]string{"localhost"}),
 		s3.WithLogger(zaptest.NewLogger(t)))
 
@@ -383,11 +382,11 @@ func NewTester(t testing.TB, opts ...TesterOption) *S3Tester {
 			})
 		},
 	}
-	s3Opts = append(s3Opts, cfg.serviceOpts...)
+	cfg.serviceOpts = append(cfg.serviceOpts, s3Opts...)
 
 	return &S3Tester{
 		cfg:     awsCfg,
-		backend: backend,
+		backend: cfg.backend,
 		client:  service.NewFromConfig(awsCfg, cfg.serviceOpts...),
 	}
 }

@@ -10,7 +10,12 @@ import (
 )
 
 func TestCreateMultipartUpload(t *testing.T) {
-	s3Tester := testutil.NewTester(t)
+	// prepare a backend with 2 keypairs
+	backend := testutil.NewMemoryBackend(
+		testutil.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
+		testutil.WithKeyPair("foo", "bar"),
+	)
+	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
 
 	const (
 		bucket = "multipart-bucket"
@@ -44,7 +49,7 @@ func TestCreateMultipartUpload(t *testing.T) {
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchBucket, err)
 
 	// assert [s3errs.ErrAccessDenied] is returned for a bucket we don't own
-	otherTester := s3Tester.AddAccessKey(t, "foo", "bar")
+	otherTester := s3Tester.ChangeAccessKey(t, "foo", "bar")
 	_, err = otherTester.CreateMultipartUpload(t.Context(), bucket, object, nil)
 	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
 
