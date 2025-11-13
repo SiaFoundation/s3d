@@ -302,6 +302,19 @@ func (t *S3Tester) CreateMultipartUpload(ctx context.Context, bucket, object str
 	})
 }
 
+// UploadPart uploads a single part for an existing multipart upload.
+func (t *S3Tester) UploadPart(ctx context.Context, bucket, object, uploadID string, partNumber int32, body []byte) (*service.UploadPartOutput, error) {
+	input := &service.UploadPartInput{
+		Bucket:        aws.String(bucket),
+		Key:           aws.String(object),
+		UploadId:      aws.String(uploadID),
+		PartNumber:    aws.Int32(partNumber),
+		Body:          bytes.NewReader(body),
+		ContentLength: aws.Int64(int64(len(body))),
+	}
+	return t.client.UploadPart(ctx, input)
+}
+
 // NewTester creates a new S3Tester with an in-memory S3 backend and an AWS
 // client configured to talk to it.
 func NewTester(t testing.TB, optFns ...func(*service.Options)) *S3Tester {

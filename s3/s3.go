@@ -151,6 +151,24 @@ type Backend interface {
 	// - If the supplied metadata exceeds what the backend supports,
 	//   [ErrMetadataTooLarge] must be returned.
 	CreateMultipartUpload(ctx context.Context, accessKeyID, bucket, object string, opts CreateMultipartUploadOptions) (*CreateMultipartUploadResult, error)
+
+	// UploadPart uploads a single part for a previously initiated multipart
+	// upload.
+	//
+	// - If the access key does not have permission to write to the object,
+	//   [ErrAccessDenied] must be returned.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	//
+	// - If the multipart upload ID is not known or no longer active,
+	//   [ErrNoSuchUpload] must be returned.
+	//
+	// - If the bytes read from 'r' do not match 'ContentLength',
+	//   [ErrIncompleteBody] must be returned.
+	//
+	// - If ContentMD5 or ContentSHA256 are set in opts, and the checksums of
+	//   the data read from 'r' do not match, [ErrBadDigest] must be returned.
+	UploadPart(ctx context.Context, accessKeyID, bucket, object, uploadID string, r io.Reader, opts UploadPartOptions) (*UploadPartResult, error)
 }
 
 type s3 struct {

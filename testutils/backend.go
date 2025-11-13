@@ -44,7 +44,13 @@ type (
 		bucket    string
 		key       string
 		metadata  map[string]string
+		parts     map[int]*multipartPart
 		createdAt time.Time
+	}
+
+	multipartPart struct {
+		data       []byte
+		contentMD5 [16]byte
 	}
 )
 
@@ -325,11 +331,56 @@ func (b *MemoryBackend) CreateMultipartUpload(_ context.Context, accessKeyID, bu
 		bucket:    bucket,
 		key:       key,
 		metadata:  opts.Meta,
+		parts:     make(map[int]*multipartPart),
 		createdAt: time.Now(),
 	}
 
 	return &s3.CreateMultipartUploadResult{
 		UploadID: uploadID,
+	}, nil
+}
+
+// UploadPart uploads a single part for a multipart upload.
+func (b *MemoryBackend) UploadPart(_ context.Context, accessKeyID, bucket, key, uploadID string, r io.Reader, opts s3.UploadPartOptions) (*s3.UploadPartResult, error) {
+	bkt, exists := b.buckets[bucket]
+	if !exists {
+		return nil, s3errs.ErrNoSuchBucket
+	}
+	if bkt.owner != accessKeyID {
+		return nil, s3errs.ErrAccessDenied
+	}
+	upload, exists := b.multipartUploads[uploadID]
+	if !exists {
+		return nil, s3errs.ErrNoSuchUpload
+	}
+	if upload.bucket != bucket || upload.key != key {
+		return nil, s3errs.ErrNoSuchUpload
+	}
+
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) != opts.ContentLength {
+		return nil, s3errs.ErrIncompleteBody
+	}
+
+	contentMD5 := md5.Sum(data)
+	if opts.ContentMD5 != nil && *opts.ContentMD5 != contentMD5 {
+		return nil, s3errs.ErrBadDigest
+	}
+	contentSHA256 := sha256.Sum256(data)
+	if opts.ContentSHA256 != nil && *opts.ContentSHA256 != contentSHA256 {
+		return nil, s3errs.ErrBadDigest
+	}
+
+	upload.parts[opts.PartNumber] = &multipartPart{
+		data:       data,
+		contentMD5: contentMD5,
+	}
+
+	return &s3.UploadPartResult{
+		ContentMD5: contentMD5,
 	}, nil
 }
 
