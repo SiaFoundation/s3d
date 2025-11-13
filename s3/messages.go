@@ -260,3 +260,15 @@ type (
 		LastModified ContentTime `xml:"LastModified,omitempty"`
 	}
 )
+
+type (
+	// InitiateMultipartUploadResponse matches the XML response returned by AWS
+	// when creating a multipart upload.
+	InitiateMultipartUploadResponse struct {
+		XMLName  xml.Name `xml:"InitiateMultipartUploadResult"`
+		Xmlns    string   `xml:"xmlns,attr"`
+		Bucket   string   `xml:"Bucket"`
+		Key      string   `xml:"Key"`
+		UploadID string   `xml:"UploadId"`
+	}
+)

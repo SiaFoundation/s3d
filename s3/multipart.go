@@ -1,7 +1,6 @@
 package s3
 
 import (
-	"encoding/xml"
 	"net/http"
 
 	"github.com/SiaFoundation/s3d/s3/s3errs"
@@ -19,16 +18,6 @@ type CreateMultipartUploadOptions struct {
 // subsequent requests.
 type CreateMultipartUploadResult struct {
 	UploadID string
-}
-
-// initiateMultipartUploadResponse matches the XML response returned by AWS
-// when creating a multipart upload.
-type initiateMultipartUploadResponse struct {
-	XMLName  xml.Name `xml:"InitiateMultipartUploadResult"`
-	Xmlns    string   `xml:"xmlns,attr"`
-	Bucket   string   `xml:"Bucket"`
-	Key      string   `xml:"Key"`
-	UploadID string   `xml:"UploadId"`
 }
 
 // routeMultipartUpload operates on routes that contain '?uploadId=<id>' in the
@@ -78,11 +67,10 @@ func (s *s3) createMultipartUpload(w http.ResponseWriter, r *http.Request, acces
 		return err
 	}
 
-	resp := initiateMultipartUploadResponse{
+	return writeXMLResponse(w, InitiateMultipartUploadResponse{
 		Xmlns:    "http://s3.amazonaws.com/doc/2006-03-01/",
 		Bucket:   bucket,
 		Key:      object,
 		UploadID: result.UploadID,
-	}
-	return writeXMLResponse(w, resp)
+	})
 }
