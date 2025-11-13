@@ -131,3 +131,8 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 func (s *Sia) CreateMultipartUpload(ctx context.Context, accessKeyID, bucket, object string, opts s3.CreateMultipartUploadOptions) (*s3.CreateMultipartUploadResult, error) {
 	return nil, s3errs.ErrNotImplemented
 }
+
+// AbortMultipartUpload aborts a multipart upload.
+func (s *Sia) AbortMultipartUpload(ctx context.Context, accessKeyID, bucket, object, uploadID string) error {
+	return s3errs.ErrNotImplemented
+}

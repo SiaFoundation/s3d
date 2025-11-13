@@ -34,7 +34,16 @@ type initiateMultipartUploadResponse struct {
 // routeMultipartUpload operates on routes that contain '?uploadId=<id>' in the
 // query string.
 func (s *s3) routeMultipartUpload(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket, object, uploadID string) error {
-	return s3errs.ErrNotImplemented
+	if r.Method != http.MethodDelete {
+		return s3errs.ErrMethodNotAllowed
+	}
+
+	validatedKey, err := assertAuth(accessKeyID)
+	if err != nil {
+		return err
+	}
+
+	return s.abortMultipartUpload(w, r, validatedKey, bucket, object, uploadID)
 }
 
 // routeMultipartUploadBase operates on routes that contain '?uploads' in the
@@ -53,7 +62,23 @@ func (s *s3) routeMultipartUploadBase(w http.ResponseWriter, r *http.Request, ac
 	return s.createMultipartUpload(w, r, validatedKey, bucket, object)
 }
 
-func (s *s3) createMultipartUpload(w http.ResponseWriter, r *http.Request, accessKeyID string, bucket, object string) error {
+func (s *s3) abortMultipartUpload(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object, uploadID string) error {
+	log := s.logger.With(
+		zap.String("bucket", bucket),
+		zap.String("object", object),
+		zap.String("uploadID", uploadID),
+	)
+	log.Debug("abort multipart upload")
+
+	if err := s.backend.AbortMultipartUpload(r.Context(), accessKeyID, bucket, object, uploadID); err != nil {
+		return err
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+	return nil
+}
+
+func (s *s3) createMultipartUpload(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object string) error {
 	log := s.logger.With(
 		zap.String("bucket", bucket),
 		zap.String("object", object),

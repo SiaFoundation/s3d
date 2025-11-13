@@ -302,6 +302,17 @@ func (t *S3Tester) CreateMultipartUpload(ctx context.Context, bucket, object str
 	})
 }
 
+// AbortMultipartUpload is a convenience wrapper around the AWS SDK's
+// AbortMultipartUpload API.
+func (t *S3Tester) AbortMultipartUpload(ctx context.Context, bucket, object, uploadID string) error {
+	_, err := t.client.AbortMultipartUpload(ctx, &service.AbortMultipartUploadInput{
+		Bucket:   aws.String(bucket),
+		Key:      aws.String(object),
+		UploadId: aws.String(uploadID),
+	})
+	return err
+}
+
 // NewTester creates a new S3Tester with an in-memory S3 backend and an AWS
 // client configured to talk to it.
 func NewTester(t testing.TB, optFns ...func(*service.Options)) *S3Tester {

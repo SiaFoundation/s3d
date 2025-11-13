@@ -55,3 +55,44 @@ func TestCreateMultipartUpload(t *testing.T) {
 	_, err = s3Tester.CreateMultipartUpload(t.Context(), bucket, object, tooLargeMeta)
 	testutil.AssertS3Error(t, s3errs.ErrMetadataTooLarge, err)
 }
+
+func TestAbortMultipartUpload(t *testing.T) {
+	s3Tester := testutil.NewTester(t)
+
+	const (
+		bucket = "abort-multipart-bucket"
+		object = "object"
+	)
+
+	// create target bucket
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// initiate multipart upload
+	res, err := s3Tester.CreateMultipartUpload(t.Context(), bucket, object, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if res.UploadId == nil {
+		t.Fatal("expected upload id in response")
+	}
+	uploadID := *res.UploadId
+
+	// assert [s3errs.ErrNoSuchBucket] is returned for nonexistent bucket
+	err = s3Tester.AbortMultipartUpload(t.Context(), "nonexistent-bucket", object, uploadID)
+	testutil.AssertS3Error(t, s3errs.ErrNoSuchBucket, err)
+
+	// assert [s3errs.ErrAccessDenied] is returned for a bucket we don't own
+	otherTester := s3Tester.AddAccessKey(t, "foo", "bar")
+	err = otherTester.AbortMultipartUpload(t.Context(), bucket, object, uploadID)
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+
+	// abort the multipart upload
+	if err := s3Tester.AbortMultipartUpload(t.Context(), bucket, object, uploadID); err != nil {
+		t.Fatal(err)
+	}
+
+	// assert [s3errs.ErrNoSuchUpload] is returned if the upload was already aborted
+	err = s3Tester.AbortMultipartUpload(t.Context(), bucket, object, uploadID)
+	testutil.AssertS3Error(t, s3errs.ErrNoSuchUpload, err)
+}

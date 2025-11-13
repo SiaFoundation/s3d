@@ -333,6 +333,27 @@ func (b *MemoryBackend) CreateMultipartUpload(_ context.Context, accessKeyID, bu
 	}, nil
 }
 
+// AbortMultipartUpload aborts an in-progress multipart upload and discards
+// any uploaded parts.
+func (b *MemoryBackend) AbortMultipartUpload(_ context.Context, accessKeyID, bucket, key, uploadID string) error {
+	bkt, exists := b.buckets[bucket]
+	if !exists {
+		return s3errs.ErrNoSuchBucket
+	}
+	if bkt.owner != accessKeyID {
+		return s3errs.ErrAccessDenied
+	}
+	upload, exists := b.multipartUploads[uploadID]
+	if !exists {
+		return s3errs.ErrNoSuchUpload
+	}
+	if upload.bucket != bucket || upload.key != key {
+		return s3errs.ErrNoSuchUpload
+	}
+	delete(b.multipartUploads, uploadID)
+	return nil
+}
+
 // ListBuckets lists all available buckets.
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListBuckets.html
 func (b *MemoryBackend) ListBuckets(ctx context.Context, accessKeyID string) ([]s3.BucketInfo, error) {
