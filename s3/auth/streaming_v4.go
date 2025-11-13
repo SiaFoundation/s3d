@@ -19,7 +19,7 @@ import (
 func handleAuthV4Streaming(req *http.Request) error {
 	// parse x-amz-decoded-content-length
 	sizeStr, ok := req.Header["X-Amz-Decoded-Content-Length"]
-	if !ok || sizeStr[0] == "" {
+	if !ok || len(sizeStr) == 0 || sizeStr[0] == "" {
 		return s3errs.ErrInvalidArgument
 	}
 	size, err := strconv.ParseInt(sizeStr[0], 10, 64)
