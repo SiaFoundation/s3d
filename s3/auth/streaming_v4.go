@@ -17,16 +17,14 @@ import (
 )
 
 func handleAuthV4Streaming(req *http.Request) error {
-	var size int64
-	if sizeStr, ok := req.Header["X-Amz-Decoded-Content-Length"]; ok {
-		if sizeStr[0] == "" {
-			return s3errs.ErrInvalidArgument
-		}
-		var err error
-		size, err = strconv.ParseInt(sizeStr[0], 10, 64)
-		if err != nil {
-			return s3errs.ErrInvalidArgument
-		}
+	// parse x-amz-decoded-content-length
+	sizeStr, ok := req.Header["X-Amz-Decoded-Content-Length"]
+	if !ok || sizeStr[0] == "" {
+		return s3errs.ErrInvalidArgument
+	}
+	size, err := strconv.ParseInt(sizeStr[0], 10, 64)
+	if err != nil {
+		return s3errs.ErrInvalidArgument
 	}
 
 	// parse x-amz-trailer which contains the expected trailer headers
