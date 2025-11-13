@@ -20,6 +20,8 @@ import (
 )
 
 type (
+	memoryBackendOption func(*MemoryBackend)
+
 	// MemoryBackend is an in-memory implementation of the s3 backend for testing.
 	MemoryBackend struct {
 		buckets          map[string]*bucket
@@ -48,13 +50,24 @@ type (
 	}
 )
 
+// WithKeyPair adds a key pair to the MemoryBackend.
+func WithKeyPair(accessKeyID, secretKey string) func(*MemoryBackend) {
+	return func(mb *MemoryBackend) {
+		mb.accessKeys[accessKeyID] = auth.SecretAccessKey(secretKey)
+	}
+}
+
 // NewMemoryBackend creates a new MemoryBackend.
-func NewMemoryBackend() *MemoryBackend {
-	return &MemoryBackend{
+func NewMemoryBackend(opts ...memoryBackendOption) *MemoryBackend {
+	backend := &MemoryBackend{
 		accessKeys:       make(map[string]auth.SecretAccessKey),
 		buckets:          make(map[string]*bucket),
 		multipartUploads: make(map[string]*multipartUpload),
 	}
+	for _, opt := range opts {
+		opt(backend)
+	}
+	return backend
 }
 
 // AddAccessKey adds a new access key to the backend for authentication.

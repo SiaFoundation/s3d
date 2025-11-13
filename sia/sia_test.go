@@ -39,6 +39,7 @@ func NewTester(t testing.TB, opts ...testutil.TesterOption) *testutil.S3Tester {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { store.Close() })
 
 	backend, err := sia.New(context.Background(), sdk, store, testutil.AccessKeyID, testutil.SecretAccessKey,
 		sia.WithLogger(log))
