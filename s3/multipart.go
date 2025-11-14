@@ -2,11 +2,11 @@ package s3
 
 import (
 	"encoding/base64"
-	"encoding/xml"
 	"net/http"
 	"strconv"
 
 	"github.com/SiaFoundation/s3d/s3/auth"
+
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"go.uber.org/zap"
 )
@@ -37,16 +37,6 @@ type UploadPartOptions struct {
 // computed MD5 checksum.
 type UploadPartResult struct {
 	ContentMD5 [16]byte
-}
-
-// initiateMultipartUploadResponse matches the XML response returned by AWS
-// when creating a multipart upload.
-type initiateMultipartUploadResponse struct {
-	XMLName  xml.Name `xml:"InitiateMultipartUploadResult"`
-	Xmlns    string   `xml:"xmlns,attr"`
-	Bucket   string   `xml:"Bucket"`
-	Key      string   `xml:"Key"`
-	UploadID string   `xml:"UploadId"`
 }
 
 // routeMultipartUpload operates on routes that contain '?uploadId=<id>' in the
@@ -105,13 +95,12 @@ func (s *s3) createMultipartUpload(w http.ResponseWriter, r *http.Request, acces
 		return err
 	}
 
-	resp := initiateMultipartUploadResponse{
+	return writeXMLResponse(w, InitiateMultipartUploadResponse{
 		Xmlns:    "http://s3.amazonaws.com/doc/2006-03-01/",
 		Bucket:   bucket,
 		Key:      object,
 		UploadID: result.UploadID,
-	}
-	return writeXMLResponse(w, resp)
+	})
 }
 
 func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object, uploadID, partNumberStr string) error {

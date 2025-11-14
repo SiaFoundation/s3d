@@ -15,6 +15,7 @@ import (
 	"github.com/SiaFoundation/s3d/build"
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/sia"
+	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"lukechampine.com/flagg"
@@ -151,7 +152,13 @@ func main() {
 	}
 	defer adminAPIListener.Close()
 
-	backend, err := sia.New(ctx, cfg.Sia.AccessKey, cfg.Sia.SecretKey)
+	store, err := sqlite.OpenDatabase(filepath.Join(cfg.Directory, "s3d.db"), log)
+	if err != nil {
+		checkFatalError("failed to open database", err)
+	}
+	defer store.Close()
+
+	backend, err := sia.New(ctx, store, cfg.Sia.AccessKey, cfg.Sia.SecretKey)
 	if err != nil {
 		checkFatalError("failed to create Sia backend", err)
 	}

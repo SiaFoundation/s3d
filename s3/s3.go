@@ -147,9 +147,6 @@ type Backend interface {
 	//   [ErrAccessDenied] must be returned.
 	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
-	//
-	// - If the supplied metadata exceeds what the backend supports,
-	//   [ErrMetadataTooLarge] must be returned.
 	CreateMultipartUpload(ctx context.Context, accessKeyID, bucket, object string, opts CreateMultipartUploadOptions) (*CreateMultipartUploadResult, error)
 
 	// UploadPart uploads a single part for a previously initiated multipart

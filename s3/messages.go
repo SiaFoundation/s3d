@@ -93,7 +93,7 @@ type (
 
 		// If ContinuationToken was sent with the request, it is included in the
 		// response.
-		ContinuationToken string `xml:"ContinuationToken,omitempty"`
+		ContinuationToken *string `xml:"ContinuationToken,omitempty"`
 
 		// Returns the number of keys included in the response. The value is always
 		// less than or equal to the MaxKeys value.
@@ -258,5 +258,17 @@ type (
 		XMLName      xml.Name    `xml:"CopyObjectResult"`
 		ETag         string      `xml:"ETag"`
 		LastModified ContentTime `xml:"LastModified,omitempty"`
+	}
+)
+
+type (
+	// InitiateMultipartUploadResponse matches the XML response returned by AWS
+	// when creating a multipart upload.
+	InitiateMultipartUploadResponse struct {
+		XMLName  xml.Name `xml:"InitiateMultipartUploadResult"`
+		Xmlns    string   `xml:"xmlns,attr"`
+		Bucket   string   `xml:"Bucket"`
+		Key      string   `xml:"Key"`
+		UploadID string   `xml:"UploadId"`
 	}
 )

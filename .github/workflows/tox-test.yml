@@ -28,7 +28,7 @@ jobs:
           python -m pip install "tox>=4"
 
       - name: Clone test repo
-        run: git clone https://github.com/ceph/s3-tests.git
+        run: git clone https://github.com/SiaFoundation/s3-tests.git
 
       - name: List files
         run: ls -la ${{ github.workspace }}
@@ -74,6 +74,14 @@ jobs:
             -m "not auth_aws2 and not fails_on_rgw" \
             -k "not _create_bad_expect_ and not _acl"
 
+      - name: Run test_s3.py
+        env:
+          S3TEST_CONF: ${{ github.workspace }}/s3tests.conf
+          S3_USE_SIGV4: "True" # We only support v4 signatures
+        run: |
+          tox run --skip-pkg-install -c ./s3-tests -- s3tests/functional/test_s3.py \
+            -m "list_objects_v2 and not s3d_not_implemented and not s3d_not_supported"
+
       # NOTE: The following tests are currently disabled
       #
       #      - name: Run test_iam.py
@@ -82,11 +90,6 @@ jobs:
       #          S3_USE_SIGV4: "True" # We only support v4 signatures
       #        run: tox run --skip-pkg-install -c ./s3-tests -- s3tests/functional/test_iam.py
       #
-      #      - name: Run test_s3.py
-      #        env:
-      #          S3TEST_CONF: ${{ github.workspace }}/s3tests.conf
-      #          S3_USE_SIGV4: "True" # We only support v4 signatures
-      #        run: tox run --skip-pkg-install -c ./s3-tests -- s3tests/functional/test_s3.py
       #
       #      - name: Run test_s3select.py
       #        env:

@@ -296,17 +296,27 @@ type ObjectsListResult struct {
 	// This is a convenience for backend implementers like s3bolt and s3mem,
 	// which operate on a full, flat list of keys.
 	prefixes map[string]bool
+	maxKeys  int64
 }
 
 // NewObjectsListResult creates a new, empty ObjectsListResult. Use Add and
 // AddPrefix to populate it.
-func NewObjectsListResult() *ObjectsListResult {
-	return &ObjectsListResult{}
+func NewObjectsListResult(maxKeys int64) *ObjectsListResult {
+	return &ObjectsListResult{maxKeys: maxKeys}
 }
 
 // Add adds an object to the result.
 func (b *ObjectsListResult) Add(item *Content) {
-	b.Contents = append(b.Contents, item)
+	if len(b.Contents)+len(b.CommonPrefixes) < int(b.maxKeys) {
+		b.Contents = append(b.Contents, item)
+	}
+	if len(b.Contents)+len(b.CommonPrefixes) >= int(b.maxKeys) {
+		if b.NextMarker == "" {
+			b.NextMarker = item.Key
+		} else {
+			b.IsTruncated = true
+		}
+	}
 }
 
 // AddPrefix adds a common prefix to the result. If the prefix has already been
@@ -317,8 +327,17 @@ func (b *ObjectsListResult) AddPrefix(prefix string) {
 	} else if b.prefixes[prefix] {
 		return
 	}
-	b.prefixes[prefix] = true
-	b.CommonPrefixes = append(b.CommonPrefixes, CommonPrefix{Prefix: prefix})
+	if len(b.Contents)+len(b.CommonPrefixes) < int(b.maxKeys) {
+		b.prefixes[prefix] = true
+		b.CommonPrefixes = append(b.CommonPrefixes, CommonPrefix{Prefix: prefix})
+	}
+	if len(b.Contents)+len(b.CommonPrefixes) >= int(b.maxKeys) {
+		if b.NextMarker == "" {
+			b.NextMarker = prefix
+		} else {
+			b.IsTruncated = true
+		}
+	}
 }
 
 func (s *s3) listObjectsV2(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket string) error {
@@ -331,12 +350,37 @@ func (s *s3) listObjectsV2(w http.ResponseWriter, r *http.Request, accessKeyID *
 	page, err := listObjectsPageFromQuery(q)
 	if err != nil {
 		return err
+	} else if prefix.Delimiter != "" && prefix.Delimiter != "/" {
+		return s3errs.ErrNotImplemented // only "/" delimiter is supported
+	}
+
+	// don't allow unordered listing with delimiter
+	if _, unordered := q["allow-unordered"]; unordered && prefix.Delimiter != "" {
+		return s3errs.ErrInvalidArgument
 	}
 
 	// list objects
 	objects, err := s.backend.ListObjects(r.Context(), accessKeyID, bucket, prefix, page)
 	if err != nil {
 		return err
+	}
+
+	// URL-escape object keys and common prefixes if requested
+	if r.FormValue("encoding-type") == "url" {
+		for i := range objects.Contents {
+			objects.Contents[i].Key = urlEscape(objects.Contents[i].Key)
+		}
+		for i := range objects.CommonPrefixes {
+			objects.CommonPrefixes[i].Prefix = urlEscape(objects.CommonPrefixes[i].Prefix)
+		}
+	}
+
+	// continuation token should be omitted if not set, but if it is set to an
+	// empty string, it should still be included.
+	var continuationToken *string
+	if _, hasToken := q["continuation-token"]; hasToken {
+		token := q.Get("continuation-token")
+		continuationToken = &token
 	}
 
 	// prepare result
@@ -353,7 +397,7 @@ func (s *s3) listObjectsV2(w http.ResponseWriter, r *http.Request, accessKeyID *
 		},
 		KeyCount:          int64(len(objects.CommonPrefixes) + len(objects.Contents)),
 		StartAfter:        q.Get("start-after"),
-		ContinuationToken: q.Get("continuation-token"),
+		ContinuationToken: continuationToken,
 	}
 	if objects.NextMarker != "" {
 		// S3 continuation tokens are opaque base64-like values, so we just
@@ -363,7 +407,7 @@ func (s *s3) listObjectsV2(w http.ResponseWriter, r *http.Request, accessKeyID *
 	}
 
 	// if fetch-owner is not set, redact owner information
-	if _, ok := q["fetch-owner"]; !ok {
+	if fo, set := q["fetch-owner"]; !set || (len(fo) > 0 && fo[0] == "false") {
 		for _, v := range result.Contents {
 			v.Owner = nil
 		}
