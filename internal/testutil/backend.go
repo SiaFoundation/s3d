@@ -19,7 +19,8 @@ import (
 )
 
 type (
-	// A functional argument for configuring a MemoryBackend.
+	// MemoryBackendOption is a functional argument for configuring a
+	// MemoryBackend.
 	MemoryBackendOption func(*MemoryBackend)
 
 	// MemoryBackend is an in-memory implementation of the s3 backend for testing.
