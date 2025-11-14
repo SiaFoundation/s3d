@@ -49,6 +49,7 @@ func New(ctx context.Context, sdk SDK, store Store, accessKey, secretKey string,
 
 	sia := &Sia{
 		logger: zap.NewNop(),
+		sdk:    sdk,
 		store:  store,
 
 		accessKey: accessKey,
