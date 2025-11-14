@@ -142,3 +142,8 @@ func (s *Sia) CreateMultipartUpload(ctx context.Context, accessKeyID, bucket, ob
 func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object, uploadID string, r io.Reader, opts s3.UploadPartOptions) (*s3.UploadPartResult, error) {
 	return nil, s3errs.ErrNotImplemented
 }
+
+// ListParts lists uploaded parts for a multipart upload.
+func (s *Sia) ListParts(ctx context.Context, accessKeyID, bucket, object, uploadID string, page s3.ListPartsPage) (*s3.ListPartsResult, error) {
+	return nil, s3errs.ErrNotImplemented
+}

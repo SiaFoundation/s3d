@@ -271,4 +271,30 @@ type (
 		Key      string   `xml:"Key"`
 		UploadID string   `xml:"UploadId"`
 	}
+
+	// ListPartsResponse matches the XML response returned by AWS when listing
+	// uploaded parts for an in-progress multipart upload.
+	ListPartsResponse struct {
+		XMLName              xml.Name             `xml:"ListPartsResult"`
+		Xmlns                string               `xml:"xmlns,attr"`
+		Bucket               string               `xml:"Bucket"`
+		Key                  string               `xml:"Key"`
+		UploadID             string               `xml:"UploadId"`
+		PartNumberMarker     int                  `xml:"PartNumberMarker"`
+		NextPartNumberMarker int                  `xml:"NextPartNumberMarker,omitempty"`
+		MaxParts             int64                `xml:"MaxParts"`
+		IsTruncated          bool                 `xml:"IsTruncated"`
+		StorageClass         StorageClass         `xml:"StorageClass,omitempty"`
+		Initiator            *UserInfo            `xml:"Initiator,omitempty"`
+		Owner                *UserInfo            `xml:"Owner,omitempty"`
+		Parts                []ListedPartResponse `xml:"Part"`
+	}
+
+	// ListedPartResponse represents a single part entry in a ListParts response.
+	ListedPartResponse struct {
+		PartNumber   int         `xml:"PartNumber"`
+		LastModified ContentTime `xml:"LastModified,omitempty"`
+		ETag         string      `xml:"ETag"`
+		Size         int64       `xml:"Size"`
+	}
 )

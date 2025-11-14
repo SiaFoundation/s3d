@@ -69,4 +69,8 @@ func TestAccessDenied(t *testing.T) {
 		_, err := s3.UploadPart(t.Context(), "bucket", "object", "uploadID", 1, nil)
 		return err
 	})
+	assertAccessDenied(t, "ListParts", func(t *testing.T, s3 *testutil.S3Tester) error {
+		_, err := s3.ListParts(t.Context(), "bucket", "object", "uploadID", nil, nil)
+		return err
+	})
 }

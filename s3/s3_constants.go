@@ -15,6 +15,14 @@ const (
 	// MaxUploadPartSize is the maximum allowed size for a single multipart part.
 	MaxUploadPartSize int64 = 5 << 30 // 5 GiB
 
+	// MaxUploadListParts defines the maximum number of parts returned in a
+	// single ListParts response.
+	MaxUploadListParts = 1000
+
+	// DefaultMaxUploadListParts is the default number of parts returned when
+	// no limit is specified.
+	DefaultMaxUploadListParts = MaxUploadListParts
+
 	// MetadataSizeLimit defines the maximum size of the metadata associated
 	// with an S3 object.
 	//

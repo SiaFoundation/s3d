@@ -315,6 +315,28 @@ func (t *S3Tester) UploadPart(ctx context.Context, bucket, object, uploadID stri
 	return t.client.UploadPart(ctx, input)
 }
 
+// ListParts lists uploaded parts for an in-progress multipart upload.
+func (t *S3Tester) ListParts(ctx context.Context, bucket, object, uploadID string, marker *string, maxParts *int32) (*service.ListPartsOutput, error) {
+	input := &service.ListPartsInput{
+		Bucket:           aws.String(bucket),
+		Key:              aws.String(object),
+		UploadId:         aws.String(uploadID),
+		PartNumberMarker: marker,
+		MaxParts:         maxParts,
+	}
+	resp, err := t.client.ListParts(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	for i := range resp.Parts {
+		if resp.Parts[i].ETag != nil {
+			trimmed := strings.Trim(*resp.Parts[i].ETag, `"`)
+			resp.Parts[i].ETag = aws.String(trimmed)
+		}
+	}
+	return resp, nil
+}
+
 // NewTester creates a new S3Tester with an in-memory S3 backend and an AWS
 // client configured to talk to it.
 func NewTester(t testing.TB, optFns ...func(*service.Options)) *S3Tester {

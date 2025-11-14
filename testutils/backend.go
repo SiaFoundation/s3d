@@ -10,6 +10,7 @@ import (
 	"io"
 	"maps"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -49,8 +50,9 @@ type (
 	}
 
 	multipartPart struct {
-		data       []byte
-		contentMD5 [16]byte
+		data         []byte
+		contentMD5   [16]byte
+		lastModified time.Time
 	}
 )
 
@@ -372,13 +374,77 @@ func (b *MemoryBackend) UploadPart(_ context.Context, accessKeyID, bucket, key, 
 	}
 
 	upload.parts[opts.PartNumber] = &multipartPart{
-		data:       data,
-		contentMD5: contentMD5,
+		data:         data,
+		contentMD5:   contentMD5,
+		lastModified: time.Now(),
 	}
 
 	return &s3.UploadPartResult{
 		ContentMD5: contentMD5,
 	}, nil
+}
+
+// ListParts lists uploaded parts for an in-progress multipart upload.
+func (b *MemoryBackend) ListParts(_ context.Context, accessKeyID, bucket, key, uploadID string, page s3.ListPartsPage) (*s3.ListPartsResult, error) {
+	bkt, exists := b.buckets[bucket]
+	if !exists {
+		return nil, s3errs.ErrNoSuchBucket
+	}
+	if bkt.owner != accessKeyID {
+		return nil, s3errs.ErrAccessDenied
+	}
+	upload, exists := b.multipartUploads[uploadID]
+	if !exists {
+		return nil, s3errs.ErrNoSuchUpload
+	}
+	if upload.bucket != bucket || upload.key != key {
+		return nil, s3errs.ErrNoSuchUpload
+	}
+
+	partNumbers := make([]int, 0, len(upload.parts))
+	for number := range upload.parts {
+		partNumbers = append(partNumbers, number)
+	}
+	sort.Ints(partNumbers)
+
+	result := &s3.ListPartsResult{
+		OwnerID:              bkt.owner,
+		InitiatorID:          accessKeyID,
+		OwnerDisplayName:     "",
+		InitiatorDisplayName: "",
+	}
+
+	var listed int64
+	for _, number := range partNumbers {
+		if number <= page.PartNumberMarker {
+			continue
+		}
+		part := upload.parts[number]
+		if part == nil {
+			continue
+		}
+		if listed >= page.MaxParts {
+			result.IsTruncated = true
+			if len(result.Parts) > 0 {
+				result.NextPartNumberMarker = result.Parts[len(result.Parts)-1].PartNumber
+			}
+			break
+		}
+
+		result.Parts = append(result.Parts, s3.UploadPart{
+			PartNumber:   number,
+			LastModified: part.lastModified,
+			Size:         int64(len(part.data)),
+			ContentMD5:   part.contentMD5,
+		})
+		listed++
+	}
+
+	if !result.IsTruncated && len(result.Parts) > 0 {
+		result.NextPartNumberMarker = result.Parts[len(result.Parts)-1].PartNumber
+	}
+
+	return result, nil
 }
 
 // ListBuckets lists all available buckets.
