@@ -13,8 +13,7 @@ const (
 	MaxUploadPartNumber = 10000
 
 	// MaxUploadPartSize is the maximum allowed size for a single multipart part.
-	// AWS limits parts to 5 GiB.
-	MaxUploadPartSize int64 = 5 << 30
+	MaxUploadPartSize int64 = 5 << 30 // 5 GiB
 
 	// MetadataSizeLimit defines the maximum size of the metadata associated
 	// with an S3 object.
