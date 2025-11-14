@@ -47,5 +47,8 @@ func NewTester(t testing.TB, opts ...testutil.TesterOption) *testutil.S3Tester {
 		t.Fatal(err)
 	}
 
-	return testutil.NewTester(t, testutil.WithBackend(backend))
+	var mergedOpts []testutil.TesterOption
+	mergedOpts = append(mergedOpts, testutil.WithBackend(backend))
+	mergedOpts = append(mergedOpts, opts...)
+	return testutil.NewTester(t, mergedOpts...)
 }
