@@ -44,7 +44,7 @@ type UploadPartResult struct {
 // ListPartsPage specifies pagination options when listing the parts of an
 // in-progress multipart upload.
 type ListPartsPage struct {
-	PartNumberMarker int
+	PartNumberMarker string
 	MaxParts         int64
 }
 
@@ -52,7 +52,7 @@ type ListPartsPage struct {
 type ListPartsResult struct {
 	Parts                []UploadPart
 	IsTruncated          bool
-	NextPartNumberMarker int
+	NextPartNumberMarker string
 	OwnerID              string
 	OwnerDisplayName     string
 	StorageClass         StorageClass
@@ -207,16 +207,21 @@ func (s *s3) listUploadParts(w http.ResponseWriter, r *http.Request, accessKeyID
 	}
 
 	// build response
+	partNumberMarker, _ := strconv.Atoi(page.PartNumberMarker) // already validated
 	resp := ListPartsResponse{
-		Xmlns:                "http://s3.amazonaws.com/doc/2006-03-01/",
-		Bucket:               bucket,
-		Key:                  object,
-		UploadID:             uploadID,
-		PartNumberMarker:     page.PartNumberMarker,
-		NextPartNumberMarker: result.NextPartNumberMarker,
-		MaxParts:             page.MaxParts,
-		IsTruncated:          result.IsTruncated,
-		StorageClass:         result.StorageClass,
+		Xmlns:            "http://s3.amazonaws.com/doc/2006-03-01/",
+		Bucket:           bucket,
+		Key:              object,
+		UploadID:         uploadID,
+		PartNumberMarker: partNumberMarker,
+		MaxParts:         page.MaxParts,
+		IsTruncated:      result.IsTruncated,
+		StorageClass:     result.StorageClass,
+	}
+	if result.IsTruncated && result.NextPartNumberMarker != "" {
+		if next, err := strconv.Atoi(result.NextPartNumberMarker); err == nil {
+			resp.NextPartNumberMarker = next
+		}
 	}
 
 	resp.Owner = globalUserInfo
@@ -273,7 +278,7 @@ func listPartsPageFromQuery(query url.Values) (ListPartsPage, error) {
 		if val < 0 || val >= MaxUploadPartNumber {
 			return page, s3errs.ErrInvalidArgument
 		}
-		page.PartNumberMarker = val
+		page.PartNumberMarker = rawMarker
 	}
 
 	if rawMax := query.Get("max-parts"); rawMax != "" {

@@ -3,6 +3,7 @@ package s3_test
 import (
 	"crypto/md5"
 	"encoding/hex"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -168,10 +169,17 @@ func TestListParts(t *testing.T) {
 		t.Fatalf("expected 2 parts, got %d", len(paginated.Parts))
 	} else if paginated.IsTruncated == nil || !*paginated.IsTruncated {
 		t.Fatal("expected truncated response")
-	} else if paginated.NextPartNumberMarker == nil || *paginated.NextPartNumberMarker != "2" {
-		t.Fatalf("expected next marker 2, got %v", paginated.NextPartNumberMarker)
+	} else if paginated.NextPartNumberMarker == nil {
+		t.Fatal("expected next marker")
 	} else if paginated.MaxParts == nil || *paginated.MaxParts != maxParts {
 		t.Fatalf("expected max parts %d, got %v", maxParts, paginated.MaxParts)
+	}
+
+	nextMarker, err := strconv.Atoi(*paginated.NextPartNumberMarker)
+	if err != nil {
+		t.Fatalf("expected numeric next marker, got %v: %v", *paginated.NextPartNumberMarker, err)
+	} else if nextMarker != 2 {
+		t.Fatalf("expected next marker 2, got %d", nextMarker)
 	}
 
 	// fetch next page
@@ -183,8 +191,15 @@ func TestListParts(t *testing.T) {
 		t.Fatalf("expected final page of 1 part, got %d", len(nextPage.Parts))
 	} else if nextPage.IsTruncated == nil || *nextPage.IsTruncated {
 		t.Fatal("expected final page to not be truncated")
-	} else if nextPage.PartNumberMarker == nil || *nextPage.PartNumberMarker != *marker {
-		t.Fatalf("expected part number marker %s, got %v", *marker, nextPage.PartNumberMarker)
+	} else if nextPage.PartNumberMarker == nil {
+		t.Fatalf("expected part number marker %s, got nil", *marker)
+	}
+
+	parsedMarker, err := strconv.Atoi(*nextPage.PartNumberMarker)
+	if err != nil {
+		t.Fatalf("expected numeric part number marker, got %v: %v", *nextPage.PartNumberMarker, err)
+	} else if parsedMarker != nextMarker {
+		t.Fatalf("expected part number marker %d, got %d", nextMarker, parsedMarker)
 	} else if nextPage.Parts[0].PartNumber == nil || *nextPage.Parts[0].PartNumber != 3 {
 		t.Fatalf("expected final part number 3, got %v", nextPage.Parts[0].PartNumber)
 	}

@@ -11,6 +11,7 @@ import (
 	"maps"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -401,6 +402,11 @@ func (b *MemoryBackend) ListParts(_ context.Context, accessKeyID, bucket, key, u
 		return nil, s3errs.ErrNoSuchUpload
 	}
 
+	partNumberMarker, err := strconv.Atoi(page.PartNumberMarker)
+	if err != nil && page.PartNumberMarker != "" {
+		return nil, s3errs.ErrInvalidArgument // should have been caught earlier
+	}
+
 	partNumbers := make([]int, 0, len(upload.parts))
 	for number := range upload.parts {
 		partNumbers = append(partNumbers, number)
@@ -416,7 +422,7 @@ func (b *MemoryBackend) ListParts(_ context.Context, accessKeyID, bucket, key, u
 
 	var listed int64
 	for _, number := range partNumbers {
-		if number <= page.PartNumberMarker {
+		if number <= partNumberMarker {
 			continue
 		}
 		part := upload.parts[number]
@@ -426,7 +432,8 @@ func (b *MemoryBackend) ListParts(_ context.Context, accessKeyID, bucket, key, u
 		if listed >= page.MaxParts {
 			result.IsTruncated = true
 			if len(result.Parts) > 0 {
-				result.NextPartNumberMarker = result.Parts[len(result.Parts)-1].PartNumber
+				last := result.Parts[len(result.Parts)-1].PartNumber
+				result.NextPartNumberMarker = strconv.Itoa(last)
 			}
 			break
 		}
@@ -438,10 +445,6 @@ func (b *MemoryBackend) ListParts(_ context.Context, accessKeyID, bucket, key, u
 			ContentMD5:   part.contentMD5,
 		})
 		listed++
-	}
-
-	if !result.IsTruncated && len(result.Parts) > 0 {
-		result.NextPartNumberMarker = result.Parts[len(result.Parts)-1].PartNumber
 	}
 
 	return result, nil
