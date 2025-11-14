@@ -2,7 +2,6 @@ package s3_test
 
 import (
 	"bytes"
-	"context"
 	"crypto/md5"
 	"encoding/base64"
 	"encoding/hex"
@@ -146,12 +145,6 @@ func TestGetAndHeadObject(t *testing.T) {
 }
 
 func TestPutObject(t *testing.T) {
-	// prepare a backend with 2 keypairs
-	backend := testutil.NewMemoryBackend(
-		testutil.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
-		testutil.WithKeyPair("foo", "bar"),
-	)
-
 	test := func(t *testing.T, s3Tester *testutil.S3Tester) {
 		data := frand.Bytes(100)
 		hash := md5.Sum(data)
@@ -203,22 +196,26 @@ func TestPutObject(t *testing.T) {
 		testutil.AssertS3Error(t, s3errs.ErrNoSuchBucket, err)
 
 		// upload to a bucket that we don't own
-		accessKeyID, secretKey := "foo", "bar"
-		if err := backend.AddAccessKey(context.Background(), accessKeyID, secretKey); err != nil {
-			t.Fatal(err)
-		}
 		otherTester := s3Tester.ChangeAccessKey(t, "foo", "bar")
 		_, err = otherTester.PutObject(t.Context(), bucket, object, bytes.NewReader(data), metadata)
 		testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
 	}
 
 	t.Run("http", func(t *testing.T) {
-		s3Tester := testutil.NewTester(t)
+		backend := testutil.NewMemoryBackend(
+			testutil.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
+			testutil.WithKeyPair("foo", "bar"),
+		)
+		s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
 		test(t, s3Tester)
 	})
 
 	t.Run("https", func(t *testing.T) {
-		s3Tester := testutil.NewTester(t, testutil.WithTLS())
+		backend := testutil.NewMemoryBackend(
+			testutil.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
+			testutil.WithKeyPair("foo", "bar"),
+		)
+		s3Tester := testutil.NewTester(t, testutil.WithTLS(), testutil.WithBackend(backend))
 		test(t, s3Tester)
 	})
 }
