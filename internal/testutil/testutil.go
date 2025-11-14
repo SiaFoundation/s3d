@@ -382,12 +382,12 @@ func NewTester(t testing.TB, opts ...TesterOption) *S3Tester {
 			})
 		},
 	}
-	cfg.serviceOpts = append(cfg.serviceOpts, s3Opts...)
+	s3Opts = append(s3Opts, cfg.serviceOpts...)
 
 	return &S3Tester{
 		cfg:     awsCfg,
 		backend: cfg.backend,
-		client:  service.NewFromConfig(awsCfg, cfg.serviceOpts...),
+		client:  service.NewFromConfig(awsCfg, s3Opts...),
 	}
 }
 
