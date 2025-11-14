@@ -296,4 +296,32 @@ type (
 		Key      string   `xml:"Key"`
 		ETag     string   `xml:"ETag"`
 	}
+
+	// ListMultipartUploadsResponse is the response to a ListMultipartUploads
+	// request.
+	ListMultipartUploadsResponse struct {
+		XMLName            xml.Name                `xml:"ListMultipartUploadsResult"`
+		Xmlns              string                  `xml:"xmlns,attr"`
+		Bucket             string                  `xml:"Bucket"`
+		KeyMarker          string                  `xml:"KeyMarker,omitempty"`
+		UploadIDMarker     string                  `xml:"UploadIdMarker,omitempty"`
+		NextKeyMarker      string                  `xml:"NextKeyMarker,omitempty"`
+		NextUploadIDMarker string                  `xml:"NextUploadIdMarker,omitempty"`
+		MaxUploads         int64                   `xml:"MaxUploads"`
+		IsTruncated        bool                    `xml:"IsTruncated"`
+		Prefix             string                  `xml:"Prefix,omitempty"`
+		Delimiter          string                  `xml:"Delimiter,omitempty"`
+		CommonPrefixes     []CommonPrefix          `xml:"CommonPrefixes,omitempty"`
+		Uploads            []ListedMultipartUpload `xml:"Upload"`
+	}
+
+	// ListedMultipartUpload represents a single multipart upload in a listing.
+	ListedMultipartUpload struct {
+		Key          string       `xml:"Key"`
+		UploadID     string       `xml:"UploadId"`
+		Initiator    *UserInfo    `xml:"Initiator,omitempty"`
+		Owner        *UserInfo    `xml:"Owner,omitempty"`
+		StorageClass StorageClass `xml:"StorageClass"`
+		Initiated    ContentTime  `xml:"Initiated"`
+	}
 )
