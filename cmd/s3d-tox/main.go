@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"log"
 	"net/http"
 
@@ -37,14 +36,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to create logger: %v", err)
 	}
-	backend := testutil.NewMemoryBackend()
 
+	var opts []testutil.MemoryBackendOption
 	for _, pair := range toxKeyPairs {
-		err = backend.AddAccessKey(context.Background(), pair.AccessKey, pair.SecretKey)
-		if err != nil {
-			log.Fatalf("failed to add access key: %v", err)
-		}
+		opts = append(opts, testutil.WithKeyPair(pair.AccessKey, pair.SecretKey))
 	}
+	backend := testutil.NewMemoryBackend(opts...)
 
 	s3 := s3.New(backend,
 		s3.WithHostBucketBases([]string{"localhost"}),

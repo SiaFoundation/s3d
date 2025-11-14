@@ -6,7 +6,6 @@ import (
 	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"io"
 	"maps"
 	"slices"
@@ -20,7 +19,8 @@ import (
 )
 
 type (
-	memoryBackendOption func(*MemoryBackend)
+	// A functional argument for configuring a MemoryBackend.
+	MemoryBackendOption func(*MemoryBackend)
 
 	// MemoryBackend is an in-memory implementation of the s3 backend for testing.
 	MemoryBackend struct {
@@ -58,7 +58,7 @@ func WithKeyPair(accessKeyID, secretKey string) func(*MemoryBackend) {
 }
 
 // NewMemoryBackend creates a new MemoryBackend.
-func NewMemoryBackend(opts ...memoryBackendOption) *MemoryBackend {
+func NewMemoryBackend(opts ...MemoryBackendOption) *MemoryBackend {
 	backend := &MemoryBackend{
 		accessKeys:       make(map[string]auth.SecretAccessKey),
 		buckets:          make(map[string]*bucket),
@@ -68,15 +68,6 @@ func NewMemoryBackend(opts ...memoryBackendOption) *MemoryBackend {
 		opt(backend)
 	}
 	return backend
-}
-
-// AddAccessKey adds a new access key to the backend for authentication.
-func (b *MemoryBackend) AddAccessKey(ctx context.Context, accessKeyID, secretAccessKey string) error {
-	if _, exists := b.accessKeys[accessKeyID]; exists {
-		return errors.New("access key already exists")
-	}
-	b.accessKeys[accessKeyID] = auth.SecretAccessKey(secretAccessKey)
-	return nil
 }
 
 // CopyObject copies an object from the source bucket/object to the destination.

@@ -344,10 +344,7 @@ func NewTester(t testing.TB, opts ...TesterOption) *S3Tester {
 	}
 
 	if cfg.backend == nil {
-		backend := NewMemoryBackend()
-		if err := backend.AddAccessKey(t.Context(), AccessKeyID, SecretAccessKey); err != nil {
-			t.Fatal(err)
-		}
+		backend := NewMemoryBackend(WithKeyPair(AccessKeyID, SecretAccessKey))
 		cfg.backend = backend
 	}
 
