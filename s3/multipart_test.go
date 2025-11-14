@@ -214,6 +214,15 @@ func TestListMultipartUploads(t *testing.T) {
 			t.Fatalf("unexpected key in prefix listing: %v", upload.Key)
 		}
 	}
+
+	// assert [s3errs.ErrAccessDenied] is returned for unauthorized access
+	otherTester := s3Tester.AddAccessKey(t, "foo", "bar")
+	_, err = otherTester.ListMultipartUploads(t.Context(), bucket, nil)
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+
+	// assert [s3errs.ErrNoSuchBucket] is returned for nonexistent bucket
+	_, err = s3Tester.ListMultipartUploads(t.Context(), "missing-bucket", nil)
+	testutil.AssertS3Error(t, s3errs.ErrNoSuchBucket, err)
 }
 
 func TestCompleteMultipartUpload(t *testing.T) {
