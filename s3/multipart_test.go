@@ -64,7 +64,12 @@ func TestCreateMultipartUpload(t *testing.T) {
 }
 
 func TestUploadPart(t *testing.T) {
-	s3Tester := testutil.NewTester(t)
+	// prepare a backend with 2 keypairs
+	backend := testutil.NewMemoryBackend(
+		testutil.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
+		testutil.WithKeyPair("foo", "bar"),
+	)
+	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
 
 	const (
 		bucket = "multipart-bucket"
