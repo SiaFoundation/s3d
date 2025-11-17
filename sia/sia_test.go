@@ -20,6 +20,10 @@ func (s *MemorySDK) Download(ctx context.Context, w io.Writer, obj sdk.Object, o
 	panic("not implemented")
 }
 
+func (s *MemorySDK) PinObject(ctx context.Context, obj sdk.Object) error {
+	panic("not implemented")
+}
+
 func (s *MemorySDK) Upload(ctx context.Context, r io.Reader, opts ...sdk.UploadOption) (sdk.Object, error) {
 	panic("not implemented")
 }

@@ -8,9 +8,9 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.18.21
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.90.0
 	github.com/mattn/go-sqlite3 v1.14.32
-	go.sia.tech/core v0.18.1
-	go.sia.tech/coreutils v0.18.7
-	go.sia.tech/indexd v0.0.4-0.20251113131811-6f46e888c7bd
+	go.sia.tech/core v0.18.2-0.20251113164615-c42e113353ff
+	go.sia.tech/coreutils v0.18.8-0.20251113201657-ec81d054671b
+	go.sia.tech/indexd v0.0.4-0.20251117162244-833a23fd6b72
 	go.uber.org/zap v1.27.0
 	golang.org/x/term v0.36.0
 	gopkg.in/yaml.v3 v3.0.1
