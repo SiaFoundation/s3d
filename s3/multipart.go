@@ -1,7 +1,11 @@
 package s3
 
 import (
+	"encoding/base64"
 	"net/http"
+	"strconv"
+
+	"github.com/SiaFoundation/s3d/s3/auth"
 
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"go.uber.org/zap"
@@ -20,10 +24,34 @@ type CreateMultipartUploadResult struct {
 	UploadID string
 }
 
+// UploadPartOptions contains options for uploading an individual part in a
+// multipart upload.
+type UploadPartOptions struct {
+	PartNumber    int
+	ContentLength int64
+	ContentMD5    *[16]byte
+	ContentSHA256 *[32]byte
+}
+
+// UploadPartResult contains metadata about an uploaded part, such as the
+// computed MD5 checksum.
+type UploadPartResult struct {
+	ContentMD5 [16]byte
+}
+
 // routeMultipartUpload operates on routes that contain '?uploadId=<id>' in the
 // query string.
 func (s *s3) routeMultipartUpload(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket, object, uploadID string) error {
-	return s3errs.ErrNotImplemented
+	if r.Method != http.MethodPut {
+		return s3errs.ErrMethodNotAllowed
+	}
+
+	validatedKey, err := assertAuth(accessKeyID)
+	if err != nil {
+		return err
+	}
+
+	return s.addUploadPart(w, r, validatedKey, bucket, object, uploadID, r.URL.Query().Get("partNumber"))
 }
 
 // routeMultipartUploadBase operates on routes that contain '?uploads' in the
@@ -42,7 +70,7 @@ func (s *s3) routeMultipartUploadBase(w http.ResponseWriter, r *http.Request, ac
 	return s.createMultipartUpload(w, r, validatedKey, bucket, object)
 }
 
-func (s *s3) createMultipartUpload(w http.ResponseWriter, r *http.Request, accessKeyID string, bucket, object string) error {
+func (s *s3) createMultipartUpload(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object string) error {
 	log := s.logger.With(
 		zap.String("bucket", bucket),
 		zap.String("object", object),
@@ -73,4 +101,68 @@ func (s *s3) createMultipartUpload(w http.ResponseWriter, r *http.Request, acces
 		Key:      object,
 		UploadID: result.UploadID,
 	})
+}
+
+func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object, uploadID, partNumberStr string) error {
+	log := s.logger.With(
+		zap.String("bucket", bucket),
+		zap.String("object", object),
+		zap.String("uploadID", uploadID),
+		zap.String("partNumber", partNumberStr),
+	)
+	log.Debug("upload multipart part")
+
+	partNumber, err := parsePartNumber(partNumberStr)
+	if err != nil {
+		return err
+	}
+
+	// content length is mandatory
+	if r.ContentLength < 0 {
+		return s3errs.ErrMissingContentLength
+	} else if r.ContentLength > MaxUploadPartSize {
+		return s3errs.ErrEntityTooLarge
+	}
+
+	// extract Content-MD5 header
+	var contentMD5 *[16]byte
+	if md5Header := r.Header.Get("Content-Md5"); md5Header != "" {
+		contentMD5 = new([16]byte)
+		if n, err := base64.StdEncoding.Decode(contentMD5[:], []byte(md5Header)); err != nil || n != len(contentMD5) {
+			return s3errs.ErrInvalidDigest
+		}
+	}
+
+	// extract SHA256 checksum from "X-Amz-Content-Sha256" header if present
+	contentSHA256, err := auth.Sha256HashFromRequest(r)
+	if err != nil {
+		return err
+	}
+
+	res, err := s.backend.UploadPart(r.Context(), accessKeyID, bucket, object, uploadID, r.Body, UploadPartOptions{
+		PartNumber:    partNumber,
+		ContentLength: r.ContentLength,
+		ContentMD5:    contentMD5,
+		ContentSHA256: contentSHA256,
+	})
+	if err != nil {
+		return err
+	}
+
+	w.Header().Set("ETag", FormatETag(res.ContentMD5[:]))
+	return nil
+}
+
+func parsePartNumber(raw string) (int, error) {
+	if raw == "" {
+		return 0, s3errs.ErrInvalidRequest
+	}
+	val, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, s3errs.ErrInvalidArgument
+	}
+	if val < 1 || val > MaxUploadPartNumber {
+		return 0, s3errs.ErrInvalidArgument
+	}
+	return val, nil
 }
