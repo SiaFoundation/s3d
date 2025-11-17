@@ -108,7 +108,7 @@ func TestUploadPart(t *testing.T) {
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchUpload, err)
 
 	// assert [s3errs.ErrAccessDenied] is returned for unauthorized access
-	otherTester := s3Tester.AddAccessKey(t, "foo", "bar")
+	otherTester := s3Tester.ChangeAccessKey(t, "foo", "bar")
 	_, err = otherTester.UploadPart(t.Context(), bucket, object, *res.UploadId, 1, data)
 	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
 
