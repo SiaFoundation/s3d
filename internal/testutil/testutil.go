@@ -14,7 +14,6 @@ import (
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
-	"github.com/SiaFoundation/s3d/testutils"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -24,25 +23,24 @@ import (
 )
 
 const (
-	accessKeyID     = "AKIA7GQ3XN52WQLYDHZP"
-	secretAccessKey = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+	// AccessKeyID is the access key configured for S3Tester
+	AccessKeyID = "AKIA7GQ3XN52WQLYDHZP"
+
+	// SecretAccessKey is the secret key configured for S3Tester
+	SecretAccessKey = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 )
 
 // S3Tester wraps an AWS S3 client configured to talk to an in-memory S3
 // backend.
 type S3Tester struct {
 	cfg     aws.Config
-	backend *testutils.MemoryBackend
+	backend s3.Backend
 	client  *service.Client
 }
 
-// AddAccessKey adds a new keypair to the in-memory S3 backend and returns a new
-// S3Tester configured to use those credentials.
-func (t *S3Tester) AddAccessKey(tb testing.TB, accessKeyID, secretKey string) *S3Tester {
-	err := t.backend.AddAccessKey(context.Background(), accessKeyID, secretKey)
-	if err != nil {
-		tb.Fatal(err)
-	}
+// ChangeAccessKey creates a copy of the tester that uses the provided keypair
+// to access the S3 API.
+func (t *S3Tester) ChangeAccessKey(tb testing.TB, accessKeyID, secretKey string) *S3Tester {
 	client := service.NewFromConfig(t.cfg, func(o *service.Options) {
 		*o = t.client.Options()
 		o.Credentials = aws.NewCredentialsCache(&credentials.StaticCredentialsProvider{
@@ -61,7 +59,7 @@ func (t *S3Tester) AddAccessKey(tb testing.TB, accessKeyID, secretKey string) *S
 
 // AddObject adds an object to the in-memory S3 backend.
 func (t *S3Tester) AddObject(bucket, object string, data []byte, metadata map[string]string) error {
-	_, err := t.backend.PutObject(context.Background(), accessKeyID, bucket, object, bytes.NewReader(data), s3.PutObjectOptions{
+	_, err := t.backend.PutObject(context.Background(), AccessKeyID, bucket, object, bytes.NewReader(data), s3.PutObjectOptions{
 		ContentLength: int64(len(data)),
 		Meta:          metadata,
 	})
@@ -337,44 +335,72 @@ func (t *S3Tester) ListParts(ctx context.Context, bucket, object, uploadID strin
 	return resp, nil
 }
 
-// NewTester creates a new S3Tester with an in-memory S3 backend and an AWS
-// client configured to talk to it.
-func NewTester(t testing.TB, optFns ...func(*service.Options)) *S3Tester {
-	return newTesterWithTLS(t, false, optFns...)
+type testerCfg struct {
+	backend     s3.Backend
+	serviceOpts []func(*service.Options)
+	tls         bool
 }
 
-// NewTesterTLS creates a new S3Tester with an in-memory S3 backend and an AWS
-// client configured to talk to it over TLS.
-func NewTesterTLS(t testing.TB, optFns ...func(*service.Options)) *S3Tester {
-	return newTesterWithTLS(t, true, optFns...)
+// TesterOption is an option for configuring the S3Tester.
+type TesterOption func(*testerCfg)
+
+// WithServiceOptions adds options to configure the AWS S3 client.
+func WithServiceOptions(opts ...func(*service.Options)) TesterOption {
+	return func(cfg *testerCfg) {
+		cfg.serviceOpts = opts
+	}
 }
 
-func newTesterWithTLS(t testing.TB, tls bool, optFns ...func(*service.Options)) *S3Tester {
+// WithBackend sets the S3 backend to use for the tester.
+func WithBackend(backend s3.Backend) TesterOption {
+	return func(cfg *testerCfg) {
+		cfg.backend = backend
+	}
+}
+
+// WithTLS configures the tester to use TLS.
+func WithTLS() TesterOption {
+	return func(cfg *testerCfg) {
+		cfg.tls = true
+	}
+}
+
+// NewTester creates a new S3Tester and a AWS client configured to talk to it.
+func NewTester(t testing.TB, opts ...TesterOption) *S3Tester {
 	t.Helper()
 
-	backend := testutils.NewMemoryBackend()
-	if err := backend.AddAccessKey(t.Context(), accessKeyID, secretAccessKey); err != nil {
-		t.Fatal(err)
+	cfg := &testerCfg{
+		backend:     nil,
+		serviceOpts: nil,
+		tls:         false,
+	}
+	for _, opt := range opts {
+		opt(cfg)
 	}
 
-	handler := s3.New(backend,
+	if cfg.backend == nil {
+		backend := NewMemoryBackend(WithKeyPair(AccessKeyID, SecretAccessKey))
+		cfg.backend = backend
+	}
+
+	handler := s3.New(cfg.backend,
 		s3.WithHostBucketBases([]string{"localhost"}),
 		s3.WithLogger(zaptest.NewLogger(t)))
 
 	server := httptest.NewUnstartedServer(handler)
-	if tls {
+	if cfg.tls {
 		server.StartTLS()
 	} else {
 		server.Start()
 	}
 	t.Cleanup(server.Close)
 
-	cfg, err := config.LoadDefaultConfig(t.Context())
+	awsCfg, err := config.LoadDefaultConfig(t.Context())
 	if err != nil {
 		t.Fatalf("unable to load SDK config, %v", err)
 	}
 
-	opts := []func(*service.Options){
+	s3Opts := []func(*service.Options){
 		func(o *service.Options) {
 			o.Region = "us-east-1"
 			o.HTTPClient = server.Client()
@@ -382,18 +408,18 @@ func newTesterWithTLS(t testing.TB, tls bool, optFns ...func(*service.Options)) 
 			o.UsePathStyle = true
 			o.Credentials = aws.NewCredentialsCache(&credentials.StaticCredentialsProvider{
 				Value: aws.Credentials{
-					AccessKeyID:     accessKeyID,
-					SecretAccessKey: secretAccessKey,
+					AccessKeyID:     AccessKeyID,
+					SecretAccessKey: SecretAccessKey,
 				},
 			})
 		},
 	}
-	opts = append(opts, optFns...)
+	s3Opts = append(s3Opts, cfg.serviceOpts...)
 
 	return &S3Tester{
-		cfg:     cfg,
-		backend: backend,
-		client:  service.NewFromConfig(cfg, opts...),
+		cfg:     awsCfg,
+		backend: cfg.backend,
+		client:  service.NewFromConfig(awsCfg, s3Opts...),
 	}
 }
 
