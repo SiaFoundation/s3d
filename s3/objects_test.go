@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SiaFoundation/s3d/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3"
-	"github.com/SiaFoundation/s3d/s3/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -196,18 +196,26 @@ func TestPutObject(t *testing.T) {
 		testutil.AssertS3Error(t, s3errs.ErrNoSuchBucket, err)
 
 		// upload to a bucket that we don't own
-		otherTester := s3Tester.AddAccessKey(t, "foo", "bar")
+		otherTester := s3Tester.ChangeAccessKey(t, "foo", "bar")
 		_, err = otherTester.PutObject(t.Context(), bucket, object, bytes.NewReader(data), metadata)
 		testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
 	}
 
 	t.Run("http", func(t *testing.T) {
-		s3Tester := testutil.NewTester(t)
+		backend := testutil.NewMemoryBackend(
+			testutil.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
+			testutil.WithKeyPair("foo", "bar"),
+		)
+		s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
 		test(t, s3Tester)
 	})
 
 	t.Run("https", func(t *testing.T) {
-		s3Tester := testutil.NewTesterTLS(t)
+		backend := testutil.NewMemoryBackend(
+			testutil.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
+			testutil.WithKeyPair("foo", "bar"),
+		)
+		s3Tester := testutil.NewTester(t, testutil.WithTLS(), testutil.WithBackend(backend))
 		test(t, s3Tester)
 	})
 }

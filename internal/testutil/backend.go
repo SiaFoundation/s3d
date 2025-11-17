@@ -1,4 +1,4 @@
-package testutils
+package testutil
 
 import (
 	"bytes"
@@ -6,7 +6,6 @@ import (
 	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"io"
 	"maps"
 	"slices"
@@ -20,6 +19,10 @@ import (
 )
 
 type (
+	// MemoryBackendOption is a functional argument for configuring a
+	// MemoryBackend.
+	MemoryBackendOption func(*MemoryBackend)
+
 	// MemoryBackend is an in-memory implementation of the s3 backend for testing.
 	MemoryBackend struct {
 		buckets          map[string]*bucket
@@ -54,22 +57,24 @@ type (
 	}
 )
 
+// WithKeyPair adds a key pair to the MemoryBackend.
+func WithKeyPair(accessKeyID, secretKey string) func(*MemoryBackend) {
+	return func(mb *MemoryBackend) {
+		mb.accessKeys[accessKeyID] = auth.SecretAccessKey(secretKey)
+	}
+}
+
 // NewMemoryBackend creates a new MemoryBackend.
-func NewMemoryBackend() *MemoryBackend {
-	return &MemoryBackend{
+func NewMemoryBackend(opts ...MemoryBackendOption) *MemoryBackend {
+	backend := &MemoryBackend{
 		accessKeys:       make(map[string]auth.SecretAccessKey),
 		buckets:          make(map[string]*bucket),
 		multipartUploads: make(map[string]*multipartUpload),
 	}
-}
-
-// AddAccessKey adds a new access key to the backend for authentication.
-func (b *MemoryBackend) AddAccessKey(ctx context.Context, accessKeyID, secretAccessKey string) error {
-	if _, exists := b.accessKeys[accessKeyID]; exists {
-		return errors.New("access key already exists")
+	for _, opt := range opts {
+		opt(backend)
 	}
-	b.accessKeys[accessKeyID] = auth.SecretAccessKey(secretAccessKey)
-	return nil
+	return backend
 }
 
 // CopyObject copies an object from the source bucket/object to the destination.
