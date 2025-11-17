@@ -1,13 +1,18 @@
 package sia
 
 import (
+	"bytes"
 	"context"
+	"crypto/md5"
+	"crypto/sha256"
 	"fmt"
+	"hash"
 	"io"
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/auth"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/sdk"
 	"go.uber.org/zap"
 )
@@ -35,11 +40,14 @@ type Sia struct {
 // SDK describes the SDK used to interact with Sia.
 type SDK interface {
 	Download(ctx context.Context, w io.Writer, obj sdk.Object, opts ...sdk.DownloadOption) error
+	PinObject(ctx context.Context, obj sdk.Object) error
 	Upload(ctx context.Context, r io.Reader, opts ...sdk.UploadOption) (sdk.Object, error)
 }
 
 // Store represents the storage backend used by the Sia backend.
-type Store any
+type Store interface {
+	CreateBucket(bucket string) error
+}
 
 // New creates a new Sia backend instance.
 func New(ctx context.Context, sdk SDK, store Store, accessKey, secretKey string, opts ...Option) (*Sia, error) {
@@ -81,8 +89,8 @@ func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject,
 
 // CreateBucket creates a new bucket with the given name for the user
 // identified by the given access key.
-func (s *Sia) CreateBucket(ctx context.Context, accessKeyID, name string) error {
-	return s3errs.ErrNotImplemented
+func (s *Sia) CreateBucket(ctx context.Context, _, name string) error {
+	return s.store.CreateBucket(name)
 }
 
 // DeleteBucket deletes the bucket with the given name for the user
@@ -139,6 +147,59 @@ func (s *Sia) ListObjects(ctx context.Context, accessKeyID *string, bucket strin
 
 // PutObject puts an object with the given key into the specified bucket.
 func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object string, r io.Reader, opts s3.PutObjectOptions) (*s3.PutObjectResult, error) {
+	// check if bucket exists
+
+	// check if object exists
+
+	// compute md5 checksum for the etag
+	md5Hash := md5.New()
+	r = io.TeeReader(r, md5Hash)
+
+	// check if we need to compute any other checksums
+	var sha256Hash hash.Hash
+	if opts.ContentSHA256 != nil {
+		sha256Hash = sha256.New()
+		r = io.TeeReader(r, sha256Hash)
+	}
+
+	// upload the data
+	obj, err := s.sdk.Upload(ctx, r, sdk.WithSkipPinObject())
+	if err != nil {
+		return nil, fmt.Errorf("failed to upload object: %w", err)
+	}
+
+	// check content length
+	var contentLength int64
+	for _, slab := range obj.Slabs() {
+		contentLength += int64(slab.Length)
+	}
+	if opts.ContentLength != contentLength {
+		return nil, s3errs.ErrIncompleteBody
+	}
+
+	// verify checksums
+	contentMD5 := md5.Sum(nil)
+	if opts.ContentSHA256 != nil && !bytes.Equal(sha256Hash.Sum(nil), opts.ContentSHA256[:]) {
+		return nil, s3errs.ErrBadDigest
+	} else if opts.ContentMD5 != nil && contentMD5 != *opts.ContentMD5 {
+		return nil, s3errs.ErrBadDigest
+	}
+
+	// update metadata and pin object
+	objMeta := &objectMeta{
+		contentMD5: contentMD5,
+		meta:       opts.Meta,
+	}
+	encodedMeta, err := objMeta.encode()
+	if err != nil {
+		return nil, err
+	}
+	obj.UpdateMetadata(encodedMeta)
+
+	if err := s.sdk.PinObject(ctx, obj); err != nil {
+		return nil, fmt.Errorf("failed to pin object: %w", err)
+	}
+
 	return nil, s3errs.ErrNotImplemented
 }
 
@@ -160,4 +221,44 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object, uploa
 // CompleteMultipartUpload completes a multipart upload.
 func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, object, uploadID string, parts []s3.CompletedPart) (*s3.CompleteMultipartUploadResult, error) {
 	return nil, s3errs.ErrNotImplemented
+}
+
+type objectMeta struct {
+	contentMD5 [16]byte
+	meta       map[string]string
+}
+
+func (om *objectMeta) encode() ([]byte, error) {
+	buf := new(bytes.Buffer)
+	enc := types.NewEncoder(buf)
+	_, _ = enc.Write(om.contentMD5[:])
+	enc.WriteUint64(uint64(len(om.meta)))
+	for k, v := range om.meta {
+		enc.WriteString(k)
+		enc.WriteString(v)
+	}
+	if err := enc.Flush(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func (om *objectMeta) decode(data []byte) error {
+	dec := types.NewBufDecoder(data)
+	n, err := dec.Read(om.contentMD5[:])
+	if err != nil {
+		return err
+	} else if n != len(om.contentMD5) {
+		return fmt.Errorf("invalid object meta data")
+	}
+	om.meta = make(map[string]string)
+	nPairs := dec.ReadUint64()
+	for i := uint64(0); i < nPairs; i++ {
+		k, v := dec.ReadString(), dec.ReadString()
+		if dec.Err() != nil {
+			return dec.Err()
+		}
+		om.meta[k] = v
+	}
+	return dec.Err()
 }

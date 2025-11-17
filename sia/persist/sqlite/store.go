@@ -130,4 +130,4 @@ func OpenDatabase(fp string, log *zap.Logger) (*Store, error) {
 	return store, nil
 }
 
-var _ sia.Store = Store{}
+var _ sia.Store = &Store{}
