@@ -48,6 +48,7 @@ type SDK interface {
 type Store interface {
 	CreateBucket(accessKeyID, bucket string) error
 	DeleteBucket(accessKeyID, bucket string) error
+	DeleteObject(accessKeyID, bucket, name string) error
 	HeadBucket(accessKeyID, bucket string) error
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
 	PutObject(accessKeyID, bucket, name string, obj slabs.SealedObject) error
