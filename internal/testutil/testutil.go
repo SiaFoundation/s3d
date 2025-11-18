@@ -313,6 +313,20 @@ func (t *S3Tester) UploadPart(ctx context.Context, bucket, object, uploadID stri
 	return t.client.UploadPart(ctx, input)
 }
 
+// CompleteMultipartUpload is a convenience wrapper around the AWS SDK's
+// CompleteMultipartUpload API.
+func (t *S3Tester) CompleteMultipartUpload(ctx context.Context, bucket, object, uploadID string, parts []types.CompletedPart) (*service.CompleteMultipartUploadOutput, error) {
+	input := &service.CompleteMultipartUploadInput{
+		Bucket:   aws.String(bucket),
+		Key:      aws.String(object),
+		UploadId: aws.String(uploadID),
+		MultipartUpload: &types.CompletedMultipartUpload{
+			Parts: parts,
+		},
+	}
+	return t.client.CompleteMultipartUpload(ctx, input)
+}
+
 type testerCfg struct {
 	backend     s3.Backend
 	serviceOpts []func(*service.Options)
