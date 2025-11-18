@@ -45,8 +45,11 @@ func (s *Sia) ListObjects(ctx context.Context, accessKeyID *string, bucket strin
 // PutObject puts an object with the given key into the specified bucket.
 func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object string, r io.Reader, opts s3.PutObjectOptions) (*s3.PutObjectResult, error) {
 	// check if bucket exists
+	if err := s.HeadBucket(ctx, accessKeyID, bucket); err != nil {
+		return nil, err
+	}
 
-	// check if object exists
+	// TODO: check if object exists
 
 	// compute md5 checksum for the etag
 	md5Hash := md5.New()
