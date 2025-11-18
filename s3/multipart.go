@@ -2,9 +2,12 @@ package s3
 
 import (
 	"encoding/base64"
+	"encoding/hex"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3/auth"
@@ -69,6 +72,20 @@ type UploadPart struct {
 	ContentMD5   [16]byte
 }
 
+// CompletedPart represents a single part referenced during a multipart
+// completion request.
+type CompletedPart struct {
+	PartNumber int
+	ETag       [16]byte
+}
+
+// CompleteMultipartUploadResult contains metadata about the completed object,
+// such as the final ETag.
+type CompleteMultipartUploadResult struct {
+	ETag       string
+	ContentMD5 [16]byte
+}
+
 // routeMultipartUpload operates on routes that contain '?uploadId=<id>' in the
 // query string.
 func (s *s3) routeMultipartUpload(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket, object, uploadID string) error {
@@ -82,6 +99,8 @@ func (s *s3) routeMultipartUpload(w http.ResponseWriter, r *http.Request, access
 		return s.addUploadPart(w, r, validatedKey, bucket, object, uploadID, r.URL.Query().Get("partNumber"))
 	case http.MethodGet:
 		return s.listUploadParts(w, r, validatedKey, bucket, object, uploadID)
+	case http.MethodPost:
+		return s.completeMultipartUpload(w, r, validatedKey, bucket, object, uploadID)
 	default:
 		return s3errs.ErrMethodNotAllowed
 	}
@@ -251,18 +270,114 @@ func (s *s3) listUploadParts(w http.ResponseWriter, r *http.Request, accessKeyID
 	return writeXMLResponse(w, resp)
 }
 
-func parsePartNumber(raw string) (int, error) {
-	if raw == "" {
+func (s *s3) completeMultipartUpload(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object, uploadID string) error {
+	log := s.logger.With(
+		zap.String("bucket", bucket),
+		zap.String("object", object),
+		zap.String("uploadID", uploadID),
+	)
+	log.Debug("complete multipart upload")
+
+	var req CompleteMultipartUploadRequest
+	if err := decodeXMLBody(r.Body, &req); err != nil {
+		return err
+	}
+
+	completedParts, err := parseCompletedParts(req.Parts)
+	if err != nil {
+		return err
+	}
+
+	res, err := s.backend.CompleteMultipartUpload(r.Context(), accessKeyID, bucket, object, uploadID, completedParts)
+	if err != nil {
+		return err
+	}
+
+	protocol := "http"
+	if r.TLS != nil {
+		protocol = "https"
+	}
+
+	var location string
+	if len(s.hostBucketBases) > 0 {
+		location = fmt.Sprintf("%s://%s/%s", protocol, r.Host, object)
+	} else {
+		location = fmt.Sprintf("%s://%s/%s/%s", protocol, r.Host, bucket, object)
+	}
+
+	w.Header().Set("ETag", res.ETag)
+	return writeXMLResponse(w, CompleteMultipartUploadResponse{
+		Xmlns:    "http://s3.amazonaws.com/doc/2006-03-01/",
+		Location: location,
+		Bucket:   bucket,
+		Key:      object,
+		ETag:     res.ETag,
+	})
+}
+
+func parsePartNumber(partStr string) (int, error) {
+	if partStr == "" {
 		return 0, s3errs.ErrInvalidRequest
 	}
-	val, err := strconv.Atoi(raw)
+	partNumber, err := strconv.Atoi(partStr)
 	if err != nil {
 		return 0, s3errs.ErrInvalidArgument
 	}
-	if val < 1 || val > MaxUploadPartNumber {
+	if partNumber < 1 || partNumber > MaxUploadPartNumber {
 		return 0, s3errs.ErrInvalidArgument
 	}
-	return val, nil
+	return partNumber, nil
+}
+
+func parseCompletedParts(parts []CompleteMultipartPartXML) ([]CompletedPart, error) {
+	if len(parts) == 0 {
+		return nil, s3errs.ErrInvalidRequest
+	}
+
+	completed := make([]CompletedPart, 0, len(parts))
+	prev := 0
+	for i, part := range parts {
+		if part.PartNumber < 1 || part.PartNumber > MaxUploadPartNumber {
+			return nil, s3errs.ErrInvalidArgument
+		}
+		if i > 0 && part.PartNumber <= prev {
+			return nil, s3errs.ErrInvalidPartOrder
+		}
+
+		etag, err := parseCompletedPartETag(part.ETag)
+		if err != nil {
+			return nil, err
+		}
+
+		completed = append(completed, CompletedPart{
+			PartNumber: part.PartNumber,
+			ETag:       etag,
+		})
+		prev = part.PartNumber
+	}
+
+	return completed, nil
+}
+
+func parseCompletedPartETag(etagStr string) (etag [16]byte, _ error) {
+	etagStr = strings.TrimSpace(etagStr)
+	etagStr = strings.Trim(etagStr, `"`)
+	if etagStr == "" {
+		return etag, s3errs.ErrInvalidArgument
+	}
+
+	decoded, err := hex.DecodeString(etagStr)
+	if err != nil || len(decoded) != len(etag) {
+		return etag, s3errs.ErrInvalidDigest
+	}
+	copy(etag[:], decoded)
+	return etag, nil
+}
+
+// FormatMultipartETag formats the MD5 checksum of concatenated part hashes
+// along with the part count to match AWS multipart ETag semantics.
+func FormatMultipartETag(hash []byte, partCount int) string {
+	return `"` + hex.EncodeToString(hash) + "-" + strconv.Itoa(partCount) + `"`
 }
 
 func listPartsPageFromQuery(query url.Values) (ListPartsPage, error) {

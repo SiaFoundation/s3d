@@ -156,3 +156,8 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object, uploa
 func (s *Sia) ListParts(ctx context.Context, accessKeyID, bucket, object, uploadID string, page s3.ListPartsPage) (*s3.ListPartsResult, error) {
 	return nil, s3errs.ErrNotImplemented
 }
+
+// CompleteMultipartUpload completes a multipart upload.
+func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, object, uploadID string, parts []s3.CompletedPart) (*s3.CompleteMultipartUploadResult, error) {
+	return nil, s3errs.ErrNotImplemented
+}

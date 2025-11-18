@@ -12,7 +12,12 @@ const (
 	// upload. AWS allows part numbers between 1 and 10,000 inclusive.
 	MaxUploadPartNumber = 10000
 
-	// MaxUploadPartSize is the maximum allowed size for a single multipart part.
+	// MinUploadPartSize defines the minimum allowed size for a multipart upload
+	// part, except for the last part, which may be smaller.
+	MinUploadPartSize int64 = 5 << 20 // 5 MiB
+
+	// MaxUploadPartSize is the maximum allowed size for a single multipart
+	// part.
 	MaxUploadPartSize int64 = 5 << 30 // 5 GiB
 
 	// MaxUploadListParts defines the maximum number of parts returned in a

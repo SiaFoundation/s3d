@@ -297,4 +297,29 @@ type (
 		ETag         string      `xml:"ETag"`
 		Size         int64       `xml:"Size"`
 	}
+
+	// CompleteMultipartUploadRequest matches the XML request body sent when
+	// completing a multipart upload.
+	CompleteMultipartUploadRequest struct {
+		XMLName xml.Name                   `xml:"CompleteMultipartUpload"`
+		Parts   []CompleteMultipartPartXML `xml:"Part"`
+	}
+
+	// CompleteMultipartPartXML represents a single part in a
+	// CompleteMultipartUploadRequest.
+	CompleteMultipartPartXML struct {
+		PartNumber int    `xml:"PartNumber"`
+		ETag       string `xml:"ETag"`
+	}
+
+	// CompleteMultipartUploadResponse matches the XML response returned after a
+	// successful CompleteMultipartUpload operation.
+	CompleteMultipartUploadResponse struct {
+		XMLName  xml.Name `xml:"CompleteMultipartUploadResult"`
+		Xmlns    string   `xml:"xmlns,attr"`
+		Location string   `xml:"Location"`
+		Bucket   string   `xml:"Bucket"`
+		Key      string   `xml:"Key"`
+		ETag     string   `xml:"ETag"`
+	}
 )

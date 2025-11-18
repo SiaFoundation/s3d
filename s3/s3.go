@@ -177,6 +177,19 @@ type Backend interface {
 	// - If the multipart upload ID is not known or no longer active,
 	//   [ErrNoSuchUpload] must be returned.
 	ListParts(ctx context.Context, accessKeyID, bucket, object, uploadID string, page ListPartsPage) (*ListPartsResult, error)
+
+	// CompleteMultipartUpload completes a multipart upload by assembling the
+	// previously uploaded parts into the final object.
+	//
+	// - If the access key does not have permission to write to the object,
+	//   [ErrAccessDenied] must be returned.
+	//
+	// - If any referenced part is missing or its ETag does not match,
+	//   [ErrInvalidPart] must be returned.
+	//
+	// - If the list of parts is not strictly ordered by part number,
+	//   [ErrInvalidPartOrder] must be returned.
+	CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, object, uploadID string, parts []CompletedPart) (*CompleteMultipartUploadResult, error)
 }
 
 type s3 struct {
