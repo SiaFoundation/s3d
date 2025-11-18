@@ -25,7 +25,7 @@ func (s *MemorySDK) PinObject(ctx context.Context, obj sdk.Object) error {
 }
 
 func (s *MemorySDK) Upload(ctx context.Context, r io.Reader, opts ...sdk.UploadOption) (sdk.Object, error) {
-	panic("not implemented")
+	return sdk.Object{}, nil
 }
 
 func NewMemorySDK() *MemorySDK {

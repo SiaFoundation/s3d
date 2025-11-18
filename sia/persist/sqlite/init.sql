@@ -5,7 +5,8 @@
 
 CREATE TABLE buckets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL UNIQUE,
+    created_at INTEGER NOT NULL,
+    name TEXT NOT NULL UNIQUE
 );
 
 CREATE TABLE objects (
@@ -14,7 +15,7 @@ CREATE TABLE objects (
     name TEXT NOT NULL,
     sia_meta BLOB NOT NULL,
     FOREIGN KEY (bucket_id) REFERENCES buckets(id),
-    UNIQUE(bucket_id, key)
+    UNIQUE(bucket_id, name)
 );
 
 CREATE TABLE global_settings (
