@@ -69,11 +69,7 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	}
 
 	// check content length
-	var contentLength int64
-	for _, slab := range obj.Slabs() {
-		contentLength += int64(slab.Length)
-	}
-	if opts.ContentLength != contentLength {
+	if opts.ContentLength != int64(obj.Size()) {
 		return nil, s3errs.ErrIncompleteBody
 	}
 
@@ -95,10 +91,16 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 		return nil, err
 	}
 	obj.UpdateMetadata(encodedMeta)
-
 	if err := s.sdk.PinObject(ctx, obj); err != nil {
 		return nil, fmt.Errorf("failed to pin object: %w", err)
 	}
 
-	return nil, s3errs.ErrNotImplemented
+	// store the object in the database
+	if err := s.store.PutObject(accessKeyID, bucket, object, s.sdk.SealObject(obj)); err != nil {
+		return nil, fmt.Errorf("failed to store object metadata: %w", err)
+	}
+
+	return &s3.PutObjectResult{
+		ContentMD5: contentMD5,
+	}, nil
 }

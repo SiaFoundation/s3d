@@ -12,6 +12,7 @@ import (
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/sdk"
+	"go.sia.tech/indexd/slabs"
 	"go.uber.org/zap"
 )
 
@@ -39,6 +40,7 @@ type Sia struct {
 type SDK interface {
 	Download(ctx context.Context, w io.Writer, obj sdk.Object, opts ...sdk.DownloadOption) error
 	PinObject(ctx context.Context, obj sdk.Object) error
+	SealObject(obj sdk.Object) slabs.SealedObject
 	Upload(ctx context.Context, r io.Reader, opts ...sdk.UploadOption) (sdk.Object, error)
 }
 
@@ -48,6 +50,7 @@ type Store interface {
 	DeleteBucket(accessKeyID, bucket string) error
 	HeadBucket(accessKeyID, bucket string) error
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
+	PutObject(accessKeyID, bucket, name string, obj slabs.SealedObject) error
 }
 
 // New creates a new Sia backend instance.
