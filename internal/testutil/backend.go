@@ -1,4 +1,4 @@
-package testutils
+package testutil
 
 import (
 	"bytes"
@@ -6,7 +6,6 @@ import (
 	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"io"
 	"maps"
 	"slices"
@@ -19,7 +18,16 @@ import (
 	"lukechampine.com/frand"
 )
 
+const (
+	// ETagSize is the size of an ETag in bytes.
+	ETagSize = 16
+)
+
 type (
+	// MemoryBackendOption is a functional argument for configuring a
+	// MemoryBackend.
+	MemoryBackendOption func(*MemoryBackend)
+
 	// MemoryBackend is an in-memory implementation of the s3 backend for testing.
 	MemoryBackend struct {
 		buckets          map[string]*bucket
@@ -44,26 +52,34 @@ type (
 		bucket    string
 		key       string
 		metadata  map[string]string
+		parts     map[int]*multipartPart
 		createdAt time.Time
+	}
+
+	multipartPart struct {
+		data       []byte
+		contentMD5 [16]byte
 	}
 )
 
+// WithKeyPair adds a key pair to the MemoryBackend.
+func WithKeyPair(accessKeyID, secretKey string) func(*MemoryBackend) {
+	return func(mb *MemoryBackend) {
+		mb.accessKeys[accessKeyID] = auth.SecretAccessKey(secretKey)
+	}
+}
+
 // NewMemoryBackend creates a new MemoryBackend.
-func NewMemoryBackend() *MemoryBackend {
-	return &MemoryBackend{
+func NewMemoryBackend(opts ...MemoryBackendOption) *MemoryBackend {
+	backend := &MemoryBackend{
 		accessKeys:       make(map[string]auth.SecretAccessKey),
 		buckets:          make(map[string]*bucket),
 		multipartUploads: make(map[string]*multipartUpload),
 	}
-}
-
-// AddAccessKey adds a new access key to the backend for authentication.
-func (b *MemoryBackend) AddAccessKey(ctx context.Context, accessKeyID, secretAccessKey string) error {
-	if _, exists := b.accessKeys[accessKeyID]; exists {
-		return errors.New("access key already exists")
+	for _, opt := range opts {
+		opt(backend)
 	}
-	b.accessKeys[accessKeyID] = auth.SecretAccessKey(secretAccessKey)
-	return nil
+	return backend
 }
 
 // CopyObject copies an object from the source bucket/object to the destination.
@@ -216,16 +232,11 @@ func (b *MemoryBackend) ListObjects(ctx context.Context, accessKeyID *string, bu
 		return strings.Compare(a.name, b.name)
 	})
 
-	// apply marker
-	if page.Marker != nil {
-		for len(objects) > 0 && strings.Compare(*page.Marker, objects[0].name) >= 0 {
-			objects = objects[1:]
-		}
+	result := s3.NewObjectsListResult(page.MaxKeys)
+	if page.MaxKeys == 0 {
+		return result, nil
 	}
 
-	result := s3.NewObjectsListResult()
-
-	var cntr int64
 	var lastMatchedPart string
 
 	for _, obj := range objects {
@@ -234,33 +245,35 @@ func (b *MemoryBackend) ListObjects(ctx context.Context, accessKeyID *string, bu
 		case match == nil:
 			continue
 		case match.CommonPrefix:
+			if page.Marker != nil && strings.Compare(*page.Marker, match.MatchedPart) >= 0 {
+				continue
+			}
 			if match.MatchedPart == lastMatchedPart {
 				continue // should not count towards keys
 			}
-			if cntr < page.MaxKeys {
-				result.AddPrefix(match.MatchedPart)
-			}
+			result.AddPrefix(match.MatchedPart)
 			lastMatchedPart = match.MatchedPart
 		default:
-			if cntr < page.MaxKeys {
-				result.Add(&s3.Content{
-					Key:          obj.name,
-					LastModified: s3.NewContentTime(obj.lastModified),
-					ETag:         s3.FormatETag(obj.contentMD5[:]),
-					Size:         int64(len(obj.data)),
-				})
+			if page.Marker != nil && strings.Compare(*page.Marker, obj.name) >= 0 {
+				continue
 			}
+			result.Add(&s3.Content{
+				Key:          obj.name,
+				LastModified: s3.NewContentTime(obj.lastModified),
+				ETag:         s3.FormatETag(obj.contentMD5[:]),
+				Owner: &s3.UserInfo{
+					ID: bkt.owner,
+				},
+				Size: int64(len(obj.data)),
+			})
 		}
 
-		cntr++
-		if page.MaxKeys > 0 {
-			if cntr == page.MaxKeys {
-				result.NextMarker = obj.name
-			} else if cntr > page.MaxKeys {
-				result.IsTruncated = true
-				break
-			}
+		if result.IsTruncated {
+			break
 		}
+	}
+	if !result.IsTruncated {
+		result.NextMarker = ""
 	}
 
 	return result, nil
@@ -325,6 +338,7 @@ func (b *MemoryBackend) CreateMultipartUpload(_ context.Context, accessKeyID, bu
 		bucket:    bucket,
 		key:       key,
 		metadata:  opts.Meta,
+		parts:     make(map[int]*multipartPart),
 		createdAt: time.Now(),
 	}
 
@@ -352,6 +366,130 @@ func (b *MemoryBackend) AbortMultipartUpload(_ context.Context, accessKeyID, buc
 	}
 	delete(b.multipartUploads, uploadID)
 	return nil
+}
+
+// UploadPart uploads a single part for a multipart upload.
+func (b *MemoryBackend) UploadPart(_ context.Context, accessKeyID, bucket, key, uploadID string, r io.Reader, opts s3.UploadPartOptions) (*s3.UploadPartResult, error) {
+	bkt, exists := b.buckets[bucket]
+	if !exists {
+		return nil, s3errs.ErrNoSuchBucket
+	}
+	if bkt.owner != accessKeyID {
+		return nil, s3errs.ErrAccessDenied
+	}
+	upload, exists := b.multipartUploads[uploadID]
+	if !exists {
+		return nil, s3errs.ErrNoSuchUpload
+	}
+	if upload.bucket != bucket || upload.key != key {
+		return nil, s3errs.ErrNoSuchUpload
+	}
+
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) != opts.ContentLength {
+		return nil, s3errs.ErrIncompleteBody
+	}
+
+	contentMD5 := md5.Sum(data)
+	if opts.ContentMD5 != nil && *opts.ContentMD5 != contentMD5 {
+		return nil, s3errs.ErrBadDigest
+	}
+	contentSHA256 := sha256.Sum256(data)
+	if opts.ContentSHA256 != nil && *opts.ContentSHA256 != contentSHA256 {
+		return nil, s3errs.ErrBadDigest
+	}
+
+	upload.parts[opts.PartNumber] = &multipartPart{
+		data:       slices.Clone(data),
+		contentMD5: contentMD5,
+	}
+
+	return &s3.UploadPartResult{
+		ContentMD5: contentMD5,
+	}, nil
+}
+
+// CompleteMultipartUpload assembles the uploaded parts into the final object.
+func (b *MemoryBackend) CompleteMultipartUpload(_ context.Context, accessKeyID, bucket, key, uploadID string, parts []s3.CompletedPart) (*s3.CompleteMultipartUploadResult, error) {
+	bkt, exists := b.buckets[bucket]
+	if !exists {
+		return nil, s3errs.ErrNoSuchBucket
+	}
+	if bkt.owner != accessKeyID {
+		return nil, s3errs.ErrAccessDenied
+	}
+	upload, exists := b.multipartUploads[uploadID]
+	if !exists {
+		return nil, s3errs.ErrNoSuchUpload
+	}
+	if upload.bucket != bucket || upload.key != key {
+		return nil, s3errs.ErrNoSuchUpload
+	}
+	if len(parts) == 0 {
+		return nil, s3errs.ErrInvalidRequest
+	}
+
+	// validate parts
+	var prev, totalSize int
+	objHash := make([]byte, 0, len(parts)*ETagSize)
+	for i, completed := range parts {
+		if i > 0 && completed.PartNumber <= prev {
+			return nil, s3errs.ErrInvalidPartOrder
+		}
+		prev = completed.PartNumber
+
+		part, found := upload.parts[completed.PartNumber]
+		if !found {
+			return nil, s3errs.ErrInvalidPart
+		} else if part.contentMD5 != completed.ETag {
+			return nil, s3errs.ErrInvalidPart
+		}
+
+		lastPart := i == len(parts)-1
+		if !lastPart && int64(len(part.data)) < s3.MinUploadPartSize {
+			return nil, s3errs.ErrEntityTooSmall
+		}
+
+		totalSize += len(part.data)
+		objHash = append(objHash, part.contentMD5[:]...)
+	}
+
+	// collect object data
+	objData := make([]byte, 0, totalSize)
+	for _, completed := range parts {
+		objData = append(objData, upload.parts[completed.PartNumber].data...)
+	}
+	objMD5 := md5.Sum(objData)
+
+	// calculate final ETag
+	var etag string
+	if len(parts) == 1 {
+		etag = s3.FormatETag(objMD5[:])
+	} else {
+		multipartMD5 := md5.Sum(objHash)
+		etag = s3.FormatMultipartETag(multipartMD5[:], len(parts))
+	}
+
+	// store the object
+	if bkt.objects == nil {
+		bkt.objects = make(map[string]*object)
+	}
+	bkt.objects[key] = &object{
+		name:         key,
+		data:         objData,
+		lastModified: time.Now(),
+		metadata:     upload.metadata,
+		contentMD5:   objMD5,
+	}
+	delete(b.multipartUploads, uploadID)
+
+	return &s3.CompleteMultipartUploadResult{
+		ETag:       etag,
+		ContentMD5: objMD5,
+	}, nil
 }
 
 // ListBuckets lists all available buckets.

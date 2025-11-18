@@ -8,6 +8,7 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/auth"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"go.sia.tech/indexd/sdk"
 	"go.uber.org/zap"
 )
 
@@ -23,20 +24,34 @@ func WithLogger(logger *zap.Logger) Option {
 
 // Sia implements the s3.Backend interface for storing data on Sia.
 type Sia struct {
+	sdk    SDK
 	logger *zap.Logger
+	store  Store
 
 	accessKey string
 	secretKey auth.SecretAccessKey
 }
 
+// SDK describes the SDK used to interact with Sia.
+type SDK interface {
+	Download(ctx context.Context, w io.Writer, obj sdk.Object, opts ...sdk.DownloadOption) error
+	Upload(ctx context.Context, r io.Reader, opts ...sdk.UploadOption) (sdk.Object, error)
+}
+
+// Store represents the storage backend used by the Sia backend.
+type Store any
+
 // New creates a new Sia backend instance.
-func New(ctx context.Context, accessKey, secretKey string, opts ...Option) (*Sia, error) {
+func New(ctx context.Context, sdk SDK, store Store, accessKey, secretKey string, opts ...Option) (*Sia, error) {
 	if accessKey == "" || secretKey == "" {
 		return nil, fmt.Errorf("sia backend requires both access key and secret key")
 	}
 
 	sia := &Sia{
-		logger:    zap.NewNop(),
+		logger: zap.NewNop(),
+		sdk:    sdk,
+		store:  store,
+
 		accessKey: accessKey,
 		secretKey: auth.SecretAccessKey(secretKey),
 	}
@@ -135,4 +150,14 @@ func (s *Sia) CreateMultipartUpload(ctx context.Context, accessKeyID, bucket, ob
 // AbortMultipartUpload aborts a multipart upload.
 func (s *Sia) AbortMultipartUpload(ctx context.Context, accessKeyID, bucket, object, uploadID string) error {
 	return s3errs.ErrNotImplemented
+}
+
+// UploadPart uploads a single multipart part.
+func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object, uploadID string, r io.Reader, opts s3.UploadPartOptions) (*s3.UploadPartResult, error) {
+	return nil, s3errs.ErrNotImplemented
+}
+
+// CompleteMultipartUpload completes a multipart upload.
+func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, object, uploadID string, parts []s3.CompletedPart) (*s3.CompleteMultipartUploadResult, error) {
+	return nil, s3errs.ErrNotImplemented
 }

@@ -49,6 +49,8 @@ type (
 	Sia struct {
 		AccessKey string `yaml:"accessKey"`
 		SecretKey string `yaml:"secretKey"`
+
+		IndexerURL string `yaml:"indexerURL"`
 	}
 
 	// Config contains the configuration for S3d.

@@ -8,6 +8,18 @@ const (
 	// encoding is at most 1024 bytes long.
 	KeySizeLimit = 1024
 
+	// MaxUploadPartNumber defines the maximum allowed part number in a multipart
+	// upload. AWS allows part numbers between 1 and 10,000 inclusive.
+	MaxUploadPartNumber = 10000
+
+	// MinUploadPartSize defines the minimum allowed size for a multipart upload
+	// part, except for the last part, which may be smaller.
+	MinUploadPartSize int64 = 5 << 20 // 5 MiB
+
+	// MaxUploadPartSize is the maximum allowed size for a single multipart
+	// part.
+	MaxUploadPartSize int64 = 5 << 30 // 5 GiB
+
 	// MetadataSizeLimit defines the maximum size of the metadata associated
 	// with an S3 object.
 	//
