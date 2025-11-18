@@ -164,6 +164,14 @@ type Backend interface {
 	// UploadPart uploads a single part for a previously initiated multipart
 	// upload.
 	//
+	// - If the access key does not have permission to write to the object,
+	//   [ErrAccessDenied] must be returned.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	//
+	// - If the multipart upload ID is not known or no longer active,
+	//   [ErrNoSuchUpload] must be returned.
+	//
 	// - If the bytes read from 'r' do not match 'ContentLength',
 	//   [ErrIncompleteBody] must be returned.
 	//
