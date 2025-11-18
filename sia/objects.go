@@ -17,7 +17,14 @@ import (
 // DeleteObject deletes the object with the given key from the specified
 // bucket for the user identified by the given access key.
 func (s *Sia) DeleteObject(ctx context.Context, accessKeyID, bucket, object string) (*s3.DeleteObjectResult, error) {
-	return nil, s3errs.ErrNotImplemented
+	err := s.store.DeleteObject(accessKeyID, bucket, object)
+	if err != nil {
+		return nil, err
+	}
+	return &s3.DeleteObjectResult{
+		IsDeleteMarker: false,
+		VersionID:      "",
+	}, nil
 }
 
 // GetObject retrieves the object with the given key from the specified

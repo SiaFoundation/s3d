@@ -4,6 +4,17 @@ import (
 	"go.sia.tech/indexd/slabs"
 )
 
+func (s *Store) DeleteObject(accessKeyID, bucket, name string) error {
+	return s.transaction(func(t *txn) error {
+		bid, err := bucketID(t, bucket)
+		if err != nil {
+			return err
+		}
+		_, err = t.Exec("DELETE FROM objects WHERE bucket_id = $1 AND name = $2 ", bid, name)
+		return err
+	})
+}
+
 func (s *Store) PutObject(accessKeyID, bucket, name string, obj slabs.SealedObject) error {
 	return s.transaction(func(t *txn) error {
 		bid, err := bucketID(t, bucket)

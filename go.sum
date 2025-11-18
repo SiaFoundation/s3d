@@ -82,12 +82,6 @@ go.sia.tech/core v0.18.2-0.20251113164615-c42e113353ff h1:atCiBHJ/JsnCLqRKV1DZsj
 go.sia.tech/core v0.18.2-0.20251113164615-c42e113353ff/go.mod h1:nrVyqhH9cSdWdd7+I+MAtUU5IUhw4Z+cLNMk6mwQ3OA=
 go.sia.tech/coreutils v0.18.8-0.20251113201657-ec81d054671b h1:6pCm17gghNNPb3De8SLXLQBciQIK+7ArxHhwHXFIFRU=
 go.sia.tech/coreutils v0.18.8-0.20251113201657-ec81d054671b/go.mod h1:9NTcUI3vE1xD/kN+bLoy6fPeheWp9GP0U0fK6uoK55Y=
-go.sia.tech/indexd v0.0.4-0.20251117162244-833a23fd6b72 h1:3M4yDAcn1B9bVDt27Pr9m37ElczLi+wKMh81szZadnY=
-go.sia.tech/indexd v0.0.4-0.20251117162244-833a23fd6b72/go.mod h1:IgHSooJrLAXOPYZDPDwRTesomzj/q48vWjqZHL3vYXg=
-go.sia.tech/indexd v0.0.4-0.20251118143212-fe0c9371cb24 h1:eeiQW1GNTCZFQhul+OWZpYU15D20dVRjewuNzMrIKNA=
-go.sia.tech/indexd v0.0.4-0.20251118143212-fe0c9371cb24/go.mod h1:IgHSooJrLAXOPYZDPDwRTesomzj/q48vWjqZHL3vYXg=
-go.sia.tech/indexd v0.0.4-0.20251118152835-880b5aaa4446 h1:F4asLnElR5Nv/zsPqvluZHtC731mm/F2K2bnoHIIFXs=
-go.sia.tech/indexd v0.0.4-0.20251118152835-880b5aaa4446/go.mod h1:IgHSooJrLAXOPYZDPDwRTesomzj/q48vWjqZHL3vYXg=
 go.sia.tech/indexd v0.0.4-0.20251118154009-6ff9e14b7aaf h1:W0lNDHjyPG8E4hrv5IzurdTQ7bjM1poZikJI4guW95E=
 go.sia.tech/indexd v0.0.4-0.20251118154009-6ff9e14b7aaf/go.mod h1:IgHSooJrLAXOPYZDPDwRTesomzj/q48vWjqZHL3vYXg=
 go.sia.tech/jape v0.14.1 h1:3QWpOzAxxcaECuv2Mc6tbkFh+olLnyUxxP5SfwgI/qY=
