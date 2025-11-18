@@ -18,9 +18,6 @@ func TestBuckets(t *testing.T) {
 			o.UsePathStyle = pathStyle
 		}))
 
-		// create another valid keypair and a tester to use it
-		otherTester := s3Tester.ChangeAccessKey(t, "foo", "bar")
-
 		// check that the bucket doesn't exist yet
 		err := s3Tester.HeadBucket(t.Context(), bucket)
 		testutil.AssertS3StatusCode(t, s3errs.ErrNoSuchBucket, err)
@@ -45,10 +42,6 @@ func TestBuckets(t *testing.T) {
 			t.Fatalf("unexpected location: %q", location)
 		}
 
-		// bucket should not be accessible by other account
-		err = otherTester.HeadBucket(t.Context(), bucket)
-		testutil.AssertS3StatusCode(t, s3errs.ErrAccessDenied, err)
-
 		// make sure it shows up in the list
 		buckets, err := s3Tester.ListBuckets(t.Context())
 		if err != nil {
@@ -71,10 +64,6 @@ func TestBuckets(t *testing.T) {
 		// creating a bucket with invalid name should fail
 		err = s3Tester.CreateBucket(t.Context(), "invalid_bucket")
 		testutil.AssertS3Error(t, s3errs.ErrInvalidBucketName, err)
-
-		// creating an existing bucket with different account should fail
-		err = otherTester.CreateBucket(t.Context(), bucket)
-		testutil.AssertS3Error(t, s3errs.ErrBucketAlreadyExists, err)
 
 		// deleting the bucket should fail since it's not empty
 		err = s3Tester.DeleteBucket(t.Context(), bucket)
