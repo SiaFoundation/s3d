@@ -127,7 +127,12 @@ func TestUploadPart(t *testing.T) {
 }
 
 func TestListMultipartUploads(t *testing.T) {
-	s3Tester := testutil.NewTester(t)
+	// prepare a backend with 2 keypairs
+	backend := testutil.NewMemoryBackend(
+		testutil.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
+		testutil.WithKeyPair("foo", "bar"),
+	)
+	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
 
 	const bucket = "list-multipart-bucket"
 
@@ -226,7 +231,7 @@ func TestListMultipartUploads(t *testing.T) {
 	}
 
 	// assert [s3errs.ErrAccessDenied] is returned for unauthorized access
-	otherTester := s3Tester.AddAccessKey(t, "foo", "bar")
+	otherTester := s3Tester.ChangeAccessKey(t, "foo", "bar")
 	_, err = otherTester.ListMultipartUploads(t.Context(), bucket, nil)
 	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
 
