@@ -79,11 +79,10 @@ func (s *Store) ListBuckets(accessKeyID string) ([]s3.BucketInfo, error) {
 
 // bucketID returns the ID of the bucket with the given name or an error if it
 // does not exist.
-func bucketID(t *txn, bucket string) (int64, error) {
-	var bucketID int64
-	err := t.QueryRow(`SELECT id FROM buckets WHERE buckets.name = $1`, bucket).Scan(&bucketID)
+func bucketID(t *txn, bucket string) (bucketID int64, err error) {
+	err = t.QueryRow(`SELECT id FROM buckets WHERE buckets.name = $1`, bucket).Scan(&bucketID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return 0, s3errs.ErrNoSuchBucket
+		err = s3errs.ErrNoSuchBucket
 	}
-	return bucketID, nil
+	return
 }

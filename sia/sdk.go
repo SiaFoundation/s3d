@@ -31,6 +31,7 @@ func NewSDK(baseURL string, appKey types.PrivateKey, opts ...sdk.Option) (*Index
 
 // Download downloads an object from indexd.
 func (s *IndexdSDK) Download(ctx context.Context, w io.Writer, obj sdk.Object, rnge *s3.ObjectRange) error {
+	// TODO: support range downloads once the SDK supports them
 	return s.inner.Download(ctx, w, obj, sdk.WithDownloadInflight(s.perDownloadInflight))
 }
 
@@ -47,7 +48,7 @@ func (s *IndexdSDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
 
 // OpenSealedObject opens a sealed object to get access to its metadata and content.
 func (s *IndexdSDK) OpenSealedObject(so slabs.SealedObject) (sdk.Object, error) {
-	return s.OpenSealedObject(so)
+	return s.inner.OpenSealedObject(so)
 }
 
 // SealObject seals an object for storage.

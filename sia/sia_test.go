@@ -3,6 +3,7 @@ package sia_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"path/filepath"
 	"testing"
@@ -44,6 +45,9 @@ func (s *MemorySDK) Download(ctx context.Context, w io.Writer, obj sdk.Object, r
 	}
 	data := uploaded.data
 	if rnge != nil {
+		if rnge.Start+rnge.Length > int64(len(data)) {
+			return fmt.Errorf("download failed - range %d-%d exceeds object size %d", rnge.Start, rnge.Start+rnge.Length, len(data))
+		}
 		data = data[rnge.Start : rnge.Start+rnge.Length]
 	}
 	_, err := w.Write(data)

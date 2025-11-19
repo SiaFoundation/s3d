@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/md5"
 	"crypto/sha256"
-	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -43,6 +42,11 @@ func (s *Sia) HeadObject(ctx context.Context, accessKeyID *string, bucket, objec
 }
 
 func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, object string, requestedRange *s3.ObjectRangeRequest, head bool) (*s3.Object, error) {
+	if accessKeyID == nil {
+		// anonymous access is not supported yet
+		return nil, s3errs.ErrAccessDenied
+	}
+
 	so, err := s.store.GetObject(accessKeyID, bucket, object)
 	if err != nil {
 		return nil, err
@@ -85,6 +89,7 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 		err := s.sdk.Download(ctx, pw, obj, rnge)
 		if err != nil {
 			s.logger.Error("download failed", zap.Error(err), zap.String("bucket", bucket), zap.String("object", object))
+			pw.CloseWithError(err)
 		}
 	}()
 
@@ -102,8 +107,8 @@ func (s *Sia) ListObjects(ctx context.Context, accessKeyID *string, bucket strin
 
 // PutObject puts an object with the given key into the specified bucket.
 func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object string, r io.Reader, opts s3.PutObjectOptions) (*s3.PutObjectResult, error) {
-	// quick check if the object already exists
-	if _, err := s.store.GetObject(&accessKeyID, bucket, object); !errors.Is(err, s3errs.ErrNoSuchKey) {
+	// quick check if the bucket exists
+	if err := s.store.HeadBucket(accessKeyID, bucket); err != nil {
 		return nil, err
 	}
 

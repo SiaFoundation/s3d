@@ -1,7 +1,6 @@
 package sia
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -10,7 +9,6 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/auth"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
-	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/sdk"
 	"go.sia.tech/indexd/slabs"
 	"go.uber.org/zap"
@@ -119,44 +117,4 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object, uploa
 // CompleteMultipartUpload completes a multipart upload.
 func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, object, uploadID string, parts []s3.CompletedPart) (*s3.CompleteMultipartUploadResult, error) {
 	return nil, s3errs.ErrNotImplemented
-}
-
-type objectMeta struct {
-	contentMD5 [16]byte
-	meta       map[string]string
-}
-
-func (om *objectMeta) encode() ([]byte, error) {
-	buf := new(bytes.Buffer)
-	enc := types.NewEncoder(buf)
-	_, _ = enc.Write(om.contentMD5[:])
-	enc.WriteUint64(uint64(len(om.meta)))
-	for k, v := range om.meta {
-		enc.WriteString(k)
-		enc.WriteString(v)
-	}
-	if err := enc.Flush(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
-func (om *objectMeta) decode(data []byte) error {
-	dec := types.NewBufDecoder(data)
-	n, err := dec.Read(om.contentMD5[:])
-	if err != nil {
-		return err
-	} else if n != len(om.contentMD5) {
-		return fmt.Errorf("invalid object meta data")
-	}
-	om.meta = make(map[string]string)
-	nPairs := dec.ReadUint64()
-	for range nPairs {
-		k, v := dec.ReadString(), dec.ReadString()
-		if dec.Err() != nil {
-			return dec.Err()
-		}
-		om.meta[k] = v
-	}
-	return dec.Err()
 }
