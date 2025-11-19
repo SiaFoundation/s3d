@@ -34,18 +34,16 @@ type Sia struct {
 
 	accessKey string
 	secretKey auth.SecretAccessKey
-
-	perDownloadInflight int
-	perUploadInflight   int
 }
 
 // SDK describes the SDK used to interact with Sia.
 type SDK interface {
-	Download(ctx context.Context, w io.Writer, obj sdk.Object, opts ...sdk.DownloadOption) error
+	Download(ctx context.Context, w io.Writer, obj sdk.Object, rnge *s3.ObjectRange) error
 	PinObject(ctx context.Context, obj sdk.Object) error
+	Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
+
 	OpenSealedObject(so slabs.SealedObject) (sdk.Object, error)
 	SealObject(obj sdk.Object) slabs.SealedObject
-	Upload(ctx context.Context, r io.Reader, opts ...sdk.UploadOption) (sdk.Object, error)
 }
 
 // Store represents the storage backend used by the Sia backend.
@@ -72,9 +70,6 @@ func New(ctx context.Context, sdk SDK, store Store, accessKey, secretKey string,
 
 		accessKey: accessKey,
 		secretKey: auth.SecretAccessKey(secretKey),
-
-		perDownloadInflight: 10,
-		perUploadInflight:   30,
 	}
 	for _, opt := range opts {
 		opt(sia)
