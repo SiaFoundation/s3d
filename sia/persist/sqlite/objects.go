@@ -8,6 +8,7 @@ import (
 	"go.sia.tech/indexd/slabs"
 )
 
+// DeleteObject deletes the object with the given bucket and name.
 func (s *Store) DeleteObject(accessKeyID, bucket, name string) error {
 	return s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
@@ -19,6 +20,7 @@ func (s *Store) DeleteObject(accessKeyID, bucket, name string) error {
 	})
 }
 
+// GetObject retrieves the object with the given bucket and name.
 func (s *Store) GetObject(accessKeyID *string, bucket, name string) (slabs.SealedObject, error) {
 	if accessKeyID == nil {
 		// public buckets not supported yet
@@ -49,6 +51,8 @@ func (s *Store) GetObject(accessKeyID *string, bucket, name string) (slabs.Seale
 	return obj, err
 }
 
+// PutObject stores the given object in the given bucket with the given name or
+// overwrites it if it already exists.
 func (s *Store) PutObject(accessKeyID, bucket, name string, obj slabs.SealedObject) error {
 	return s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)

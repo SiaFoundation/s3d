@@ -9,9 +9,10 @@ import (
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 )
 
+// CreateBucket creates a new bucket.
 func (s *Store) CreateBucket(accessKeyID, bucket string) error {
-	return s.transaction(func(t *txn) error {
-		res, err := t.Exec("INSERT INTO buckets (name, created_at) VALUES ($1, $2) ON CONFLICT (name) DO NOTHING", bucket, time.Now().Unix())
+	return s.transaction(func(tx *txn) error {
+		res, err := tx.Exec("INSERT INTO buckets (name, created_at) VALUES ($1, $2) ON CONFLICT (name) DO NOTHING", bucket, time.Now().Unix())
 		if err != nil {
 			return err
 		} else if n, err := res.RowsAffected(); err != nil {
@@ -25,35 +26,38 @@ func (s *Store) CreateBucket(accessKeyID, bucket string) error {
 	})
 }
 
+// DeleteBucket deletes a bucket if it is empty.
 func (s *Store) DeleteBucket(accessKeyID, bucket string) error {
-	return s.transaction(func(t *txn) error {
-		bid, err := bucketID(t, bucket)
+	return s.transaction(func(tx *txn) error {
+		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
 		var inUse bool
-		err = t.QueryRow("SELECT EXISTS(SELECT 1 FROM objects WHERE bucket_id = $1)", bid).Scan(&inUse)
+		err = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM objects WHERE bucket_id = $1)", bid).Scan(&inUse)
 		if err != nil {
 			return err
 		} else if inUse {
 			return s3errs.ErrBucketNotEmpty
 		}
-		_, err = t.Exec("DELETE FROM buckets WHERE id = $1", bid)
+		_, err = tx.Exec("DELETE FROM buckets WHERE id = $1", bid)
 		return err
 	})
 }
 
+// HeadBucket checks if a bucket exists and returns an error otherwise.
 func (s *Store) HeadBucket(accessKeyID, bucket string) error {
-	return s.transaction(func(t *txn) error {
-		_, err := bucketID(t, bucket)
+	return s.transaction(func(tx *txn) error {
+		_, err := bucketID(tx, bucket)
 		return err
 	})
 }
 
+// ListBuckets lists all buckets.
 func (s *Store) ListBuckets(accessKeyID string) ([]s3.BucketInfo, error) {
 	var buckets []s3.BucketInfo
-	err := s.transaction(func(t *txn) error {
-		rows, err := t.Query("SELECT name, created_at FROM buckets")
+	err := s.transaction(func(tx *txn) error {
+		rows, err := tx.Query("SELECT name, created_at FROM buckets")
 		if err != nil {
 			return err
 		}
@@ -73,6 +77,8 @@ func (s *Store) ListBuckets(accessKeyID string) ([]s3.BucketInfo, error) {
 	return buckets, err
 }
 
+// bucketID returns the ID of the bucket with the given name or an error if it
+// does not exist.
 func bucketID(t *txn, bucket string) (int64, error) {
 	var bucketID int64
 	err := t.QueryRow(`SELECT id FROM buckets WHERE buckets.name = $1`, bucket).Scan(&bucketID)
