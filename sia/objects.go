@@ -12,7 +12,6 @@ import (
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
-	"go.sia.tech/indexd/sdk"
 	"go.uber.org/zap"
 )
 
@@ -83,7 +82,7 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 	pr, pw := io.Pipe()
 	go func() {
 		defer pw.Close()
-		err := s.sdk.Download(ctx, pw, obj, sdk.WithDownloadInflight(s.perDownloadInflight))
+		err := s.sdk.Download(ctx, pw, obj, rnge)
 		if err != nil {
 			s.logger.Error("download failed", zap.Error(err), zap.String("bucket", bucket), zap.String("object", object))
 		}
@@ -120,7 +119,7 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	}
 
 	// upload the data
-	obj, err := s.sdk.Upload(ctx, r, sdk.WithSkipPinObject(), sdk.WithUploadInflight(s.perUploadInflight))
+	obj, err := s.sdk.Upload(ctx, r)
 	if err != nil {
 		return nil, fmt.Errorf("failed to upload object: %w", err)
 	}

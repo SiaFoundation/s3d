@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/SiaFoundation/s3d/internal/testutil"
+	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/sia"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"go.sia.tech/core/types"
@@ -36,12 +37,16 @@ func NewMemorySDK() *MemorySDK {
 	}
 }
 
-func (s *MemorySDK) Download(ctx context.Context, w io.Writer, obj sdk.Object, opts ...sdk.DownloadOption) error {
+func (s *MemorySDK) Download(ctx context.Context, w io.Writer, obj sdk.Object, rnge *s3.ObjectRange) error {
 	uploaded, exists := s.objects[obj.ID()]
 	if !exists {
 		return errors.New("download failed - object not found")
 	}
-	_, err := w.Write(uploaded.data)
+	data := uploaded.data
+	if rnge != nil {
+		data = data[rnge.Start : rnge.Start+rnge.Length]
+	}
+	_, err := w.Write(data)
 	return err
 }
 
@@ -58,7 +63,7 @@ func (s *MemorySDK) PinObject(ctx context.Context, obj sdk.Object) error {
 	return nil
 }
 
-func (s *MemorySDK) Upload(ctx context.Context, r io.Reader, opts ...sdk.UploadOption) (sdk.Object, error) {
+func (s *MemorySDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error) {
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return sdk.Object{}, err

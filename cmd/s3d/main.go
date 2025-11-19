@@ -190,7 +190,7 @@ func main() {
 		}
 	}
 
-	sdkClient, err := sdk.NewSDK(cfg.Sia.IndexerURL, pk, sdk.WithLogger(log.Named("sdk")))
+	sdkClient, err := sia.NewSDK(cfg.Sia.IndexerURL, pk, sdk.WithLogger(log.Named("sdk")))
 	if err != nil {
 		log.Fatal("failed to create SDK client", zap.Error(err))
 	}
