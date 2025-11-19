@@ -10,7 +10,7 @@ require (
 	github.com/mattn/go-sqlite3 v1.14.32
 	go.sia.tech/core v0.18.2-0.20251113164615-c42e113353ff
 	go.sia.tech/coreutils v0.18.8-0.20251113201657-ec81d054671b
-	go.sia.tech/indexd v0.0.4-0.20251118154009-6ff9e14b7aaf
+	go.sia.tech/indexd v0.0.4-0.20251119091253-1b00a56cbf1b
 	go.uber.org/zap v1.27.0
 	golang.org/x/term v0.36.0
 	gopkg.in/yaml.v3 v3.0.1

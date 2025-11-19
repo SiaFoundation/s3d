@@ -45,6 +45,10 @@ func (s *MemorySDK) Download(ctx context.Context, w io.Writer, obj sdk.Object, o
 	return err
 }
 
+func (s *MemorySDK) OpenSealedObject(so slabs.SealedObject) (sdk.Object, error) {
+	return sdk.ObjectFromSealedObject(so, s.appKey)
+}
+
 func (s *MemorySDK) SealObject(obj sdk.Object) slabs.SealedObject {
 	return obj.Seal(s.appKey)
 }
