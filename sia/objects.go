@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/md5"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"go.sia.tech/indexd/sdk"
+	"go.uber.org/zap"
 )
 
 // DeleteObject deletes the object with the given key from the specified
@@ -32,13 +34,63 @@ func (s *Sia) DeleteObject(ctx context.Context, accessKeyID, bucket, object stri
 // range is either nil if no range was requested, or contains the requested,
 // byte range.
 func (s *Sia) GetObject(ctx context.Context, accessKeyID *string, bucket, object string, rnge *s3.ObjectRangeRequest) (*s3.Object, error) {
-	return nil, s3errs.ErrNotImplemented
+	return s.headOrGetObject(ctx, accessKeyID, bucket, object, rnge, false)
 }
 
 // HeadObject is like GetObject but only retrieves the metadata of the
 // object and returns an empty body.
 func (s *Sia) HeadObject(ctx context.Context, accessKeyID *string, bucket, object string, rnge *s3.ObjectRangeRequest) (*s3.Object, error) {
-	return nil, s3errs.ErrNotImplemented
+	return s.headOrGetObject(ctx, accessKeyID, bucket, object, rnge, true)
+}
+
+func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, object string, requestedRange *s3.ObjectRangeRequest, head bool) (*s3.Object, error) {
+	so, err := s.store.GetObject(accessKeyID, bucket, object)
+	if err != nil {
+		return nil, err
+	}
+
+	obj, err := s.sdk.OpenSealedObject(so)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open object: %w", err)
+	}
+
+	var meta objectMeta
+	if err := meta.decode(obj.Metadata()); err != nil {
+		return nil, fmt.Errorf("failed to decode object metadata: %w", err)
+	}
+
+	size := int64(obj.Size())
+	rnge, err := requestedRange.Range(size)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := &s3.Object{
+		Body:         nil,
+		ContentMD5:   meta.contentMD5,
+		LastModified: obj.UpdatedAt(),
+		Metadata:     meta.meta,
+		Range:        rnge,
+		Size:         size,
+	}
+
+	// if this is a head request, we are done
+	if head {
+		return resp, nil
+	}
+
+	// otherwise, we download the body
+	pr, pw := io.Pipe()
+	go func() {
+		defer pw.Close()
+		err := s.sdk.Download(ctx, pw, obj, sdk.WithDownloadInflight(s.perDownloadInflight))
+		if err != nil {
+			s.logger.Error("download failed", zap.Error(err), zap.String("bucket", bucket), zap.String("object", object))
+		}
+	}()
+
+	resp.Body = pr
+	return resp, nil
 }
 
 // ListObjects lists objects in the specified bucket for the user identified
@@ -51,12 +103,10 @@ func (s *Sia) ListObjects(ctx context.Context, accessKeyID *string, bucket strin
 
 // PutObject puts an object with the given key into the specified bucket.
 func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object string, r io.Reader, opts s3.PutObjectOptions) (*s3.PutObjectResult, error) {
-	// check if bucket exists
-	if err := s.HeadBucket(ctx, accessKeyID, bucket); err != nil {
+	// quick check if the object already exists
+	if _, err := s.store.GetObject(&accessKeyID, bucket, object); !errors.Is(err, s3errs.ErrNoSuchKey) {
 		return nil, err
 	}
-
-	// TODO: check if object exists
 
 	// compute md5 checksum for the etag
 	md5Hash := md5.New()
@@ -70,7 +120,7 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	}
 
 	// upload the data
-	obj, err := s.sdk.Upload(ctx, r, sdk.WithSkipPinObject())
+	obj, err := s.sdk.Upload(ctx, r, sdk.WithSkipPinObject(), sdk.WithUploadInflight(s.perUploadInflight))
 	if err != nil {
 		return nil, fmt.Errorf("failed to upload object: %w", err)
 	}

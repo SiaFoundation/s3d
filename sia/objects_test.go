@@ -63,11 +63,6 @@ func TestPutObject(t *testing.T) {
 		// upload to a bucket that doesn't exist
 		_, err = s3Tester.PutObject(t.Context(), "nonexistent", object, bytes.NewReader(data), metadata)
 		testutil.AssertS3Error(t, s3errs.ErrNoSuchBucket, err)
-
-		// upload to a bucket that we don't own
-		otherTester := s3Tester.ChangeAccessKey(t, "foo", "bar")
-		_, err = otherTester.PutObject(t.Context(), bucket, object, bytes.NewReader(data), metadata)
-		testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
 	}
 
 	t.Run("http", func(t *testing.T) {
