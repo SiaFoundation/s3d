@@ -4,14 +4,141 @@ import (
 	"bytes"
 	"crypto/md5"
 	"encoding/hex"
+	"io"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/SiaFoundation/s3d/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"lukechampine.com/frand"
 )
+
+func TestGetAndHeadObject(t *testing.T) {
+	now := time.Now().UTC().Add(-time.Second)
+	s3Tester := NewTester(t)
+
+	// prepare a bucket
+	bucket := "foo"
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// add object to backend
+	data := frand.Bytes(100)
+	hash := md5.Sum(data)
+	object := "bar"
+	metadata := map[string]string{
+		"x-amz-meta-foo": "bar",
+	}
+	err := s3Tester.AddObject(bucket, object, data, metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertObject := func(t *testing.T, obj *s3.Object, head bool, rnge *s3.ObjectRangeRequest) {
+		t.Helper()
+
+		var start, end int64
+		if rnge == nil {
+			start = 0
+			end = int64(len(data)) - 1
+		} else if rnge.FromEnd {
+			start = int64(len(data)) - rnge.Start
+			end = rnge.End
+		} else {
+			start = rnge.Start
+			end = rnge.End
+		}
+
+		if end == -1 {
+			end = int64(len(data)) - 1
+		}
+
+		expected := data[start : end+1]
+		if obj.ContentMD5 != hash {
+			t.Fatal("hash mismatch", obj.ContentMD5, hash[:])
+		} else if obj.Size != int64(len(data)) {
+			t.Fatalf("size mismatch: expected %d, got %d", len(data), obj.Size)
+		} else if obj.LastModified.Before(now) {
+			t.Fatal("last modified not set", obj.LastModified)
+		}
+
+		// NOTE: The S3 client trims away the x-amz-meta- prefix when returning user
+		// metadata. Since we added the object to the store directly rather than
+		// the client, we set x-amz-meta-foo in the store but check for foo
+		// here.
+		if obj.Metadata["foo"] != "bar" {
+			t.Fatal("metadata mismatch", obj.Metadata)
+		}
+
+		if !head {
+			if content, err := io.ReadAll(obj.Body); err != nil {
+				t.Fatal(err)
+			} else if !bytes.Equal(content, expected) {
+				t.Fatal("data mismatch", len(content), len(expected))
+			}
+		}
+	}
+
+	tests := []struct {
+		name string
+		rnge *s3.ObjectRangeRequest
+	}{
+		{
+			name: "NoRange",
+			rnge: nil,
+		},
+		{
+			name: "FullRange",
+			rnge: &s3.ObjectRangeRequest{
+				Start: 0,
+				End:   99,
+			},
+		},
+		{
+			name: "PartialRange",
+			rnge: &s3.ObjectRangeRequest{
+				Start: 33,
+				End:   66,
+			},
+		},
+		{
+			name: "OpenEndedRange",
+			rnge: &s3.ObjectRangeRequest{
+				Start: 33,
+				End:   -1,
+			},
+		},
+		{
+			name: "ReversedRange",
+			rnge: &s3.ObjectRangeRequest{
+				Start:   10,
+				End:     99,
+				FromEnd: true,
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// HEAD Object
+			obj, err := s3Tester.HeadObject(t.Context(), bucket, object, tc.rnge)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertObject(t, obj, true, tc.rnge)
+
+			// GET Object
+			obj, err = s3Tester.GetObject(t.Context(), bucket, object, tc.rnge)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertObject(t, obj, false, tc.rnge)
+		})
+	}
+}
 
 func TestPutObject(t *testing.T) {
 	test := func(t *testing.T, s3Tester *testutil.S3Tester) {
