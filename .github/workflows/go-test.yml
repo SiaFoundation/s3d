@@ -11,6 +11,9 @@ jobs:
     steps:
       - name: Configure git
         run: git config --global core.autocrlf false # required on Windows
+      - name: Auth for GitHub private modules
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.REPO_INDEXD_ACCESS }}@github.com/".insteadOf "https://github.com/"
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
@@ -28,6 +31,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: 1.23
+      - name: Auth for GitHub private modules
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.REPO_INDEXD_ACCESS }}@github.com/".insteadOf "https://github.com/"
       - name: Test
         uses: n8maninger/action-golang-test@v2
         with:

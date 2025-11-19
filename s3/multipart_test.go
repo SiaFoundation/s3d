@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/SiaFoundation/s3d/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3"
-	"github.com/SiaFoundation/s3d/s3/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	service "github.com/aws/aws-sdk-go-v2/service/s3"
@@ -17,7 +17,12 @@ import (
 )
 
 func TestCreateMultipartUpload(t *testing.T) {
-	s3Tester := testutil.NewTester(t)
+	// prepare a backend with 2 keypairs
+	backend := testutil.NewMemoryBackend(
+		testutil.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
+		testutil.WithKeyPair("foo", "bar"),
+	)
+	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
 
 	const (
 		bucket = "multipart-bucket"
@@ -51,7 +56,7 @@ func TestCreateMultipartUpload(t *testing.T) {
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchBucket, err)
 
 	// assert [s3errs.ErrAccessDenied] is returned for a bucket we don't own
-	otherTester := s3Tester.AddAccessKey(t, "foo", "bar")
+	otherTester := s3Tester.ChangeAccessKey(t, "foo", "bar")
 	_, err = otherTester.CreateMultipartUpload(t.Context(), bucket, object, nil)
 	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
 
@@ -64,7 +69,12 @@ func TestCreateMultipartUpload(t *testing.T) {
 }
 
 func TestUploadPart(t *testing.T) {
-	s3Tester := testutil.NewTester(t)
+	// prepare a backend with 2 keypairs
+	backend := testutil.NewMemoryBackend(
+		testutil.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
+		testutil.WithKeyPair("foo", "bar"),
+	)
+	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
 
 	const (
 		bucket = "multipart-bucket"
@@ -107,7 +117,7 @@ func TestUploadPart(t *testing.T) {
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchUpload, err)
 
 	// assert [s3errs.ErrAccessDenied] is returned for unauthorized access
-	otherTester := s3Tester.AddAccessKey(t, "foo", "bar")
+	otherTester := s3Tester.ChangeAccessKey(t, "foo", "bar")
 	_, err = otherTester.UploadPart(t.Context(), bucket, object, *res.UploadId, 1, data)
 	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
 
@@ -226,7 +236,12 @@ func TestListMultipartUploads(t *testing.T) {
 }
 
 func TestCompleteMultipartUpload(t *testing.T) {
-	s3Tester := testutil.NewTester(t)
+	// prepare a backend with 2 keypairs
+	backend := testutil.NewMemoryBackend(
+		testutil.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
+		testutil.WithKeyPair("foo", "bar"),
+	)
+	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
 
 	const (
 		bucket = "complete-multipart-bucket"
@@ -308,7 +323,7 @@ func TestCompleteMultipartUpload(t *testing.T) {
 	testutil.AssertS3Error(t, s3errs.ErrInvalidPartOrder, err)
 
 	// assert [s3errs.ErrAccessDenied] is returned for unauthorized access
-	otherTester := s3Tester.AddAccessKey(t, "foo", "bar")
+	otherTester := s3Tester.ChangeAccessKey(t, "foo", "bar")
 	uploadID, parts = newTestMultipartUpload(t, s3Tester, bucket, object, [][]byte{p1Data, p2Data})
 	_, err = otherTester.CompleteMultipartUpload(t.Context(), bucket, object, uploadID, parts)
 	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
