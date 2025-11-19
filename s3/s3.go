@@ -149,6 +149,18 @@ type Backend interface {
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
 	CreateMultipartUpload(ctx context.Context, accessKeyID, bucket, object string, opts CreateMultipartUploadOptions) (*CreateMultipartUploadResult, error)
 
+	// AbortMultipartUpload aborts an in-progress multipart upload and
+	// discards any uploaded parts.
+	//
+	// - If the access key does not have permission to write to the object,
+	//   [ErrAccessDenied] must be returned.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	//
+	// - If the multipart upload ID is not known or no longer active,
+	//   [ErrNoSuchUpload] must be returned.
+	AbortMultipartUpload(ctx context.Context, accessKeyID, bucket, object, uploadID string) error
+
 	// UploadPart uploads a single part for a previously initiated multipart
 	// upload.
 	//

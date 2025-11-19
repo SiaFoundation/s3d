@@ -69,6 +69,8 @@ func (s *s3) routeMultipartUpload(w http.ResponseWriter, r *http.Request, access
 		return s.addUploadPart(w, r, validatedKey, bucket, object, uploadID, r.URL.Query().Get("partNumber"))
 	case http.MethodPost:
 		return s.completeMultipartUpload(w, r, validatedKey, bucket, object, uploadID)
+	case http.MethodDelete:
+		return s.abortMultipartUpload(w, r, validatedKey, bucket, object, uploadID)
 	default:
 		return s3errs.ErrMethodNotAllowed
 	}
@@ -88,6 +90,22 @@ func (s *s3) routeMultipartUploadBase(w http.ResponseWriter, r *http.Request, ac
 	}
 
 	return s.createMultipartUpload(w, r, validatedKey, bucket, object)
+}
+
+func (s *s3) abortMultipartUpload(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object, uploadID string) error {
+	log := s.logger.With(
+		zap.String("bucket", bucket),
+		zap.String("object", object),
+		zap.String("uploadID", uploadID),
+	)
+	log.Debug("abort multipart upload")
+
+	if err := s.backend.AbortMultipartUpload(r.Context(), accessKeyID, bucket, object, uploadID); err != nil {
+		return err
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+	return nil
 }
 
 func (s *s3) createMultipartUpload(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object string) error {
