@@ -81,7 +81,9 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	}
 
 	// verify checksums
-	contentMD5 := md5.Sum(nil)
+	var contentMD5 [16]byte
+	sum := md5Hash.Sum(nil)
+	copy(contentMD5[:], sum)
 	if opts.ContentSHA256 != nil && !bytes.Equal(sha256Hash.Sum(nil), opts.ContentSHA256[:]) {
 		return nil, s3errs.ErrBadDigest
 	} else if opts.ContentMD5 != nil && contentMD5 != *opts.ContentMD5 {
