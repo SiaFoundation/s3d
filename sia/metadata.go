@@ -3,6 +3,9 @@ package sia
 import (
 	"bytes"
 	"fmt"
+	"maps"
+	"slices"
+	"sort"
 
 	"go.sia.tech/core/types"
 )
@@ -17,9 +20,12 @@ func (om *objectMeta) encode() ([]byte, error) {
 	enc := types.NewEncoder(buf)
 	_, _ = enc.Write(om.contentMD5[:])
 	enc.WriteUint64(uint64(len(om.meta)))
-	for k, v := range om.meta {
+
+	keys := slices.Collect(maps.Keys(om.meta))
+	sort.Strings(keys)
+	for _, k := range keys {
 		enc.WriteString(k)
-		enc.WriteString(v)
+		enc.WriteString(om.meta[k])
 	}
 	if err := enc.Flush(); err != nil {
 		return nil, err
