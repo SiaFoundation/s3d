@@ -96,7 +96,7 @@ func (s *Store) ListObjects(accessKeyID *string, bucket string, prefix s3.Prefix
 			query += ` AND name > ?`
 			args = append(args, *page.Marker)
 		}
-		if prefix.Prefix != "" {
+		if prefix.HasPrefix {
 			query += ` AND name LIKE ?`
 			args = append(args, prefix.Prefix+"%")
 		}
