@@ -1,7 +1,6 @@
 package sqlite
 
 import (
-	"encoding/base64"
 	"path/filepath"
 	"testing"
 
@@ -48,13 +47,6 @@ func TestListObjects(t *testing.T) {
 			return ""
 		}
 		return *s
-	}
-
-	toBase64 := func(s *string) *string {
-		if s == nil {
-			return nil
-		}
-		return ptr(base64.URLEncoding.EncodeToString([]byte(*s)))
 	}
 
 	assertCommonPrefixesEqual := func(t *testing.T, expected []string, actual []s3.CommonPrefix) {
@@ -121,7 +113,7 @@ func TestListObjects(t *testing.T) {
 				Delimiter:    val(tc.delimiter),
 				HasDelimiter: tc.delimiter != nil,
 			}, s3.ListObjectsPage{
-				Marker:  toBase64(tc.marker),
+				Marker:  tc.marker,
 				MaxKeys: tc.maxKeys,
 			})
 			if err != nil {
@@ -142,7 +134,6 @@ func TestListObjects(t *testing.T) {
 			if expectedMarker := val(tc.nextMarker); expectedMarker != resp.NextMarker {
 				t.Fatalf("expected marker %v, got %v", expectedMarker, resp.NextMarker)
 			}
-
 		})
 	}
 }
