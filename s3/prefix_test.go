@@ -1,4 +1,4 @@
-package testutil
+package s3
 
 import (
 	"fmt"
@@ -48,7 +48,7 @@ func TestPrefixMatch(t *testing.T) {
 				Delimiter:    unwrapStr(tc.delim),
 			}
 
-			match := match(prefix, tc.key)
+			match := Match(prefix, tc.key)
 			if (tc.out == nil) != (match == nil) {
 				t.Fatal("prefix match failed at index", idx)
 			}
@@ -77,7 +77,7 @@ func TestNewPrefix(t *testing.T) {
 		{s("foo"), s("bar"), s3.Prefix{HasPrefix: true, Prefix: "foo", HasDelimiter: true, Delimiter: "bar"}},
 	} {
 		t.Run("", func(t *testing.T) {
-			exp := newPrefix(tc.prefix, tc.delim)
+			exp := NewPrefix(tc.prefix, tc.delim)
 			if !reflect.DeepEqual(tc.out, exp) {
 				t.Fatal(tc.out, "!=", exp)
 			}
@@ -107,9 +107,9 @@ func TestPrefixFilePrefix(t *testing.T) {
 		{s("foo-bar"), s("-"), false, "", ""},
 	} {
 		t.Run(fmt.Sprintf("%d/(%s-%s)", idx, tc.path, tc.rem), func(t *testing.T) {
-			prefix := newPrefix(tc.p, tc.d)
+			prefix := NewPrefix(tc.p, tc.d)
 
-			foundPath, foundRem, ok := filePrefix(prefix)
+			foundPath, foundRem, ok := FilePrefix(prefix)
 			if tc.ok != ok {
 				t.Fatal()
 			} else if tc.ok {

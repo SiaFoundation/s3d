@@ -1,14 +1,12 @@
-package testutil
+package s3
 
 import (
 	"strings"
-
-	"github.com/SiaFoundation/s3d/s3"
 )
 
-// newPrefix creates a new Prefix from the given optional prefix and delimiter
+// NewPrefix creates a new Prefix from the given optional prefix and delimiter
 // strings.
-func newPrefix(prefix, delim *string) (p s3.Prefix) {
+func NewPrefix(prefix, delim *string) (p Prefix) {
 	if prefix != nil {
 		p.HasPrefix, p.Prefix = true, *prefix
 	}
@@ -27,7 +25,7 @@ func newPrefix(prefix, delim *string) (p s3.Prefix) {
 //	/foo/bar/  : path: /foo/bar  remaining: ""
 //	/foo/bar/b : path: /foo/bar  remaining: "b"
 //	/foo/bar   : path: /foo      remaining: "bar"
-func filePrefix(p s3.Prefix) (path, remaining string, ok bool) {
+func filePrefix(p Prefix) (path, remaining string, ok bool) {
 	if !p.HasPrefix || !p.HasDelimiter || p.Delimiter != "/" {
 		return "", "", p.Delimiter == "/"
 	}
@@ -48,17 +46,17 @@ func filePrefix(p s3.Prefix) (path, remaining string, ok bool) {
 //
 // To check whether the key belongs in Contents or CommonPrefixes, compare the
 // result to key.
-func match(p s3.Prefix, key string) *prefixMatch {
+func Match(p Prefix, key string) *PrefixMatch {
 	if !p.HasPrefix && !p.HasDelimiter {
 		// If there is no prefix in the search, the match is the prefix:
-		return &prefixMatch{Key: key, MatchedPart: key}
+		return &PrefixMatch{Key: key, MatchedPart: key}
 	}
 
 	if !p.HasDelimiter {
 		// If the request does not contain a delimiter, prefix matching is a
 		// simple string prefix:
 		if strings.HasPrefix(key, p.Prefix) {
-			return &prefixMatch{Key: key, MatchedPart: p.Prefix}
+			return &PrefixMatch{Key: key, MatchedPart: p.Prefix}
 		}
 		return nil
 	}
@@ -109,11 +107,11 @@ func match(p s3.Prefix, key string) *prefixMatch {
 	if appendDelim {
 		out += p.Delimiter
 	}
-	return &prefixMatch{Key: key, CommonPrefix: out != key, MatchedPart: out}
+	return &PrefixMatch{Key: key, CommonPrefix: out != key, MatchedPart: out}
 }
 
-// prefixMatch describes a successful match of a key against a Prefix.
-type prefixMatch struct {
+// PrefixMatch describes a successful match of a key against a Prefix.
+type PrefixMatch struct {
 	// Input key passed to PrefixMatch.
 	Key string
 
