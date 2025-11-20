@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
-
-	"github.com/SiaFoundation/s3d/s3"
 )
 
 func TestPrefixMatch(t *testing.T) {
@@ -41,7 +39,7 @@ func TestPrefixMatch(t *testing.T) {
 		{key: "foo/bar", prefix: s(""), out: s("")},
 	} {
 		t.Run("", func(t *testing.T) {
-			prefix := s3.Prefix{
+			prefix := Prefix{
 				HasPrefix:    tc.prefix != nil,
 				HasDelimiter: tc.delim != nil,
 				Prefix:       unwrapStr(tc.prefix),
@@ -69,12 +67,12 @@ func TestNewPrefix(t *testing.T) {
 
 	for _, tc := range []struct {
 		prefix, delim *string
-		out           s3.Prefix
+		out           Prefix
 	}{
-		{nil, nil, s3.Prefix{}},
-		{s("foo"), nil, s3.Prefix{HasPrefix: true, Prefix: "foo"}},
-		{nil, s("foo"), s3.Prefix{HasDelimiter: true, Delimiter: "foo"}},
-		{s("foo"), s("bar"), s3.Prefix{HasPrefix: true, Prefix: "foo", HasDelimiter: true, Delimiter: "bar"}},
+		{nil, nil, Prefix{}},
+		{s("foo"), nil, Prefix{HasPrefix: true, Prefix: "foo"}},
+		{nil, s("foo"), Prefix{HasDelimiter: true, Delimiter: "foo"}},
+		{s("foo"), s("bar"), Prefix{HasPrefix: true, Prefix: "foo", HasDelimiter: true, Delimiter: "bar"}},
 	} {
 		t.Run("", func(t *testing.T) {
 			exp := NewPrefix(tc.prefix, tc.delim)

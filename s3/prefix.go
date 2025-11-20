@@ -16,7 +16,7 @@ func NewPrefix(prefix, delim *string) (p Prefix) {
 	return p
 }
 
-// filePrefix returns the path portion, then the remaining portion of the
+// FilePrefix returns the path portion, then the remaining portion of the
 // Prefix if the Delimiter is "/". If the Delimiter is not set, or not "/",
 // ok will be false.
 //
@@ -25,7 +25,7 @@ func NewPrefix(prefix, delim *string) (p Prefix) {
 //	/foo/bar/  : path: /foo/bar  remaining: ""
 //	/foo/bar/b : path: /foo/bar  remaining: "b"
 //	/foo/bar   : path: /foo      remaining: "bar"
-func filePrefix(p Prefix) (path, remaining string, ok bool) {
+func FilePrefix(p Prefix) (path, remaining string, ok bool) {
 	if !p.HasPrefix || !p.HasDelimiter || p.Delimiter != "/" {
 		return "", "", p.Delimiter == "/"
 	}
