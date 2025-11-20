@@ -115,7 +115,7 @@ LIMIT ?;`
 		for rows.Next() {
 			var name string
 			var siaMeta []byte
-			if err := rows.Scan(&name, siaMeta); err != nil {
+			if err := rows.Scan(&name, &siaMeta); err != nil {
 				return fmt.Errorf("failed to scan: %w", err)
 			}
 
@@ -123,6 +123,7 @@ LIMIT ?;`
 			if err := obj.UnmarshalSia(siaMeta); err != nil {
 				return fmt.Errorf("failed to parse object: %w", err)
 			}
+			objID := obj.ID()
 
 			match := s3.Match(prefix, name)
 			switch {
@@ -150,8 +151,8 @@ LIMIT ?;`
 				result.Add(&s3.Content{
 					Key:          name,
 					LastModified: s3.NewContentTime(obj.UpdatedAt),
-					// ETag:         s3.FormatETag(obj.contentMD5[:]),
-					Size: int64(size),
+					ETag:         s3.FormatETag(objID[:]),
+					Size:         int64(size),
 				})
 			}
 
