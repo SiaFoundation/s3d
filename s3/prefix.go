@@ -38,7 +38,7 @@ func FilePrefix(p Prefix) (path, remaining string, ok bool) {
 	}
 }
 
-// match checks whether key starts with a prefix. If the prefix does not match,
+// Match checks whether key starts with a prefix. If the prefix does not match,
 // nil is returned.
 //
 // It is a best-effort attempt to implement the prefix/delimiter matching found
