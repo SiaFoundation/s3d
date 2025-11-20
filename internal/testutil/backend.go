@@ -412,11 +412,6 @@ func (b *MemoryBackend) ListParts(_ context.Context, accessKeyID, bucket, key, u
 		return nil, s3errs.ErrNoSuchUpload
 	}
 
-	partNumberMarker, err := strconv.Atoi(page.PartNumberMarker)
-	if err != nil && page.PartNumberMarker != "" {
-		return nil, s3errs.ErrInvalidArgument // should have been caught earlier
-	}
-
 	partNumbers := make([]int, 0, len(upload.parts))
 	for number := range upload.parts {
 		partNumbers = append(partNumbers, number)
@@ -432,7 +427,7 @@ func (b *MemoryBackend) ListParts(_ context.Context, accessKeyID, bucket, key, u
 
 	var listed int64
 	for _, number := range partNumbers {
-		if number <= partNumberMarker {
+		if number <= page.PartNumberMarker {
 			continue
 		}
 		part := upload.parts[number]

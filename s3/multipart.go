@@ -47,7 +47,7 @@ type UploadPartResult struct {
 // ListPartsPage specifies pagination options when listing the parts of an
 // in-progress multipart upload.
 type ListPartsPage struct {
-	PartNumberMarker string
+	PartNumberMarker int
 	MaxParts         int64
 }
 
@@ -226,13 +226,12 @@ func (s *s3) listUploadParts(w http.ResponseWriter, r *http.Request, accessKeyID
 	}
 
 	// build response
-	partNumberMarker, _ := strconv.Atoi(page.PartNumberMarker) // already validated
 	resp := ListPartsResponse{
 		Xmlns:            "http://s3.amazonaws.com/doc/2006-03-01/",
 		Bucket:           bucket,
 		Key:              object,
 		UploadID:         uploadID,
-		PartNumberMarker: partNumberMarker,
+		PartNumberMarker: page.PartNumberMarker,
 		MaxParts:         page.MaxParts,
 		IsTruncated:      result.IsTruncated,
 		StorageClass:     result.StorageClass,
@@ -393,7 +392,7 @@ func listPartsPageFromQuery(query url.Values) (ListPartsPage, error) {
 		if val < 0 || val >= MaxUploadPartNumber {
 			return page, s3errs.ErrInvalidArgument
 		}
-		page.PartNumberMarker = rawMarker
+		page.PartNumberMarker = val
 	}
 
 	if rawMax := query.Get("max-parts"); rawMax != "" {
