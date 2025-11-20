@@ -277,6 +277,11 @@ func TestListMultipartUploads(t *testing.T) {
 
 	const bucket = "list-multipart-bucket"
 
+	// create target bucket
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
 	// assert there's no uploads initially
 	res, err := s3Tester.ListMultipartUploads(t.Context(), bucket, nil)
 	if err != nil {
