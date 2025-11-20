@@ -439,6 +439,27 @@ func (b *MemoryBackend) ListMultipartUploads(_ context.Context, accessKeyID, buc
 	}, nil
 }
 
+// AbortMultipartUpload aborts an in-progress multipart upload and discards
+// any uploaded parts.
+func (b *MemoryBackend) AbortMultipartUpload(_ context.Context, accessKeyID, bucket, key, uploadID string) error {
+	bkt, exists := b.buckets[bucket]
+	if !exists {
+		return s3errs.ErrNoSuchBucket
+	}
+	if bkt.owner != accessKeyID {
+		return s3errs.ErrAccessDenied
+	}
+	upload, exists := b.multipartUploads[uploadID]
+	if !exists {
+		return s3errs.ErrNoSuchUpload
+	}
+	if upload.bucket != bucket || upload.key != key {
+		return s3errs.ErrNoSuchUpload
+	}
+	delete(b.multipartUploads, uploadID)
+	return nil
+}
+
 // UploadPart uploads a single part for a multipart upload.
 func (b *MemoryBackend) UploadPart(_ context.Context, accessKeyID, bucket, key, uploadID string, r io.Reader, opts s3.UploadPartOptions) (*s3.UploadPartResult, error) {
 	bkt, exists := b.buckets[bucket]

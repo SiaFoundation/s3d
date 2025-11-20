@@ -152,6 +152,11 @@ func (s *Sia) ListMultipartUploads(ctx context.Context, accessKeyID, bucket stri
 	return nil, s3errs.ErrNotImplemented
 }
 
+// AbortMultipartUpload aborts a multipart upload.
+func (s *Sia) AbortMultipartUpload(ctx context.Context, accessKeyID, bucket, object, uploadID string) error {
+	return s3errs.ErrNotImplemented
+}
+
 // UploadPart uploads a single multipart part.
 func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object, uploadID string, r io.Reader, opts s3.UploadPartOptions) (*s3.UploadPartResult, error) {
 	return nil, s3errs.ErrNotImplemented

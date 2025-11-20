@@ -310,6 +310,17 @@ func (t *S3Tester) ListMultipartUploads(ctx context.Context, bucket string, inpu
 	return t.client.ListMultipartUploads(ctx, input)
 }
 
+// AbortMultipartUpload is a convenience wrapper around the AWS SDK's
+// AbortMultipartUpload API.
+func (t *S3Tester) AbortMultipartUpload(ctx context.Context, bucket, object, uploadID string) error {
+	_, err := t.client.AbortMultipartUpload(ctx, &service.AbortMultipartUploadInput{
+		Bucket:   aws.String(bucket),
+		Key:      aws.String(object),
+		UploadId: aws.String(uploadID),
+	})
+	return err
+}
+
 // UploadPart uploads a single part for an existing multipart upload.
 func (t *S3Tester) UploadPart(ctx context.Context, bucket, object, uploadID string, partNumber int32, body []byte) (*service.UploadPartOutput, error) {
 	input := &service.UploadPartInput{
