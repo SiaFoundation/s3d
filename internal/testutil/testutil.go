@@ -300,6 +300,16 @@ func (t *S3Tester) CreateMultipartUpload(ctx context.Context, bucket, object str
 	})
 }
 
+// ListMultipartUploads is a convenience wrapper around the AWS SDK's
+// ListMultipartUploads API.
+func (t *S3Tester) ListMultipartUploads(ctx context.Context, bucket string, input *service.ListMultipartUploadsInput) (*service.ListMultipartUploadsOutput, error) {
+	if input == nil {
+		input = &service.ListMultipartUploadsInput{}
+	}
+	input.Bucket = aws.String(bucket)
+	return t.client.ListMultipartUploads(ctx, input)
+}
+
 // AbortMultipartUpload is a convenience wrapper around the AWS SDK's
 // AbortMultipartUpload API.
 func (t *S3Tester) AbortMultipartUpload(ctx context.Context, bucket, object, uploadID string) error {

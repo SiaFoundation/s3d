@@ -12,6 +12,7 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	service "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
@@ -168,6 +169,120 @@ func TestUploadPart(t *testing.T) {
 
 	// assert [s3errs.ErrNoSuchBucket] is returned for nonexistent bucket
 	_, err = s3Tester.UploadPart(t.Context(), "missing-bucket", object, *res.UploadId, 1, data)
+	testutil.AssertS3Error(t, s3errs.ErrNoSuchBucket, err)
+}
+
+func TestListMultipartUploads(t *testing.T) {
+	// prepare a backend with 2 keypairs
+	backend := testutil.NewMemoryBackend(
+		testutil.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
+		testutil.WithKeyPair("foo", "bar"),
+	)
+	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
+
+	const bucket = "list-multipart-bucket"
+
+	// create target bucket
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// assert there's no uploads initially
+	res, err := s3Tester.ListMultipartUploads(t.Context(), bucket, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(res.Uploads) != 0 {
+		t.Fatalf("expected no uploads, got %d", len(res.Uploads))
+	}
+
+	// create multipart upload
+	mp1, err := s3Tester.CreateMultipartUpload(t.Context(), bucket, "multipart-upload-1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// assert the upload shows up in the listing
+	res, err = s3Tester.ListMultipartUploads(t.Context(), bucket, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(res.Uploads) != 1 {
+		t.Fatalf("expected 1 upload, got %d", len(res.Uploads))
+	} else if *res.Uploads[0].UploadId != *mp1.UploadId {
+		t.Fatalf("expected upload ID %q, got %q", *mp1.UploadId, *res.Uploads[0].UploadId)
+	}
+
+	// create another multipart upload
+	mp2, err := s3Tester.CreateMultipartUpload(t.Context(), bucket, "multipart-upload-2", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// assert both uploads show up in the listing
+	res, err = s3Tester.ListMultipartUploads(t.Context(), bucket, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(res.Uploads) != 2 {
+		t.Fatalf("expected 2 uploads, got %d", len(res.Uploads))
+	}
+
+	// assert max uploads, key marker and prefix filtering work
+	limited, err := s3Tester.ListMultipartUploads(t.Context(), bucket, &service.ListMultipartUploadsInput{
+		MaxUploads: aws.Int32(1),
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if !aws.ToBool(limited.IsTruncated) {
+		t.Fatal("expected truncated response")
+	} else if aws.ToString(limited.NextKeyMarker) != "multipart-upload-1" {
+		t.Fatal("expected next key marker in response")
+	} else if aws.ToString(limited.NextUploadIdMarker) != *mp1.UploadId {
+		t.Fatal("expected next upload id marker in response")
+	} else if len(limited.Uploads) != 1 {
+		t.Fatalf("expected 1 upload, got %d", len(limited.Uploads))
+	} else if *limited.Uploads[0].UploadId != *mp1.UploadId {
+		t.Fatalf("expected upload ID %q, got %q", *mp1.UploadId, *limited.Uploads[0].UploadId)
+	}
+
+	paginated, err := s3Tester.ListMultipartUploads(t.Context(), bucket, &service.ListMultipartUploadsInput{
+		KeyMarker:      limited.NextKeyMarker,
+		UploadIdMarker: limited.NextUploadIdMarker,
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if len(paginated.Uploads) != 1 {
+		t.Fatalf("expected 1 upload, got %d", len(paginated.Uploads))
+	} else if *paginated.Uploads[0].UploadId != *mp2.UploadId {
+		t.Fatalf("expected upload ID %q, got %q", *mp2.UploadId, *paginated.Uploads[0].UploadId)
+	} else if aws.ToBool(paginated.IsTruncated) {
+		t.Fatal("did not expect truncated response")
+	}
+
+	// create another multipart upload
+	_, err = s3Tester.CreateMultipartUpload(t.Context(), bucket, "non-prefixed-upload-3", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefixed, err := s3Tester.ListMultipartUploads(t.Context(), bucket, &service.ListMultipartUploadsInput{
+		Prefix: aws.String("multipart-"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if len(prefixed.Uploads) != 2 {
+		t.Fatalf("expected 2 uploads, got %d", len(prefixed.Uploads))
+	}
+	for _, upload := range prefixed.Uploads {
+		if !strings.HasPrefix(aws.ToString(upload.Key), "multipart-") {
+			t.Fatalf("unexpected key in prefix listing: %v", upload.Key)
+		}
+	}
+
+	// assert [s3errs.ErrAccessDenied] is returned for unauthorized access
+	otherTester := s3Tester.ChangeAccessKey(t, "foo", "bar")
+	_, err = otherTester.ListMultipartUploads(t.Context(), bucket, nil)
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+
+	// assert [s3errs.ErrNoSuchBucket] is returned for nonexistent bucket
+	_, err = s3Tester.ListMultipartUploads(t.Context(), "missing-bucket", nil)
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchBucket, err)
 }
 

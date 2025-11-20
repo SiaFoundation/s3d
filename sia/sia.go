@@ -104,6 +104,11 @@ func (s *Sia) CreateMultipartUpload(ctx context.Context, accessKeyID, bucket, ob
 	return nil, s3errs.ErrNotImplemented
 }
 
+// ListMultipartUploads lists in-progress multipart uploads.
+func (s *Sia) ListMultipartUploads(ctx context.Context, accessKeyID, bucket string, opts s3.ListMultipartUploadsOptions) (*s3.ListMultipartUploadsResult, error) {
+	return nil, s3errs.ErrNotImplemented
+}
+
 // AbortMultipartUpload aborts a multipart upload.
 func (s *Sia) AbortMultipartUpload(ctx context.Context, accessKeyID, bucket, object, uploadID string) error {
 	return s3errs.ErrNotImplemented

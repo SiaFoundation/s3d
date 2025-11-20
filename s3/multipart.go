@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/SiaFoundation/s3d/s3/auth"
 
@@ -56,6 +57,33 @@ type CompleteMultipartUploadResult struct {
 	ContentMD5 [16]byte
 }
 
+// ListMultipartUploadsOptions contains options for listing in-progress
+// multipart uploads for a bucket.
+type ListMultipartUploadsOptions struct {
+	Prefix         string
+	Delimiter      string
+	KeyMarker      string
+	UploadIDMarker string
+	MaxUploads     int64
+}
+
+// MultipartUploadInfo represents a single multipart upload in a listing.
+type MultipartUploadInfo struct {
+	Key       string
+	UploadID  string
+	Initiated time.Time
+}
+
+// ListMultipartUploadsResult contains the uploads returned by the backend
+// along with pagination metadata.
+type ListMultipartUploadsResult struct {
+	Uploads            []MultipartUploadInfo
+	CommonPrefixes     []string
+	IsTruncated        bool
+	NextKeyMarker      string
+	NextUploadIDMarker string
+}
+
 // routeMultipartUpload operates on routes that contain '?uploadId=<id>' in the
 // query string.
 func (s *s3) routeMultipartUpload(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket, object, uploadID string) error {
@@ -80,16 +108,19 @@ func (s *s3) routeMultipartUpload(w http.ResponseWriter, r *http.Request, access
 // query string. These routes may or may not have a value for bucket or object;
 // this is validated and handled in the target handler functions.
 func (s *s3) routeMultipartUploadBase(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket, object string) error {
-	if r.Method != http.MethodPost {
-		return s3errs.ErrMethodNotAllowed
-	}
-
 	validatedKey, err := assertAuth(accessKeyID)
 	if err != nil {
 		return err
 	}
 
-	return s.createMultipartUpload(w, r, validatedKey, bucket, object)
+	switch r.Method {
+	case http.MethodPost:
+		return s.createMultipartUpload(w, r, validatedKey, bucket, object)
+	case http.MethodGet:
+		return s.listMultipartUploads(w, r, validatedKey, bucket)
+	default:
+		return s3errs.ErrMethodNotAllowed
+	}
 }
 
 func (s *s3) abortMultipartUpload(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object, uploadID string) error {
@@ -139,6 +170,61 @@ func (s *s3) createMultipartUpload(w http.ResponseWriter, r *http.Request, acces
 		Key:      object,
 		UploadID: result.UploadID,
 	})
+}
+
+func (s *s3) listMultipartUploads(w http.ResponseWriter, r *http.Request, accessKeyID, bucket string) error {
+	if bucket == "" {
+		return s3errs.ErrInvalidRequest
+	}
+
+	query := r.URL.Query()
+	maxUploads, err := parseClampedInt(query.Get("max-uploads"), DefaultMaxMultipartUploads, 0, MaxMultipartUploads)
+	if err != nil {
+		return err
+	}
+
+	opts := ListMultipartUploadsOptions{
+		Prefix:         query.Get("prefix"),
+		Delimiter:      query.Get("delimiter"),
+		KeyMarker:      query.Get("key-marker"),
+		UploadIDMarker: query.Get("upload-id-marker"),
+		MaxUploads:     maxUploads,
+	}
+
+	result, err := s.backend.ListMultipartUploads(r.Context(), accessKeyID, bucket, opts)
+	if err != nil {
+		return err
+	}
+
+	resp := ListMultipartUploadsResponse{
+		Xmlns:              "http://s3.amazonaws.com/doc/2006-03-01/",
+		Bucket:             bucket,
+		Prefix:             opts.Prefix,
+		Delimiter:          opts.Delimiter,
+		KeyMarker:          opts.KeyMarker,
+		UploadIDMarker:     opts.UploadIDMarker,
+		MaxUploads:         maxUploads,
+		IsTruncated:        result.IsTruncated,
+		NextKeyMarker:      result.NextKeyMarker,
+		NextUploadIDMarker: result.NextUploadIDMarker,
+	}
+
+	for _, cp := range result.CommonPrefixes {
+		resp.CommonPrefixes = append(resp.CommonPrefixes, CommonPrefix{Prefix: cp})
+	}
+
+	for _, upload := range result.Uploads {
+		resp.Uploads = append(resp.Uploads, ListedMultipartUpload{
+			Key:          upload.Key,
+			UploadID:     upload.UploadID,
+			Initiator:    globalUserInfo,
+			Owner:        globalUserInfo,
+			StorageClass: StorageClass("STANDARD"),
+			Initiated:    NewContentTime(upload.Initiated),
+		})
+	}
+
+	return writeXMLResponse(w, resp)
 }
 
 func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object, uploadID, partNumberStr string) error {
