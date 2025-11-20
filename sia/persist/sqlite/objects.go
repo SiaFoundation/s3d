@@ -89,11 +89,23 @@ func (s *Store) ListObjects(accessKeyID *string, bucket string, prefix s3.Prefix
 			return fmt.Errorf("failed to get bucket ID: %w", err)
 		}
 
-		rows, err := tx.Query(`SELECT name, sia_meta
-FROM objects
-WHERE bucket_id = ?
-ORDER BY name;
-`, bid)
+		query := `SELECT name, sia_meta FROM objects WHERE bucket_id = ?`
+		args := []any{bid}
+
+		if page.Marker != nil && *page.Marker != "" {
+			query += ` AND name > ?`
+			args = append(args, *page.Marker)
+		}
+		if prefix.Prefix != "" {
+			query += ` AND name LIKE ?`
+			args = append(args, prefix.Prefix+"%")
+		}
+		query += `
+ORDER BY name
+LIMIT ?;`
+		args = append(args, page.MaxKeys+1)
+
+		rows, err := tx.Query(query, args...)
 		if err != nil {
 			return fmt.Errorf("failed to query objects: %w", err)
 		}
