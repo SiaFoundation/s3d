@@ -46,4 +46,12 @@ const (
 	// DefaultMaxBucketKeys is the default number of object keys from a bucket
 	// retrieved by ListObjects if no limit is specified.
 	DefaultMaxBucketKeys = 1000
+
+	// MaxMultipartUploads is the maximum number of multipart uploads returned
+	// in a single ListMultipartUploads response.
+	MaxMultipartUploads = 1000
+
+	// DefaultMaxMultipartUploads is the default number of multipart uploads
+	// returned if the client does not specify max-uploads.
+	DefaultMaxMultipartUploads = 1000
 )

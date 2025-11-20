@@ -65,12 +65,24 @@ func TestAccessDenied(t *testing.T) {
 		_, err := s3.CreateMultipartUpload(t.Context(), "bucket", "object", nil)
 		return err
 	})
+	assertAccessDenied(t, "AbortMultipartUpload", func(t *testing.T, s3 *testutil.S3Tester) error {
+		err := s3.AbortMultipartUpload(t.Context(), "bucket", "object", "uploadID")
+		return err
+	})
+	assertAccessDenied(t, "CompleteMultipartUpload", func(t *testing.T, s3 *testutil.S3Tester) error {
+		_, err := s3.CompleteMultipartUpload(t.Context(), "bucket", "object", "uploadID", nil)
+		return err
+	})
 	assertAccessDenied(t, "UploadPart", func(t *testing.T, s3 *testutil.S3Tester) error {
 		_, err := s3.UploadPart(t.Context(), "bucket", "object", "uploadID", 1, nil)
 		return err
 	})
 	assertAccessDenied(t, "ListParts", func(t *testing.T, s3 *testutil.S3Tester) error {
 		_, err := s3.ListParts(t.Context(), "bucket", "object", "uploadID", nil, nil)
+		return err
+	})
+	assertAccessDenied(t, "ListMultipartUploads", func(t *testing.T, s3 *testutil.S3Tester) error {
+		_, err := s3.ListMultipartUploads(t.Context(), "bucket", nil)
 		return err
 	})
 }

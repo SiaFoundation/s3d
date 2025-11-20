@@ -2,30 +2,94 @@ package sia_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"path/filepath"
 	"testing"
 
 	"github.com/SiaFoundation/s3d/internal/testutil"
+	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/sia"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
+	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/sdk"
+	"go.sia.tech/indexd/slabs"
 	"go.uber.org/zap/zaptest"
+	"lukechampine.com/frand"
 )
 
+type uploadedObject struct {
+	meta sdk.Object
+	data []byte
+}
+
 type MemorySDK struct {
-}
-
-func (s *MemorySDK) Download(ctx context.Context, w io.Writer, obj sdk.Object, opts ...sdk.DownloadOption) error {
-	panic("not implemented")
-}
-
-func (s *MemorySDK) Upload(ctx context.Context, r io.Reader, opts ...sdk.UploadOption) (sdk.Object, error) {
-	panic("not implemented")
+	appKey  types.PrivateKey
+	objects map[types.Hash256]uploadedObject
+	pinned  map[types.Hash256]struct{}
 }
 
 func NewMemorySDK() *MemorySDK {
-	return &MemorySDK{}
+	return &MemorySDK{
+		appKey:  types.GeneratePrivateKey(),
+		objects: make(map[types.Hash256]uploadedObject),
+		pinned:  make(map[types.Hash256]struct{}),
+	}
+}
+
+func (s *MemorySDK) Download(ctx context.Context, w io.Writer, obj sdk.Object, rnge *s3.ObjectRange) error {
+	uploaded, exists := s.objects[obj.ID()]
+	if !exists {
+		return errors.New("download failed - object not found")
+	}
+	data := uploaded.data
+	if rnge != nil {
+		if rnge.Start+rnge.Length > int64(len(data)) {
+			return fmt.Errorf("download failed - range %d-%d exceeds object size %d", rnge.Start, rnge.Start+rnge.Length, len(data))
+		}
+		data = data[rnge.Start : rnge.Start+rnge.Length]
+	}
+	_, err := w.Write(data)
+	return err
+}
+
+func (s *MemorySDK) OpenSealedObject(so slabs.SealedObject) (sdk.Object, error) {
+	return sdk.ObjectFromSealedObject(so, s.appKey)
+}
+
+func (s *MemorySDK) SealObject(obj sdk.Object) slabs.SealedObject {
+	return obj.Seal(s.appKey)
+}
+
+func (s *MemorySDK) PinObject(ctx context.Context, obj sdk.Object) error {
+	s.pinned[obj.ID()] = struct{}{}
+	return nil
+}
+
+func (s *MemorySDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error) {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return sdk.Object{}, err
+	}
+	obj := s.newObject(len(data))
+	s.objects[obj.ID()] = uploadedObject{
+		data: data,
+		meta: obj,
+	}
+	return obj, nil
+}
+
+func (s *MemorySDK) newObject(size int) sdk.Object {
+	// single slice that adds up to size
+	slices := []slabs.SlabSlice{
+		{
+			SlabID: frand.Entropy256(),
+			Offset: 0,
+			Length: uint32(size),
+		},
+	}
+	return sdk.NewObject(slices, []byte{})
 }
 
 func NewTester(t testing.TB, opts ...testutil.TesterOption) *testutil.S3Tester {

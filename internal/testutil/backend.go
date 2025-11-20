@@ -350,6 +350,118 @@ func (b *MemoryBackend) CreateMultipartUpload(_ context.Context, accessKeyID, bu
 	}, nil
 }
 
+// ListMultipartUploads lists in-progress multipart uploads for the given bucket.
+func (b *MemoryBackend) ListMultipartUploads(_ context.Context, accessKeyID, bucket string, opts s3.ListMultipartUploadsOptions) (*s3.ListMultipartUploadsResult, error) {
+	bkt, exists := b.buckets[bucket]
+	if !exists {
+		return nil, s3errs.ErrNoSuchBucket
+	}
+	if bkt.owner != accessKeyID {
+		return nil, s3errs.ErrAccessDenied
+	}
+
+	type entry struct {
+		key      string
+		uploadID string
+		created  time.Time
+	}
+
+	var entries []entry
+	for id, upload := range b.multipartUploads {
+		if upload.bucket != bucket {
+			continue
+		}
+		if opts.Prefix != "" && !strings.HasPrefix(upload.key, opts.Prefix) {
+			continue
+		}
+		entries = append(entries, entry{
+			key:      upload.key,
+			uploadID: id,
+			created:  upload.createdAt,
+		})
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].key == entries[j].key {
+			return entries[i].uploadID < entries[j].uploadID
+		}
+		return entries[i].key < entries[j].key
+	})
+
+	// apply markers
+	if opts.KeyMarker != "" {
+		i := 0
+		for i < len(entries) {
+			cmp := strings.Compare(entries[i].key, opts.KeyMarker)
+			if cmp < 0 {
+				i++
+				continue
+			}
+			if cmp == 0 && opts.UploadIDMarker != "" && entries[i].uploadID <= opts.UploadIDMarker {
+				i++
+				continue
+			}
+			break
+		}
+		entries = entries[i:]
+	}
+
+	// sanitize max uploads
+	if opts.MaxUploads <= 0 || opts.MaxUploads > s3.MaxMultipartUploads {
+		opts.MaxUploads = s3.MaxMultipartUploads
+	}
+
+	// collect results
+	uploads := make([]s3.MultipartUploadInfo, 0, len(entries))
+	for _, entry := range entries {
+		uploads = append(uploads, s3.MultipartUploadInfo{
+			Key:       entry.key,
+			UploadID:  entry.uploadID,
+			Initiated: entry.created,
+		})
+		if int64(len(uploads)) == opts.MaxUploads {
+			break
+		}
+	}
+
+	// determine if truncated
+	isTruncated := len(entries) > len(uploads)
+	var nextKeyMarker, nextUploadIDMarker string
+	if isTruncated && len(uploads) > 0 {
+		last := uploads[len(uploads)-1]
+		nextKeyMarker = last.Key
+		nextUploadIDMarker = last.UploadID
+	}
+
+	return &s3.ListMultipartUploadsResult{
+		Uploads:            uploads,
+		IsTruncated:        isTruncated,
+		NextKeyMarker:      nextKeyMarker,
+		NextUploadIDMarker: nextUploadIDMarker,
+	}, nil
+}
+
+// AbortMultipartUpload aborts an in-progress multipart upload and discards
+// any uploaded parts.
+func (b *MemoryBackend) AbortMultipartUpload(_ context.Context, accessKeyID, bucket, key, uploadID string) error {
+	bkt, exists := b.buckets[bucket]
+	if !exists {
+		return s3errs.ErrNoSuchBucket
+	}
+	if bkt.owner != accessKeyID {
+		return s3errs.ErrAccessDenied
+	}
+	upload, exists := b.multipartUploads[uploadID]
+	if !exists {
+		return s3errs.ErrNoSuchUpload
+	}
+	if upload.bucket != bucket || upload.key != key {
+		return s3errs.ErrNoSuchUpload
+	}
+	delete(b.multipartUploads, uploadID)
+	return nil
+}
+
 // UploadPart uploads a single part for a multipart upload.
 func (b *MemoryBackend) UploadPart(_ context.Context, accessKeyID, bucket, key, uploadID string, r io.Reader, opts s3.UploadPartOptions) (*s3.UploadPartResult, error) {
 	bkt, exists := b.buckets[bucket]

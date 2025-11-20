@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/auth"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"go.sia.tech/indexd/sdk"
+	"go.sia.tech/indexd/slabs"
 	"go.uber.org/zap"
 )
 
@@ -34,12 +36,24 @@ type Sia struct {
 
 // SDK describes the SDK used to interact with Sia.
 type SDK interface {
-	Download(ctx context.Context, w io.Writer, obj sdk.Object, opts ...sdk.DownloadOption) error
-	Upload(ctx context.Context, r io.Reader, opts ...sdk.UploadOption) (sdk.Object, error)
+	Download(ctx context.Context, w io.Writer, obj sdk.Object, rnge *s3.ObjectRange) error
+	PinObject(ctx context.Context, obj sdk.Object) error
+	Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
+
+	OpenSealedObject(so slabs.SealedObject) (sdk.Object, error)
+	SealObject(obj sdk.Object) slabs.SealedObject
 }
 
 // Store represents the storage backend used by the Sia backend.
-type Store any
+type Store interface {
+	CreateBucket(accessKeyID, bucket string) error
+	DeleteBucket(accessKeyID, bucket string) error
+	DeleteObject(accessKeyID, bucket, name string) error
+	GetObject(accessKeyID *string, bucket, object string) (slabs.SealedObject, error)
+	HeadBucket(accessKeyID, bucket string) error
+	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
+	PutObject(accessKeyID, bucket, name string, obj slabs.SealedObject) error
+}
 
 // New creates a new Sia backend instance.
 func New(ctx context.Context, sdk SDK, store Store, accessKey, secretKey string, opts ...Option) (*Sia, error) {
@@ -68,7 +82,7 @@ func (s *Sia) LoadSecret(ctx context.Context, accessKeyID string) (auth.SecretAc
 	if accessKeyID != s.accessKey {
 		return nil, s3errs.ErrInvalidAccessKeyId
 	}
-	return s.secretKey, nil
+	return slices.Clone(s.secretKey), nil
 }
 
 // CopyObject copies an object from the source bucket and object key to the
@@ -79,72 +93,25 @@ func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject,
 	return nil, s3errs.ErrNotImplemented
 }
 
-// CreateBucket creates a new bucket with the given name for the user
-// identified by the given access key.
-func (s *Sia) CreateBucket(ctx context.Context, accessKeyID, name string) error {
-	return s3errs.ErrNotImplemented
-}
-
-// DeleteBucket deletes the bucket with the given name for the user
-// identified by the given access key.
-func (s *Sia) DeleteBucket(ctx context.Context, accessKeyID, name string) error {
-	return s3errs.ErrNotImplemented
-}
-
-// DeleteObject deletes the object with the given key from the specified
-// bucket for the user identified by the given access key.
-func (s *Sia) DeleteObject(ctx context.Context, accessKeyID, bucket, object string) (*s3.DeleteObjectResult, error) {
-	return nil, s3errs.ErrNotImplemented
-}
-
 // DeleteObjects deletes multiple objects from the specified bucket for the
 // user identified by the given access key.
 func (s *Sia) DeleteObjects(ctx context.Context, accessKeyID, bucket string, objects []s3.ObjectID) (*s3.ObjectsDeleteResult, error) {
 	return nil, s3errs.ErrNotImplemented
 }
 
-// GetObject retrieves the object with the given key from the specified
-// bucket for the user identified by the given access key. The provided
-// range is either nil if no range was requested, or contains the requested,
-// byte range.
-func (s *Sia) GetObject(ctx context.Context, accessKeyID *string, bucket, object string, rnge *s3.ObjectRangeRequest) (*s3.Object, error) {
-	return nil, s3errs.ErrNotImplemented
-}
-
-// HeadBucket checks if the bucket with the given name exists and is
-// accessible for the user identified by the given access key.
-func (s *Sia) HeadBucket(ctx context.Context, accessKeyID, name string) error {
-	return s3errs.ErrNotImplemented
-}
-
-// HeadObject is like GetObject but only retrieves the metadata of the
-// object and returns an empty body.
-func (s *Sia) HeadObject(ctx context.Context, accessKeyID *string, bucket, object string, rnge *s3.ObjectRangeRequest) (*s3.Object, error) {
-	return nil, s3errs.ErrNotImplemented
-}
-
-// ListBuckets lists all available buckets for the user identified by the
-// given access key.
-func (s *Sia) ListBuckets(ctx context.Context, accessKeyID string) ([]s3.BucketInfo, error) {
-	return nil, s3errs.ErrNotImplemented
-}
-
-// ListObjects lists objects in the specified bucket for the user identified
-// by the given access key. The backend should use the prefix to limit the
-// contents of the bucket and sort the results into the Contents and
-// CommonPrefixes fields of the returned ObjectsListResult.
-func (s *Sia) ListObjects(ctx context.Context, accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error) {
-	return nil, s3errs.ErrNotImplemented
-}
-
-// PutObject puts an object with the given key into the specified bucket.
-func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object string, r io.Reader, opts s3.PutObjectOptions) (*s3.PutObjectResult, error) {
-	return nil, s3errs.ErrNotImplemented
-}
-
 // CreateMultipartUpload creates a new multipart upload.
 func (s *Sia) CreateMultipartUpload(ctx context.Context, accessKeyID, bucket, object string, opts s3.CreateMultipartUploadOptions) (*s3.CreateMultipartUploadResult, error) {
 	return nil, s3errs.ErrNotImplemented
+}
+
+// ListMultipartUploads lists in-progress multipart uploads.
+func (s *Sia) ListMultipartUploads(ctx context.Context, accessKeyID, bucket string, opts s3.ListMultipartUploadsOptions) (*s3.ListMultipartUploadsResult, error) {
+	return nil, s3errs.ErrNotImplemented
+}
+
+// AbortMultipartUpload aborts a multipart upload.
+func (s *Sia) AbortMultipartUpload(ctx context.Context, accessKeyID, bucket, object, uploadID string) error {
+	return s3errs.ErrNotImplemented
 }
 
 // UploadPart uploads a single multipart part.
