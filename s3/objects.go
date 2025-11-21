@@ -747,7 +747,14 @@ func parseRangeHeader(s string) (*ObjectRangeRequest, error) {
 // a HEAD and a GET request for a /bucket/object URL.
 func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Request) error {
 	for mk, mv := range obj.Metadata {
-		w.Header().Set(mk, mv)
+		// NOTE: To preserve the original case of x-amz-meta-* headers as
+		// stored, we bypass http.Header.Set which would canonicalize the header
+		// key.
+		if strings.HasPrefix(strings.ToLower(mk), "x-amz-meta-") {
+			w.Header()[mk] = []string{mv}
+		} else {
+			w.Header().Set(mk, mv)
+		}
 	}
 
 	etag := FormatETag(obj.ContentMD5[:])

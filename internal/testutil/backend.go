@@ -316,7 +316,7 @@ func (b *MemoryBackend) PutObject(_ context.Context, accessKeyID, bucket, obj st
 		data:         slices.Clone(data),
 		contentMD5:   contentMD5,
 		lastModified: time.Now(),
-		metadata:     opts.Meta,
+		metadata:     sanitizeMetadata(opts.Meta),
 	}
 	return &s3.PutObjectResult{
 		ContentMD5: contentMD5,
@@ -340,7 +340,7 @@ func (b *MemoryBackend) CreateMultipartUpload(_ context.Context, accessKeyID, bu
 	b.multipartUploads[uploadID] = &multipartUpload{
 		bucket:    bucket,
 		key:       key,
-		metadata:  opts.Meta,
+		metadata:  sanitizeMetadata(opts.Meta),
 		parts:     make(map[int]*multipartPart),
 		createdAt: time.Now(),
 	}
@@ -702,4 +702,22 @@ func (b *MemoryBackend) headOrGetObject(_ context.Context, accessKeyID *string, 
 		Range:        rnge,
 		Size:         size,
 	}, nil
+}
+
+// sanitizeMetadata ensures that x-amz-meta-* keys are lowercased.
+func sanitizeMetadata(meta map[string]string) map[string]string {
+	sanitized := make(map[string]string)
+
+	for k, v := range meta {
+		if !strings.HasPrefix(strings.ToLower(k), "x-amz-meta-") {
+			sanitized[k] = v
+			continue
+		}
+
+		prefix := k[:len("X-Amz-Meta-")]
+		metaKey := k[len("X-Amz-Meta-"):]
+		sanitized[prefix+strings.ToLower(metaKey)] = v
+	}
+
+	return sanitized
 }
