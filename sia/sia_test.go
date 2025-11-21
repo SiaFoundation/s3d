@@ -20,6 +20,7 @@ import (
 type uploadedObject struct {
 	meta sdk.Object
 	data []byte
+	obj  sdk.Object
 }
 
 type MemorySDK struct {
@@ -50,6 +51,8 @@ func (s *MemorySDK) Download(ctx context.Context, w io.Writer, obj sdk.Object, r
 	return err
 }
 
+// TODO: Right now, all objects have the same ID. We'll need to expose something from
+// the SDK to be able to mock objects with different IDs.
 func (s *MemorySDK) Object(ctx context.Context, objectKey types.Hash256) (sdk.Object, error) {
 	uploaded, exists := s.objects[objectKey]
 	if !exists {
@@ -58,8 +61,6 @@ func (s *MemorySDK) Object(ctx context.Context, objectKey types.Hash256) (sdk.Ob
 	return uploaded.meta, nil
 }
 
-// TODO: Right now, all objects have the same ID. We'll need to expose something from
-// the SDK to be able to mock objects with different IDs.
 func (s *MemorySDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error) {
 	data, err := io.ReadAll(r)
 	if err != nil {

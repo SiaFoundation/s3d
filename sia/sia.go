@@ -88,7 +88,21 @@ func (s *Sia) LoadSecret(ctx context.Context, accessKeyID string) (auth.SecretAc
 // metadata that should be merged into the copied object except for the
 // x-amz-acl header.
 func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, replace bool, meta map[string]string) (*s3.CopyObjectResult, error) {
-	return nil, s3errs.ErrNotImplemented
+	obj, err := s.store.GetObject(&accessKeyID, srcBucket, srcObject)
+	if err != nil {
+		return nil, err
+	}
+
+	// TODO: handle replace and metadata merging
+
+	if err := s.store.PutObject(accessKeyID, dstBucket, dstObject, obj); err != nil {
+		return nil, err
+	}
+	return &s3.CopyObjectResult{
+		ContentMD5:   obj.ContentMD5,
+		LastModified: obj.UpdatedAt,
+		VersionID:    "", // versioning isn't supported
+	}, nil
 }
 
 // DeleteObjects deletes multiple objects from the specified bucket for the
