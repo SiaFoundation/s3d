@@ -83,34 +83,6 @@ func (s *Sia) LoadSecret(ctx context.Context, accessKeyID string) (auth.SecretAc
 	return slices.Clone(s.secretKey), nil
 }
 
-// CopyObject copies an object from the source bucket and object key to the
-// destination bucket and object key. The provided metadata map contains any
-// metadata that should be merged into the copied object except for the
-// x-amz-acl header.
-func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, replace bool, meta map[string]string) (*s3.CopyObjectResult, error) {
-	obj, err := s.store.GetObject(&accessKeyID, srcBucket, srcObject)
-	if err != nil {
-		return nil, err
-	}
-
-	// TODO: handle replace and metadata merging
-
-	if err := s.store.PutObject(accessKeyID, dstBucket, dstObject, obj); err != nil {
-		return nil, err
-	}
-	return &s3.CopyObjectResult{
-		ContentMD5:   obj.ContentMD5,
-		LastModified: obj.UpdatedAt,
-		VersionID:    "", // versioning isn't supported
-	}, nil
-}
-
-// DeleteObjects deletes multiple objects from the specified bucket for the
-// user identified by the given access key.
-func (s *Sia) DeleteObjects(ctx context.Context, accessKeyID, bucket string, objects []s3.ObjectID) (*s3.ObjectsDeleteResult, error) {
-	return nil, s3errs.ErrNotImplemented
-}
-
 // CreateMultipartUpload creates a new multipart upload.
 func (s *Sia) CreateMultipartUpload(ctx context.Context, accessKeyID, bucket, object string, opts s3.CreateMultipartUploadOptions) (*s3.CreateMultipartUploadResult, error) {
 	return nil, s3errs.ErrNotImplemented
