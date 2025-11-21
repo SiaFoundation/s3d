@@ -28,6 +28,9 @@ const (
 
 	// SecretAccessKey is the secret key configured for S3Tester
 	SecretAccessKey = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+
+	//  Owner is the default owner name for objects created by S3Tester
+	Owner = "s3tester"
 )
 
 // S3Tester wraps an AWS S3 client configured to talk to an in-memory S3
@@ -414,7 +417,7 @@ func NewTester(t testing.TB, opts ...TesterOption) *S3Tester {
 	}
 
 	if cfg.backend == nil {
-		backend := NewMemoryBackend(WithKeyPair(AccessKeyID, SecretAccessKey))
+		backend := NewMemoryBackend(WithKeyPair(Owner, AccessKeyID, SecretAccessKey))
 		cfg.backend = backend
 	}
 

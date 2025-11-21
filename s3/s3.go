@@ -34,7 +34,7 @@ type Backend interface {
 	//
 	// - If the source and destination are the same, the object is kept but its metadata
 	//   is merged with the provided metadata.
-	CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, meta map[string]string) (*CopyObjectResult, error)
+	CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, replace bool, meta map[string]string) (*CopyObjectResult, error)
 
 	// CreateBucket creates a new bucket with the given name for the user
 	// identified by the given access key. If the bucket already exists,
@@ -417,6 +417,7 @@ func (s *s3) routeBase(w http.ResponseWriter, r *http.Request, accessKeyID *stri
 		return
 	}
 	if err != nil {
+		s.logger.Error("failed to handle request", zap.Error(err))
 		writeErrorResponse(w, err)
 	}
 }
