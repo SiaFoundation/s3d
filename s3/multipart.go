@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -41,6 +42,34 @@ type UploadPartOptions struct {
 // computed MD5 checksum.
 type UploadPartResult struct {
 	ContentMD5 [16]byte
+}
+
+// ListPartsPage specifies pagination options when listing the parts of an
+// in-progress multipart upload.
+type ListPartsPage struct {
+	PartNumberMarker int
+	MaxParts         int64
+}
+
+// ListPartsResult contains metadata about uploaded parts.
+type ListPartsResult struct {
+	Parts                []UploadPart
+	IsTruncated          bool
+	NextPartNumberMarker string
+	OwnerID              string
+	OwnerDisplayName     string
+	StorageClass         StorageClass
+	InitiatorID          string
+	InitiatorDisplayName string
+}
+
+// UploadPart represents a single uploaded part that can be returned by
+// ListParts.
+type UploadPart struct {
+	PartNumber   int
+	LastModified time.Time
+	Size         int64
+	ContentMD5   [16]byte
 }
 
 // CompletedPart represents a single part referenced during a multipart
@@ -95,6 +124,8 @@ func (s *s3) routeMultipartUpload(w http.ResponseWriter, r *http.Request, access
 	switch r.Method {
 	case http.MethodPut:
 		return s.addUploadPart(w, r, validatedKey, bucket, object, uploadID, r.URL.Query().Get("partNumber"))
+	case http.MethodGet:
+		return s.listUploadParts(w, r, validatedKey, bucket, object, uploadID)
 	case http.MethodPost:
 		return s.completeMultipartUpload(w, r, validatedKey, bucket, object, uploadID)
 	case http.MethodDelete:
@@ -277,6 +308,70 @@ func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, accessKeyID, 
 	return nil
 }
 
+func (s *s3) listUploadParts(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object, uploadID string) error {
+	log := s.logger.With(
+		zap.String("bucket", bucket),
+		zap.String("object", object),
+		zap.String("uploadID", uploadID),
+	)
+	log.Debug("list multipart parts")
+
+	// parse pagination options
+	page, err := listPartsPageFromQuery(r.URL.Query())
+	if err != nil {
+		return err
+	}
+
+	// list parts
+	result, err := s.backend.ListParts(r.Context(), accessKeyID, bucket, object, uploadID, page)
+	if err != nil {
+		return err
+	}
+
+	// build response
+	resp := ListPartsResponse{
+		Xmlns:            "http://s3.amazonaws.com/doc/2006-03-01/",
+		Bucket:           bucket,
+		Key:              object,
+		UploadID:         uploadID,
+		PartNumberMarker: page.PartNumberMarker,
+		MaxParts:         page.MaxParts,
+		IsTruncated:      result.IsTruncated,
+		StorageClass:     result.StorageClass,
+	}
+	if result.IsTruncated && result.NextPartNumberMarker != "" {
+		if next, err := strconv.Atoi(result.NextPartNumberMarker); err == nil {
+			resp.NextPartNumberMarker = next
+		}
+	}
+
+	resp.Owner = globalUserInfo
+	if result.OwnerID != "" || result.OwnerDisplayName != "" {
+		resp.Owner = &UserInfo{
+			ID:          result.OwnerID,
+			DisplayName: result.OwnerDisplayName,
+		}
+	}
+	resp.Initiator = globalUserInfo
+	if result.InitiatorID != "" || result.InitiatorDisplayName != "" {
+		resp.Initiator = &UserInfo{
+			ID:          result.InitiatorID,
+			DisplayName: result.InitiatorDisplayName,
+		}
+	}
+
+	for _, part := range result.Parts {
+		resp.Parts = append(resp.Parts, ListedPartResponse{
+			PartNumber:   part.PartNumber,
+			LastModified: NewContentTime(part.LastModified),
+			ETag:         FormatETag(part.ContentMD5[:]),
+			Size:         part.Size,
+		})
+	}
+
+	return writeXMLResponse(w, resp)
+}
+
 func (s *s3) completeMultipartUpload(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object, uploadID string) error {
 	log := s.logger.With(
 		zap.String("bucket", bucket),
@@ -385,4 +480,34 @@ func parseCompletedPartETag(etagStr string) (etag [16]byte, _ error) {
 // along with the part count to match AWS multipart ETag semantics.
 func FormatMultipartETag(hash []byte, partCount int) string {
 	return `"` + hex.EncodeToString(hash) + "-" + strconv.Itoa(partCount) + `"`
+}
+
+func listPartsPageFromQuery(query url.Values) (ListPartsPage, error) {
+	page := ListPartsPage{
+		MaxParts: DefaultMaxUploadListParts,
+	}
+
+	if rawMarker := query.Get("part-number-marker"); rawMarker != "" {
+		val, err := strconv.Atoi(rawMarker)
+		if err != nil {
+			return page, s3errs.ErrInvalidArgument
+		}
+		if val < 0 || val >= MaxUploadPartNumber {
+			return page, s3errs.ErrInvalidArgument
+		}
+		page.PartNumberMarker = val
+	}
+
+	if rawMax := query.Get("max-parts"); rawMax != "" {
+		val, err := strconv.Atoi(rawMax)
+		if err != nil {
+			return page, s3errs.ErrInvalidArgument
+		}
+		if val < 1 || val > MaxUploadListParts {
+			return page, s3errs.ErrInvalidArgument
+		}
+		page.MaxParts = int64(val)
+	}
+
+	return page, nil
 }

@@ -188,16 +188,22 @@ type Backend interface {
 	//   the data read from 'r' do not match, [ErrBadDigest] must be returned.
 	UploadPart(ctx context.Context, accessKeyID, bucket, object, uploadID string, r io.Reader, opts UploadPartOptions) (*UploadPartResult, error)
 
-	// CompleteMultipartUpload completes a multipart upload by assembling the
-	// previously uploaded parts into the final object.
+	// ListParts lists uploaded parts for the specified multipart upload.
 	//
-	// - If the access key does not have permission to write to the object,
+	// - If the access key does not have permission to list parts,
 	//   [ErrAccessDenied] must be returned.
 	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
 	//
 	// - If the multipart upload ID is not known or no longer active,
 	//   [ErrNoSuchUpload] must be returned.
+	ListParts(ctx context.Context, accessKeyID, bucket, object, uploadID string, page ListPartsPage) (*ListPartsResult, error)
+
+	// CompleteMultipartUpload completes a multipart upload by assembling the
+	// previously uploaded parts into the final object.
+	//
+	// - If the access key does not have permission to write to the object,
+	//   [ErrAccessDenied] must be returned.
 	//
 	// - If any referenced part is missing or its ETag does not match,
 	//   [ErrInvalidPart] must be returned.

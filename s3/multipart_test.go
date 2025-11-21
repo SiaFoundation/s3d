@@ -5,6 +5,7 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"io"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -172,6 +173,100 @@ func TestUploadPart(t *testing.T) {
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchBucket, err)
 }
 
+func TestCompleteMultipartUpload(t *testing.T) {
+	// prepare a backend with 2 keypairs
+	backend := testutil.NewMemoryBackend(
+		testutil.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
+		testutil.WithKeyPair("foo", "bar"),
+	)
+	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
+
+	const (
+		bucket = "complete-multipart-bucket"
+		object = "object"
+	)
+
+	// create target bucket
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// prepare part data
+	p1Data := bytes.Repeat([]byte("a"), int(s3.MinUploadPartSize))
+	p2Data := []byte(t.Name())
+
+	// initiate multipart upload
+	uploadID, parts := newTestMultipartUpload(t, s3Tester, bucket, object, [][]byte{p1Data, p2Data})
+
+	// complete the multipart upload
+	completed, err := s3Tester.CompleteMultipartUpload(t.Context(), bucket, object, uploadID, parts)
+	if err != nil {
+		t.Fatal(err)
+	} else if completed.ETag == nil {
+		t.Fatal("expected ETag in completion response")
+	}
+
+	// assert final ETag is correct
+	p1MD5 := md5.Sum(p1Data)
+	p2MD5 := md5.Sum(p2Data)
+	combined := make([]byte, 32)
+	copy(combined, p1MD5[:])
+	copy(combined[16:], p2MD5[:])
+	hash := md5.Sum(combined)
+	expectedETag := s3.FormatMultipartETag(hash[:], 2)
+	if *completed.ETag != expectedETag {
+		t.Fatalf("expected final ETag %q, got %q", expectedETag, *completed.ETag)
+	}
+
+	// assert object data is correct
+	obj, err := s3Tester.GetObject(t.Context(), bucket, object, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer obj.Body.Close()
+
+	data, err := io.ReadAll(obj.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedData := append(append([]byte{}, p1Data...), p2Data...)
+	if !bytes.Equal(data, expectedData) {
+		t.Fatalf("unexpected object data")
+	}
+
+	// assert [s3errs.ErrNoSuchUpload] is returned for invalid upload id
+	_, err = s3Tester.CompleteMultipartUpload(t.Context(), bucket, object, "nonexistent-upload", parts)
+	testutil.AssertS3Error(t, s3errs.ErrNoSuchUpload, err)
+
+	// assert [s3errs.ErrNoSuchBucket] is returned for nonexistent bucket
+	_, err = s3Tester.CompleteMultipartUpload(t.Context(), "missing-bucket", object, uploadID, parts)
+	testutil.AssertS3Error(t, s3errs.ErrNoSuchBucket, err)
+
+	// assert [s3errs.ErrEntityTooSmall] is returned if a part is smaller than
+	// the minimum size
+	uploadID, tooSmallParts := newTestMultipartUpload(t, s3Tester, bucket, object, [][]byte{[]byte("too"), []byte("small")})
+	_, err = s3Tester.CompleteMultipartUpload(t.Context(), bucket, object, uploadID, tooSmallParts)
+	testutil.AssertS3Error(t, s3errs.ErrEntityTooSmall, err)
+
+	// assert [s3errs.ErrInvalidPart] is returned for invalid part ETag
+	uploadID, invalidParts := newTestMultipartUpload(t, s3Tester, bucket, object, [][]byte{p1Data, p2Data})
+	invalidParts[1].ETag = aws.String(`"ffffffffffffffffffffffffffffffff"`)
+	_, err = s3Tester.CompleteMultipartUpload(t.Context(), bucket, object, uploadID, invalidParts)
+	testutil.AssertS3Error(t, s3errs.ErrInvalidPart, err)
+
+	// assert [s3errs.ErrInvalidPartOrder] is returned for parts out of order
+	uploadID, outOfOrderParts := newTestMultipartUpload(t, s3Tester, bucket, object, [][]byte{p1Data, p2Data})
+	outOfOrderParts[0], outOfOrderParts[1] = outOfOrderParts[1], outOfOrderParts[0]
+	_, err = s3Tester.CompleteMultipartUpload(t.Context(), bucket, object, uploadID, outOfOrderParts)
+	testutil.AssertS3Error(t, s3errs.ErrInvalidPartOrder, err)
+
+	// assert [s3errs.ErrAccessDenied] is returned for unauthorized access
+	otherTester := s3Tester.ChangeAccessKey(t, "foo", "bar")
+	uploadID, parts = newTestMultipartUpload(t, s3Tester, bucket, object, [][]byte{p1Data, p2Data})
+	_, err = otherTester.CompleteMultipartUpload(t.Context(), bucket, object, uploadID, parts)
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+}
+
 func TestListMultipartUploads(t *testing.T) {
 	// prepare a backend with 2 keypairs
 	backend := testutil.NewMemoryBackend(
@@ -286,100 +381,6 @@ func TestListMultipartUploads(t *testing.T) {
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchBucket, err)
 }
 
-func TestCompleteMultipartUpload(t *testing.T) {
-	// prepare a backend with 2 keypairs
-	backend := testutil.NewMemoryBackend(
-		testutil.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
-		testutil.WithKeyPair("foo", "bar"),
-	)
-	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
-
-	const (
-		bucket = "complete-multipart-bucket"
-		object = "object"
-	)
-
-	// create target bucket
-	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
-		t.Fatal(err)
-	}
-
-	// prepare part data
-	p1Data := bytes.Repeat([]byte("a"), int(s3.MinUploadPartSize))
-	p2Data := []byte(t.Name())
-
-	// initiate multipart upload
-	uploadID, parts := newTestMultipartUpload(t, s3Tester, bucket, object, [][]byte{p1Data, p2Data})
-
-	// complete the multipart upload
-	completed, err := s3Tester.CompleteMultipartUpload(t.Context(), bucket, object, uploadID, parts)
-	if err != nil {
-		t.Fatal(err)
-	} else if completed.ETag == nil {
-		t.Fatal("expected ETag in completion response")
-	}
-
-	// assert final ETag is correct
-	p1MD5 := md5.Sum(p1Data)
-	p2MD5 := md5.Sum(p2Data)
-	combined := make([]byte, 32)
-	copy(combined, p1MD5[:])
-	copy(combined[16:], p2MD5[:])
-	hash := md5.Sum(combined)
-	expectedETag := s3.FormatMultipartETag(hash[:], 2)
-	if *completed.ETag != expectedETag {
-		t.Fatalf("expected final ETag %q, got %q", expectedETag, *completed.ETag)
-	}
-
-	// assert object data is correct
-	obj, err := s3Tester.GetObject(t.Context(), bucket, object, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer obj.Body.Close()
-
-	data, err := io.ReadAll(obj.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	expectedData := append(append([]byte{}, p1Data...), p2Data...)
-	if !bytes.Equal(data, expectedData) {
-		t.Fatalf("unexpected object data")
-	}
-
-	// assert [s3errs.ErrNoSuchUpload] is returned for invalid upload id
-	_, err = s3Tester.CompleteMultipartUpload(t.Context(), bucket, object, "nonexistent-upload", parts)
-	testutil.AssertS3Error(t, s3errs.ErrNoSuchUpload, err)
-
-	// assert [s3errs.ErrNoSuchBucket] is returned for nonexistent bucket
-	_, err = s3Tester.CompleteMultipartUpload(t.Context(), "missing-bucket", object, uploadID, parts)
-	testutil.AssertS3Error(t, s3errs.ErrNoSuchBucket, err)
-
-	// assert [s3errs.ErrEntityTooSmall] is returned if a part is smaller than
-	// the minimum size
-	uploadID, tooSmallParts := newTestMultipartUpload(t, s3Tester, bucket, object, [][]byte{[]byte("too"), []byte("small")})
-	_, err = s3Tester.CompleteMultipartUpload(t.Context(), bucket, object, uploadID, tooSmallParts)
-	testutil.AssertS3Error(t, s3errs.ErrEntityTooSmall, err)
-
-	// assert [s3errs.ErrInvalidPart] is returned for invalid part ETag
-	uploadID, invalidParts := newTestMultipartUpload(t, s3Tester, bucket, object, [][]byte{p1Data, p2Data})
-	invalidParts[1].ETag = aws.String(`"ffffffffffffffffffffffffffffffff"`)
-	_, err = s3Tester.CompleteMultipartUpload(t.Context(), bucket, object, uploadID, invalidParts)
-	testutil.AssertS3Error(t, s3errs.ErrInvalidPart, err)
-
-	// assert [s3errs.ErrInvalidPartOrder] is returned for parts out of order
-	uploadID, outOfOrderParts := newTestMultipartUpload(t, s3Tester, bucket, object, [][]byte{p1Data, p2Data})
-	outOfOrderParts[0], outOfOrderParts[1] = outOfOrderParts[1], outOfOrderParts[0]
-	_, err = s3Tester.CompleteMultipartUpload(t.Context(), bucket, object, uploadID, outOfOrderParts)
-	testutil.AssertS3Error(t, s3errs.ErrInvalidPartOrder, err)
-
-	// assert [s3errs.ErrAccessDenied] is returned for unauthorized access
-	otherTester := s3Tester.ChangeAccessKey(t, "foo", "bar")
-	uploadID, parts = newTestMultipartUpload(t, s3Tester, bucket, object, [][]byte{p1Data, p2Data})
-	_, err = otherTester.CompleteMultipartUpload(t.Context(), bucket, object, uploadID, parts)
-	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
-}
-
 func newTestMultipartUpload(t *testing.T, s3Tester *testutil.S3Tester, bucket, object string, parts [][]byte) (uploadID string, completedParts []types.CompletedPart) {
 	res, err := s3Tester.CreateMultipartUpload(t.Context(), bucket, object, nil)
 	if err != nil {
@@ -399,4 +400,94 @@ func newTestMultipartUpload(t *testing.T, s3Tester *testutil.S3Tester, bucket, o
 		})
 	}
 	return
+}
+
+func TestListParts(t *testing.T) {
+	s3Tester := testutil.NewTester(t)
+
+	const (
+		bucket = "multipart-bucket"
+		object = "object"
+	)
+
+	// create target bucket
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// create multipart upload
+	parts := [][]byte{
+		[]byte("foo"),
+		[]byte("bar"),
+		[]byte("bax"),
+	}
+	uploadID, _ := newTestMultipartUpload(t, s3Tester, bucket, object, parts)
+
+	// list parts without pagination
+	res, err := s3Tester.ListParts(t.Context(), bucket, object, uploadID, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if res == nil {
+		t.Fatal("expected response")
+	} else if len(res.Parts) != 3 {
+		t.Fatalf("expected 3 parts, got %d", len(res.Parts))
+	} else if res.IsTruncated == nil || *res.IsTruncated {
+		t.Fatal("expected untruncated response")
+	} else if res.MaxParts == nil || *res.MaxParts != 1000 {
+		t.Fatalf("expected default max parts 1000, got %v", res.MaxParts)
+	}
+
+	for i, got := range res.Parts {
+		if got.PartNumber == nil || *got.PartNumber != int32(i+1) {
+			t.Fatalf("part %d: expected part number %d, got %v", i, i+1, got.PartNumber)
+		} else if expectedMD5 := md5.Sum(parts[i]); got.ETag == nil || *got.ETag != hex.EncodeToString(expectedMD5[:]) {
+			t.Fatalf("part %d: expected ETag %x, got %v", i, expectedMD5, got.ETag)
+		} else if got.Size == nil || *got.Size != int64(len(parts[i])) {
+			t.Fatalf("part %d: expected size %d, got %v", i, len(parts[i]), got.Size)
+		}
+	}
+
+	// list parts with pagination
+	maxParts := int32(2)
+	paginated, err := s3Tester.ListParts(t.Context(), bucket, object, *res.UploadId, nil, &maxParts)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(paginated.Parts) != 2 {
+		t.Fatalf("expected 2 parts, got %d", len(paginated.Parts))
+	} else if paginated.IsTruncated == nil || !*paginated.IsTruncated {
+		t.Fatal("expected truncated response")
+	} else if paginated.NextPartNumberMarker == nil {
+		t.Fatal("expected next marker")
+	} else if paginated.MaxParts == nil || *paginated.MaxParts != maxParts {
+		t.Fatalf("expected max parts %d, got %v", maxParts, paginated.MaxParts)
+	}
+
+	nextMarker, err := strconv.Atoi(*paginated.NextPartNumberMarker)
+	if err != nil {
+		t.Fatalf("expected numeric next marker, got %v: %v", *paginated.NextPartNumberMarker, err)
+	} else if nextMarker != 2 {
+		t.Fatalf("expected next marker 2, got %d", nextMarker)
+	}
+
+	// fetch next page
+	marker := paginated.NextPartNumberMarker
+	nextPage, err := s3Tester.ListParts(t.Context(), bucket, object, *res.UploadId, marker, &maxParts)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(nextPage.Parts) != 1 {
+		t.Fatalf("expected final page of 1 part, got %d", len(nextPage.Parts))
+	} else if nextPage.IsTruncated == nil || *nextPage.IsTruncated {
+		t.Fatal("expected final page to not be truncated")
+	} else if nextPage.PartNumberMarker == nil {
+		t.Fatalf("expected part number marker %s, got nil", *marker)
+	}
+
+	parsedMarker, err := strconv.Atoi(*nextPage.PartNumberMarker)
+	if err != nil {
+		t.Fatalf("expected numeric part number marker, got %v: %v", *nextPage.PartNumberMarker, err)
+	} else if parsedMarker != nextMarker {
+		t.Fatalf("expected part number marker %d, got %d", nextMarker, parsedMarker)
+	} else if nextPage.Parts[0].PartNumber == nil || *nextPage.Parts[0].PartNumber != 3 {
+		t.Fatalf("expected final part number 3, got %v", nextPage.Parts[0].PartNumber)
+	}
 }
