@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/SiaFoundation/s3d/s3"
 
@@ -89,84 +88,20 @@ func (s *Store) ListObjects(accessKeyID *string, bucket string, prefix s3.Prefix
 			return fmt.Errorf("failed to get bucket ID: %w", err)
 		}
 
-		query := `SELECT name, sia_meta FROM objects WHERE bucket_id = ?`
-		args := []any{bid}
-
-		if page.Marker != nil && *page.Marker != "" {
-			query += ` AND name > ?`
-			args = append(args, *page.Marker)
-		}
-		if prefix.HasPrefix {
-			query += ` AND name LIKE ?`
-			args = append(args, prefix.Prefix+"%")
-		}
-		query += `
-ORDER BY name
-LIMIT ?;`
-		args = append(args, page.MaxKeys+1)
-
-		rows, err := tx.Query(query, args...)
+		// Query 1: Fetch up to maxKeys actual objects
+		objects, err := s.fetchObjects(tx, bid, prefix, page)
 		if err != nil {
-			return fmt.Errorf("failed to query objects: %w", err)
-		}
-		defer rows.Close()
-
-		var lastMatchedPart string
-		for rows.Next() {
-			var name string
-			var siaMeta []byte
-			if err := rows.Scan(&name, &siaMeta); err != nil {
-				return fmt.Errorf("failed to scan: %w", err)
-			}
-
-			var obj slabs.SealedObject
-			if err := obj.UnmarshalSia(siaMeta); err != nil {
-				return fmt.Errorf("failed to parse object: %w", err)
-			}
-			objID := obj.ID()
-
-			match := s3.Match(prefix, name)
-			switch {
-			case match == nil:
-				continue
-			case match.CommonPrefix:
-				if page.Marker != nil && strings.Compare(*page.Marker, match.MatchedPart) >= 0 {
-					continue
-				}
-				if match.MatchedPart == lastMatchedPart {
-					continue // should not count towards keys
-				}
-				result.AddPrefix(match.MatchedPart)
-				lastMatchedPart = match.MatchedPart
-			default:
-				if page.Marker != nil && strings.Compare(*page.Marker, name) >= 0 {
-					continue
-				}
-
-				var size uint32
-				for _, obj := range obj.Slabs {
-					size += obj.Length
-				}
-
-				result.Add(&s3.Content{
-					Key:          name,
-					LastModified: s3.NewContentTime(obj.UpdatedAt),
-					ETag:         s3.FormatETag(objID[:]),
-					Size:         int64(size),
-				})
-			}
-
-			if result.IsTruncated {
-				break
-			}
-		}
-		if err := rows.Err(); err != nil {
-			return fmt.Errorf("failed to get rows: %w", err)
+			return err
 		}
 
-		if !result.IsTruncated {
-			result.NextMarker = ""
+		// Query 2: Fetch up to maxKeys common prefixes
+		commonPrefixes, err := s.fetchCommonPrefixes(tx, bid, prefix, page)
+		if err != nil {
+			return err
 		}
+
+		// Merge results in sorted order
+		s.mergeResults(result, objects, commonPrefixes, page.MaxKeys)
 
 		return nil
 	})
@@ -175,4 +110,159 @@ LIMIT ?;`
 	}
 
 	return result, nil
+}
+
+func (s *Store) fetchObjects(tx *txn, bid int64, prefix s3.Prefix, page s3.ListObjectsPage) ([]*s3.Content, error) {
+	query := `SELECT name, sia_meta FROM objects WHERE bucket_id = ?`
+	args := []any{bid}
+
+	if page.Marker != nil && *page.Marker != "" {
+		query += ` AND name > ?`
+		args = append(args, *page.Marker)
+	}
+	if prefix.HasPrefix {
+		query += ` AND name LIKE ?`
+		args = append(args, prefix.Prefix+"%")
+	}
+	// Exclude objects that would be common prefixes
+	if prefix.HasDelimiter {
+		query += ` AND name NOT LIKE ?`
+		args = append(args, prefix.Prefix+"%"+prefix.Delimiter+"%")
+	}
+	query += ` ORDER BY name LIMIT ?`
+	args = append(args, page.MaxKeys+1)
+
+	rows, err := tx.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query objects: %w", err)
+	}
+	defer rows.Close()
+
+	var objects []*s3.Content
+	for rows.Next() {
+		var name string
+		var siaMeta []byte
+		if err := rows.Scan(&name, &siaMeta); err != nil {
+			return nil, fmt.Errorf("failed to scan: %w", err)
+		}
+
+		var obj slabs.SealedObject
+		if err := obj.UnmarshalSia(siaMeta); err != nil {
+			return nil, fmt.Errorf("failed to parse object: %w", err)
+		}
+		objID := obj.ID()
+
+		var size uint32
+		for _, slab := range obj.Slabs {
+			size += slab.Length
+		}
+
+		objects = append(objects, &s3.Content{
+			Key:          name,
+			LastModified: s3.NewContentTime(obj.UpdatedAt),
+			ETag:         s3.FormatETag(objID[:]),
+			Size:         int64(size),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to get rows: %w", err)
+	}
+
+	return objects, nil
+}
+
+func (s *Store) fetchCommonPrefixes(tx *txn, bid int64, prefix s3.Prefix, page s3.ListObjectsPage) ([]string, error) {
+	if !prefix.HasDelimiter {
+		return nil, nil
+	}
+
+	// Find distinct common prefixes by selecting the minimum name for each prefix group
+	query := `
+SELECT DISTINCT substr(name, 1, instr(substr(name, ?), ?) + ? - 1) as common_prefix
+FROM objects 
+WHERE bucket_id = ?`
+
+	prefixLen := len(prefix.Prefix) + 1
+	args := []any{prefixLen, prefix.Delimiter, len(prefix.Prefix), bid}
+
+	if page.Marker != nil && *page.Marker != "" {
+		query += ` AND name > ?`
+		args = append(args, *page.Marker)
+	}
+	if prefix.HasPrefix {
+		query += ` AND name LIKE ?`
+		args = append(args, prefix.Prefix+"%")
+	}
+	// Only include objects that have the delimiter after the prefix
+	if prefix.HasDelimiter {
+		query += ` AND name LIKE ?`
+		args = append(args, prefix.Prefix+"%"+prefix.Delimiter+"%")
+	}
+
+	query += ` ORDER BY common_prefix LIMIT ?`
+	args = append(args, page.MaxKeys+1)
+
+	rows, err := tx.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query common prefixes: %w", err)
+	}
+	defer rows.Close()
+
+	var prefixes []string
+	for rows.Next() {
+		var commonPrefix string
+		if err := rows.Scan(&commonPrefix); err != nil {
+			return nil, fmt.Errorf("failed to scan common prefix: %w", err)
+		}
+		prefixes = append(prefixes, commonPrefix+"/")
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to get rows: %w", err)
+	}
+
+	return prefixes, nil
+}
+
+func (s *Store) mergeResults(result *s3.ObjectsListResult, objects []*s3.Content, prefixes []string, maxKeys int64) {
+	i, j := 0, 0
+
+	for int64(len(result.CommonPrefixes)+len(result.Contents)) < maxKeys && (i < len(objects) || j < len(prefixes)) {
+		if i >= len(objects) {
+			// Only prefixes left
+			result.AddPrefix(prefixes[j])
+			j++
+		} else if j >= len(prefixes) {
+			// Only objects left
+			result.Add(objects[i])
+			i++
+		} else {
+			// Compare and add the smaller one
+			if objects[i].Key < prefixes[j] {
+				result.Add(objects[i])
+				i++
+			} else {
+				result.AddPrefix(prefixes[j])
+				j++
+			}
+		}
+	}
+
+	// Check if there are more results
+	if i < len(objects) || j < len(prefixes) {
+		result.IsTruncated = true
+		// Set NextMarker to the last added key
+		if (len(result.CommonPrefixes) + len(result.Contents)) > 0 {
+			// Get the last item added (either from Contents or CommonPrefixes)
+			lastContent := result.Contents[len(result.Contents)-1]
+			lastPrefix := ""
+			if len(result.CommonPrefixes) > 0 {
+				lastPrefix = result.CommonPrefixes[len(result.CommonPrefixes)-1].Prefix
+			}
+			if lastPrefix != "" && (lastContent == nil || lastPrefix > lastContent.Key) {
+				result.NextMarker = lastPrefix
+			} else if lastContent != nil {
+				result.NextMarker = lastContent.Key
+			}
+		}
+	}
 }
