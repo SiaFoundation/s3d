@@ -89,7 +89,7 @@ func (s *Sia) LoadSecret(ctx context.Context, accessKeyID string) (auth.SecretAc
 // destination bucket and object key. The provided metadata map contains any
 // metadata that should be merged into the copied object except for the
 // x-amz-acl header.
-func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, meta map[string]string) (*s3.CopyObjectResult, error) {
+func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, replace bool, meta map[string]string) (*s3.CopyObjectResult, error) {
 	return nil, s3errs.ErrNotImplemented
 }
 
