@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/md5"
 	"encoding/hex"
+	"errors"
 	"io"
 	"strconv"
 	"strings"
@@ -109,9 +110,10 @@ func TestAbortMultipartUpload(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// assert [s3errs.ErrNoSuchUpload] is returned if the upload was already aborted
-	err = s3Tester.AbortMultipartUpload(t.Context(), bucket, object, uploadID)
-	testutil.AssertS3Error(t, s3errs.ErrNoSuchUpload, err)
+	// assert we can call abort again without error
+	if err := s3Tester.AbortMultipartUpload(t.Context(), bucket, object, uploadID); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestUploadPart(t *testing.T) {
@@ -155,8 +157,16 @@ func TestUploadPart(t *testing.T) {
 		t.Fatalf("expected ETag %x, got %q", expectedMD5, *part.ETag)
 	}
 
+	// assert [s3errs.ErrNoSuchUpload] is returned for aborted upload
+	if err := s3Tester.AbortMultipartUpload(t.Context(), bucket, object, uploadID); err != nil {
+		t.Fatal(err)
+	}
+	_, err = s3Tester.UploadPart(t.Context(), bucket, object, uploadID, 1, data)
+	testutil.AssertS3Error(t, s3errs.ErrNoSuchUpload, err)
+
 	// assert [s3errs.ErrInvalidArgument] is returned for invalid part number
-	_, err = s3Tester.UploadPart(t.Context(), bucket, object, *res.UploadId, 0, data)
+	uploadID, _ = newTestMultipartUpload(t, s3Tester, bucket, object, nil)
+	_, err = s3Tester.UploadPart(t.Context(), bucket, object, uploadID, 0, data)
 	testutil.AssertS3Error(t, s3errs.ErrInvalidArgument, err)
 
 	// assert [s3errs.ErrNoSuchUpload] is returned for invalid upload id
@@ -202,6 +212,12 @@ func TestCompleteMultipartUpload(t *testing.T) {
 	completed, err := s3Tester.CompleteMultipartUpload(t.Context(), bucket, object, uploadID, parts)
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	// assert completeMultipartUpload is idempotent
+	completed, err = s3Tester.CompleteMultipartUpload(t.Context(), bucket, object, uploadID, parts)
+	if err != nil {
+		t.Fatal(err)
 	} else if completed.ETag == nil {
 		t.Fatal("expected ETag in completion response")
 	}
@@ -234,8 +250,20 @@ func TestCompleteMultipartUpload(t *testing.T) {
 		t.Fatalf("unexpected object data")
 	}
 
+	// assert [s3errs.ErrNoSuchUpload] for already completed upload
+	_, err = s3Tester.CompleteMultipartUpload(t.Context(), bucket, object, uploadID, parts)
+	testutil.AssertS3Error(t, s3errs.ErrNoSuchUpload, err)
+
 	// assert [s3errs.ErrNoSuchUpload] is returned for invalid upload id
 	_, err = s3Tester.CompleteMultipartUpload(t.Context(), bucket, object, "nonexistent-upload", parts)
+	testutil.AssertS3Error(t, s3errs.ErrNoSuchUpload, err)
+
+	// assert [s3errs.ErrNoSuchUpload] is returned for aborted upload
+	uploadID, _ = newTestMultipartUpload(t, s3Tester, bucket, object, [][]byte{p1Data, p2Data})
+	if err := s3Tester.AbortMultipartUpload(t.Context(), bucket, object, uploadID); err != nil {
+		t.Fatal(err)
+	}
+	_, err = s3Tester.CompleteMultipartUpload(t.Context(), bucket, object, uploadID, parts)
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchUpload, err)
 
 	// assert [s3errs.ErrNoSuchBucket] is returned for nonexistent bucket
@@ -291,10 +319,7 @@ func TestListMultipartUploads(t *testing.T) {
 	}
 
 	// create multipart upload
-	mp1, err := s3Tester.CreateMultipartUpload(t.Context(), bucket, "multipart-upload-1", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	uploadID1, parts1 := newTestMultipartUpload(t, s3Tester, bucket, "multipart-upload-1", [][]byte{[]byte("part1")})
 
 	// assert the upload shows up in the listing
 	res, err = s3Tester.ListMultipartUploads(t.Context(), bucket, nil)
@@ -302,15 +327,12 @@ func TestListMultipartUploads(t *testing.T) {
 		t.Fatal(err)
 	} else if len(res.Uploads) != 1 {
 		t.Fatalf("expected 1 upload, got %d", len(res.Uploads))
-	} else if *res.Uploads[0].UploadId != *mp1.UploadId {
-		t.Fatalf("expected upload ID %q, got %q", *mp1.UploadId, *res.Uploads[0].UploadId)
+	} else if *res.Uploads[0].UploadId != uploadID1 {
+		t.Fatalf("expected upload ID %q, got %q", uploadID1, *res.Uploads[0].UploadId)
 	}
 
 	// create another multipart upload
-	mp2, err := s3Tester.CreateMultipartUpload(t.Context(), bucket, "multipart-upload-2", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	uploadID2, parts2 := newTestMultipartUpload(t, s3Tester, bucket, "multipart-upload-2", [][]byte{[]byte("part1")})
 
 	// assert both uploads show up in the listing
 	res, err = s3Tester.ListMultipartUploads(t.Context(), bucket, nil)
@@ -330,12 +352,12 @@ func TestListMultipartUploads(t *testing.T) {
 		t.Fatal("expected truncated response")
 	} else if aws.ToString(limited.NextKeyMarker) != "multipart-upload-1" {
 		t.Fatal("expected next key marker in response")
-	} else if aws.ToString(limited.NextUploadIdMarker) != *mp1.UploadId {
+	} else if aws.ToString(limited.NextUploadIdMarker) != uploadID1 {
 		t.Fatal("expected next upload id marker in response")
 	} else if len(limited.Uploads) != 1 {
 		t.Fatalf("expected 1 upload, got %d", len(limited.Uploads))
-	} else if *limited.Uploads[0].UploadId != *mp1.UploadId {
-		t.Fatalf("expected upload ID %q, got %q", *mp1.UploadId, *limited.Uploads[0].UploadId)
+	} else if *limited.Uploads[0].UploadId != uploadID1 {
+		t.Fatalf("expected upload ID %q, got %q", uploadID1, *limited.Uploads[0].UploadId)
 	}
 
 	paginated, err := s3Tester.ListMultipartUploads(t.Context(), bucket, &service.ListMultipartUploadsInput{
@@ -346,17 +368,14 @@ func TestListMultipartUploads(t *testing.T) {
 		t.Fatal(err)
 	} else if len(paginated.Uploads) != 1 {
 		t.Fatalf("expected 1 upload, got %d", len(paginated.Uploads))
-	} else if *paginated.Uploads[0].UploadId != *mp2.UploadId {
-		t.Fatalf("expected upload ID %q, got %q", *mp2.UploadId, *paginated.Uploads[0].UploadId)
+	} else if *paginated.Uploads[0].UploadId != uploadID2 {
+		t.Fatalf("expected upload ID %q, got %q", uploadID2, *paginated.Uploads[0].UploadId)
 	} else if aws.ToBool(paginated.IsTruncated) {
 		t.Fatal("did not expect truncated response")
 	}
 
 	// create another multipart upload
-	_, err = s3Tester.CreateMultipartUpload(t.Context(), bucket, "non-prefixed-upload-3", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	_, _ = newTestMultipartUpload(t, s3Tester, bucket, "non-prefixed-upload-3", [][]byte{[]byte("part1")})
 	prefixed, err := s3Tester.ListMultipartUploads(t.Context(), bucket, &service.ListMultipartUploadsInput{
 		Prefix: aws.String("multipart-"),
 	})
@@ -369,6 +388,23 @@ func TestListMultipartUploads(t *testing.T) {
 		if !strings.HasPrefix(aws.ToString(upload.Key), "multipart-") {
 			t.Fatalf("unexpected key in prefix listing: %v", upload.Key)
 		}
+	}
+
+	// complete the first two uploads
+	_, err1 := s3Tester.CompleteMultipartUpload(t.Context(), bucket, "multipart-upload-1", uploadID1, parts1)
+	_, err2 := s3Tester.CompleteMultipartUpload(t.Context(), bucket, "multipart-upload-2", uploadID2, parts2)
+	if err := errors.Join(err1, err2); err != nil {
+		t.Fatal(err)
+	}
+
+	// assert only the remaining upload shows up in the listing
+	res, err = s3Tester.ListMultipartUploads(t.Context(), bucket, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(res.Uploads) != 1 {
+		t.Fatalf("expected 1 upload, got %d", len(res.Uploads))
+	} else if *res.Uploads[0].Key != "non-prefixed-upload-3" {
+		t.Fatalf("expected remaining upload to be 'non-prefixed-upload-3', got %q", *res.Uploads[0].Key)
 	}
 
 	// assert [s3errs.ErrAccessDenied] is returned for unauthorized access
