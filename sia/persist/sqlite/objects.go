@@ -130,7 +130,7 @@ func (s *Store) fetchObjects(tx *txn, bid int64, prefix s3.Prefix, page s3.ListO
 		args = append(args, prefix.Prefix+"%"+prefix.Delimiter+"%")
 	}
 	query += ` ORDER BY name LIMIT ?`
-	args = append(args, page.MaxKeys)
+	args = append(args, page.MaxKeys+1)
 
 	rows, err := tx.Query(query, args...)
 	if err != nil {
@@ -200,7 +200,7 @@ WHERE bucket_id = ?`
 	}
 
 	query += ` ORDER BY common_prefix LIMIT ?`
-	args = append(args, page.MaxKeys)
+	args = append(args, page.MaxKeys+1)
 
 	rows, err := tx.Query(query, args...)
 	if err != nil {
@@ -225,6 +225,7 @@ WHERE bucket_id = ?`
 
 func (s *Store) mergeResults(result *s3.ObjectsListResult, objects []*s3.Content, prefixes []string, maxKeys int64) {
 	i, j := 0, 0
+
 	for int64(len(result.CommonPrefixes)+len(result.Contents)) < maxKeys && (i < len(objects) || j < len(prefixes)) {
 		if i >= len(objects) {
 			// Only prefixes left
