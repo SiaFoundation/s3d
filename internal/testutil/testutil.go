@@ -78,12 +78,13 @@ func (t *S3Tester) BucketLocation(ctx context.Context, bucket string) (string, e
 }
 
 // CopyObject is a convenience wrapper around the AWS SDK's CopyObject API.
-func (t *S3Tester) CopyObject(ctx context.Context, srcBucket, srcObject, dstBucket, dstObject string, meta map[string]string) ([]byte, error) {
+func (t *S3Tester) CopyObject(ctx context.Context, srcBucket, srcObject, dstBucket, dstObject string, dir types.MetadataDirective, meta map[string]string) ([]byte, error) {
 	resp, err := t.client.CopyObject(ctx, &service.CopyObjectInput{
-		CopySource: aws.String(fmt.Sprintf("%s/%s", srcBucket, url.QueryEscape(srcObject))),
-		Bucket:     aws.String(dstBucket),
-		Key:        aws.String(dstObject),
-		Metadata:   meta,
+		CopySource:        aws.String(fmt.Sprintf("%s/%s", srcBucket, url.QueryEscape(srcObject))),
+		Bucket:            aws.String(dstBucket),
+		Key:               aws.String(dstObject),
+		MetadataDirective: dir,
+		Metadata:          meta,
 	})
 	if err != nil {
 		return nil, err
