@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"strconv"
 	"strings"
@@ -524,6 +525,7 @@ func FormatETag(hash []byte) string {
 func metadataHeaders(headers map[string][]string, sizeLimit int) (map[string]string, error) {
 	meta := make(map[string]string)
 	for hk, hv := range headers {
+		hk = textproto.CanonicalMIMEHeaderKey(hk)
 		if strings.HasPrefix(hk, "X-Amz-") ||
 			hk == "Content-Type" ||
 			hk == "Content-Disposition" ||
@@ -746,12 +748,11 @@ func parseRangeHeader(s string) (*ObjectRangeRequest, error) {
 // writeGetOrHeadObjectHeaders contains shared logic for constructing headers for
 // a HEAD and a GET request for a /bucket/object URL.
 func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Request) error {
+	const metaPrefix = "X-Amz-Meta-"
 	for mk, mv := range obj.Metadata {
-		// NOTE: To preserve the original case of x-amz-meta-* headers as
-		// stored, we bypass http.Header.Set which would canonicalize the header
-		// key.
-		if strings.HasPrefix(strings.ToLower(mk), "x-amz-meta-") {
-			w.Header()[mk] = []string{mv}
+		// user metadata key is always returned in lowercase
+		if key, found := strings.CutPrefix(mk, metaPrefix); found {
+			w.Header()[fmt.Sprintf("%s%s", metaPrefix, strings.ToLower(key))] = []string{mv}
 		} else {
 			w.Header().Set(mk, mv)
 		}
