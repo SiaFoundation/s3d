@@ -769,8 +769,8 @@ func parseRangeHeader(s string) (*ObjectRangeRequest, error) {
 func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Request) error {
 	const metaPrefix = "X-Amz-Meta-"
 	for mk, mv := range obj.Metadata {
-		// user metadata key is always returned in lowercase
 		if key, found := strings.CutPrefix(mk, metaPrefix); found {
+			// user metadata key is always returned in lowercase
 			w.Header()[fmt.Sprintf("%s%s", metaPrefix, strings.ToLower(key))] = []string{mv}
 		} else {
 			w.Header().Set(mk, mv)
