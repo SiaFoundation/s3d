@@ -53,6 +53,13 @@ type (
 		lastModified time.Time
 		metadata     map[string]string
 		contentMD5   [16]byte
+		parts        map[int]objectMultipartPart
+	}
+
+	objectMultipartPart struct {
+		offset     int64
+		length     int64
+		contentMD5 [16]byte
 	}
 
 	multipartUpload struct {
@@ -129,6 +136,7 @@ func (b *MemoryBackend) CopyObject(ctx context.Context, accessKeyID, srcBucket, 
 		lastModified: time.Now(),
 		metadata:     meta,
 		contentMD5:   srcObjct.contentMD5,
+		parts:        srcObjct.parts,
 	}
 	b.buckets[dstBucket].objects[dstObject] = dstObjct
 	return &s3.CopyObjectResult{
@@ -208,8 +216,8 @@ func (b *MemoryBackend) DeleteObjects(ctx context.Context, accessKeyID, bucket s
 }
 
 // GetObject retrieves an object from the specified bucket.
-func (b *MemoryBackend) GetObject(ctx context.Context, accessKeyID *string, bucket, object string, requestedRange *s3.ObjectRangeRequest) (*s3.Object, error) {
-	return b.headOrGetObject(ctx, accessKeyID, bucket, object, requestedRange, false)
+func (b *MemoryBackend) GetObject(ctx context.Context, accessKeyID *string, bucket, object string, requestedRange *s3.ObjectRangeRequest, partNumber *int32) (*s3.Object, error) {
+	return b.headOrGetObject(ctx, accessKeyID, bucket, object, requestedRange, partNumber, false)
 }
 
 // HeadBucket checks if the specified bucket exists and is owned by the user.
@@ -225,8 +233,8 @@ func (b *MemoryBackend) HeadBucket(ctx context.Context, accessKeyID, bucket stri
 
 // HeadObject retrieves metadata about the specified object without returning
 // the object's data.
-func (b *MemoryBackend) HeadObject(ctx context.Context, accessKeyID *string, bucket, object string, requestedRange *s3.ObjectRangeRequest) (*s3.Object, error) {
-	return b.headOrGetObject(ctx, accessKeyID, bucket, object, requestedRange, true)
+func (b *MemoryBackend) HeadObject(ctx context.Context, accessKeyID *string, bucket, object string, requestedRange *s3.ObjectRangeRequest, partNumber *int32) (*s3.Object, error) {
+	return b.headOrGetObject(ctx, accessKeyID, bucket, object, requestedRange, partNumber, true)
 }
 
 // ListObjects lists objects in the specified bucket that match the given prefix
@@ -327,6 +335,7 @@ func (b *MemoryBackend) PutObject(_ context.Context, accessKeyID, bucket, obj st
 		contentMD5:   contentMD5,
 		lastModified: time.Now(),
 		metadata:     opts.Meta,
+		parts:        make(map[int]objectMultipartPart),
 	}
 	return &s3.PutObjectResult{
 		ContentMD5: contentMD5,
@@ -560,7 +569,7 @@ func (b *MemoryBackend) ListParts(_ context.Context, accessKeyID, bucket, key, u
 			result.IsTruncated = true
 			if len(result.Parts) > 0 {
 				last := result.Parts[len(result.Parts)-1].PartNumber
-				result.NextPartNumberMarker = strconv.Itoa(last)
+				result.NextPartNumberMarker = strconv.Itoa(int(last))
 			}
 			break
 		}
@@ -601,6 +610,7 @@ func (b *MemoryBackend) CompleteMultipartUpload(_ context.Context, accessKeyID, 
 	// validate parts
 	var prev, totalSize int
 	objHash := make([]byte, 0, len(parts)*ETagSize)
+	objParts := make(map[int]objectMultipartPart, len(parts))
 	for i, completed := range parts {
 		if i > 0 && completed.PartNumber <= prev {
 			return nil, s3errs.ErrInvalidPartOrder
@@ -619,8 +629,14 @@ func (b *MemoryBackend) CompleteMultipartUpload(_ context.Context, accessKeyID, 
 			return nil, s3errs.ErrEntityTooSmall
 		}
 
-		totalSize += len(part.data)
 		objHash = append(objHash, part.contentMD5[:]...)
+		objParts[completed.PartNumber] = objectMultipartPart{
+			offset:     int64(totalSize),
+			length:     int64(len(part.data)),
+			contentMD5: part.contentMD5,
+		}
+
+		totalSize += len(part.data)
 	}
 
 	// collect object data
@@ -649,6 +665,7 @@ func (b *MemoryBackend) CompleteMultipartUpload(_ context.Context, accessKeyID, 
 		lastModified: time.Now(),
 		metadata:     upload.metadata,
 		contentMD5:   objMD5,
+		parts:        objParts,
 	}
 	delete(b.multipartUploads, uploadID)
 
@@ -681,7 +698,7 @@ func (b *MemoryBackend) LoadSecret(ctx context.Context, accessKeyID string) (aut
 	return nil, s3errs.ErrInvalidAccessKeyId
 }
 
-func (b *MemoryBackend) headOrGetObject(_ context.Context, accessKeyID *string, bucket, object string, requestedRange *s3.ObjectRangeRequest, head bool) (*s3.Object, error) {
+func (b *MemoryBackend) headOrGetObject(_ context.Context, accessKeyID *string, bucket, object string, requestedRange *s3.ObjectRangeRequest, partNumber *int32, head bool) (*s3.Object, error) {
 	bkt, exists := b.buckets[bucket]
 	if !exists {
 		return nil, s3errs.ErrNoSuchBucket
@@ -697,7 +714,31 @@ func (b *MemoryBackend) headOrGetObject(_ context.Context, accessKeyID *string, 
 	rnge, err := requestedRange.Range(size)
 	if err != nil {
 		return nil, err
+	} else if rnge != nil {
+		partNumber = nil // ignore part number when a range is requested
 	}
+
+	var contentMD5 [16]byte
+	if partNumber != nil {
+		partInfo, exists := obj.parts[int(*partNumber)]
+		if !exists {
+			return nil, s3errs.ErrInvalidPart
+		}
+		rnge = &s3.ObjectRange{
+			Start:  partInfo.offset,
+			Length: partInfo.length,
+		}
+		contentMD5 = partInfo.contentMD5
+	} else {
+		contentMD5 = obj.contentMD5
+	}
+
+	var partCount *int32
+	if partNumber != nil {
+		pc := int32(len(obj.parts))
+		partCount = &pc
+	}
+
 	var body io.ReadCloser
 	if !head {
 		if rnge == nil {
@@ -708,10 +749,11 @@ func (b *MemoryBackend) headOrGetObject(_ context.Context, accessKeyID *string, 
 	}
 	return &s3.Object{
 		Body:         body,
-		ContentMD5:   obj.contentMD5,
+		ContentMD5:   contentMD5,
 		LastModified: obj.lastModified,
 		Metadata:     obj.metadata,
 		Range:        rnge,
 		Size:         size,
+		PartsCount:   partCount,
 	}, nil
 }

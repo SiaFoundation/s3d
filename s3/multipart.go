@@ -123,7 +123,7 @@ func (s *s3) routeMultipartUpload(w http.ResponseWriter, r *http.Request, access
 
 	switch r.Method {
 	case http.MethodPut:
-		return s.addUploadPart(w, r, validatedKey, bucket, object, uploadID, r.URL.Query().Get("partNumber"))
+		return s.addUploadPart(w, r, validatedKey, bucket, object, uploadID)
 	case http.MethodGet:
 		return s.listUploadParts(w, r, validatedKey, bucket, object, uploadID)
 	case http.MethodPost:
@@ -258,18 +258,21 @@ func (s *s3) listMultipartUploads(w http.ResponseWriter, r *http.Request, access
 	return writeXMLResponse(w, resp)
 }
 
-func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object, uploadID, partNumberStr string) error {
+func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object, uploadID string) error {
 	log := s.logger.With(
 		zap.String("bucket", bucket),
 		zap.String("object", object),
 		zap.String("uploadID", uploadID),
-		zap.String("partNumber", partNumberStr),
+		zap.String("partNumber", r.URL.Query().Get("partNumber")),
 	)
 	log.Debug("upload multipart part")
 
-	partNumber, err := parsePartNumber(partNumberStr)
+	// parse part number
+	partNumber, err := parsePartNumber(r.URL.Query().Get("partNumber"))
 	if err != nil {
 		return err
+	} else if partNumber == nil {
+		return s3errs.ErrInvalidRequest
 	}
 
 	// content length is mandatory
@@ -295,7 +298,7 @@ func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, accessKeyID, 
 	}
 
 	res, err := s.backend.UploadPart(r.Context(), accessKeyID, bucket, object, uploadID, r.Body, UploadPartOptions{
-		PartNumber:    partNumber,
+		PartNumber:    int(*partNumber),
 		ContentLength: r.ContentLength,
 		ContentMD5:    contentMD5,
 		ContentSHA256: contentSHA256,
@@ -417,20 +420,6 @@ func (s *s3) completeMultipartUpload(w http.ResponseWriter, r *http.Request, acc
 	})
 }
 
-func parsePartNumber(partStr string) (int, error) {
-	if partStr == "" {
-		return 0, s3errs.ErrInvalidRequest
-	}
-	partNumber, err := strconv.Atoi(partStr)
-	if err != nil {
-		return 0, s3errs.ErrInvalidArgument
-	}
-	if partNumber < 1 || partNumber > MaxUploadPartNumber {
-		return 0, s3errs.ErrInvalidArgument
-	}
-	return partNumber, nil
-}
-
 func parseCompletedParts(parts []CompleteMultipartPartXML) ([]CompletedPart, error) {
 	if len(parts) == 0 {
 		return nil, s3errs.ErrInvalidRequest
@@ -474,6 +463,22 @@ func parseCompletedPartETag(etagStr string) (etag [16]byte, _ error) {
 	}
 	copy(etag[:], decoded)
 	return etag, nil
+}
+
+func parsePartNumber(s string) (*int32, error) {
+	if s == "" {
+		return nil, nil
+	}
+
+	partNumber, err := strconv.Atoi(s)
+	if err != nil {
+		return nil, s3errs.ErrInvalidArgument
+	}
+	if partNumber < 1 || partNumber > MaxUploadPartNumber {
+		return nil, s3errs.ErrInvalidArgument
+	}
+	val := int32(partNumber)
+	return &val, nil
 }
 
 // FormatMultipartETag formats the MD5 checksum of concatenated part hashes

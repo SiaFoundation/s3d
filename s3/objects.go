@@ -27,6 +27,10 @@ type Object struct {
 	Metadata     map[string]string
 	Range        *ObjectRange
 	Size         int64
+
+	// PartsCount will be set for objects that are multipart uploads, but only
+	// if a multipart part number is specified.
+	PartsCount *int32
 }
 
 // CopyObjectResult contains information about the result of a CopyObject
@@ -245,15 +249,22 @@ func (s *s3) getObject(w http.ResponseWriter, r *http.Request, accessKeyID *stri
 		zap.String("version", version))
 	log.Debug("get object")
 
+	partNumber, err := parsePartNumber(r.URL.Query().Get("partNumber"))
+	if err != nil {
+		return err
+	}
+
 	rnge, err := parseRangeHeader(r.Header.Get("Range"))
 	if err != nil {
 		return err
+	} else if rnge != nil && partNumber != nil {
+		return s3errs.ErrInvalidRequest // can't combine range and partNumber
 	}
 
 	// retrieve object
 	var obj *Object
 	if version == "" {
-		obj, err = s.backend.GetObject(r.Context(), accessKeyID, bucket, object, rnge)
+		obj, err = s.backend.GetObject(r.Context(), accessKeyID, bucket, object, rnge, partNumber)
 	} else {
 		return s3errs.ErrNotImplemented // versioning not supported
 	}
@@ -282,15 +293,22 @@ func (s *s3) headObject(w http.ResponseWriter, r *http.Request, accessKeyID *str
 		zap.String("version", version))
 	log.Debug("head object")
 
+	partNumber, err := parsePartNumber(r.URL.Query().Get("partNumber"))
+	if err != nil {
+		return err
+	}
+
 	rnge, err := parseRangeHeader(r.Header.Get("Range"))
 	if err != nil {
 		return err
+	} else if rnge != nil && partNumber != nil {
+		return s3errs.ErrInvalidRequest // can't combine range and partNumber
 	}
 
 	// retrieve object metadata
 	var obj *Object
 	if version == "" {
-		obj, err = s.backend.HeadObject(r.Context(), accessKeyID, bucket, object, rnge)
+		obj, err = s.backend.HeadObject(r.Context(), accessKeyID, bucket, object, rnge, partNumber)
 	} else {
 		return s3errs.ErrNotImplemented // versioning not supported
 	}
@@ -793,6 +811,10 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 
 	if r.Header.Get("If-None-Match") == etag {
 		return s3errs.ErrNotModified
+	}
+
+	if obj.PartsCount != nil {
+		w.Header().Set("x-amz-mp-parts-count", fmt.Sprintf("%d", *obj.PartsCount))
 	}
 
 	lastModified, _ := time.Parse(http.TimeFormat, obj.Metadata["Last-Modified"])
