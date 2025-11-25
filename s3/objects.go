@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"strconv"
 	"strings"
@@ -543,6 +544,7 @@ func FormatETag(hash []byte) string {
 func metadataHeaders(headers map[string][]string, sizeLimit int) (map[string]string, error) {
 	meta := make(map[string]string)
 	for hk, hv := range headers {
+		hk = textproto.CanonicalMIMEHeaderKey(hk)
 		if strings.HasPrefix(hk, "X-Amz-") ||
 			hk == "Content-Type" ||
 			hk == "Content-Disposition" ||
@@ -766,11 +768,10 @@ func parseRangeHeader(s string) (*ObjectRangeRequest, error) {
 // a HEAD and a GET request for a /bucket/object URL.
 func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Request) error {
 	const metaPrefix = "X-Amz-Meta-"
-	header := w.Header()
 	for mk, mv := range obj.Metadata {
 		if key, found := strings.CutPrefix(mk, metaPrefix); found {
 			// user metadata key is always returned in lowercase
-			header[fmt.Sprintf("%s%s", metaPrefix, strings.ToLower(key))] = []string{mv}
+			w.Header()[fmt.Sprintf("%s%s", metaPrefix, strings.ToLower(key))] = []string{mv}
 		} else {
 			w.Header().Set(mk, mv)
 		}
