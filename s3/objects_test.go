@@ -203,8 +203,8 @@ func TestPutObject(t *testing.T) {
 
 	t.Run("http", func(t *testing.T) {
 		backend := testutil.NewMemoryBackend(
-			testutil.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
-			testutil.WithKeyPair("foo", "bar"),
+			testutil.WithKeyPair(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey),
+			testutil.WithKeyPair("other", "foo", "bar"),
 		)
 		s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
 		test(t, s3Tester)
@@ -212,8 +212,8 @@ func TestPutObject(t *testing.T) {
 
 	t.Run("https", func(t *testing.T) {
 		backend := testutil.NewMemoryBackend(
-			testutil.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
-			testutil.WithKeyPair("foo", "bar"),
+			testutil.WithKeyPair(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey),
+			testutil.WithKeyPair("other", "foo", "bar"),
 		)
 		s3Tester := testutil.NewTester(t, testutil.WithTLS(), testutil.WithBackend(backend))
 		test(t, s3Tester)
@@ -248,7 +248,7 @@ func TestCopyObject(t *testing.T) {
 	var dstBucket, dstObject = "dstbucket", "dstobject"
 
 	// copying before creating the destination bucket should fail
-	_, err = s3Tester.CopyObject(t.Context(), srcBucket, srcObject, dstBucket, dstObject, nil)
+	_, err = s3Tester.CopyObject(t.Context(), srcBucket, srcObject, dstBucket, dstObject, types.MetadataDirectiveCopy, nil)
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchBucket, err)
 
 	// create destination bucket and try again
@@ -260,7 +260,7 @@ func TestCopyObject(t *testing.T) {
 	}
 	copyTime := time.Now().UTC()
 	time.Sleep(time.Second)
-	etag, err := s3Tester.CopyObject(t.Context(), srcBucket, srcObject, dstBucket, dstObject, dstMeta)
+	etag, err := s3Tester.CopyObject(t.Context(), srcBucket, srcObject, dstBucket, dstObject, types.MetadataDirectiveCopy, dstMeta)
 	if err != nil {
 		t.Fatal(err)
 	} else if !bytes.Equal(etag, hash[:]) {
@@ -284,14 +284,14 @@ func TestCopyObject(t *testing.T) {
 	}
 
 	// copy an object that doesn't exist
-	_, err = s3Tester.CopyObject(t.Context(), srcBucket, "nonexistent", dstBucket, dstBucket, nil)
+	_, err = s3Tester.CopyObject(t.Context(), srcBucket, "nonexistent", dstBucket, dstBucket, types.MetadataDirectiveCopy, nil)
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchKey, err)
 
 	// copy an object to the same bucket and key, adding additional metadata
 	additionalMeta := map[string]string{
 		"new-key": "new-value",
 	}
-	etag, err = s3Tester.CopyObject(t.Context(), dstBucket, dstObject, dstBucket, dstObject, additionalMeta)
+	etag, err = s3Tester.CopyObject(t.Context(), dstBucket, dstObject, dstBucket, dstObject, types.MetadataDirectiveReplace, additionalMeta)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,7 +302,7 @@ func TestCopyObject(t *testing.T) {
 		t.Fatal(err)
 	} else if !bytes.Equal(data, fetched) {
 		t.Fatal("data mismatch")
-	} else if len(obj.Metadata) != 3 || obj.Metadata["foo"] != "bar" || obj.Metadata["baz"] != "qux" || obj.Metadata["new-key"] != "new-value" {
+	} else if len(obj.Metadata) != 1 || obj.Metadata["new-key"] != "new-value" {
 		t.Fatalf("metadata mismatch: %+v", obj.Metadata)
 	} else if obj.ContentMD5 != hash {
 		t.Fatal("hash mismatch", obj.ContentMD5, hash[:])

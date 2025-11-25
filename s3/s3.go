@@ -20,8 +20,9 @@ type Backend interface {
 
 	// CopyObject copies an object from the source bucket and object key to the
 	// destination bucket and object key. The provided metadata map contains any
-	// metadata that should be merged into the copied object except for the
-	// x-amz-acl header.
+	// metadata that should either be merged into the copied object or replace
+	// the metadata except for the x-amz-acl header. The replace flag indicates
+	// whether the metadata should be replaced (true) or merged (false).
 	//
 	// - If the source bucket does not exist, [ErrNoSuchBucket] must be returned.
 	//
@@ -34,7 +35,7 @@ type Backend interface {
 	//
 	// - If the source and destination are the same, the object is kept but its metadata
 	//   is merged with the provided metadata.
-	CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, meta map[string]string) (*CopyObjectResult, error)
+	CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, replace bool, meta map[string]string) (*CopyObjectResult, error)
 
 	// CreateBucket creates a new bucket with the given name for the user
 	// identified by the given access key. If the bucket already exists,
@@ -383,12 +384,13 @@ func (s *s3) routeBase(w http.ResponseWriter, r *http.Request, accessKeyID *stri
 		object = parts[1]
 	}
 
-	s.logger.Debug("new request", zap.Stringer("url", r.URL),
+	log := s.logger.With(zap.Stringer("url", r.URL),
 		zap.String("host", r.Host),
 		zap.Strings("parts", parts),
 		zap.String("bucket", bucket),
 		zap.String("object", object),
 	)
+	log.Debug("new request")
 
 	// NOTE: Other projects set some common headers here, such as
 	// "x-amz-request-id", "x-amz-id-2" and "Server". It's probably fine to omit
@@ -417,6 +419,7 @@ func (s *s3) routeBase(w http.ResponseWriter, r *http.Request, accessKeyID *stri
 		return
 	}
 	if err != nil {
+		log.Error("failed to handle request", zap.Error(err))
 		writeErrorResponse(w, err)
 	}
 }

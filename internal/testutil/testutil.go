@@ -28,6 +28,9 @@ const (
 
 	// SecretAccessKey is the secret key configured for S3Tester
 	SecretAccessKey = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+
+	// Owner is the default owner name for objects created by S3Tester
+	Owner = "s3tester"
 )
 
 // S3Tester wraps an AWS S3 client configured to talk to an in-memory S3
@@ -75,12 +78,13 @@ func (t *S3Tester) BucketLocation(ctx context.Context, bucket string) (string, e
 }
 
 // CopyObject is a convenience wrapper around the AWS SDK's CopyObject API.
-func (t *S3Tester) CopyObject(ctx context.Context, srcBucket, srcObject, dstBucket, dstObject string, meta map[string]string) ([]byte, error) {
+func (t *S3Tester) CopyObject(ctx context.Context, srcBucket, srcObject, dstBucket, dstObject string, dir types.MetadataDirective, meta map[string]string) ([]byte, error) {
 	resp, err := t.client.CopyObject(ctx, &service.CopyObjectInput{
-		CopySource: aws.String(fmt.Sprintf("%s/%s", srcBucket, url.QueryEscape(srcObject))),
-		Bucket:     aws.String(dstBucket),
-		Key:        aws.String(dstObject),
-		Metadata:   meta,
+		CopySource:        aws.String(fmt.Sprintf("%s/%s", srcBucket, url.QueryEscape(srcObject))),
+		Bucket:            aws.String(dstBucket),
+		Key:               aws.String(dstObject),
+		MetadataDirective: dir,
+		Metadata:          meta,
 	})
 	if err != nil {
 		return nil, err
@@ -414,7 +418,7 @@ func NewTester(t testing.TB, opts ...TesterOption) *S3Tester {
 	}
 
 	if cfg.backend == nil {
-		backend := NewMemoryBackend(WithKeyPair(AccessKeyID, SecretAccessKey))
+		backend := NewMemoryBackend(WithKeyPair(Owner, AccessKeyID, SecretAccessKey))
 		cfg.backend = backend
 	}
 

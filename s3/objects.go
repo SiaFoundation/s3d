@@ -147,11 +147,30 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, accessKeyID, dst
 		return err
 	}
 
-	if dir := r.Header.Get("x-amz-metadata-directive"); dir != "COPY" && dir != "" {
-		return s3errs.ErrNotImplemented // only COPY is supported
+	// copying to the same key without REPLACE is not allowed
+	replace := r.Header.Get("x-amz-metadata-directive") == "REPLACE"
+	if srcBucket == dstBucket && srcObject == dstObject && !replace {
+		return s3errs.ErrInvalidRequest
 	}
 
-	result, err := s.backend.CopyObject(r.Context(), accessKeyID, srcBucket, srcObject, dstBucket, dstObject, meta)
+	// if If-Match or If-None-Match headers are present, handle them
+	ifMatch := r.Header.Get("X-Amz-Copy-Source-If-Match")
+	ifNoneMatch := r.Header.Get("X-Amz-Copy-Source-If-None-Match")
+	if ifMatch != "" || ifNoneMatch != "" {
+		obj, err := s.backend.HeadObject(r.Context(), &accessKeyID, srcBucket, srcObject, nil)
+		if err != nil {
+			return err
+		}
+		etag := FormatETag(obj.ContentMD5[:])
+		if ifMatch != "" && ifMatch != etag {
+			return s3errs.ErrPreconditionFailed
+		}
+		if ifNoneMatch != "" && ifNoneMatch == etag {
+			return s3errs.ErrPreconditionFailed
+		}
+	}
+
+	result, err := s.backend.CopyObject(r.Context(), accessKeyID, srcBucket, srcObject, dstBucket, dstObject, replace, meta)
 	if err != nil {
 		return err
 	}

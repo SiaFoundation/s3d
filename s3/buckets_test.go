@@ -16,8 +16,8 @@ func TestBuckets(t *testing.T) {
 	run := func(t *testing.T, pathStyle bool) {
 		// prepare a backend with 2 keypairs
 		backend := testutil.NewMemoryBackend(
-			testutil.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
-			testutil.WithKeyPair("foo", "bar"),
+			testutil.WithKeyPair(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey),
+			testutil.WithKeyPair("other", "foo", "bar"),
 		)
 
 		s3Tester := testutil.NewTester(t, testutil.WithServiceOptions(func(o *service.Options) {

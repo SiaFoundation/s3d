@@ -33,8 +33,13 @@ type (
 	// MemoryBackend is an in-memory implementation of the s3 backend for testing.
 	MemoryBackend struct {
 		buckets          map[string]*bucket
-		accessKeys       map[string]auth.SecretAccessKey
+		accessKeys       map[string]accessKey
 		multipartUploads map[string]*multipartUpload
+	}
+
+	accessKey struct {
+		owner  string
+		secret auth.SecretAccessKey
 	}
 
 	bucket struct {
@@ -66,16 +71,19 @@ type (
 )
 
 // WithKeyPair adds a key pair to the MemoryBackend.
-func WithKeyPair(accessKeyID, secretKey string) func(*MemoryBackend) {
+func WithKeyPair(owner, accessKeyID, secretKey string) func(*MemoryBackend) {
 	return func(mb *MemoryBackend) {
-		mb.accessKeys[accessKeyID] = auth.SecretAccessKey(secretKey)
+		mb.accessKeys[accessKeyID] = accessKey{
+			owner:  owner,
+			secret: auth.SecretAccessKey(secretKey),
+		}
 	}
 }
 
 // NewMemoryBackend creates a new MemoryBackend.
 func NewMemoryBackend(opts ...MemoryBackendOption) *MemoryBackend {
 	backend := &MemoryBackend{
-		accessKeys:       make(map[string]auth.SecretAccessKey),
+		accessKeys:       make(map[string]accessKey),
 		buckets:          make(map[string]*bucket),
 		multipartUploads: make(map[string]*multipartUpload),
 	}
@@ -87,17 +95,17 @@ func NewMemoryBackend(opts ...MemoryBackendOption) *MemoryBackend {
 
 // CopyObject copies an object from the source bucket/object to the destination.
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_CopyObject.html
-func (b *MemoryBackend) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, meta map[string]string) (*s3.CopyObjectResult, error) {
+func (b *MemoryBackend) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, replace bool, meta map[string]string) (*s3.CopyObjectResult, error) {
 	srcBkt, exists := b.buckets[srcBucket]
 	if !exists {
 		return nil, s3errs.ErrNoSuchBucket
-	} else if srcBkt.owner != accessKeyID {
+	} else if srcBkt.owner != b.accessKeys[accessKeyID].owner {
 		return nil, s3errs.ErrAccessDenied
 	}
 	dstBkt, exists := b.buckets[dstBucket]
 	if !exists {
 		return nil, s3errs.ErrNoSuchBucket
-	} else if dstBkt.owner != accessKeyID {
+	} else if dstBkt.owner != b.accessKeys[accessKeyID].owner {
 		return nil, s3errs.ErrAccessDenied
 	}
 	srcObjct, exists := srcBkt.objects[srcObject]
@@ -105,9 +113,11 @@ func (b *MemoryBackend) CopyObject(ctx context.Context, accessKeyID, srcBucket, 
 		return nil, s3errs.ErrNoSuchKey
 	}
 
-	for k, v := range srcObjct.metadata {
-		if _, exists := meta[k]; !exists {
-			meta[k] = v // merge metadata
+	if !replace {
+		for k, v := range srcObjct.metadata {
+			if _, exists := meta[k]; !exists {
+				meta[k] = v // merge metadata
+			}
 		}
 	}
 	if _, exists := dstBkt.objects[dstObject]; !exists {
@@ -134,13 +144,13 @@ func (b *MemoryBackend) CopyObject(ctx context.Context, accessKeyID, srcBucket, 
 func (b *MemoryBackend) CreateBucket(ctx context.Context, accessKeyID, name string) error {
 	if _, exists := b.accessKeys[accessKeyID]; !exists {
 		return s3errs.ErrInvalidAccessKeyId
-	} else if bkt, exists := b.buckets[name]; exists && bkt.owner == accessKeyID {
+	} else if bkt, exists := b.buckets[name]; exists && bkt.owner == b.accessKeys[accessKeyID].owner {
 		return s3errs.ErrBucketAlreadyOwnedByYou
 	} else if exists {
 		return s3errs.ErrBucketAlreadyExists
 	}
 	b.buckets[name] = &bucket{
-		owner: accessKeyID,
+		owner: b.accessKeys[accessKeyID].owner,
 	}
 	return nil
 }
@@ -151,7 +161,7 @@ func (b *MemoryBackend) DeleteBucket(ctx context.Context, accessKeyID, name stri
 	bkt, exists := b.buckets[name]
 	if !exists {
 		return s3errs.ErrNoSuchBucket
-	} else if bkt.owner != accessKeyID {
+	} else if bkt.owner != b.accessKeys[accessKeyID].owner {
 		return s3errs.ErrAccessDenied
 	} else if len(bkt.objects) > 0 {
 		return s3errs.ErrBucketNotEmpty
@@ -165,7 +175,7 @@ func (b *MemoryBackend) DeleteObject(ctx context.Context, accessKeyID, bucket, o
 	bkt, exists := b.buckets[bucket]
 	if !exists {
 		return nil, s3errs.ErrNoSuchBucket
-	} else if bkt.owner != accessKeyID {
+	} else if bkt.owner != b.accessKeys[accessKeyID].owner {
 		return nil, s3errs.ErrAccessDenied
 	}
 	if _, exists := bkt.objects[object]; !exists {
@@ -183,7 +193,7 @@ func (b *MemoryBackend) DeleteObjects(ctx context.Context, accessKeyID, bucket s
 	bkt, exists := b.buckets[bucket]
 	if !exists {
 		return nil, s3errs.ErrNoSuchBucket
-	} else if bkt.owner != accessKeyID {
+	} else if bkt.owner != b.accessKeys[accessKeyID].owner {
 		return nil, s3errs.ErrAccessDenied
 	}
 	var res s3.ObjectsDeleteResult
@@ -207,7 +217,7 @@ func (b *MemoryBackend) HeadBucket(ctx context.Context, accessKeyID, bucket stri
 	bkt, exists := b.buckets[bucket]
 	if !exists {
 		return s3errs.ErrNoSuchBucket
-	} else if bkt.owner != accessKeyID {
+	} else if bkt.owner != b.accessKeys[accessKeyID].owner {
 		return s3errs.ErrAccessDenied
 	}
 	return nil
@@ -225,7 +235,7 @@ func (b *MemoryBackend) ListObjects(ctx context.Context, accessKeyID *string, bu
 	bkt, exists := b.buckets[bucket]
 	if !exists {
 		return nil, s3errs.ErrNoSuchBucket
-	} else if accessKeyID == nil || bkt.owner != *accessKeyID {
+	} else if accessKeyID == nil || bkt.owner != b.accessKeys[*accessKeyID].owner {
 		return nil, s3errs.ErrAccessDenied
 	}
 
@@ -289,7 +299,7 @@ func (b *MemoryBackend) PutObject(_ context.Context, accessKeyID, bucket, obj st
 	if !exists {
 		return nil, s3errs.ErrNoSuchBucket
 	}
-	if bkt.owner != accessKeyID {
+	if bkt.owner != b.accessKeys[accessKeyID].owner {
 		return nil, s3errs.ErrAccessDenied
 	}
 	if bkt.objects == nil {
@@ -329,7 +339,7 @@ func (b *MemoryBackend) CreateMultipartUpload(_ context.Context, accessKeyID, bu
 	if !exists {
 		return nil, s3errs.ErrNoSuchBucket
 	}
-	if bkt.owner != accessKeyID {
+	if bkt.owner != b.accessKeys[accessKeyID].owner {
 		return nil, s3errs.ErrAccessDenied
 	}
 
@@ -356,7 +366,7 @@ func (b *MemoryBackend) ListMultipartUploads(_ context.Context, accessKeyID, buc
 	if !exists {
 		return nil, s3errs.ErrNoSuchBucket
 	}
-	if bkt.owner != accessKeyID {
+	if bkt.owner != b.accessKeys[accessKeyID].owner {
 		return nil, s3errs.ErrAccessDenied
 	}
 
@@ -448,7 +458,7 @@ func (b *MemoryBackend) AbortMultipartUpload(_ context.Context, accessKeyID, buc
 	if !exists {
 		return s3errs.ErrNoSuchBucket
 	}
-	if bkt.owner != accessKeyID {
+	if bkt.owner != b.accessKeys[accessKeyID].owner {
 		return s3errs.ErrAccessDenied
 	}
 	upload, exists := b.multipartUploads[uploadID]
@@ -468,7 +478,7 @@ func (b *MemoryBackend) UploadPart(_ context.Context, accessKeyID, bucket, key, 
 	if !exists {
 		return nil, s3errs.ErrNoSuchBucket
 	}
-	if bkt.owner != accessKeyID {
+	if bkt.owner != b.accessKeys[accessKeyID].owner {
 		return nil, s3errs.ErrAccessDenied
 	}
 	upload, exists := b.multipartUploads[uploadID]
@@ -513,7 +523,7 @@ func (b *MemoryBackend) ListParts(_ context.Context, accessKeyID, bucket, key, u
 	if !exists {
 		return nil, s3errs.ErrNoSuchBucket
 	}
-	if bkt.owner != accessKeyID {
+	if bkt.owner != b.accessKeys[accessKeyID].owner {
 		return nil, s3errs.ErrAccessDenied
 	}
 	upload, exists := b.multipartUploads[uploadID]
@@ -573,7 +583,7 @@ func (b *MemoryBackend) CompleteMultipartUpload(_ context.Context, accessKeyID, 
 	if !exists {
 		return nil, s3errs.ErrNoSuchBucket
 	}
-	if bkt.owner != accessKeyID {
+	if bkt.owner != b.accessKeys[accessKeyID].owner {
 		return nil, s3errs.ErrAccessDenied
 	}
 	upload, exists := b.multipartUploads[uploadID]
@@ -652,19 +662,21 @@ func (b *MemoryBackend) CompleteMultipartUpload(_ context.Context, accessKeyID, 
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListBuckets.html
 func (b *MemoryBackend) ListBuckets(ctx context.Context, accessKeyID string) ([]s3.BucketInfo, error) {
 	var buckets []s3.BucketInfo
-	for name := range b.buckets {
-		buckets = append(buckets, s3.BucketInfo{
-			Name:         name,
-			CreationDate: s3.NewContentTime(time.Now()),
-		})
+	for name, bucket := range b.buckets {
+		if bucket.owner == b.accessKeys[accessKeyID].owner {
+			buckets = append(buckets, s3.BucketInfo{
+				Name:         name,
+				CreationDate: s3.NewContentTime(time.Now()),
+			})
+		}
 	}
 	return buckets, nil
 }
 
 // LoadSecret loads the secret access key for the given access key ID.
 func (b *MemoryBackend) LoadSecret(ctx context.Context, accessKeyID string) (auth.SecretAccessKey, error) {
-	if secret, exists := b.accessKeys[accessKeyID]; exists {
-		return slices.Clone(secret), nil // return a copy to prevent modification
+	if ak, exists := b.accessKeys[accessKeyID]; exists {
+		return slices.Clone(ak.secret), nil // return a copy to prevent modification
 	}
 	return nil, s3errs.ErrInvalidAccessKeyId
 }
@@ -674,7 +686,7 @@ func (b *MemoryBackend) headOrGetObject(_ context.Context, accessKeyID *string, 
 	if !exists {
 		return nil, s3errs.ErrNoSuchBucket
 	}
-	if accessKeyID == nil || bkt.owner != *accessKeyID {
+	if accessKeyID == nil || bkt.owner != b.accessKeys[*accessKeyID].owner {
 		return nil, s3errs.ErrAccessDenied
 	}
 	obj, exists := bkt.objects[object]
