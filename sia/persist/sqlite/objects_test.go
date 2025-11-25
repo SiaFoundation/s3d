@@ -12,7 +12,7 @@ import (
 
 func TestListObjects(t *testing.T) {
 	log := zaptest.NewLogger(t)
-	fp := filepath.Join(t.TempDir(), "hostd.sqlite3")
+	fp := filepath.Join(t.TempDir(), "s3d.sqlite3")
 
 	store, err := OpenDatabase(fp, log)
 	if err != nil {

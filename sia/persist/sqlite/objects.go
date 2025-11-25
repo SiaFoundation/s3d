@@ -76,7 +76,7 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, obj slabs.SealedObje
 // by the given access key. The backend should use the prefix to limit the
 // contents of the bucket and sort the results into the Contents and
 // CommonPrefixes fields of the returned ObjectsListResult.
-func (s *Store) ListObjects(accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error) {
+func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error) {
 	result := s3.NewObjectsListResult(page.MaxKeys)
 	if page.MaxKeys == 0 {
 		return result, nil
@@ -178,7 +178,7 @@ func (s *Store) fetchCommonPrefixes(tx *txn, bid int64, prefix s3.Prefix, page s
 
 	// Find distinct common prefixes by selecting the minimum name for each prefix group
 	query := `
-SELECT DISTINCT substr(name, 1, instr(substr(name, ?), ?) + ? - 1) as common_prefix
+SELECT DISTINCT substr(name, 1, instr(substr(name, ?), ?) + ?) as common_prefix
 FROM objects 
 WHERE bucket_id = ?`
 
@@ -214,7 +214,7 @@ WHERE bucket_id = ?`
 		if err := rows.Scan(&commonPrefix); err != nil {
 			return nil, fmt.Errorf("failed to scan common prefix: %w", err)
 		}
-		prefixes = append(prefixes, commonPrefix+"/")
+		prefixes = append(prefixes, commonPrefix)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("failed to get rows: %w", err)
