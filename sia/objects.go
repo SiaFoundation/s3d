@@ -31,13 +31,13 @@ func (s *Sia) DeleteObject(ctx context.Context, accessKeyID, bucket, object stri
 // bucket for the user identified by the given access key. The provided
 // range is either nil if no range was requested, or contains the requested,
 // byte range.
-func (s *Sia) GetObject(ctx context.Context, accessKeyID *string, bucket, object string, rnge *s3.ObjectRangeRequest) (*s3.Object, error) {
+func (s *Sia) GetObject(ctx context.Context, accessKeyID *string, bucket, object string, rnge *s3.ObjectRangeRequest, _ *int32) (*s3.Object, error) {
 	return s.headOrGetObject(ctx, accessKeyID, bucket, object, rnge, false)
 }
 
 // HeadObject is like GetObject but only retrieves the metadata of the
 // object and returns an empty body.
-func (s *Sia) HeadObject(ctx context.Context, accessKeyID *string, bucket, object string, rnge *s3.ObjectRangeRequest) (*s3.Object, error) {
+func (s *Sia) HeadObject(ctx context.Context, accessKeyID *string, bucket, object string, rnge *s3.ObjectRangeRequest, _ *int32) (*s3.Object, error) {
 	return s.headOrGetObject(ctx, accessKeyID, bucket, object, rnge, true)
 }
 

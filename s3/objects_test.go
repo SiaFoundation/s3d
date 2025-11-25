@@ -144,6 +144,109 @@ func TestGetAndHeadObject(t *testing.T) {
 	}
 }
 
+func TestGetAndHeadObjectPart(t *testing.T) {
+	s3Tester := testutil.NewTester(t)
+
+	const (
+		bucket = "multipart-bucket"
+		object = "object"
+	)
+
+	// create bucket
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// prepare part data
+	p1Data := bytes.Repeat([]byte("a"), int(s3.MinUploadPartSize))
+	p2Data := bytes.Repeat([]byte("b"), int(s3.MinUploadPartSize))
+	p3Data := []byte("c")
+	data := append(append(p1Data, p2Data...), p3Data...)
+
+	// initiate multipart upload
+	uploadID, parts := newTestMultipartUpload(t, s3Tester, bucket, object, [][]byte{p1Data, p2Data, p3Data})
+
+	// complete the multipart upload
+	completed, err := s3Tester.CompleteMultipartUpload(t.Context(), bucket, object, uploadID, parts)
+	if err != nil {
+		t.Fatal(err)
+	} else if completed.ETag == nil {
+		t.Fatal("expected ETag in completion response")
+	}
+
+	assertObject := func(t *testing.T, obj *s3.Object, head bool, partNumber int32) {
+		t.Helper()
+
+		var start, end int64
+		switch partNumber {
+		case 1:
+			start = 0
+			end = s3.MinUploadPartSize - 1
+		case 2:
+			start = s3.MinUploadPartSize
+			end = s3.MinUploadPartSize*2 - 1
+		case 3:
+			start = s3.MinUploadPartSize * 2
+			end = s3.MinUploadPartSize * 2
+		}
+
+		expected := data[start : end+1]
+		expectedHash := md5.Sum(expected)
+
+		if obj.ContentMD5 != expectedHash {
+			t.Fatal("hash mismatch", obj.ContentMD5, expectedHash[:])
+		} else if obj.Size != int64(len(data)) {
+			t.Fatalf("size mismatch: expected %d, got %d", len(data), obj.Size)
+		} else if obj.PartsCount == nil || *obj.PartsCount != 3 {
+			t.Fatalf("parts count mismatch: expected %d, got %d", 3, obj.PartsCount)
+		}
+
+		if !head {
+			if content, err := io.ReadAll(obj.Body); err != nil {
+				t.Fatal(err)
+			} else if !bytes.Equal(content, expected) {
+				t.Fatal("data mismatch", len(content), len(expected))
+			}
+		}
+	}
+
+	tests := []struct {
+		name string
+		part int32
+	}{
+		{
+			name: "PartNumber-1",
+			part: 1,
+		},
+		{
+			name: "PartNumber-2",
+			part: 2,
+		},
+		{
+			name: "PartNumber-3",
+			part: 3,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// HEAD Object
+			obj, err := s3Tester.HeadObjectPart(t.Context(), bucket, object, tc.part)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertObject(t, obj, true, tc.part)
+
+			// GET Object
+			obj, err = s3Tester.GetObjectPart(t.Context(), bucket, object, tc.part)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertObject(t, obj, false, tc.part)
+		})
+	}
+}
+
 func TestPutObject(t *testing.T) {
 	test := func(t *testing.T, s3Tester *testutil.S3Tester) {
 		data := frand.Bytes(100)
