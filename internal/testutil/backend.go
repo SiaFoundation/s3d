@@ -517,6 +517,57 @@ func (b *MemoryBackend) UploadPart(_ context.Context, accessKeyID, bucket, key, 
 	}, nil
 }
 
+// UploadPartCopy copies a single part from an existing object as part of a
+// multipart upload.
+func (b *MemoryBackend) UploadPartCopy(_ context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject, uploadID string, opts s3.UploadPartCopyOptions) (*s3.UploadPartCopyResult, error) {
+	srcBkt, exists := b.buckets[srcBucket]
+	if !exists {
+		return nil, s3errs.ErrNoSuchBucket
+	}
+	if srcBkt.owner != accessKeyID {
+		return nil, s3errs.ErrAccessDenied
+	}
+	srcObjct, exists := srcBkt.objects[srcObject]
+	if !exists {
+		return nil, s3errs.ErrNoSuchKey
+	}
+
+	dstBkt, exists := b.buckets[dstBucket]
+	if !exists {
+		return nil, s3errs.ErrNoSuchBucket
+	}
+	if dstBkt.owner != accessKeyID {
+		return nil, s3errs.ErrAccessDenied
+	}
+	upload, exists := b.multipartUploads[uploadID]
+	if !exists {
+		return nil, s3errs.ErrNoSuchUpload
+	}
+	if upload.bucket != dstBucket || upload.key != dstObject {
+		return nil, s3errs.ErrNoSuchUpload
+	}
+
+	start := opts.Range.Start
+	length := opts.Range.Length
+	if start < 0 || length <= 0 || start+length > int64(len(srcObjct.data)) {
+		return nil, s3errs.ErrInvalidRange
+	}
+
+	partData := slices.Clone(srcObjct.data[start : start+length])
+	contentMD5 := md5.Sum(partData)
+
+	upload.parts[opts.PartNumber] = &multipartPart{
+		data:         partData,
+		contentMD5:   contentMD5,
+		lastModified: time.Now(),
+	}
+
+	return &s3.UploadPartCopyResult{
+		ContentMD5:   contentMD5,
+		LastModified: srcObjct.lastModified,
+	}, nil
+}
+
 // ListParts lists uploaded parts for an in-progress multipart upload.
 func (b *MemoryBackend) ListParts(_ context.Context, accessKeyID, bucket, key, uploadID string, page s3.ListPartsPage) (*s3.ListPartsResult, error) {
 	bkt, exists := b.buckets[bucket]

@@ -338,6 +338,20 @@ func (t *S3Tester) UploadPart(ctx context.Context, bucket, object, uploadID stri
 	return t.client.UploadPart(ctx, input)
 }
 
+// UploadPartCopy copies a single part from an existing object as part of a
+// multipart upload.
+func (t *S3Tester) UploadPartCopy(ctx context.Context, srcBucket, srcObject, dstBucket, dstObject, uploadID string, opts s3.UploadPartCopyOptions) (*service.UploadPartCopyOutput, error) {
+	input := &service.UploadPartCopyInput{
+		CopySource:      aws.String(fmt.Sprintf("%s/%s", srcBucket, url.QueryEscape(srcObject))),
+		Bucket:          aws.String(dstBucket),
+		Key:             aws.String(dstObject),
+		UploadId:        aws.String(uploadID),
+		PartNumber:      aws.Int32(int32(opts.PartNumber)),
+		CopySourceRange: aws.String(fmt.Sprintf("bytes=%d-%d", opts.Range.Start, opts.Range.Start+opts.Range.Length-1)),
+	}
+	return t.client.UploadPartCopy(ctx, input)
+}
+
 // ListParts lists uploaded parts for an in-progress multipart upload.
 func (t *S3Tester) ListParts(ctx context.Context, bucket, object, uploadID string, marker *string, maxParts *int32) (*service.ListPartsOutput, error) {
 	input := &service.ListPartsInput{

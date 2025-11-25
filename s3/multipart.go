@@ -38,10 +38,25 @@ type UploadPartOptions struct {
 	ContentSHA256 *[32]byte
 }
 
+// UploadPartCopyOptions contains options for copying an individual part in a
+// multipart upload.
+type UploadPartCopyOptions struct {
+	PartNumber int
+	Range      ObjectRange
+}
+
 // UploadPartResult contains metadata about an uploaded part, such as the
 // computed MD5 checksum.
 type UploadPartResult struct {
-	ContentMD5 [16]byte
+	ContentMD5   [16]byte
+	LastModified time.Time
+}
+
+// UploadPartCopyResult contains metadata about a copied part, such as the
+// computed MD5 checksum and the object's last modification time.
+type UploadPartCopyResult struct {
+	ContentMD5   [16]byte
+	LastModified time.Time
 }
 
 // ListPartsPage specifies pagination options when listing the parts of an
@@ -123,7 +138,7 @@ func (s *s3) routeMultipartUpload(w http.ResponseWriter, r *http.Request, access
 
 	switch r.Method {
 	case http.MethodPut:
-		return s.addUploadPart(w, r, validatedKey, bucket, object, uploadID, r.URL.Query().Get("partNumber"))
+		return s.addUploadPart(w, r, validatedKey, bucket, object, uploadID)
 	case http.MethodGet:
 		return s.listUploadParts(w, r, validatedKey, bucket, object, uploadID)
 	case http.MethodPost:
@@ -258,18 +273,69 @@ func (s *s3) listMultipartUploads(w http.ResponseWriter, r *http.Request, access
 	return writeXMLResponse(w, resp)
 }
 
-func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object, uploadID, partNumberStr string) error {
+func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, accessKeyID, dstBucket, dstObject, uploadID string, partNumber int) error {
+	source := r.Header.Get("X-Amz-Copy-Source")
+	log := s.logger.With(zap.String("dstBucket", dstBucket),
+		zap.String("dstObject", dstObject),
+		zap.String("uploadID", uploadID),
+		zap.String("source", source),
+		zap.Int("partNumber", partNumber),
+	)
+	log.Debug("copy part")
+
+	// parse source
+	srcBucket, srcObject, err := parseSource(source)
+	if err != nil {
+		return err
+	}
+
+	// parse range
+	rnge := r.Header.Get("x-amz-copy-source-range")
+	var start, end int64
+	if _, err := fmt.Sscanf(rnge, "bytes=%d-%d", &start, &end); err != nil {
+		return fmt.Errorf("failed to parse range %q: %w", rnge, err)
+	}
+
+	result, err := s.backend.UploadPartCopy(r.Context(), accessKeyID, srcBucket, srcObject, dstBucket, dstObject, uploadID, UploadPartCopyOptions{
+		PartNumber: partNumber,
+		Range: ObjectRange{
+			Start:  start,
+			Length: end - start + 1,
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	etag := FormatETag(result.ContentMD5[:])
+	w.Header().Set("ETag", etag)
+	return writeXMLResponse(w, ObjectCopyResult{
+		ETag:         etag,
+		LastModified: NewContentTime(result.LastModified),
+	})
+}
+
+func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object, uploadID string) error {
 	log := s.logger.With(
 		zap.String("bucket", bucket),
 		zap.String("object", object),
 		zap.String("uploadID", uploadID),
-		zap.String("partNumber", partNumberStr),
+		zap.String("partNumber", r.URL.Query().Get("partNumber")),
 	)
 	log.Debug("upload multipart part")
 
-	partNumber, err := parsePartNumber(partNumberStr)
+	// parse part number
+	partPtr, err := parsePartNumber(r.URL.Query().Get("partNumber"))
 	if err != nil {
 		return err
+	} else if partPtr == nil {
+		return s3errs.ErrInvalidRequest
+	}
+	partNumber := int(*partPtr)
+
+	// copy part
+	if _, ok := r.Header["X-Amz-Copy-Source"]; ok {
+		return s.copyPart(w, r, accessKeyID, bucket, object, uploadID, partNumber)
 	}
 
 	// content length is mandatory
@@ -417,18 +483,19 @@ func (s *s3) completeMultipartUpload(w http.ResponseWriter, r *http.Request, acc
 	})
 }
 
-func parsePartNumber(partStr string) (int, error) {
-	if partStr == "" {
-		return 0, s3errs.ErrInvalidRequest
+func parsePartNumber(s string) (*int32, error) {
+	if s == "" {
+		return nil, s3errs.ErrInvalidRequest
 	}
-	partNumber, err := strconv.Atoi(partStr)
+	partNumber, err := strconv.Atoi(s)
 	if err != nil {
-		return 0, s3errs.ErrInvalidArgument
+		return nil, s3errs.ErrInvalidArgument
 	}
 	if partNumber < 1 || partNumber > MaxUploadPartNumber {
-		return 0, s3errs.ErrInvalidArgument
+		return nil, s3errs.ErrInvalidArgument
 	}
-	return partNumber, nil
+	val := int32(partNumber)
+	return &val, nil
 }
 
 func parseCompletedParts(parts []CompleteMultipartPartXML) ([]CompletedPart, error) {
