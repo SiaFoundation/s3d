@@ -290,10 +290,10 @@ func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, accessKeyID, dstBu
 	}
 
 	// parse range
-	rnge := r.Header.Get("x-amz-copy-source-range")
+	rnge := r.Header.Get("X-Amz-Copy-Source-Range")
 	var start, end int64
 	if _, err := fmt.Sscanf(rnge, "bytes=%d-%d", &start, &end); err != nil {
-		return fmt.Errorf("failed to parse range %q: %w", rnge, err)
+		return s3errs.ErrInvalidArgument
 	}
 
 	result, err := s.backend.UploadPartCopy(r.Context(), accessKeyID, srcBucket, srcObject, dstBucket, dstObject, uploadID, UploadPartCopyOptions{
@@ -309,7 +309,7 @@ func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, accessKeyID, dstBu
 
 	etag := FormatETag(result.ContentMD5[:])
 	w.Header().Set("ETag", etag)
-	return writeXMLResponse(w, ObjectCopyResult{
+	return writeXMLResponse(w, PartCopyResult{
 		ETag:         etag,
 		LastModified: NewContentTime(result.LastModified),
 	})
@@ -328,8 +328,6 @@ func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, accessKeyID, 
 	partPtr, err := parsePartNumber(r.URL.Query().Get("partNumber"))
 	if err != nil {
 		return err
-	} else if partPtr == nil {
-		return s3errs.ErrInvalidRequest
 	}
 	partNumber := int(*partPtr)
 

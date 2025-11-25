@@ -248,6 +248,9 @@ func TestUploadPartCopy(t *testing.T) {
 			ETag:       res3.CopyPartResult.ETag,
 		},
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// assert final object data is correct
 	obj, err := s3Tester.GetObject(t.Context(), bucketDst, objectDst, nil)
@@ -281,6 +284,10 @@ func TestUploadPartCopy(t *testing.T) {
 	// assert [s3errs.ErrNoSuchBucket] is returned for nonexistent bucket
 	_, err = s3Tester.UploadPartCopy(t.Context(), "missing-bucket", objectSrc, bucketDst, objectDst, uploadID, opts)
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchBucket, err)
+
+	// assert [s3errs.ErrNoSuchKey] is returned for nonexistent source object
+	_, err = s3Tester.UploadPartCopy(t.Context(), bucketSrc, "missing-object", bucketDst, objectDst, uploadID, opts)
+	testutil.AssertS3Error(t, s3errs.ErrNoSuchKey, err)
 }
 
 func TestCompleteMultipartUpload(t *testing.T) {

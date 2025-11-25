@@ -524,7 +524,7 @@ func (b *MemoryBackend) UploadPartCopy(_ context.Context, accessKeyID, srcBucket
 	if !exists {
 		return nil, s3errs.ErrNoSuchBucket
 	}
-	if srcBkt.owner != accessKeyID {
+	if srcBkt.owner != b.accessKeys[accessKeyID].owner {
 		return nil, s3errs.ErrAccessDenied
 	}
 	srcObjct, exists := srcBkt.objects[srcObject]
@@ -536,7 +536,7 @@ func (b *MemoryBackend) UploadPartCopy(_ context.Context, accessKeyID, srcBucket
 	if !exists {
 		return nil, s3errs.ErrNoSuchBucket
 	}
-	if dstBkt.owner != accessKeyID {
+	if dstBkt.owner != b.accessKeys[accessKeyID].owner {
 		return nil, s3errs.ErrAccessDenied
 	}
 	upload, exists := b.multipartUploads[uploadID]
