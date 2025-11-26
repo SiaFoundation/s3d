@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"encoding/hex"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -243,5 +244,74 @@ func TestListObjectsMatch(t *testing.T) {
 			}
 			assertCommonPrefixesEqual(t, tc.commonPrefixes, resp.CommonPrefixes)
 		})
+	}
+}
+
+func BenchmarkListObjects(b *testing.B) {
+	log := zaptest.NewLogger(b)
+	fp := filepath.Join(b.TempDir(), "s3d.sqlite3")
+
+	store, err := OpenDatabase(fp, log)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	// prepare a bucket
+	bucket := "foo"
+	if err := store.CreateBucket("", bucket); err != nil {
+		b.Fatal(err)
+	}
+
+	obj := sdk.Object{}
+	sealed := obj.Seal(types.GeneratePrivateKey())
+	contentMD5 := [16]byte(frand.Bytes(16))
+
+	err = store.transaction(func(tx *txn) error {
+		bid, err := bucketID(tx, bucket)
+		if err != nil {
+			return err
+		}
+		encoded, err := sealed.MarshalSia()
+		if err != nil {
+			return err
+		}
+
+		var size uint64
+		for _, slab := range sealed.Slabs {
+			size += uint64(slab.Length)
+		}
+
+		for i := 0; i < 1000; i++ {
+			layer1 := fmt.Sprint(i)
+			for j := 0; j < 10; j++ {
+				layer2 := filepath.Join(layer1, fmt.Sprint(j))
+				for k := 0; k < 10; k++ {
+					layer3 := filepath.Join(layer2, fmt.Sprint(k))
+					for l := 0; l < 10; l++ {
+						idx := i*1000 + j*10 + k*10 + l*10
+						if (idx % 10000) == 0 {
+							b.Log(idx)
+						}
+
+						name := frand.Bytes(32)
+						layer4 := filepath.Join(layer3, hex.EncodeToString(name))
+
+						_, err = tx.Exec(`
+			INSERT INTO objects (bucket_id, name, sia_meta, size, content_md5)
+			VALUES ($1, $2, $3, $4, $5)
+			ON CONFLICT(bucket_id, name) DO UPDATE SET
+				sia_meta = excluded.sia_meta,
+				size = excluded.size,
+				content_md5 = excluded.content_md5,
+				last_modified = DATE('NOW')
+		`, bid, layer4, encoded, size, contentMD5[:])
+					}
+				}
+			}
+		}
+		return err
+	})
+	if err != nil {
+		b.Fatal(err)
 	}
 }
