@@ -196,7 +196,17 @@ func TestCompleteMultipartUpload(t *testing.T) {
 	p2Data := []byte(t.Name())
 
 	// initiate multipart upload
-	uploadID, parts := newTestMultipartUpload(t, s3Tester, bucket, object, [][]byte{p1Data, p2Data})
+	uploadID, parts := newTestMultipartUpload(t, s3Tester, bucket, object, [][]byte{p1Data, p2Data[1:]})
+
+	// re-upload the second part
+	uploaded, err := s3Tester.UploadPart(t.Context(), bucket, object, uploadID, 2, p2Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts = append(parts, types.CompletedPart{
+		ETag:       uploaded.ETag,
+		PartNumber: aws.Int32(2),
+	})
 
 	// complete the multipart upload
 	completed, err := s3Tester.CompleteMultipartUpload(t.Context(), bucket, object, uploadID, parts)

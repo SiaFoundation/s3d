@@ -431,7 +431,7 @@ func parseCompletedParts(parts []CompleteMultipartPartXML) ([]CompletedPart, err
 		if part.PartNumber < 1 || part.PartNumber > MaxUploadPartNumber {
 			return nil, s3errs.ErrInvalidArgument
 		}
-		if i > 0 && part.PartNumber <= prev {
+		if i > 0 && part.PartNumber < prev {
 			return nil, s3errs.ErrInvalidPartOrder
 		}
 
