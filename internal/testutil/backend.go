@@ -609,7 +609,7 @@ func (b *MemoryBackend) CompleteMultipartUpload(_ context.Context, accessKeyID, 
 
 	// deduplicate parts and validate part number ordering
 	var prev, totalSize int
-	deduped := parts[:0]
+	deduped := make([]s3.CompletedPart, 0, len(parts))
 	for i, completed := range parts {
 		if i > 0 && completed.PartNumber < prev {
 			return nil, s3errs.ErrInvalidPartOrder
