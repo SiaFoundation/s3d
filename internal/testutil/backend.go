@@ -607,7 +607,7 @@ func (b *MemoryBackend) CompleteMultipartUpload(_ context.Context, accessKeyID, 
 		return nil, s3errs.ErrInvalidRequest
 	}
 
-	// deduplicate parts and validate part number ordering
+	// deduplicate parts (keeping the last occurrence of each part number) and validate part number ordering
 	var prev, totalSize int
 	deduped := make([]s3.CompletedPart, 0, len(parts))
 	for i, completed := range parts {
