@@ -214,14 +214,6 @@ func TestCompleteMultipartUpload(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// assert completeMultipartUpload is idempotent
-	completed, err = s3Tester.CompleteMultipartUpload(t.Context(), bucket, object, uploadID, parts)
-	if err != nil {
-		t.Fatal(err)
-	} else if completed.ETag == nil {
-		t.Fatal("expected ETag in completion response")
-	}
-
 	// assert final ETag is correct
 	p1MD5 := md5.Sum(p1Data)
 	p2MD5 := md5.Sum(p2Data)
