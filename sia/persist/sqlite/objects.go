@@ -76,13 +76,8 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, obj slabs.SealedObje
 // by the given access key. The backend should use the prefix to limit the
 // contents of the bucket and sort the results into the Contents and
 // CommonPrefixes fields of the returned ObjectsListResult.
-func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error) {
-	result := s3.NewObjectsListResult(page.MaxKeys)
-	if page.MaxKeys == 0 {
-		return result, nil
-	}
-
-	err := s.transaction(func(tx *txn) error {
+func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (result *s3.ObjectsListResult, err error) {
+	err = s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return fmt.Errorf("failed to get bucket ID: %w", err)
@@ -101,7 +96,7 @@ func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.
 		}
 
 		// merge results in sorted order
-		s.mergeResults(result, objects, commonPrefixes, page.MaxKeys)
+		result = s.mergeResults(objects, commonPrefixes, page.MaxKeys)
 
 		return nil
 	})
@@ -223,9 +218,10 @@ WHERE bucket_id = ?`
 	return prefixes, nil
 }
 
-func (s *Store) mergeResults(result *s3.ObjectsListResult, objects []*s3.Content, prefixes []string, maxKeys int64) {
-	i, j := 0, 0
+func (s *Store) mergeResults(objects []*s3.Content, prefixes []string, maxKeys int64) *s3.ObjectsListResult {
+	result := s3.NewObjectsListResult(maxKeys)
 
+	i, j := 0, 0
 	for int64(len(result.CommonPrefixes)+len(result.Contents)) < maxKeys && (i < len(objects) || j < len(prefixes)) {
 		if i >= len(objects) {
 			// only prefixes left
@@ -265,4 +261,5 @@ func (s *Store) mergeResults(result *s3.ObjectsListResult, objects []*s3.Content
 			}
 		}
 	}
+	return result
 }
