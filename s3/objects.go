@@ -767,10 +767,21 @@ func parseRangeHeader(s string) (*ObjectRangeRequest, error) {
 // writeGetOrHeadObjectHeaders contains shared logic for constructing headers for
 // a HEAD and a GET request for a /bucket/object URL.
 func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Request) error {
-	const metaPrefix = "X-Amz-Meta-"
+	const (
+		checksumPrefix = "X-Amz-Checksum-"
+		metaPrefix     = "X-Amz-Meta-"
+	)
+
 	for mk, mv := range obj.Metadata {
+		// ranged responses should not include checksum headers, this prevents
+		// clients from checking the checksum of a partial object against the
+		// full object checksum
+		if obj.Range != nil && strings.HasPrefix(mk, checksumPrefix) {
+			continue
+		}
+
+		// user metadata key is always returned in lowercase
 		if key, found := strings.CutPrefix(mk, metaPrefix); found {
-			// user metadata key is always returned in lowercase
 			w.Header()[fmt.Sprintf("%s%s", metaPrefix, strings.ToLower(key))] = []string{mv}
 		} else {
 			w.Header().Set(mk, mv)
