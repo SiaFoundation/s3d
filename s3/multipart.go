@@ -275,10 +275,12 @@ func (s *s3) listMultipartUploads(w http.ResponseWriter, r *http.Request, access
 
 func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, accessKeyID, dstBucket, dstObject, uploadID string, partNumber int) error {
 	source := r.Header.Get("X-Amz-Copy-Source")
+	rnge := r.Header.Get("X-Amz-Copy-Source-Range")
 	log := s.logger.With(zap.String("dstBucket", dstBucket),
 		zap.String("dstObject", dstObject),
 		zap.String("uploadID", uploadID),
 		zap.String("source", source),
+		zap.String("range", rnge),
 		zap.Int("partNumber", partNumber),
 	)
 	log.Debug("copy part")
@@ -290,7 +292,6 @@ func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, accessKeyID, dstBu
 	}
 
 	// parse range
-	rnge := r.Header.Get("X-Amz-Copy-Source-Range")
 	var start, end int64
 	if _, err := fmt.Sscanf(rnge, "bytes=%d-%d", &start, &end); err != nil {
 		return s3errs.ErrInvalidArgument
