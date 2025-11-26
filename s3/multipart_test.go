@@ -526,4 +526,15 @@ func TestListParts(t *testing.T) {
 	} else if nextPage.Parts[0].PartNumber == nil || *nextPage.Parts[0].PartNumber != 3 {
 		t.Fatalf("expected final part number 3, got %v", nextPage.Parts[0].PartNumber)
 	}
+
+	// assert we can list parts after aborting the upload
+	if err := s3Tester.AbortMultipartUpload(t.Context(), bucket, object, uploadID); err != nil {
+		t.Fatal(err)
+	}
+	aborted, err := s3Tester.ListParts(t.Context(), bucket, object, uploadID, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(aborted.Parts) != 0 {
+		t.Fatalf("expected 0 parts, got %d", len(aborted.Parts))
+	}
 }

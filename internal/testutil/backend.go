@@ -49,7 +49,6 @@ type (
 
 	object struct {
 		name         string
-		etag         string
 		data         []byte
 		lastModified time.Time
 		metadata     map[string]string
@@ -678,7 +677,6 @@ func (b *MemoryBackend) CompleteMultipartUpload(_ context.Context, accessKeyID, 
 	}
 	bkt.objects[key] = &object{
 		name:         key,
-		etag:         etag,
 		data:         objData,
 		lastModified: time.Now(),
 		metadata:     upload.metadata,
