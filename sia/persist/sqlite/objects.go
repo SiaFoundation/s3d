@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 
 	"github.com/SiaFoundation/s3d/s3"
@@ -82,6 +83,16 @@ func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return fmt.Errorf("failed to get bucket ID: %w", err)
+		}
+
+		// if a string is empty, path.Clean will replace it with "." but the
+		// rest of its [rules](https://pkg.go.dev/path#Clean) are OK to enforce
+		// here
+		if prefix.HasPrefix && len(prefix.Prefix) > 0 {
+			prefix.Prefix = path.Clean(prefix.Prefix)
+		}
+		if prefix.HasDelimiter && len(prefix.Delimiter) > 0 {
+			prefix.Delimiter = path.Clean(prefix.Delimiter)
 		}
 
 		// fetch up to maxKeys actual objects

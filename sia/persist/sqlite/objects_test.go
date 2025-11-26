@@ -155,7 +155,7 @@ func TestListObjectsMatch(t *testing.T) {
 	}
 
 	// upload a few objects
-	keys := []string{"foo/baz", "foo/bar"}
+	keys := []string{"foo/baz", "foo/bar", "😊/д"}
 	obj := sdk.Object{}
 	sealed := obj.Seal(types.GeneratePrivateKey())
 	id := obj.ID()
@@ -200,6 +200,9 @@ func TestListObjectsMatch(t *testing.T) {
 		{prefix: ptr("foo/"), objects: []string{"foo/bar", "foo/baz"}},
 		{prefix: ptr("foo/ba"), objects: []string{"foo/bar", "foo/baz"}},
 		{prefix: ptr("foo/bar"), objects: []string{"foo/bar"}},
+		{prefix: ptr("foo//ba"), objects: []string{"foo/bar", "foo/baz"}},
+		{prefix: ptr("foo//bar"), objects: []string{"foo/bar"}},
+		{prefix: ptr("😊"), objects: []string{"😊/д"}},
 
 		{prefix: ptr("FOO"), objects: []string{"foo/bar", "foo/baz"}},
 		{prefix: ptr("FOO/"), objects: []string{"foo/bar", "foo/baz"}},
@@ -210,9 +213,11 @@ func TestListObjectsMatch(t *testing.T) {
 		{prefix: ptr("aaa"), delim: ptr("/")},
 
 		{prefix: ptr("FOO"), delim: ptr("/"), commonPrefixes: []string{"foo/"}},
+		{prefix: ptr("FOO"), delim: ptr("//"), commonPrefixes: []string{"foo/"}},
 		{prefix: ptr("aaa"), delim: ptr("/")},
 
-		{delim: ptr("/"), commonPrefixes: []string{"foo/"}},
+		{delim: ptr("/"), commonPrefixes: []string{"foo/", "😊/"}},
+		{delim: ptr("//"), commonPrefixes: []string{"foo/", "😊/"}},
 		{prefix: ptr("foo"), delim: ptr("/bar"), objects: []string{"foo/baz"}, commonPrefixes: []string{"foo/"}},
 		{prefix: ptr("foo"), delim: ptr("/BAR"), objects: []string{"foo/baz"}, commonPrefixes: []string{"foo/"}},
 	} {
