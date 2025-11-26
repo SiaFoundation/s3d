@@ -17,6 +17,7 @@ CREATE TABLE objects (
     FOREIGN KEY (bucket_id) REFERENCES buckets(id),
     UNIQUE(bucket_id, name)
 );
+CREATE INDEX objects_name ON objects(name);
 
 CREATE TABLE global_settings (
 	id INTEGER PRIMARY KEY NOT NULL DEFAULT 0 CHECK (id = 0), -- enforce a single row

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/SiaFoundation/s3d/s3"
 
@@ -174,11 +175,11 @@ func (s *Store) fetchCommonPrefixes(tx *txn, bid int64, prefix s3.Prefix, page s
 	// find distinct common prefixes by selecting the minimum name for each prefix group
 	query := `
 SELECT DISTINCT substr(name, 1, instr(substr(name, ?), ?) + ?) as common_prefix
-FROM objects 
+FROM objects
 WHERE bucket_id = ?`
 
 	prefixLen := len(prefix.Prefix) + 1
-	args := []any{prefixLen, prefix.Delimiter, len(prefix.Prefix), bid}
+	args := []any{prefixLen, strings.ToLower(prefix.Delimiter), len(prefix.Prefix), bid}
 
 	if page.Marker != nil && *page.Marker != "" {
 		query += ` AND name > ?`
