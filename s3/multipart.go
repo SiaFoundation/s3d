@@ -299,30 +299,15 @@ func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, accessKeyID, dstBu
 		obj.Body.Close()
 	}
 
-	var start, length int64
-	if rnge == "" {
-		// no range specified: copy entire object
-		start = 0
-		length = obj.Size
-	} else if _, err := fmt.Sscanf(rnge, "bytes=%d-%d", &start, &length); err != nil {
-		return s3errs.ErrInvalidArgument
-	} else {
-		end := length
-		if start < 0 || end < start {
-			return s3errs.ErrInvalidArgument
-		}
-		if end >= obj.Size {
-			return s3errs.ErrInvalidRange
-		}
-		length = end - start + 1
+	// parse range
+	objRange, err := parseRange(rnge, obj.Size)
+	if err != nil {
+		return err
 	}
 
 	result, err := s.backend.UploadPartCopy(r.Context(), accessKeyID, srcBucket, srcObject, dstBucket, dstObject, uploadID, UploadPartCopyOptions{
 		PartNumber: partNumber,
-		Range: ObjectRange{
-			Start:  start,
-			Length: length,
-		},
+		Range:      objRange,
 	})
 	if err != nil {
 		return err
@@ -528,7 +513,7 @@ func parseCompletedParts(parts []CompleteMultipartPartXML) ([]CompletedPart, err
 		if part.PartNumber < 1 || part.PartNumber > MaxUploadPartNumber {
 			return nil, s3errs.ErrInvalidArgument
 		}
-		if i > 0 && part.PartNumber <= prev {
+		if i > 0 && part.PartNumber < prev {
 			return nil, s3errs.ErrInvalidPartOrder
 		}
 
@@ -566,6 +551,51 @@ func parseCompletedPartETag(etagStr string) (etag [16]byte, _ error) {
 // along with the part count to match AWS multipart ETag semantics.
 func FormatMultipartETag(hash []byte, partCount int) string {
 	return `"` + hex.EncodeToString(hash) + "-" + strconv.Itoa(partCount) + `"`
+}
+
+// parseRange validates the X-Amz-Copy-Source-Range header. It only allows a
+// single range of the form "bytes=start-end" and returns ErrInvalidArgument for
+// malformed headers or ErrInvalidRange if the range exceeds the source object
+// size.
+func parseRange(header string, size int64) (ObjectRange, error) {
+	header = strings.TrimSpace(header)
+
+	if size <= 0 {
+		return ObjectRange{}, s3errs.ErrInvalidRange
+	}
+	if header == "" {
+		return ObjectRange{Start: 0, Length: size}, nil
+	}
+	if !strings.HasPrefix(header, "bytes=") {
+		return ObjectRange{}, s3errs.ErrInvalidArgument
+	}
+
+	spec := strings.TrimPrefix(header, "bytes=")
+	if strings.Contains(spec, ",") {
+		return ObjectRange{}, s3errs.ErrInvalidArgument
+	}
+
+	parts := strings.Split(spec, "-")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return ObjectRange{}, s3errs.ErrInvalidArgument
+	}
+
+	start, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || start < 0 {
+		return ObjectRange{}, s3errs.ErrInvalidArgument
+	}
+	end, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || end < start {
+		return ObjectRange{}, s3errs.ErrInvalidArgument
+	}
+	if end >= size {
+		return ObjectRange{}, s3errs.ErrInvalidRange
+	}
+
+	return ObjectRange{
+		Start:  start,
+		Length: end - start + 1,
+	}, nil
 }
 
 func listPartsPageFromQuery(query url.Values) (ListPartsPage, error) {
