@@ -39,7 +39,7 @@ func main() {
 
 	var opts []testutil.MemoryBackendOption
 	for _, pair := range toxKeyPairs {
-		opts = append(opts, testutil.WithKeyPair(pair.AccessKey, pair.SecretKey))
+		opts = append(opts, testutil.WithKeyPair(pair.AccessKey, pair.AccessKey, pair.SecretKey))
 	}
 	backend := testutil.NewMemoryBackend(opts...)
 

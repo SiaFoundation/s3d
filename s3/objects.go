@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"strconv"
 	"strings"
@@ -146,11 +147,30 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, accessKeyID, dst
 		return err
 	}
 
-	if dir := r.Header.Get("x-amz-metadata-directive"); dir != "COPY" && dir != "" {
-		return s3errs.ErrNotImplemented // only COPY is supported
+	// copying to the same key without REPLACE is not allowed
+	replace := r.Header.Get("x-amz-metadata-directive") == "REPLACE"
+	if srcBucket == dstBucket && srcObject == dstObject && !replace {
+		return s3errs.ErrInvalidRequest
 	}
 
-	result, err := s.backend.CopyObject(r.Context(), accessKeyID, srcBucket, srcObject, dstBucket, dstObject, meta)
+	// if If-Match or If-None-Match headers are present, handle them
+	ifMatch := r.Header.Get("X-Amz-Copy-Source-If-Match")
+	ifNoneMatch := r.Header.Get("X-Amz-Copy-Source-If-None-Match")
+	if ifMatch != "" || ifNoneMatch != "" {
+		obj, err := s.backend.HeadObject(r.Context(), &accessKeyID, srcBucket, srcObject, nil)
+		if err != nil {
+			return err
+		}
+		etag := FormatETag(obj.ContentMD5[:])
+		if ifMatch != "" && ifMatch != etag {
+			return s3errs.ErrPreconditionFailed
+		}
+		if ifNoneMatch != "" && ifNoneMatch == etag {
+			return s3errs.ErrPreconditionFailed
+		}
+	}
+
+	result, err := s.backend.CopyObject(r.Context(), accessKeyID, srcBucket, srcObject, dstBucket, dstObject, replace, meta)
 	if err != nil {
 		return err
 	}
@@ -524,6 +544,7 @@ func FormatETag(hash []byte) string {
 func metadataHeaders(headers map[string][]string, sizeLimit int) (map[string]string, error) {
 	meta := make(map[string]string)
 	for hk, hv := range headers {
+		hk = textproto.CanonicalMIMEHeaderKey(hk)
 		if strings.HasPrefix(hk, "X-Amz-") ||
 			hk == "Content-Type" ||
 			hk == "Content-Disposition" ||
@@ -746,8 +767,14 @@ func parseRangeHeader(s string) (*ObjectRangeRequest, error) {
 // writeGetOrHeadObjectHeaders contains shared logic for constructing headers for
 // a HEAD and a GET request for a /bucket/object URL.
 func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Request) error {
+	const metaPrefix = "X-Amz-Meta-"
 	for mk, mv := range obj.Metadata {
-		w.Header().Set(mk, mv)
+		if key, found := strings.CutPrefix(mk, metaPrefix); found {
+			// user metadata key is always returned in lowercase
+			w.Header()[fmt.Sprintf("%s%s", metaPrefix, strings.ToLower(key))] = []string{mv}
+		} else {
+			w.Header().Set(mk, mv)
+		}
 	}
 
 	etag := FormatETag(obj.ContentMD5[:])

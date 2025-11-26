@@ -89,7 +89,7 @@ func (s *Sia) LoadSecret(ctx context.Context, accessKeyID string) (auth.SecretAc
 // destination bucket and object key. The provided metadata map contains any
 // metadata that should be merged into the copied object except for the
 // x-amz-acl header.
-func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, meta map[string]string) (*s3.CopyObjectResult, error) {
+func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, replace bool, meta map[string]string) (*s3.CopyObjectResult, error) {
 	return nil, s3errs.ErrNotImplemented
 }
 
@@ -116,6 +116,11 @@ func (s *Sia) AbortMultipartUpload(ctx context.Context, accessKeyID, bucket, obj
 
 // UploadPart uploads a single multipart part.
 func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object, uploadID string, r io.Reader, opts s3.UploadPartOptions) (*s3.UploadPartResult, error) {
+	return nil, s3errs.ErrNotImplemented
+}
+
+// ListParts lists uploaded parts for a multipart upload.
+func (s *Sia) ListParts(ctx context.Context, accessKeyID, bucket, object, uploadID string, page s3.ListPartsPage) (*s3.ListPartsResult, error) {
 	return nil, s3errs.ErrNotImplemented
 }
 
