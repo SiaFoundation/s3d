@@ -718,25 +718,31 @@ func (b *MemoryBackend) headOrGetObject(_ context.Context, accessKeyID *string, 
 		partNumber = nil // ignore part number when a range is requested
 	}
 
+	var partCount *int32
 	var contentMD5 [16]byte
 	if partNumber != nil {
-		partInfo, exists := obj.parts[int(*partNumber)]
-		if !exists {
-			return nil, s3errs.ErrInvalidPart
+		if len(obj.parts) == 0 {
+			if *partNumber != 1 {
+				return nil, s3errs.ErrInvalidPart
+			}
+			pc := int32(1)
+			partCount = &pc
+			contentMD5 = obj.contentMD5
+		} else {
+			partInfo, exists := obj.parts[int(*partNumber)]
+			if !exists {
+				return nil, s3errs.ErrInvalidPart
+			}
+			rnge = &s3.ObjectRange{
+				Start:  partInfo.offset,
+				Length: partInfo.length,
+			}
+			contentMD5 = partInfo.contentMD5
+			pc := int32(len(obj.parts))
+			partCount = &pc
 		}
-		rnge = &s3.ObjectRange{
-			Start:  partInfo.offset,
-			Length: partInfo.length,
-		}
-		contentMD5 = partInfo.contentMD5
 	} else {
 		contentMD5 = obj.contentMD5
-	}
-
-	var partCount *int32
-	if partNumber != nil {
-		pc := int32(len(obj.parts))
-		partCount = &pc
 	}
 
 	var body io.ReadCloser
