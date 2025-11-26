@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -134,6 +135,97 @@ func TestListObjects(t *testing.T) {
 			if expectedMarker := val(tc.nextMarker); expectedMarker != resp.NextMarker {
 				t.Fatalf("expected marker %v, got %v", expectedMarker, resp.NextMarker)
 			}
+		})
+	}
+}
+
+func TestListObjectsMatch(t *testing.T) {
+	log := zaptest.NewLogger(t)
+	fp := filepath.Join(t.TempDir(), "s3d.sqlite3")
+
+	store, err := OpenDatabase(fp, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// prepare a bucket
+	bucket := "foo"
+	if err := store.CreateBucket("", bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// upload a few objects
+	keys := []string{"foo/baz", "foo/bar"}
+	obj := sdk.Object{}
+	sealed := obj.Seal(types.GeneratePrivateKey())
+	id := obj.ID()
+
+	etag := s3.FormatETag(id[:])
+	for _, key := range keys {
+		err := store.PutObject("", bucket, key, sealed)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	assertCommonPrefixesEqual := func(t *testing.T, expected []string, actual []s3.CommonPrefix) {
+		t.Helper()
+		if len(expected) != len(actual) {
+			t.Fatalf("expected %d common prefixes, got %d", len(expected), len(actual))
+		}
+		for i := range expected {
+			if expected[i] != actual[i].Prefix {
+				t.Fatalf("expected common prefix %v, got %v", expected[i], actual[i])
+			}
+		}
+	}
+
+	ptr := func(s string) *string {
+		return &s
+	}
+	val := func(s *string) string {
+		if s == nil {
+			return ""
+		}
+		return *s
+	}
+
+	for idx, tc := range []struct {
+		prefix         *string
+		delim          *string
+		objects        []string
+		commonPrefixes []string
+	}{
+		{prefix: ptr("foo"), objects: []string{"foo/bar", "foo/baz"}},
+		{prefix: ptr("foo/"), objects: []string{"foo/bar", "foo/baz"}},
+		{prefix: ptr("foo/ba"), objects: []string{"foo/bar", "foo/baz"}},
+		{prefix: ptr("foo/bar"), objects: []string{"foo/bar"}},
+
+		{prefix: ptr("foo"), delim: ptr("/"), commonPrefixes: []string{"foo/"}},
+		{prefix: ptr("aaa"), delim: ptr("/")},
+
+		{delim: ptr("/"), commonPrefixes: []string{"foo/"}},
+	} {
+		t.Run(fmt.Sprint(idx), func(t *testing.T) {
+			resp, err := store.ListObjects(nil, bucket, s3.Prefix{
+				Prefix:       val(tc.prefix),
+				HasPrefix:    tc.prefix != nil,
+				Delimiter:    val(tc.delim),
+				HasDelimiter: tc.delim != nil,
+			}, s3.ListObjectsPage{MaxKeys: 100})
+			if err != nil {
+				t.Fatal(err)
+			} else if len(resp.Contents) != len(tc.objects) {
+				t.Fatalf("expected %d objects, got %d", len(tc.objects), len(resp.Contents))
+			}
+			for i := range tc.objects {
+				if resp.Contents[i].Key != tc.objects[i] {
+					t.Fatalf("expected object %v, got %v", tc.objects[i], resp.Contents[i].Key)
+				} else if resp.Contents[i].ETag != etag {
+					t.Fatalf("expected ETag %q, got %q", etag, resp.Contents[i].ETag)
+				}
+			}
+			assertCommonPrefixesEqual(t, tc.commonPrefixes, resp.CommonPrefixes)
 		})
 	}
 }
