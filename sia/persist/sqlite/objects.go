@@ -88,19 +88,19 @@ func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.
 			return fmt.Errorf("failed to get bucket ID: %w", err)
 		}
 
-		// Query 1: Fetch up to maxKeys actual objects
+		// fetch up to maxKeys actual objects
 		objects, err := s.fetchObjects(tx, bid, prefix, page)
 		if err != nil {
 			return err
 		}
 
-		// Query 2: Fetch up to maxKeys common prefixes
+		// fetch up to maxKeys common prefixes
 		commonPrefixes, err := s.fetchCommonPrefixes(tx, bid, prefix, page)
 		if err != nil {
 			return err
 		}
 
-		// Merge results in sorted order
+		// merge results in sorted order
 		s.mergeResults(result, objects, commonPrefixes, page.MaxKeys)
 
 		return nil
@@ -124,7 +124,7 @@ func (s *Store) fetchObjects(tx *txn, bid int64, prefix s3.Prefix, page s3.ListO
 		query += ` AND name LIKE ?`
 		args = append(args, prefix.Prefix+"%")
 	}
-	// Exclude objects that would be common prefixes
+	// exclude objects that would be common prefixes
 	if prefix.HasDelimiter {
 		query += ` AND name NOT LIKE ?`
 		args = append(args, prefix.Prefix+"%"+prefix.Delimiter+"%")
@@ -176,7 +176,7 @@ func (s *Store) fetchCommonPrefixes(tx *txn, bid int64, prefix s3.Prefix, page s
 		return nil, nil
 	}
 
-	// Find distinct common prefixes by selecting the minimum name for each prefix group
+	// find distinct common prefixes by selecting the minimum name for each prefix group
 	query := `
 SELECT DISTINCT substr(name, 1, instr(substr(name, ?), ?) + ?) as common_prefix
 FROM objects 
@@ -193,7 +193,7 @@ WHERE bucket_id = ?`
 		query += ` AND name LIKE ?`
 		args = append(args, prefix.Prefix+"%")
 	}
-	// Only include objects that have the delimiter after the prefix
+	// only include objects that have the delimiter after the prefix
 	if prefix.HasDelimiter {
 		query += ` AND name LIKE ?`
 		args = append(args, prefix.Prefix+"%"+prefix.Delimiter+"%")
@@ -228,15 +228,15 @@ func (s *Store) mergeResults(result *s3.ObjectsListResult, objects []*s3.Content
 
 	for int64(len(result.CommonPrefixes)+len(result.Contents)) < maxKeys && (i < len(objects) || j < len(prefixes)) {
 		if i >= len(objects) {
-			// Only prefixes left
+			// only prefixes left
 			result.AddPrefix(prefixes[j])
 			j++
 		} else if j >= len(prefixes) {
-			// Only objects left
+			// only objects left
 			result.Add(objects[i])
 			i++
 		} else {
-			// Compare and add the smaller one
+			// compare and add the smaller one
 			if objects[i].Key < prefixes[j] {
 				result.Add(objects[i])
 				i++
@@ -247,12 +247,12 @@ func (s *Store) mergeResults(result *s3.ObjectsListResult, objects []*s3.Content
 		}
 	}
 
-	// Check if there are more results
+	// check if there are more results
 	if i < len(objects) || j < len(prefixes) {
 		result.IsTruncated = true
-		// Set NextMarker to the last added key
+		// set NextMarker to the last added key
 		if (len(result.CommonPrefixes) + len(result.Contents)) > 0 {
-			// Get the last item added (either from Contents or CommonPrefixes)
+			// get the last item added (either from Contents or CommonPrefixes)
 			lastContent := result.Contents[len(result.Contents)-1]
 			lastPrefix := ""
 			if len(result.CommonPrefixes) > 0 {
