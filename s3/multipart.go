@@ -291,17 +291,37 @@ func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, accessKeyID, dstBu
 		return err
 	}
 
-	// parse range
-	var start, end int64
-	if _, err := fmt.Sscanf(rnge, "bytes=%d-%d", &start, &end); err != nil {
+	// fetch source metadata to determine size and validate range
+	obj, err := s.backend.HeadObject(r.Context(), &accessKeyID, srcBucket, srcObject, nil)
+	if err != nil {
+		return err
+	} else if obj.Body != nil {
+		obj.Body.Close()
+	}
+
+	var start, length int64
+	if rnge == "" {
+		// no range specified: copy entire object
+		start = 0
+		length = obj.Size
+	} else if _, err := fmt.Sscanf(rnge, "bytes=%d-%d", &start, &length); err != nil {
 		return s3errs.ErrInvalidArgument
+	} else {
+		end := length
+		if start < 0 || end < start {
+			return s3errs.ErrInvalidArgument
+		}
+		if end >= obj.Size {
+			return s3errs.ErrInvalidRange
+		}
+		length = end - start + 1
 	}
 
 	result, err := s.backend.UploadPartCopy(r.Context(), accessKeyID, srcBucket, srcObject, dstBucket, dstObject, uploadID, UploadPartCopyOptions{
 		PartNumber: partNumber,
 		Range: ObjectRange{
 			Start:  start,
-			Length: end - start + 1,
+			Length: length,
 		},
 	})
 	if err != nil {

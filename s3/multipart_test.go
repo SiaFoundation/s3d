@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 	"testing"
@@ -217,14 +218,10 @@ func TestUploadPartCopy(t *testing.T) {
 	uploadID := *res2.UploadId
 
 	// upload the second part first, copying from the source object
-	opts := s3.UploadPartCopyOptions{
-		PartNumber: 2,
-		Range: s3.ObjectRange{
-			Start:  s3.MinUploadPartSize / 2,
-			Length: s3.MinUploadPartSize,
-		},
-	}
-	res3, err := s3Tester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, uploadID, opts)
+	res3, err := s3Tester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, uploadID, 2, &s3.ObjectRange{
+		Start:  s3.MinUploadPartSize / 2,
+		Length: s3.MinUploadPartSize,
+	})
 	if err != nil {
 		t.Fatal(err)
 	} else if res3.CopyPartResult == nil {
@@ -263,30 +260,76 @@ func TestUploadPartCopy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	expectedData := append(append(append([]byte{}, p1Data...), p1Data[:s3.MinUploadPartSize/2]...), p2Data[s3.MinUploadPartSize/2:]...)
 	if !bytes.Equal(data, expectedData) {
 		t.Fatalf("unexpected object data")
 	}
 
+	// initiate new multipart upload
+	res5, err := s3Tester.CreateMultipartUpload(t.Context(), bucketDst, objectDst, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if res5.UploadId == nil {
+		t.Fatal("expected upload id in response")
+	}
+	uploadID = *res5.UploadId
+
+	// upload a part, copy the entire source object
+	res6, err := s3Tester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, uploadID, 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if res6.CopyPartResult == nil {
+		t.Fatal("expected CopyPartResult in response")
+	}
+
+	// complete the multipart upload
+	_, err = s3Tester.CompleteMultipartUpload(t.Context(), bucketDst, objectDst, uploadID, []types.CompletedPart{
+		{
+			PartNumber: aws.Int32(1),
+			ETag:       res6.CopyPartResult.ETag,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// assert final object data is correct
+	obj, err = s3Tester.GetObject(t.Context(), bucketDst, objectDst, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer obj.Body.Close()
+
+	data, err = io.ReadAll(obj.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expectedData = append(append([]byte{}, p1Data...), p2Data...)
+	if !bytes.Equal(data, expectedData) {
+		t.Fatalf("unexpected object data")
+	}
+
 	// assert [s3errs.ErrInvalidArgument] is returned for invalid part number
-	_, err = s3Tester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, "nonexistent-upload", s3.UploadPartCopyOptions{})
+	_, err = s3Tester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, "nonexistent-upload", math.MaxInt32, nil)
 	testutil.AssertS3Error(t, s3errs.ErrInvalidArgument, err)
 
 	// assert [s3errs.ErrNoSuchUpload] is returned for invalid upload id
-	_, err = s3Tester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, "nonexistent-upload", opts)
+	_, err = s3Tester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, "nonexistent-upload", 1, nil)
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchUpload, err)
 
 	// assert [s3errs.ErrAccessDenied] is returned for unauthorized access
 	otherTester := s3Tester.ChangeAccessKey(t, "foo", "bar")
-	_, err = otherTester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, uploadID, opts)
+	_, err = otherTester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, uploadID, 1, nil)
 	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
 
 	// assert [s3errs.ErrNoSuchBucket] is returned for nonexistent bucket
-	_, err = s3Tester.UploadPartCopy(t.Context(), "missing-bucket", objectSrc, bucketDst, objectDst, uploadID, opts)
+	_, err = s3Tester.UploadPartCopy(t.Context(), "missing-bucket", objectSrc, bucketDst, objectDst, uploadID, 1, nil)
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchBucket, err)
 
 	// assert [s3errs.ErrNoSuchKey] is returned for nonexistent source object
-	_, err = s3Tester.UploadPartCopy(t.Context(), bucketSrc, "missing-object", bucketDst, objectDst, uploadID, opts)
+	_, err = s3Tester.UploadPartCopy(t.Context(), bucketSrc, "missing-object", bucketDst, objectDst, uploadID, 1, nil)
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchKey, err)
 }
 
