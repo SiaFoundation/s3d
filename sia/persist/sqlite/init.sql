@@ -11,10 +11,12 @@ CREATE TABLE buckets (
 
 CREATE TABLE objects (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    bucket_id INTEGER NOT NULL,
+    bucket_id INTEGER REFERENCES buckets(id) NOT NULL,
     name TEXT NOT NULL,
     sia_meta BLOB NOT NULL,
-    FOREIGN KEY (bucket_id) REFERENCES buckets(id),
+    size INTEGER NOT NULL,
+    content_md5 BLOB NOT NULL,
+    last_modified TIMESTAMP NOT NULL DEFAULT (DATE('now')),
     UNIQUE(bucket_id, name)
 );
 CREATE INDEX objects_name ON objects(name);

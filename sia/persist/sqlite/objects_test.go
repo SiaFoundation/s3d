@@ -9,6 +9,7 @@ import (
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/sdk"
 	"go.uber.org/zap/zaptest"
+	"lukechampine.com/frand"
 )
 
 func TestListObjects(t *testing.T) {
@@ -30,11 +31,11 @@ func TestListObjects(t *testing.T) {
 	keys := []string{"foo", "foo/baz", "foo/bar"}
 	obj := sdk.Object{}
 	sealed := obj.Seal(types.GeneratePrivateKey())
-	id := obj.ID()
+	contentMD5 := [16]byte(frand.Bytes(16))
 
-	etag := s3.FormatETag(id[:])
+	etag := s3.FormatETag(contentMD5[:])
 	for _, key := range keys {
-		err := store.PutObject("", bucket, key, sealed)
+		err := store.PutObject("", bucket, key, contentMD5, sealed)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -158,11 +159,11 @@ func TestListObjectsMatch(t *testing.T) {
 	keys := []string{"foo/baz", "foo/bar", "😊/д"}
 	obj := sdk.Object{}
 	sealed := obj.Seal(types.GeneratePrivateKey())
-	id := obj.ID()
+	contentMD5 := [16]byte(frand.Bytes(16))
 
-	etag := s3.FormatETag(id[:])
+	etag := s3.FormatETag(contentMD5[:])
 	for _, key := range keys {
-		err := store.PutObject("", bucket, key, sealed)
+		err := store.PutObject("", bucket, key, contentMD5, sealed)
 		if err != nil {
 			t.Fatal(err)
 		}

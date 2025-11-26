@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
 
@@ -53,7 +54,7 @@ func (s *Store) GetObject(accessKeyID *string, bucket, name string) (slabs.Seale
 
 // PutObject stores the given object in the given bucket with the given name or
 // overwrites it if it already exists.
-func (s *Store) PutObject(accessKeyID, bucket, name string, obj slabs.SealedObject) error {
+func (s *Store) PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, obj slabs.SealedObject) error {
 	return s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
@@ -64,12 +65,20 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, obj slabs.SealedObje
 			return err
 		}
 
+		var size uint64
+		for _, slab := range obj.Slabs {
+			size += uint64(slab.Length)
+		}
+
 		_, err = tx.Exec(`
-			INSERT INTO objects (bucket_id, name, sia_meta)
-			VALUES ($1, $2, $3)
+			INSERT INTO objects (bucket_id, name, sia_meta, size, content_md5)
+			VALUES ($1, $2, $3, $4, $5)
 			ON CONFLICT(bucket_id, name) DO UPDATE SET
-				sia_meta = excluded.sia_meta
-		`, bid, name, encoded)
+				sia_meta = excluded.sia_meta,
+				size = excluded.size,
+				content_md5 = excluded.content_md5,
+				last_modified = DATE('NOW')
+		`, bid, name, encoded, size, contentMD5[:])
 		return err
 	})
 }
@@ -120,7 +129,7 @@ func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.
 }
 
 func (s *Store) fetchObjects(tx *txn, bid int64, prefix s3.Prefix, page s3.ListObjectsPage) ([]*s3.Content, error) {
-	query := `SELECT name, sia_meta FROM objects WHERE bucket_id = ?`
+	query := `SELECT name, size, content_md5, last_modified FROM objects WHERE bucket_id = ?`
 	args := []any{bid}
 
 	if page.Marker != nil && *page.Marker != "" {
@@ -148,26 +157,17 @@ func (s *Store) fetchObjects(tx *txn, bid int64, prefix s3.Prefix, page s3.ListO
 	var objects []*s3.Content
 	for rows.Next() {
 		var name string
-		var siaMeta []byte
-		if err := rows.Scan(&name, &siaMeta); err != nil {
+		var size uint64
+		var contentMD5 []byte
+		var lastModified time.Time
+		if err := rows.Scan(&name, &size, &contentMD5, &lastModified); err != nil {
 			return nil, fmt.Errorf("failed to scan: %w", err)
-		}
-
-		var obj slabs.SealedObject
-		if err := obj.UnmarshalSia(siaMeta); err != nil {
-			return nil, fmt.Errorf("failed to parse object: %w", err)
-		}
-		objID := obj.ID()
-
-		var size uint32
-		for _, slab := range obj.Slabs {
-			size += slab.Length
 		}
 
 		objects = append(objects, &s3.Content{
 			Key:          name,
-			LastModified: s3.NewContentTime(obj.UpdatedAt),
-			ETag:         s3.FormatETag(objID[:]),
+			LastModified: s3.NewContentTime(lastModified),
+			ETag:         s3.FormatETag(contentMD5[:]),
 			Size:         int64(size),
 		})
 	}

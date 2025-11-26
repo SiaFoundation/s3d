@@ -52,7 +52,7 @@ type Store interface {
 	GetObject(accessKeyID *string, bucket, object string) (slabs.SealedObject, error)
 	HeadBucket(accessKeyID, bucket string) error
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
-	PutObject(accessKeyID, bucket, name string, obj slabs.SealedObject) error
+	PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, obj slabs.SealedObject) error
 }
 
 // New creates a new Sia backend instance.

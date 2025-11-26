@@ -159,7 +159,7 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	}
 
 	// store the object in the database
-	if err := s.store.PutObject(accessKeyID, bucket, object, s.sdk.SealObject(obj)); err != nil {
+	if err := s.store.PutObject(accessKeyID, bucket, object, contentMD5, s.sdk.SealObject(obj)); err != nil {
 		return nil, fmt.Errorf("failed to store object metadata: %w", err)
 	}
 
