@@ -97,10 +97,10 @@ func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.
 		// if a string is empty, path.Clean will replace it with "." but the
 		// rest of its [rules](https://pkg.go.dev/path#Clean) are OK to enforce
 		// here
-		if prefix.HasPrefix && len(prefix.Prefix) > 0 {
+		if prefix.HasPrefix && prefix.Prefix != "" {
 			prefix.Prefix = path.Clean(prefix.Prefix)
 		}
-		if prefix.HasDelimiter && len(prefix.Delimiter) > 0 {
+		if prefix.HasDelimiter && prefix.Delimiter != "" {
 			prefix.Delimiter = path.Clean(prefix.Delimiter)
 		}
 
@@ -167,7 +167,7 @@ func (s *Store) fetchObjects(tx *txn, bid int64, prefix s3.Prefix, page s3.ListO
 		objects = append(objects, &s3.Content{
 			Key:          name,
 			LastModified: s3.NewContentTime(lastModified),
-			ETag:         s3.FormatETag(contentMD5[:]),
+			ETag:         s3.FormatETag(contentMD5),
 			Size:         int64(size),
 		})
 	}
