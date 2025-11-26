@@ -161,7 +161,7 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, accessKeyID, dst
 	ifMatch := r.Header.Get("X-Amz-Copy-Source-If-Match")
 	ifNoneMatch := r.Header.Get("X-Amz-Copy-Source-If-None-Match")
 	if ifMatch != "" || ifNoneMatch != "" {
-		obj, err := s.backend.HeadObject(r.Context(), &accessKeyID, srcBucket, srcObject, nil)
+		obj, err := s.backend.HeadObject(r.Context(), &accessKeyID, srcBucket, srcObject, nil, nil)
 		if err != nil {
 			return err
 		}
