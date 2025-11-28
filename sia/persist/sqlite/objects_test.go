@@ -1,9 +1,9 @@
 package sqlite
 
 import (
-	"encoding/hex"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/SiaFoundation/s3d/s3"
@@ -293,8 +293,8 @@ func BenchmarkListObjects(b *testing.B) {
 							b.Log(idx)
 						}
 
-						name := frand.Bytes(32)
-						layer4 := filepath.Join(layer3, hex.EncodeToString(name))
+						name := strconv.Itoa(idx)
+						layer4 := filepath.Join(layer3, name)
 
 						_, err = tx.Exec(`
 			INSERT INTO objects (bucket_id, name, sia_meta, size, content_md5)
@@ -314,4 +314,63 @@ func BenchmarkListObjects(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
+
+	const maxKeys = 100
+	b.Run("no_delimiter", func(b *testing.B) {
+		for b.Loop() {
+			resp, err := store.ListObjects(nil, bucket, s3.Prefix{}, s3.ListObjectsPage{MaxKeys: maxKeys})
+			if err != nil {
+				b.Fatal(err)
+			} else if length := len(resp.Contents) + len(resp.CommonPrefixes); length != maxKeys {
+				b.Fatalf("expected %d objects, got %d", maxKeys, length)
+			}
+		}
+	})
+
+	b.Run("root_delimiter", func(b *testing.B) {
+		for b.Loop() {
+			const maxKeys = 100
+			resp, err := store.ListObjects(nil, bucket, s3.Prefix{
+				Delimiter:    "/",
+				HasDelimiter: true,
+			}, s3.ListObjectsPage{MaxKeys: maxKeys})
+			if err != nil {
+				b.Fatal(err)
+			} else if length := len(resp.Contents) + len(resp.CommonPrefixes); length != maxKeys {
+				b.Fatalf("expected %d objects, got %d", maxKeys, length)
+			}
+		}
+	})
+
+	b.Run("folder_bottom_delimiter", func(b *testing.B) {
+		for b.Loop() {
+			const maxKeys = 100
+			resp, err := store.ListObjects(nil, bucket, s3.Prefix{
+				Prefix:       "0/0/0",
+				Delimiter:    "1",
+				HasDelimiter: true,
+			}, s3.ListObjectsPage{MaxKeys: maxKeys})
+			if err != nil {
+				b.Fatal(err)
+			} else if length := len(resp.Contents) + len(resp.CommonPrefixes); length != maxKeys {
+				b.Fatalf("expected %d objects, got %d", maxKeys, length)
+			}
+		}
+	})
+
+	b.Run("folder_delimiter", func(b *testing.B) {
+		for b.Loop() {
+			const maxKeys = 100
+			resp, err := store.ListObjects(nil, bucket, s3.Prefix{
+				Prefix:       "0/",
+				Delimiter:    "000",
+				HasDelimiter: true,
+			}, s3.ListObjectsPage{MaxKeys: maxKeys})
+			if err != nil {
+				b.Fatal(err)
+			} else if length := len(resp.Contents) + len(resp.CommonPrefixes); length != maxKeys {
+				b.Fatalf("expected %d objects, got %d", maxKeys, length)
+			}
+		}
+	})
 }

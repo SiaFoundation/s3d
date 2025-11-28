@@ -83,6 +83,23 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte,
 	})
 }
 
+// pathClean has the same behavior as path.Clean except it preserves
+// trailing slashes for any input besides "/"
+func pathClean(p string) string {
+	if p == "" {
+		return ""
+	} else if p == "/" {
+		return p
+	}
+
+	hasSlash := len(p) > 1 && p[len(p)-1] == '/'
+	cleaned := path.Clean(p)
+	if hasSlash && cleaned != "/" {
+		cleaned += "/"
+	}
+	return cleaned
+}
+
 // ListObjects lists objects in the specified bucket for the user identified
 // by the given access key. The backend should use the prefix to limit the
 // contents of the bucket and sort the results into the Contents and
@@ -98,10 +115,10 @@ func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.
 		// rest of its [rules](https://pkg.go.dev/path#Clean) are OK to enforce
 		// here
 		if prefix.HasPrefix && prefix.Prefix != "" {
-			prefix.Prefix = path.Clean(prefix.Prefix)
+			prefix.Prefix = pathClean(prefix.Prefix)
 		}
 		if prefix.HasDelimiter && prefix.Delimiter != "" {
-			prefix.Delimiter = path.Clean(prefix.Delimiter)
+			prefix.Delimiter = pathClean(prefix.Delimiter)
 		}
 
 		// fetch up to maxKeys actual objects
@@ -261,15 +278,18 @@ func (s *Store) mergeResults(objects []*s3.Content, prefixes []string, maxKeys i
 		// set NextMarker to the last added key
 		if (len(result.CommonPrefixes) + len(result.Contents)) > 0 {
 			// get the last item added (either from Contents or CommonPrefixes)
-			lastContent := result.Contents[len(result.Contents)-1]
-			lastPrefix := ""
+			var lastContent string
+			if len(result.Contents) > 0 {
+				lastContent = result.Contents[len(result.Contents)-1].Key
+			}
+			var lastPrefix string
 			if len(result.CommonPrefixes) > 0 {
 				lastPrefix = result.CommonPrefixes[len(result.CommonPrefixes)-1].Prefix
 			}
-			if lastPrefix != "" && (lastContent == nil || lastPrefix > lastContent.Key) {
+			if lastPrefix != "" && (lastContent == "" || lastPrefix > lastContent) {
 				result.NextMarker = lastPrefix
-			} else if lastContent != nil {
-				result.NextMarker = lastContent.Key
+			} else if lastContent != "" {
+				result.NextMarker = lastContent
 			}
 		}
 	}
