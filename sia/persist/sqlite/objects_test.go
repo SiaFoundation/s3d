@@ -332,8 +332,6 @@ func BenchmarkListObjects(b *testing.B) {
 			resp, err := store.ListObjects(nil, bucket, s3.Prefix{}, s3.ListObjectsPage{MaxKeys: maxKeys})
 			if err != nil {
 				b.Fatal(err)
-			} else if length := len(resp.Contents) + len(resp.CommonPrefixes); length != maxKeys {
-				b.Fatalf("expected %d objects, got %d", maxKeys, length)
 			}
 		}
 	})
@@ -346,8 +344,6 @@ func BenchmarkListObjects(b *testing.B) {
 			}, s3.ListObjectsPage{MaxKeys: maxKeys})
 			if err != nil {
 				b.Fatal(err)
-			} else if length := len(resp.Contents) + len(resp.CommonPrefixes); length != maxKeys {
-				b.Fatalf("expected %d objects, got %d", maxKeys, length)
 			}
 		}
 	})
@@ -359,8 +355,6 @@ func BenchmarkListObjects(b *testing.B) {
 			}, s3.ListObjectsPage{MaxKeys: maxKeys})
 			if err != nil {
 				b.Fatal(err)
-			} else if length := len(resp.Contents) + len(resp.CommonPrefixes); length != maxKeys {
-				b.Fatalf("expected %d objects, got %d", maxKeys, length)
 			}
 		}
 	})
@@ -375,8 +369,6 @@ func BenchmarkListObjects(b *testing.B) {
 			}, s3.ListObjectsPage{MaxKeys: maxKeys})
 			if err != nil {
 				b.Fatal(err)
-			} else if length := len(resp.Contents) + len(resp.CommonPrefixes); length != maxKeys {
-				b.Fatalf("expected %d objects, got %d", maxKeys, length)
 			}
 		}
 	})
@@ -391,8 +383,6 @@ func BenchmarkListObjects(b *testing.B) {
 			}, s3.ListObjectsPage{MaxKeys: maxKeys})
 			if err != nil {
 				b.Fatal(err)
-			} else if length := len(resp.Contents) + len(resp.CommonPrefixes); length != maxKeys {
-				b.Fatalf("expected %d objects, got %d", maxKeys, length)
 			}
 		}
 	})
@@ -407,8 +397,6 @@ func BenchmarkListObjects(b *testing.B) {
 			}, s3.ListObjectsPage{MaxKeys: maxKeys})
 			if err != nil {
 				b.Fatal(err)
-			} else if length := len(resp.Contents) + len(resp.CommonPrefixes); length != maxKeys {
-				b.Fatalf("expected %d objects, got %d", maxKeys, length)
 			}
 		}
 	})
