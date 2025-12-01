@@ -369,6 +369,7 @@ func BenchmarkListObjects(b *testing.B) {
 		for b.Loop() {
 			resp, err := store.ListObjects(nil, bucket, s3.Prefix{
 				Prefix:       fmt.Sprintf("%d/%d/", frand.Intn(dir1), frand.Intn(dir2)),
+				HasPrefix:    true,
 				Delimiter:    "/",
 				HasDelimiter: true,
 			}, s3.ListObjectsPage{MaxKeys: maxKeys})
@@ -384,6 +385,7 @@ func BenchmarkListObjects(b *testing.B) {
 		for b.Loop() {
 			resp, err := store.ListObjects(nil, bucket, s3.Prefix{
 				Prefix:       "0/0/0",
+				HasPrefix:    true,
 				Delimiter:    "1",
 				HasDelimiter: true,
 			}, s3.ListObjectsPage{MaxKeys: maxKeys})
@@ -399,6 +401,7 @@ func BenchmarkListObjects(b *testing.B) {
 		for b.Loop() {
 			resp, err := store.ListObjects(nil, bucket, s3.Prefix{
 				Prefix:       "0/",
+				HasPrefix:    true,
 				Delimiter:    "000",
 				HasDelimiter: true,
 			}, s3.ListObjectsPage{MaxKeys: maxKeys})
