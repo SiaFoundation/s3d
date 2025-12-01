@@ -320,6 +320,12 @@ func BenchmarkListObjects(b *testing.B) {
 		b.Fatal(err)
 	}
 
+	if _, err := store.db.Exec(`VACUUM;`); err != nil {
+		b.Fatal(err)
+	} else if _, err := store.db.Exec(`ANALYZE;`); err != nil {
+		b.Fatal(err)
+	}
+
 	const maxKeys = 100
 	b.Run("no_delimiter", func(b *testing.B) {
 		for b.Loop() {
@@ -335,6 +341,34 @@ func BenchmarkListObjects(b *testing.B) {
 	b.Run("root_delimiter", func(b *testing.B) {
 		for b.Loop() {
 			resp, err := store.ListObjects(nil, bucket, s3.Prefix{
+				Delimiter:    "/",
+				HasDelimiter: true,
+			}, s3.ListObjectsPage{MaxKeys: maxKeys})
+			if err != nil {
+				b.Fatal(err)
+			} else if length := len(resp.Contents) + len(resp.CommonPrefixes); length != maxKeys {
+				b.Fatalf("expected %d objects, got %d", maxKeys, length)
+			}
+		}
+	})
+
+	b.Run("random_without_delimiter", func(b *testing.B) {
+		for b.Loop() {
+			resp, err := store.ListObjects(nil, bucket, s3.Prefix{
+				Prefix: fmt.Sprintf("%d/%d/", frand.Intn(dir1), frand.Intn(dir2)),
+			}, s3.ListObjectsPage{MaxKeys: maxKeys})
+			if err != nil {
+				b.Fatal(err)
+			} else if length := len(resp.Contents) + len(resp.CommonPrefixes); length != maxKeys {
+				b.Fatalf("expected %d objects, got %d", maxKeys, length)
+			}
+		}
+	})
+
+	b.Run("random_with_root_delimiter", func(b *testing.B) {
+		for b.Loop() {
+			resp, err := store.ListObjects(nil, bucket, s3.Prefix{
+				Prefix:       fmt.Sprintf("%d/%d/", frand.Intn(dir1), frand.Intn(dir2)),
 				Delimiter:    "/",
 				HasDelimiter: true,
 			}, s3.ListObjectsPage{MaxKeys: maxKeys})
