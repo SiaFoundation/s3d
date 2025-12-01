@@ -329,7 +329,7 @@ func BenchmarkListObjects(b *testing.B) {
 	const maxKeys = 100
 	b.Run("no_delimiter", func(b *testing.B) {
 		for b.Loop() {
-			resp, err := store.ListObjects(nil, bucket, s3.Prefix{}, s3.ListObjectsPage{MaxKeys: maxKeys})
+			_, err := store.ListObjects(nil, bucket, s3.Prefix{}, s3.ListObjectsPage{MaxKeys: maxKeys})
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -338,7 +338,7 @@ func BenchmarkListObjects(b *testing.B) {
 
 	b.Run("root_delimiter", func(b *testing.B) {
 		for b.Loop() {
-			resp, err := store.ListObjects(nil, bucket, s3.Prefix{
+			_, err := store.ListObjects(nil, bucket, s3.Prefix{
 				Delimiter:    "/",
 				HasDelimiter: true,
 			}, s3.ListObjectsPage{MaxKeys: maxKeys})
@@ -350,7 +350,7 @@ func BenchmarkListObjects(b *testing.B) {
 
 	b.Run("random_without_delimiter", func(b *testing.B) {
 		for b.Loop() {
-			resp, err := store.ListObjects(nil, bucket, s3.Prefix{
+			_, err := store.ListObjects(nil, bucket, s3.Prefix{
 				Prefix: fmt.Sprintf("%d/%d/", frand.Intn(dir1), frand.Intn(dir2)),
 			}, s3.ListObjectsPage{MaxKeys: maxKeys})
 			if err != nil {
@@ -361,7 +361,7 @@ func BenchmarkListObjects(b *testing.B) {
 
 	b.Run("random_with_root_delimiter", func(b *testing.B) {
 		for b.Loop() {
-			resp, err := store.ListObjects(nil, bucket, s3.Prefix{
+			_, err := store.ListObjects(nil, bucket, s3.Prefix{
 				Prefix:       fmt.Sprintf("%d/%d/", frand.Intn(dir1), frand.Intn(dir2)),
 				HasPrefix:    true,
 				Delimiter:    "/",
@@ -375,7 +375,7 @@ func BenchmarkListObjects(b *testing.B) {
 
 	b.Run("folder_bottom_delimiter", func(b *testing.B) {
 		for b.Loop() {
-			resp, err := store.ListObjects(nil, bucket, s3.Prefix{
+			_, err := store.ListObjects(nil, bucket, s3.Prefix{
 				Prefix:       "0/0/0",
 				HasPrefix:    true,
 				Delimiter:    "1",
@@ -389,7 +389,7 @@ func BenchmarkListObjects(b *testing.B) {
 
 	b.Run("folder_delimiter", func(b *testing.B) {
 		for b.Loop() {
-			resp, err := store.ListObjects(nil, bucket, s3.Prefix{
+			_, err := store.ListObjects(nil, bucket, s3.Prefix{
 				Prefix:       "0/",
 				HasPrefix:    true,
 				Delimiter:    "000",
