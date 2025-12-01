@@ -607,22 +607,8 @@ func (b *MemoryBackend) CompleteMultipartUpload(_ context.Context, accessKeyID, 
 		return nil, s3errs.ErrInvalidRequest
 	}
 
-	// deduplicate parts (keeping the last occurrence of each part number) and validate part number ordering
-	var prev, totalSize int
-	deduped := make([]s3.CompletedPart, 0, len(parts))
-	for i, completed := range parts {
-		if i > 0 && completed.PartNumber < prev {
-			return nil, s3errs.ErrInvalidPartOrder
-		}
-		prev = completed.PartNumber
-		if len(deduped) > 0 && deduped[len(deduped)-1].PartNumber == completed.PartNumber {
-			deduped[len(deduped)-1] = completed // overwrite duplicate
-		} else {
-			deduped = append(deduped, completed)
-		}
-	}
-	parts = deduped
-
+	// build object hash and validate parts
+	var totalSize int
 	objHash := make([]byte, 0, len(parts)*ETagSize)
 	objParts := make(map[int]objectMultipartPart, len(parts))
 	for i, completed := range parts {
