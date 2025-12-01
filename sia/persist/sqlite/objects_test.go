@@ -248,6 +248,17 @@ func TestListObjectsMatch(t *testing.T) {
 }
 
 func BenchmarkListObjects(b *testing.B) {
+	const (
+		// number of root level directories
+		dir1 = 1000
+		// number of second level directories
+		dir2 = 10
+		// number of third level directories
+		dir3 = 10
+		// number of fourth level files
+		dir4 = 10
+	)
+
 	log := zaptest.NewLogger(b)
 	fp := filepath.Join(b.TempDir(), "s3d.sqlite3")
 
@@ -281,14 +292,14 @@ func BenchmarkListObjects(b *testing.B) {
 			size += uint64(slab.Length)
 		}
 
-		for i := 0; i < 1000; i++ {
+		for i := 0; i < dir1; i++ {
 			layer1 := fmt.Sprint(i)
-			for j := 0; j < 10; j++ {
+			for j := 0; j < dir2; j++ {
 				layer2 := filepath.Join(layer1, fmt.Sprint(j))
-				for k := 0; k < 10; k++ {
+				for k := 0; k < dir3; k++ {
 					layer3 := filepath.Join(layer2, fmt.Sprint(k))
-					for l := 0; l < 10; l++ {
-						idx := i*1000 + j*10 + k*10 + l*10
+					for l := 0; l < dir4; l++ {
+						idx := i*dir1 + j*dir2 + k*dir3 + l*dir4
 						if (idx % 10000) == 0 {
 							b.Log(idx)
 						}
@@ -298,13 +309,7 @@ func BenchmarkListObjects(b *testing.B) {
 
 						_, err = tx.Exec(`
 			INSERT INTO objects (bucket_id, name, sia_meta, size, content_md5)
-			VALUES ($1, $2, $3, $4, $5)
-			ON CONFLICT(bucket_id, name) DO UPDATE SET
-				sia_meta = excluded.sia_meta,
-				size = excluded.size,
-				content_md5 = excluded.content_md5,
-				last_modified = DATE('NOW')
-		`, bid, layer4, encoded, size, contentMD5[:])
+			VALUES ($1, $2, $3, $4, $5)`, bid, layer4, encoded, size, contentMD5[:])
 					}
 				}
 			}
@@ -329,7 +334,6 @@ func BenchmarkListObjects(b *testing.B) {
 
 	b.Run("root_delimiter", func(b *testing.B) {
 		for b.Loop() {
-			const maxKeys = 100
 			resp, err := store.ListObjects(nil, bucket, s3.Prefix{
 				Delimiter:    "/",
 				HasDelimiter: true,
@@ -344,7 +348,6 @@ func BenchmarkListObjects(b *testing.B) {
 
 	b.Run("folder_bottom_delimiter", func(b *testing.B) {
 		for b.Loop() {
-			const maxKeys = 100
 			resp, err := store.ListObjects(nil, bucket, s3.Prefix{
 				Prefix:       "0/0/0",
 				Delimiter:    "1",
@@ -360,7 +363,6 @@ func BenchmarkListObjects(b *testing.B) {
 
 	b.Run("folder_delimiter", func(b *testing.B) {
 		for b.Loop() {
-			const maxKeys = 100
 			resp, err := store.ListObjects(nil, bucket, s3.Prefix{
 				Prefix:       "0/",
 				Delimiter:    "000",
