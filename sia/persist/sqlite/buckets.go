@@ -12,7 +12,7 @@ import (
 // CreateBucket creates a new bucket.
 func (s *Store) CreateBucket(accessKeyID, bucket string) error {
 	return s.transaction(func(tx *txn) error {
-		res, err := tx.Exec("INSERT INTO buckets (name, created_at) VALUES ($1, $2) ON CONFLICT (name) DO NOTHING", bucket, time.Now().Unix())
+		res, err := tx.Exec("INSERT INTO buckets (name, created_at) VALUES ($1, $2) ON CONFLICT (name) DO NOTHING", bucket, sqlTime(time.Now()))
 		if err != nil {
 			return err
 		} else if n, err := res.RowsAffected(); err != nil {
@@ -62,14 +62,14 @@ func (s *Store) ListBuckets(accessKeyID string) ([]s3.BucketInfo, error) {
 			return err
 		}
 		for rows.Next() {
-			var createdAt int64
+			var createdAt time.Time
 			var name string
-			if err := rows.Scan(&name, &createdAt); err != nil {
+			if err := rows.Scan(&name, (*sqlTime)(&createdAt)); err != nil {
 				return err
 			}
 			buckets = append(buckets, s3.BucketInfo{
 				Name:         name,
-				CreationDate: s3.NewContentTime(time.Unix(createdAt, 0)),
+				CreationDate: s3.NewContentTime(createdAt),
 			})
 		}
 		return rows.Close()
