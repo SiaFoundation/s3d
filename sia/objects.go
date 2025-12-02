@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.uber.org/zap"
 )
 
@@ -47,34 +49,23 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 		return nil, s3errs.ErrAccessDenied
 	}
 
-	so, err := s.store.GetObject(accessKeyID, bucket, object)
+	obj, err := s.store.GetObject(accessKeyID, bucket, object)
 	if err != nil {
 		return nil, err
 	}
 
-	obj, err := s.sdk.OpenSealedObject(so)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open object: %w", err)
-	}
-
-	var meta objectMeta
-	if err := meta.decode(obj.Metadata()); err != nil {
-		return nil, fmt.Errorf("failed to decode object metadata: %w", err)
-	}
-
-	size := int64(obj.Size())
-	rnge, err := requestedRange.Range(size)
+	rnge, err := requestedRange.Range(obj.Size)
 	if err != nil {
 		return nil, err
 	}
 
 	resp := &s3.Object{
 		Body:         nil,
-		ContentMD5:   meta.contentMD5,
-		LastModified: obj.UpdatedAt(),
-		Metadata:     meta.meta,
+		ContentMD5:   obj.ContentMD5,
+		LastModified: obj.UpdatedAt,
+		Metadata:     obj.Meta,
 		Range:        rnge,
-		Size:         size,
+		Size:         obj.Size,
 	}
 
 	// if this is a head request, we are done
@@ -82,14 +73,22 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 		return resp, nil
 	}
 
+	// TODO: once the indexer returns the full metadata we can cache it locally
+	// and avoid fetching it on-demand.
+	pinnedObj, err := s.sdk.Object(ctx, obj.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch object from indexer: %w", err)
+	}
+
 	// otherwise, we download the body
 	pr, pw := io.Pipe()
 	go func() {
 		defer pw.Close()
-		err := s.sdk.Download(ctx, pw, obj, rnge)
+		err = s.sdk.Download(ctx, pw, pinnedObj, rnge)
 		if err != nil {
 			s.logger.Error("download failed", zap.Error(err), zap.String("bucket", bucket), zap.String("object", object))
 			pw.CloseWithError(err)
+			return
 		}
 	}()
 
@@ -123,14 +122,19 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 		r = io.TeeReader(r, sha256Hash)
 	}
 
+	// count size of uploaded data
+	lr := &lenReader{
+		inner: r,
+	}
+
 	// upload the data
-	obj, err := s.sdk.Upload(ctx, r)
+	obj, err := s.sdk.Upload(ctx, lr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to upload object: %w", err)
 	}
 
 	// check content length
-	if opts.ContentLength != int64(obj.Size()) {
+	if opts.ContentLength != lr.N {
 		return nil, s3errs.ErrIncompleteBody
 	}
 
@@ -144,26 +148,31 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 		return nil, s3errs.ErrBadDigest
 	}
 
-	// update metadata and pin object
-	objMeta := &objectMeta{
-		contentMD5: contentMD5,
-		meta:       opts.Meta,
-	}
-	encodedMeta, err := objMeta.encode()
-	if err != nil {
-		return nil, err
-	}
-	obj.UpdateMetadata(encodedMeta)
-	if err := s.sdk.PinObject(ctx, obj); err != nil {
-		return nil, fmt.Errorf("failed to pin object: %w", err)
-	}
-
 	// store the object in the database
-	if err := s.store.PutObject(accessKeyID, bucket, object, s.sdk.SealObject(obj)); err != nil {
+	if err := s.store.PutObject(accessKeyID, bucket, object, &objects.Object{
+		ID:         obj.ID(),
+		ContentMD5: contentMD5,
+		Meta:       opts.Meta,
+		Size:       lr.N,
+		UpdatedAt:  time.Now(),
+	}); err != nil {
 		return nil, fmt.Errorf("failed to store object metadata: %w", err)
 	}
 
 	return &s3.PutObjectResult{
 		ContentMD5: contentMD5,
 	}, nil
+}
+
+// lenReader is an io.Reader that counts the number of bytes read.
+type lenReader struct {
+	N     int64
+	inner io.Reader
+}
+
+// Read counts the number of bytes read from the inner reader.
+func (r *lenReader) Read(d []byte) (int, error) {
+	n, err := r.inner.Read(d)
+	r.N += int64(n)
+	return n, err
 }

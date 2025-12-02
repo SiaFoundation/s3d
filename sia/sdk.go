@@ -7,7 +7,6 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/sdk"
-	"go.sia.tech/indexd/slabs"
 )
 
 // IndexdSDK is a wrapper around the indexd SDK to implement the SDK interface.
@@ -35,23 +34,13 @@ func (s *IndexdSDK) Download(ctx context.Context, w io.Writer, obj sdk.Object, r
 	return s.inner.Download(ctx, w, obj, sdk.WithDownloadInflight(s.perDownloadInflight))
 }
 
-// PinObject pins an object in indexd.
-func (s *IndexdSDK) PinObject(ctx context.Context, obj sdk.Object) error {
-	return s.inner.PinObject(ctx, obj)
-}
-
 // Upload uploads an object to indexd without pinning it.
 func (s *IndexdSDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error) {
-	return s.inner.Upload(ctx, r, sdk.WithSkipPinObject(),
+	return s.inner.Upload(ctx, r,
 		sdk.WithUploadInflight(s.perUploadInflight))
 }
 
-// OpenSealedObject opens a sealed object to get access to its metadata and content.
-func (s *IndexdSDK) OpenSealedObject(so slabs.SealedObject) (sdk.Object, error) {
-	return s.inner.OpenSealedObject(so)
-}
-
-// SealObject seals an object for storage.
-func (s *IndexdSDK) SealObject(obj sdk.Object) slabs.SealedObject {
-	return s.inner.SealObject(obj)
+// Object retrieves the object with the given key.
+func (s *IndexdSDK) Object(ctx context.Context, objectKey types.Hash256) (sdk.Object, error) {
+	return s.inner.Object(ctx, objectKey)
 }
