@@ -61,7 +61,10 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, obj *objects.Object)
 		if err != nil {
 			return err
 		}
-		meta_json, err := json.Marshal(obj.Meta)
+		if obj.Meta == nil {
+			obj.Meta = make(map[string]string) // force '{}' instead of 'null' in JSON
+		}
+		metaJson, err := json.Marshal(obj.Meta)
 		if err != nil {
 			return err
 		}
@@ -76,7 +79,7 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, obj *objects.Object)
 				size = excluded.size,
 				updated_at = excluded.updated_at
 		`, bid, name, sqlHash256(obj.ID), sqlMD5(obj.ContentMD5),
-			string(meta_json), obj.Size, sqlTime(obj.UpdatedAt))
+			string(metaJson), obj.Size, sqlTime(obj.UpdatedAt))
 		return err
 	})
 }
