@@ -146,23 +146,25 @@ func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.
 }
 
 func (s *Store) fetchObjects(tx *txn, bid int64, prefix s3.Prefix, page s3.ListObjectsPage) ([]*s3.Content, error) {
-	query := `SELECT name, size, content_md5, last_modified FROM objects WHERE bucket_id = ?`
+	query := `SELECT o.name, o.size, o.content_md5, o.last_modified FROM objects o
+JOIN objects_fts fts ON o.id = fts.rowid
+WHERE o.bucket_id = ?`
 	args := []any{bid}
 
 	if page.Marker != nil && *page.Marker != "" {
-		query += ` AND name > ?`
+		query += ` AND o.name > ?`
 		args = append(args, *page.Marker)
 	}
 	if prefix.HasPrefix {
-		query += ` AND name LIKE ?`
+		query += ` AND fts.name LIKE ?`
 		args = append(args, prefix.Prefix+"%")
 	}
 	// exclude objects that would be common prefixes
 	if prefix.HasDelimiter {
-		query += ` AND name NOT LIKE ?`
+		query += ` AND fts.name NOT LIKE ?`
 		args = append(args, prefix.Prefix+"%"+prefix.Delimiter+"%")
 	}
-	query += ` ORDER BY name LIMIT ?`
+	query += ` ORDER BY o.name LIMIT ?`
 	args = append(args, page.MaxKeys+1)
 
 	rows, err := tx.Query(query, args...)
@@ -202,24 +204,24 @@ func (s *Store) fetchCommonPrefixes(tx *txn, bid int64, prefix s3.Prefix, page s
 
 	// find distinct common prefixes by selecting the minimum name for each prefix group
 	query := `
-SELECT DISTINCT substr(name, 1, instr(substr(name, ?), ?) + ?) as common_prefix
-FROM objects
+SELECT DISTINCT substr(o.name, 1, instr(substr(o.name, ?), ?) + ?) as common_prefix FROM objects o
+JOIN objects_fts fts ON o.id = fts.rowid
 WHERE bucket_id = ?`
 
 	prefixLen := len(prefix.Prefix) + 1
 	args := []any{prefixLen, strings.ToLower(prefix.Delimiter), len(prefix.Prefix), bid}
 
 	if page.Marker != nil && *page.Marker != "" {
-		query += ` AND name > ?`
+		query += ` AND o.name > ?`
 		args = append(args, *page.Marker)
 	}
 	if prefix.HasPrefix {
-		query += ` AND name LIKE ?`
+		query += ` AND fts.name LIKE ?`
 		args = append(args, prefix.Prefix+"%")
 	}
 	// only include objects that have the delimiter after the prefix
 	if prefix.HasDelimiter {
-		query += ` AND name LIKE ?`
+		query += ` AND fts.name LIKE ?`
 		args = append(args, prefix.Prefix+"%"+prefix.Delimiter+"%")
 	}
 
