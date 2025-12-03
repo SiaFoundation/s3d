@@ -1,16 +1,12 @@
 package sqlite
 
 import (
-	"bytes"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
-	"maps"
-	"slices"
-	"sort"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3/s3errs"
-	"go.sia.tech/core/types"
 	"lukechampine.com/frand"
 )
 
@@ -44,24 +40,26 @@ func (uid UploadID) String() string {
 // CreateMultipartUpload persists metadata for a new multipart upload and
 // returns a random upload ID.
 func (s *Store) CreateMultipartUpload(bucket, name string, meta map[string]string) (string, error) {
-	// encode metadata
-	encodedMeta, err := encodeMeta(meta)
-	if err != nil {
-		return "", fmt.Errorf("failed to encode metadata: %w", err)
-	}
-
-	// insert upload
 	uid := NewUploadID()
+
 	if err := s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
 
+		if meta == nil {
+			meta = make(map[string]string) // force '{}' instead of 'null' in JSON
+		}
+		metaJson, err := json.Marshal(meta)
+		if err != nil {
+			return err
+		}
+
 		if _, err := tx.Exec(`
-				INSERT INTO multipart_uploads (upload_id, bucket_id, name, sia_meta, created_at)
+				INSERT INTO multipart_uploads (upload_id, bucket_id, name, metadata, created_at)
 				VALUES ($1, $2, $3, $4, $5)
-			`, uid, bid, name, encodedMeta, time.Now().Unix()); err != nil {
+			`, sqlUploadID(uid), bid, name, string(metaJson), sqlTime(time.Now())); err != nil {
 			return fmt.Errorf("failed to insert multipart upload: %w", err)
 		}
 		return nil
@@ -87,7 +85,7 @@ func (s *Store) AbortMultipartUpload(bucket, name, uploadID string) error {
 		res, err := tx.Exec(`
 			DELETE FROM multipart_uploads
 			WHERE bucket_id = $1 AND name = $2 AND upload_id = $3
-		`, bid, name, uid)
+		`, bid, name, sqlUploadID(uid))
 		if err != nil {
 			return err
 		} else if n, err := res.RowsAffected(); err != nil {
@@ -98,24 +96,4 @@ func (s *Store) AbortMultipartUpload(bucket, name, uploadID string) error {
 
 		return nil
 	})
-}
-
-func encodeMeta(meta map[string]string) ([]byte, error) {
-	if meta == nil {
-		meta = map[string]string{}
-	}
-
-	buf := new(bytes.Buffer)
-	enc := types.NewEncoder(buf)
-	enc.WriteUint64(uint64(len(meta)))
-	keys := slices.Collect(maps.Keys(meta))
-	sort.Strings(keys)
-	for _, k := range keys {
-		enc.WriteString(k)
-		enc.WriteString(meta[k])
-	}
-	if err := enc.Flush(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
 }

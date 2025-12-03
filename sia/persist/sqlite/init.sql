@@ -27,7 +27,7 @@ CREATE TABLE multipart_uploads (
     upload_id BLOB NOT NULL UNIQUE,
     bucket_id INTEGER NOT NULL,
     name TEXT NOT NULL,
-    sia_meta BLOB NOT NULL,
+    metadata TEXT NOT NULL,
     created_at INTEGER NOT NULL,
     FOREIGN KEY (bucket_id) REFERENCES buckets(id)
 );
