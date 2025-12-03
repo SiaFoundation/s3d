@@ -81,7 +81,8 @@ type Backend interface {
 	// GetObject retrieves the object with the given key from the specified
 	// bucket for the user identified by the given access key. The provided
 	// range is either nil if no range was requested, or contains the requested,
-	// byte range.
+	// byte range. If partNumber is not nil, the specified part of a multipart
+	// upload is retrieved, this can not be combined with a byte range.
 	//
 	// - If the access key does not have permission to access the object,
 	//   [ErrAccessDenied] must be returned. A 'nil' accessKeyID indicates the
@@ -94,7 +95,7 @@ type Backend interface {
 	//
 	// - If the requested range is not satisfiable, [ErrInvalidRange] must be
 	//   returned. You can use the 'Range' method on 'rnge' for that.
-	GetObject(ctx context.Context, accessKeyID *string, bucket, object string, rnge *ObjectRangeRequest) (*Object, error)
+	GetObject(ctx context.Context, accessKeyID *string, bucket, object string, rnge *ObjectRangeRequest, partNumber *int32) (*Object, error)
 
 	// HeadBucket checks if the bucket with the given name exists and is
 	// accessible for the user identified by the given access key.
@@ -107,7 +108,7 @@ type Backend interface {
 
 	// HeadObject is like GetObject but only retrieves the metadata of the
 	// object and returns an empty body.
-	HeadObject(ctx context.Context, accessKeyID *string, bucket, object string, rnge *ObjectRangeRequest) (*Object, error)
+	HeadObject(ctx context.Context, accessKeyID *string, bucket, object string, rnge *ObjectRangeRequest, partNumber *int32) (*Object, error)
 
 	// ListBuckets lists all available buckets for the user identified by the
 	// given access key.

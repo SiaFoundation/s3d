@@ -27,6 +27,10 @@ type Object struct {
 	Metadata     map[string]string
 	Range        *ObjectRange
 	Size         int64
+
+	// PartsCount will be set for objects that are multipart uploads, but only
+	// if a multipart part number is specified.
+	PartsCount *int32
 }
 
 // CopyObjectResult contains information about the result of a CopyObject
@@ -150,7 +154,7 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, accessKeyID, dst
 	ifMatch := r.Header.Get("X-Amz-Copy-Source-If-Match")
 	ifNoneMatch := r.Header.Get("X-Amz-Copy-Source-If-None-Match")
 	if ifMatch != "" || ifNoneMatch != "" {
-		obj, err := s.backend.HeadObject(r.Context(), &accessKeyID, srcBucket, srcObject, nil)
+		obj, err := s.backend.HeadObject(r.Context(), &accessKeyID, srcBucket, srcObject, nil, nil)
 		if err != nil {
 			return err
 		}
@@ -238,15 +242,22 @@ func (s *s3) getObject(w http.ResponseWriter, r *http.Request, accessKeyID *stri
 		zap.String("version", version))
 	log.Debug("get object")
 
+	partNumber, err := parsePartNumber(r.URL.Query().Get("partNumber"))
+	if err != nil {
+		return err
+	}
+
 	rnge, err := parseRangeHeader(r.Header.Get("Range"))
 	if err != nil {
 		return err
+	} else if rnge != nil && partNumber != nil {
+		return s3errs.ErrInvalidRequest // can't combine range and partNumber
 	}
 
 	// retrieve object
 	var obj *Object
 	if version == "" {
-		obj, err = s.backend.GetObject(r.Context(), accessKeyID, bucket, object, rnge)
+		obj, err = s.backend.GetObject(r.Context(), accessKeyID, bucket, object, rnge, partNumber)
 	} else {
 		return s3errs.ErrNotImplemented // versioning not supported
 	}
@@ -275,15 +286,22 @@ func (s *s3) headObject(w http.ResponseWriter, r *http.Request, accessKeyID *str
 		zap.String("version", version))
 	log.Debug("head object")
 
+	partNumber, err := parsePartNumber(r.URL.Query().Get("partNumber"))
+	if err != nil {
+		return err
+	}
+
 	rnge, err := parseRangeHeader(r.Header.Get("Range"))
 	if err != nil {
 		return err
+	} else if rnge != nil && partNumber != nil {
+		return s3errs.ErrInvalidRequest // can't combine range and partNumber
 	}
 
 	// retrieve object metadata
 	var obj *Object
 	if version == "" {
-		obj, err = s.backend.HeadObject(r.Context(), accessKeyID, bucket, object, rnge)
+		obj, err = s.backend.HeadObject(r.Context(), accessKeyID, bucket, object, rnge, partNumber)
 	} else {
 		return s3errs.ErrNotImplemented // versioning not supported
 	}
@@ -777,10 +795,21 @@ func parseRangeHeader(s string) (*ObjectRangeRequest, error) {
 // writeGetOrHeadObjectHeaders contains shared logic for constructing headers for
 // a HEAD and a GET request for a /bucket/object URL.
 func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Request) error {
-	const metaPrefix = "X-Amz-Meta-"
+	const (
+		checksumPrefix = "X-Amz-Checksum-"
+		metaPrefix     = "X-Amz-Meta-"
+	)
+
 	for mk, mv := range obj.Metadata {
+		// ranged responses should not include checksum headers, this prevents
+		// clients from checking the checksum of a partial object against the
+		// full object checksum
+		if obj.Range != nil && strings.HasPrefix(mk, checksumPrefix) {
+			continue
+		}
+
+		// user metadata key is always returned in lowercase
 		if key, found := strings.CutPrefix(mk, metaPrefix); found {
-			// user metadata key is always returned in lowercase
 			w.Header()[fmt.Sprintf("%s%s", metaPrefix, strings.ToLower(key))] = []string{mv}
 		} else {
 			w.Header().Set(mk, mv)
@@ -792,6 +821,10 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 
 	if r.Header.Get("If-None-Match") == etag {
 		return s3errs.ErrNotModified
+	}
+
+	if obj.PartsCount != nil {
+		w.Header().Set("x-amz-mp-parts-count", fmt.Sprintf("%d", *obj.PartsCount))
 	}
 
 	lastModified, _ := time.Parse(http.TimeFormat, obj.Metadata["Last-Modified"])

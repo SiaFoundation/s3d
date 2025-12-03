@@ -292,7 +292,7 @@ func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, accessKeyID, dstBu
 	}
 
 	// fetch source metadata to determine size and validate range
-	obj, err := s.backend.HeadObject(r.Context(), &accessKeyID, srcBucket, srcObject, nil)
+	obj, err := s.backend.HeadObject(r.Context(), &accessKeyID, srcBucket, srcObject, nil, nil)
 	if err != nil {
 		return err
 	} else if obj.Body != nil {
@@ -334,6 +334,8 @@ func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, accessKeyID, 
 	partPtr, err := parsePartNumber(r.URL.Query().Get("partNumber"))
 	if err != nil {
 		return err
+	} else if partPtr == nil {
+		return s3errs.ErrInvalidRequest
 	}
 	partNumber := int(*partPtr)
 
@@ -487,21 +489,6 @@ func (s *s3) completeMultipartUpload(w http.ResponseWriter, r *http.Request, acc
 	})
 }
 
-func parsePartNumber(s string) (*int32, error) {
-	if s == "" {
-		return nil, s3errs.ErrInvalidRequest
-	}
-	partNumber, err := strconv.Atoi(s)
-	if err != nil {
-		return nil, s3errs.ErrInvalidArgument
-	}
-	if partNumber < 1 || partNumber > MaxUploadPartNumber {
-		return nil, s3errs.ErrInvalidArgument
-	}
-	val := int32(partNumber)
-	return &val, nil
-}
-
 func parseCompletedParts(parts []CompleteMultipartPartXML) ([]CompletedPart, error) {
 	if len(parts) == 0 {
 		return nil, s3errs.ErrInvalidRequest
@@ -545,6 +532,22 @@ func parseCompletedPartETag(etagStr string) (etag [16]byte, _ error) {
 	}
 	copy(etag[:], decoded)
 	return etag, nil
+}
+
+func parsePartNumber(s string) (*int32, error) {
+	if s == "" {
+		return nil, nil
+	}
+
+	partNumber, err := strconv.Atoi(s)
+	if err != nil {
+		return nil, s3errs.ErrInvalidArgument
+	}
+	if partNumber < 1 || partNumber > MaxUploadPartNumber {
+		return nil, s3errs.ErrInvalidArgument
+	}
+	val := int32(partNumber)
+	return &val, nil
 }
 
 // FormatMultipartETag formats the MD5 checksum of concatenated part hashes
