@@ -34,6 +34,14 @@ jobs:
       - name: Clone test repo
         run: git clone https://github.com/SiaFoundation/s3-tests.git
 
+      - name: Choose random port
+        run: |
+          port=$(python -c 'import socket; s=socket.socket(); s.bind(("", 0)); print(s.getsockname()[1]); s.close()')
+          echo "S3D_PORT=${port}" >> "$GITHUB_ENV"
+
+      - name: Set test port in config
+        run: sed -i "s/^port = .*/port = ${S3D_PORT}/" "$GITHUB_WORKSPACE/s3tests.conf"
+
       - name: List files
         run: ls -la ${{ github.workspace }}
 
@@ -45,7 +53,7 @@ jobs:
 
       - name: Launch s3d and save pid
         run: |
-          nohup go run ./cmd/s3d-tox/main.go > s3d.log 2>&1 &
+          nohup env S3D_PORT=${S3D_PORT} go run ./cmd/s3d-tox/main.go > s3d.log 2>&1 &
           echo $! > s3d.pid
 
           # wait a bit to let s3d start

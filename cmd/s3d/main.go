@@ -34,10 +34,18 @@ const (
 
 	configFileEnvVar = "S3D_CONFIG_FILE"
 	dataDirEnvVar    = "S3D_DATA_DIR"
+	apiPortEnvVar    = "S3D_PORT"
 )
 
+func defaultAPIAddress() string {
+	if port := os.Getenv(apiPortEnvVar); port != "" {
+		return net.JoinHostPort("127.0.0.1", port)
+	}
+	return "127.0.0.1:8000"
+}
+
 var cfg = Config{
-	ApiAddress: "127.0.0.1:8000",
+	ApiAddress: defaultAPIAddress(),
 	AppSecret:  os.Getenv(appSecretEnvVar),
 	Directory:  os.Getenv(dataDirEnvVar),
 	Log: Log{

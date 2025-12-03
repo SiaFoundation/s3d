@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/SiaFoundation/s3d/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3"
@@ -31,6 +32,13 @@ var (
 	}
 )
 
+func listenAddr() string {
+	if port := os.Getenv("S3D_PORT"); port != "" {
+		return "localhost:" + port
+	}
+	return "localhost:8000"
+}
+
 func main() {
 	logger, err := zap.NewDevelopment()
 	if err != nil {
@@ -46,7 +54,7 @@ func main() {
 	s3 := s3.New(backend,
 		s3.WithHostBucketBases([]string{"localhost"}),
 		s3.WithLogger(logger))
-	if err := http.ListenAndServe("localhost:8000", s3); err != nil {
+	if err := http.ListenAndServe(listenAddr(), s3); err != nil {
 		log.Printf("failed to start server: %v", err)
 	}
 }
