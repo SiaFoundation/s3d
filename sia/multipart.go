@@ -52,6 +52,11 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object, uploa
 	return nil, s3errs.ErrNotImplemented
 }
 
+// UploadPartCopy uploads a part by copying data from an existing object.
+func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject, uploadID string, opts s3.UploadPartCopyOptions) (*s3.UploadPartCopyResult, error) {
+	return nil, s3errs.ErrNotImplemented
+}
+
 // ListParts lists uploaded parts for a multipart upload.
 func (s *Sia) ListParts(ctx context.Context, accessKeyID, bucket, object, uploadID string, page s3.ListPartsPage) (*s3.ListPartsResult, error) {
 	return nil, s3errs.ErrNotImplemented

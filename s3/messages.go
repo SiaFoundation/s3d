@@ -259,6 +259,13 @@ type (
 		ETag         string      `xml:"ETag"`
 		LastModified ContentTime `xml:"LastModified,omitempty"`
 	}
+
+	// PartCopyResult contains the response from an UploadPartCopy operation.
+	PartCopyResult struct {
+		XMLName      xml.Name    `xml:"CopyPartResult"`
+		ETag         string      `xml:"ETag"`
+		LastModified ContentTime `xml:"LastModified,omitempty"`
+	}
 )
 
 type (
