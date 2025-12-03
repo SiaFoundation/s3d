@@ -9,9 +9,6 @@ var migrations = []func(tx *txn, log *zap.Logger) error{
 	func(tx *txn, _ *zap.Logger) error {
 		_, err := tx.Exec(`
 CREATE INDEX objects_name ON objects(name);
-ALTER TABLE objects ADD COLUMN content_md5 BLOB NOT NULL;
-ALTER TABLE objects ADD COLUMN size INTEGER NOT NULL;
-ALTER TABLE objects ADD COLUMN last_modified TIMESTAMP NOT NULL DEFAULT (DATE('now'));
 
 CREATE VIRTUAL TABLE objects_fts USING fts5(name, tokenize="trigram");
 

@@ -5,8 +5,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
+	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/sdk"
 	"go.uber.org/zap/zaptest"
@@ -31,12 +33,16 @@ func TestListObjects(t *testing.T) {
 	// upload a few objects
 	keys := []string{"foo", "foo/baz", "foo/bar"}
 	obj := sdk.Object{}
-	sealed := obj.Seal(types.GeneratePrivateKey())
 	contentMD5 := [16]byte(frand.Bytes(16))
 
 	etag := s3.FormatETag(contentMD5[:])
 	for _, key := range keys {
-		err := store.PutObject("", bucket, key, contentMD5, sealed)
+		err := store.PutObject("", bucket, key, &objects.Object{
+			ID:         obj.ID(),
+			ContentMD5: contentMD5,
+			Size:       0,
+			UpdatedAt:  time.Now(),
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -159,12 +165,16 @@ func TestListObjectsMatch(t *testing.T) {
 	// upload a few objects
 	keys := []string{"foo/baz", "foo/bar", "😊/д"}
 	obj := sdk.Object{}
-	sealed := obj.Seal(types.GeneratePrivateKey())
 	contentMD5 := [16]byte(frand.Bytes(16))
 
 	etag := s3.FormatETag(contentMD5[:])
 	for _, key := range keys {
-		err := store.PutObject("", bucket, key, contentMD5, sealed)
+		err := store.PutObject("", bucket, key, &objects.Object{
+			ID:         obj.ID(),
+			ContentMD5: contentMD5,
+			Size:       0,
+			UpdatedAt:  time.Now(),
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -250,7 +260,7 @@ func TestListObjectsMatch(t *testing.T) {
 func BenchmarkListObjects(b *testing.B) {
 	const (
 		// number of root level directories
-		dir1 = 1000
+		dir1 = 10
 		// number of second level directories
 		dir2 = 10
 		// number of third level directories
@@ -275,23 +285,22 @@ func BenchmarkListObjects(b *testing.B) {
 
 	obj := sdk.Object{}
 	sealed := obj.Seal(types.GeneratePrivateKey())
-	contentMD5 := [16]byte(frand.Bytes(16))
 
 	err = store.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
-		encoded, err := sealed.MarshalSia()
-		if err != nil {
-			return err
-		}
+
+		objID := sealed.ID()
+		contentMD5 := [16]byte(frand.Bytes(16))
 
 		var size uint64
 		for _, slab := range sealed.Slabs {
 			size += uint64(slab.Length)
 		}
 
+		now := time.Now()
 		for i := 0; i < dir1; i++ {
 			layer1 := fmt.Sprint(i)
 			for j := 0; j < dir2; j++ {
@@ -308,8 +317,8 @@ func BenchmarkListObjects(b *testing.B) {
 						layer4 := filepath.Join(layer3, name)
 
 						_, err = tx.Exec(`
-			INSERT INTO objects (bucket_id, name, sia_meta, size, content_md5)
-			VALUES ($1, $2, $3, $4, $5)`, bid, layer4, encoded, size, contentMD5[:])
+			INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)`, bid, layer4, sqlHash256(objID), sqlMD5(contentMD5), []byte{}, size, sqlTime(now))
 					}
 				}
 			}

@@ -175,6 +175,45 @@ func (t *S3Tester) GetObject(ctx context.Context, bucket, object string, rnge *s
 		Metadata:     resp.Metadata,
 		Range:        objRange,
 		Size:         size,
+		PartsCount:   resp.PartsCount,
+	}, nil
+}
+
+// GetObjectPart is a convenience wrapper around the AWS SDK's GetObject API that
+// allows specifying a part to download.
+func (t *S3Tester) GetObjectPart(ctx context.Context, bucket, object string, partNumber int32) (*s3.Object, error) {
+	resp, err := t.client.GetObject(ctx, &service.GetObjectInput{
+		Bucket:     aws.String(bucket),
+		Key:        aws.String(object),
+		PartNumber: aws.Int32(partNumber),
+	})
+	if err != nil {
+		return nil, err
+	}
+	etag := strings.Trim(*resp.ETag, `"`)
+	var contentMD5 [16]byte
+	_, err = hex.Decode(contentMD5[:], []byte(etag))
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode ETag %q: %w", *resp.ETag, err)
+	}
+	var objRange *s3.ObjectRange
+	var size int64
+	if resp.ContentRange != nil {
+		objRange, size, err = parseRange(*resp.ContentRange)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		size = *resp.ContentLength
+	}
+	return &s3.Object{
+		Body:         resp.Body,
+		ContentMD5:   contentMD5,
+		LastModified: *resp.LastModified,
+		Metadata:     resp.Metadata,
+		Range:        objRange,
+		Size:         size,
+		PartsCount:   resp.PartsCount,
 	}, nil
 }
 
@@ -218,6 +257,44 @@ func (t *S3Tester) HeadObject(ctx context.Context, bucket, object string, rnge *
 		Metadata:     resp.Metadata,
 		Range:        objRange,
 		Size:         size,
+		PartsCount:   resp.PartsCount,
+	}, nil
+}
+
+// HeadObjectPart is a convenience wrapper around the AWS SDK's HeadObject API
+// that allows specifying a part.
+func (t *S3Tester) HeadObjectPart(ctx context.Context, bucket, object string, partNumber int32) (*s3.Object, error) {
+	resp, err := t.client.HeadObject(ctx, &service.HeadObjectInput{
+		Bucket:     aws.String(bucket),
+		Key:        aws.String(object),
+		PartNumber: aws.Int32(partNumber),
+	})
+	if err != nil {
+		return nil, err
+	}
+	etag := strings.Trim(*resp.ETag, `"`)
+	var contentMD5 [16]byte
+	_, err = hex.Decode(contentMD5[:], []byte(etag))
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode ETag %q: %w", *resp.ETag, err)
+	}
+	var objRange *s3.ObjectRange
+	var size int64
+	if resp.ContentRange != nil {
+		objRange, size, err = parseRange(*resp.ContentRange)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		size = *resp.ContentLength
+	}
+	return &s3.Object{
+		ContentMD5:   contentMD5,
+		LastModified: *resp.LastModified,
+		Metadata:     resp.Metadata,
+		Range:        objRange,
+		Size:         size,
+		PartsCount:   resp.PartsCount,
 	}, nil
 }
 
@@ -336,6 +413,24 @@ func (t *S3Tester) UploadPart(ctx context.Context, bucket, object, uploadID stri
 		ContentLength: aws.Int64(int64(len(body))),
 	}
 	return t.client.UploadPart(ctx, input)
+}
+
+// UploadPartCopy copies a single part from an existing object as part of a
+// multipart upload.
+func (t *S3Tester) UploadPartCopy(ctx context.Context, srcBucket, srcObject, dstBucket, dstObject, uploadID string, partNumber int32, rnge *s3.ObjectRange) (*service.UploadPartCopyOutput, error) {
+	var copySourceRange *string
+	if rnge != nil {
+		copySourceRange = aws.String(fmt.Sprintf("bytes=%d-%d", rnge.Start, rnge.Start+rnge.Length-1))
+	}
+	input := &service.UploadPartCopyInput{
+		CopySource:      aws.String(fmt.Sprintf("%s/%s", srcBucket, url.QueryEscape(srcObject))),
+		Bucket:          aws.String(dstBucket),
+		Key:             aws.String(dstObject),
+		UploadId:        aws.String(uploadID),
+		PartNumber:      aws.Int32(partNumber),
+		CopySourceRange: copySourceRange,
+	}
+	return t.client.UploadPartCopy(ctx, input)
 }
 
 // ListParts lists uploaded parts for an in-progress multipart upload.

@@ -2,16 +2,16 @@ package sqlite
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path"
 	"strings"
-	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
 
 	"github.com/SiaFoundation/s3d/s3/s3errs"
-	"go.sia.tech/indexd/slabs"
+	"github.com/SiaFoundation/s3d/sia/objects"
 )
 
 // DeleteObject deletes the object with the given bucket and name.
@@ -27,58 +27,64 @@ func (s *Store) DeleteObject(accessKeyID, bucket, name string) error {
 }
 
 // GetObject retrieves the object with the given bucket and name.
-func (s *Store) GetObject(accessKeyID *string, bucket, name string) (slabs.SealedObject, error) {
-	var encoded []byte
+func (s *Store) GetObject(accessKeyID *string, bucket, name string) (*objects.Object, error) {
+	var obj objects.Object
 	err := s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
+
+		var meta string
 		err = tx.QueryRow(`
-			SELECT sia_meta
+			SELECT name, object_id, content_md5, metadata, size, updated_at
 			FROM objects
 			WHERE bucket_id = $1 AND name = $2
-		`, bid, name).Scan(&encoded)
+		`, bid, name).
+			Scan(&obj.Name, (*sqlHash256)(&obj.ID), (*sqlMD5)(&obj.ContentMD5), &meta,
+				&obj.Size, (*sqlTime)(&obj.UpdatedAt))
 		if errors.Is(err, sql.ErrNoRows) {
 			return s3errs.ErrNoSuchKey
+		} else if err != nil {
+			return err
 		}
-		return err
+
+		err = json.Unmarshal([]byte(meta), &obj.Meta)
+		if err != nil {
+			return errors.New("failed to unmarshal object metadata: " + err.Error())
+		}
+		return nil
 	})
-	if err != nil {
-		return slabs.SealedObject{}, err
-	}
-	var obj slabs.SealedObject
-	err = obj.UnmarshalSia(encoded)
-	return obj, err
+	return &obj, err
 }
 
 // PutObject stores the given object in the given bucket with the given name or
 // overwrites it if it already exists.
-func (s *Store) PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, obj slabs.SealedObject) error {
+func (s *Store) PutObject(accessKeyID, bucket, name string, obj *objects.Object) error {
 	return s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
-		encoded, err := obj.MarshalSia()
+		if obj.Meta == nil {
+			obj.Meta = make(map[string]string) // force '{}' instead of 'null' in JSON
+		}
+		metaJson, err := json.Marshal(obj.Meta)
 		if err != nil {
 			return err
 		}
 
-		var size uint64
-		for _, slab := range obj.Slabs {
-			size += uint64(slab.Length)
-		}
-
 		_, err = tx.Exec(`
-			INSERT INTO objects (bucket_id, name, sia_meta, size, content_md5)
-			VALUES ($1, $2, $3, $4, $5)
+			INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
 			ON CONFLICT(bucket_id, name) DO UPDATE SET
-				sia_meta = excluded.sia_meta,
-				size = excluded.size,
+				object_id = excluded.object_id,
 				content_md5 = excluded.content_md5,
-				last_modified = DATE('NOW')
-		`, bid, name, encoded, size, contentMD5[:])
+				metadata = excluded.metadata,
+				size = excluded.size,
+				updated_at = excluded.updated_at
+		`, bid, name, sqlHash256(obj.ID), sqlMD5(obj.ContentMD5),
+			string(metaJson), obj.Size, sqlTime(obj.UpdatedAt))
 		return err
 	})
 }
@@ -146,7 +152,7 @@ func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.
 }
 
 func (s *Store) fetchObjects(tx *txn, bid int64, prefix s3.Prefix, page s3.ListObjectsPage) ([]*s3.Content, error) {
-	query := `SELECT o.name, o.size, o.content_md5, o.last_modified FROM objects o
+	query := `SELECT o.name, o.content_md5, o.size, o.updated_at FROM objects o
 JOIN objects_fts fts ON o.id = fts.rowid
 WHERE o.bucket_id = ?`
 	args := []any{bid}
@@ -173,28 +179,31 @@ WHERE o.bucket_id = ?`
 	}
 	defer rows.Close()
 
-	var objects []*s3.Content
+	var objs []*s3.Content
 	for rows.Next() {
-		var name string
-		var size uint64
-		var contentMD5 []byte
-		var lastModified time.Time
-		if err := rows.Scan(&name, &size, &contentMD5, &lastModified); err != nil {
-			return nil, fmt.Errorf("failed to scan: %w", err)
+		var obj objects.Object
+		err = rows.Scan(
+			&obj.Name,
+			(*sqlMD5)(&obj.ContentMD5),
+			&obj.Size,
+			(*sqlTime)(&obj.UpdatedAt),
+		)
+		if err != nil {
+			return nil, err
 		}
 
-		objects = append(objects, &s3.Content{
-			Key:          name,
-			LastModified: s3.NewContentTime(lastModified),
-			ETag:         s3.FormatETag(contentMD5),
-			Size:         int64(size),
+		objs = append(objs, &s3.Content{
+			Key:          obj.Name,
+			LastModified: s3.NewContentTime(obj.UpdatedAt),
+			ETag:         s3.FormatETag(obj.ContentMD5[:]),
+			Size:         int64(obj.Size),
 		})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("failed to get rows: %w", err)
 	}
 
-	return objects, nil
+	return objs, nil
 }
 
 func (s *Store) fetchCommonPrefixes(tx *txn, bid int64, prefix s3.Prefix, page s3.ListObjectsPage) ([]string, error) {

@@ -14,9 +14,7 @@ import (
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/sdk"
-	"go.sia.tech/indexd/slabs"
 	"go.uber.org/zap/zaptest"
-	"lukechampine.com/frand"
 )
 
 type uploadedObject struct {
@@ -27,14 +25,12 @@ type uploadedObject struct {
 type MemorySDK struct {
 	appKey  types.PrivateKey
 	objects map[types.Hash256]uploadedObject
-	pinned  map[types.Hash256]struct{}
 }
 
 func NewMemorySDK() *MemorySDK {
 	return &MemorySDK{
 		appKey:  types.GeneratePrivateKey(),
 		objects: make(map[types.Hash256]uploadedObject),
-		pinned:  make(map[types.Hash256]struct{}),
 	}
 }
 
@@ -54,42 +50,27 @@ func (s *MemorySDK) Download(ctx context.Context, w io.Writer, obj sdk.Object, r
 	return err
 }
 
-func (s *MemorySDK) OpenSealedObject(so slabs.SealedObject) (sdk.Object, error) {
-	return sdk.ObjectFromSealedObject(so, s.appKey)
+func (s *MemorySDK) Object(ctx context.Context, objectKey types.Hash256) (sdk.Object, error) {
+	uploaded, exists := s.objects[objectKey]
+	if !exists {
+		return sdk.Object{}, errors.New("object not found")
+	}
+	return uploaded.meta, nil
 }
 
-func (s *MemorySDK) SealObject(obj sdk.Object) slabs.SealedObject {
-	return obj.Seal(s.appKey)
-}
-
-func (s *MemorySDK) PinObject(ctx context.Context, obj sdk.Object) error {
-	s.pinned[obj.ID()] = struct{}{}
-	return nil
-}
-
+// TODO: Right now, all objects have the same ID. We'll need to expose something from
+// the SDK to be able to mock objects with different IDs.
 func (s *MemorySDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error) {
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return sdk.Object{}, err
 	}
-	obj := s.newObject(len(data))
+	obj := sdk.Object{}
 	s.objects[obj.ID()] = uploadedObject{
 		data: data,
-		meta: obj,
+		meta: sdk.Object{},
 	}
 	return obj, nil
-}
-
-func (s *MemorySDK) newObject(size int) sdk.Object {
-	// single slice that adds up to size
-	slices := []slabs.SlabSlice{
-		{
-			SlabID: frand.Entropy256(),
-			Offset: 0,
-			Length: uint32(size),
-		},
-	}
-	return sdk.NewObject(slices, []byte{})
 }
 
 func NewTester(t testing.TB, opts ...testutil.TesterOption) *testutil.S3Tester {

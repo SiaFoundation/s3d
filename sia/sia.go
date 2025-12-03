@@ -9,8 +9,9 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/auth"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"github.com/SiaFoundation/s3d/sia/objects"
+	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/sdk"
-	"go.sia.tech/indexd/slabs"
 	"go.uber.org/zap"
 )
 
@@ -37,11 +38,8 @@ type Sia struct {
 // SDK describes the SDK used to interact with Sia.
 type SDK interface {
 	Download(ctx context.Context, w io.Writer, obj sdk.Object, rnge *s3.ObjectRange) error
-	PinObject(ctx context.Context, obj sdk.Object) error
+	Object(ctx context.Context, id types.Hash256) (sdk.Object, error)
 	Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
-
-	OpenSealedObject(so slabs.SealedObject) (sdk.Object, error)
-	SealObject(obj sdk.Object) slabs.SealedObject
 }
 
 // Store represents the storage backend used by the Sia backend.
@@ -49,10 +47,10 @@ type Store interface {
 	CreateBucket(accessKeyID, bucket string) error
 	DeleteBucket(accessKeyID, bucket string) error
 	DeleteObject(accessKeyID, bucket, name string) error
-	GetObject(accessKeyID *string, bucket, object string) (slabs.SealedObject, error)
+	GetObject(accessKeyID *string, bucket, object string) (*objects.Object, error)
 	HeadBucket(accessKeyID, bucket string) error
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
-	PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, obj slabs.SealedObject) error
+	PutObject(accessKeyID, bucket, name string, obj *objects.Object) error
 }
 
 // New creates a new Sia backend instance.
@@ -116,6 +114,12 @@ func (s *Sia) AbortMultipartUpload(ctx context.Context, accessKeyID, bucket, obj
 
 // UploadPart uploads a single multipart part.
 func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object, uploadID string, r io.Reader, opts s3.UploadPartOptions) (*s3.UploadPartResult, error) {
+	return nil, s3errs.ErrNotImplemented
+}
+
+// UploadPartCopy copies a single part from an existing object as part of a
+// multipart upload.
+func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject, uploadID string, opts s3.UploadPartCopyOptions) (*s3.UploadPartCopyResult, error) {
 	return nil, s3errs.ErrNotImplemented
 }
 
