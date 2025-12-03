@@ -78,3 +78,83 @@ func (s *Store) AbortMultipartUpload(bucket, name, uploadID string) error {
 		return nil
 	})
 }
+
+// HasMultipartUpload returns an error if the multipart upload does not exist.
+func (s *Store) HasMultipartUpload(bucket, name, uploadID string) error {
+	uid, err := parseUploadID(uploadID)
+	if err != nil {
+		return err
+	}
+	return s.transaction(func(tx *txn) error {
+		bid, err := bucketID(tx, bucket)
+		if err != nil {
+			return err
+		}
+		var exists bool
+		if err := tx.QueryRow(`
+			SELECT EXISTS(
+				SELECT 1 FROM multipart_uploads
+				WHERE bucket_id = $1 AND name = $2 AND upload_id = $3
+			)
+		`, bid, name, sqlUploadID(uid)).Scan(&exists); err != nil {
+			return err
+		} else if !exists {
+			return s3errs.ErrNoSuchUpload
+		}
+		return nil
+	})
+}
+
+// AddMultipartPart adds metadata for a multipart part to the store.
+func (s *Store) AddMultipartPart(uploadID string, partNumber int) error {
+	uid, err := parseUploadID(uploadID)
+	if err != nil {
+		return err
+	}
+	return s.transaction(func(tx *txn) error {
+		res, err := tx.Exec(`
+			INSERT INTO multipart_parts (upload_id, part_number, created_at)
+			VALUES ($1, $2, $3)
+			ON CONFLICT(upload_id, part_number) DO UPDATE SET created_at = EXCLUDED.created_at
+		`, sqlUploadID(uid), partNumber, sqlTime(time.Now()))
+		if err != nil {
+			return fmt.Errorf("failed to insert multipart part: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		} else if n == 0 {
+			return fmt.Errorf("no rows affected when inserting multipart part")
+		}
+		return nil
+	})
+}
+
+// FinishMultipartPart updates metadata for a multipart part in the store.
+func (s *Store) FinishMultipartPart(uploadID string, partNumber int, contentMD5 [16]byte, contentSHA256 *[32]byte, contentLength int64) error {
+	uid, err := parseUploadID(uploadID)
+	if err != nil {
+		return err
+	}
+	return s.transaction(func(tx *txn) error {
+		var sha256Bytes []byte
+		if contentSHA256 != nil {
+			sha256Bytes = contentSHA256[:]
+		}
+		res, err := tx.Exec(`
+			UPDATE multipart_parts
+			SET content_md5 = $1, content_sha256 = $2, content_length = $3
+			WHERE upload_id = $4 AND part_number = $5
+		`, sqlMD5(contentMD5), sqlSHA256(sha256Bytes), contentLength, sqlUploadID(uid), partNumber)
+		if err != nil {
+			return fmt.Errorf("failed to update multipart part: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		} else if n == 0 {
+			return fmt.Errorf("no rows affected when updating multipart part")
+		}
+		return nil
+	})
+}

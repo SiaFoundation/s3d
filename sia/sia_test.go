@@ -74,19 +74,23 @@ func (s *MemorySDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
 }
 
 func NewTester(t testing.TB, opts ...testutil.TesterOption) *testutil.S3Tester {
+	return NewCustomTester(t, t.TempDir(), opts...)
+}
+
+func NewCustomTester(t testing.TB, dir string, opts ...testutil.TesterOption) *testutil.S3Tester {
 	log := zaptest.NewLogger(t)
 
 	// use in-memory SDK
 	sdk := NewMemorySDK()
 
 	// use SQLite store
-	store, err := sqlite.OpenDatabase(filepath.Join(t.TempDir(), "s3d.sqlite"), log)
+	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
 
-	backend, err := sia.New(context.Background(), sdk, store, testutil.AccessKeyID, testutil.SecretAccessKey,
+	backend, err := sia.New(context.Background(), sdk, store, dir, testutil.AccessKeyID, testutil.SecretAccessKey,
 		sia.WithLogger(log))
 	if err != nil {
 		t.Fatal(err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"path/filepath"
 	"slices"
 
 	"github.com/SiaFoundation/s3d/s3"
@@ -13,6 +14,11 @@ import (
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/sdk"
 	"go.uber.org/zap"
+)
+
+const (
+	// MultipartDir is the directory name used for storing multipart uploads.
+	MultipartDir = "multipart"
 )
 
 // Option is a configuration option for the S3 API handler.
@@ -31,6 +37,7 @@ type Sia struct {
 	logger *zap.Logger
 	store  Store
 
+	directory string
 	accessKey string
 	secretKey auth.SecretAccessKey
 }
@@ -54,10 +61,14 @@ type Store interface {
 
 	CreateMultipartUpload(bucket, name string, meta map[string]string) (string, error)
 	AbortMultipartUpload(bucket, name, uploadID string) error
+	HasMultipartUpload(bucket, name, uploadID string) error
+
+	AddMultipartPart(uploadID string, partNumber int) error
+	FinishMultipartPart(uploadID string, partNumber int, contentMD5 [16]byte, contentSHA256 *[32]byte, contentLength int64) error
 }
 
 // New creates a new Sia backend instance.
-func New(ctx context.Context, sdk SDK, store Store, accessKey, secretKey string, opts ...Option) (*Sia, error) {
+func New(ctx context.Context, sdk SDK, store Store, directory, accessKey, secretKey string, opts ...Option) (*Sia, error) {
 	if accessKey == "" || secretKey == "" {
 		return nil, fmt.Errorf("sia backend requires both access key and secret key")
 	}
@@ -67,6 +78,7 @@ func New(ctx context.Context, sdk SDK, store Store, accessKey, secretKey string,
 		sdk:    sdk,
 		store:  store,
 
+		directory: filepath.Join(directory, MultipartDir),
 		accessKey: accessKey,
 		secretKey: auth.SecretAccessKey(secretKey),
 	}

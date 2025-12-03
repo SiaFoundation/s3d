@@ -195,7 +195,7 @@ func main() {
 		log.Fatal("failed to create SDK client", zap.Error(err))
 	}
 
-	backend, err := sia.New(ctx, sdkClient, store, cfg.Sia.AccessKey, cfg.Sia.SecretKey)
+	backend, err := sia.New(ctx, sdkClient, store, cfg.Directory, cfg.Sia.AccessKey, cfg.Sia.SecretKey)
 	if err != nil {
 		checkFatalError("failed to create Sia backend", err)
 	}

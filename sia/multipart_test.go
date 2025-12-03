@@ -1,12 +1,17 @@
 package sia_test
 
 import (
+	"bytes"
+	"crypto/md5"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/SiaFoundation/s3d/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"github.com/SiaFoundation/s3d/sia"
 )
 
 func TestCreateMultipartUpload(t *testing.T) {
@@ -91,4 +96,57 @@ func TestAbortMultipartUpload(t *testing.T) {
 	// assert abort returns [ErrNoSuchUpload] for already aborted upload
 	err = s3Tester.AbortMultipartUpload(t.Context(), bucket, object, uploadID)
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchUpload, err)
+}
+
+func TestMultipartAddPart(t *testing.T) {
+	dataDir := t.TempDir()
+	s3Tester := NewCustomTester(t, dataDir)
+
+	const (
+		unknownID = "001f6350ae92ef759626ac909dbc027e"
+		bucket    = "bucket"
+		object    = "object"
+	)
+
+	// create target bucket
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// create multipart upload
+	res, err := s3Tester.CreateMultipartUpload(t.Context(), bucket, object, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if res.UploadId == nil || *res.UploadId == "" {
+		t.Fatal("expected upload id in response")
+	}
+	uploadID := *res.UploadId
+
+	// prepare a part
+	part := bytes.Repeat([]byte("a"), int(s3.MinUploadPartSize))
+	md5Sum := md5.Sum(part)
+	res2, err := s3Tester.UploadPart(t.Context(), bucket, object, uploadID, 1, part)
+	if err != nil {
+		t.Fatal(err)
+	} else if res2 == nil || res2.ETag == nil || *res2.ETag != s3.FormatETag(md5Sum[:]) {
+		t.Fatalf("unexpected upload part result: %+v", res2)
+	}
+
+	// verify part is on disk
+	partDir := filepath.Join(dataDir, sia.MultipartDir, uploadID)
+	partPath := filepath.Join(partDir, "1.part")
+	onDisk, err := os.ReadFile(partPath)
+	if err != nil {
+		t.Fatalf("failed to read part from disk: %v", err)
+	} else if !bytes.Equal(onDisk, part) {
+		t.Fatalf("unexpected part contents on disk: got %d bytes", len(onDisk))
+	}
+
+	// TODO: verify part metadata in the database
+
+	// assert [s3errs.ErrNoSuchUpload] is returned for wrong upload ID
+	_, err = s3Tester.UploadPart(t.Context(), bucket, object, unknownID, 1, nil)
+	testutil.AssertS3Error(t, s3errs.ErrNoSuchUpload, err)
+
+	// TODO: assert various s3 errors for invalid part uploads
 }

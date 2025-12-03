@@ -33,6 +33,19 @@ CREATE TABLE multipart_uploads (
 );
 CREATE INDEX multipart_uploads_bucket_id_name_idx ON multipart_uploads(bucket_id, name);
 
+CREATE TABLE multipart_parts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    upload_id BLOB NOT NULL,
+    part_number INTEGER NOT NULL,
+    content_md5 BLOB,
+    content_sha256 BLOB,
+    content_length INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (upload_id) REFERENCES multipart_uploads(upload_id) ON DELETE CASCADE,
+    UNIQUE(upload_id, part_number)
+);
+
+
 CREATE TABLE global_settings (
 	id INTEGER PRIMARY KEY NOT NULL DEFAULT 0 CHECK (id = 0), -- enforce a single row
 	db_version INTEGER NOT NULL -- used for migrations
