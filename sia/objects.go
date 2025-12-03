@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"maps"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
@@ -26,7 +27,12 @@ func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject,
 		return nil, err
 	}
 
-	// TODO: handle replace and metadata merging
+	if replace {
+		obj.Meta = meta
+	} else {
+		maps.Copy(obj.Meta, meta)
+	}
+	obj.UpdatedAt = time.Now()
 
 	if err := s.store.PutObject(accessKeyID, dstBucket, dstObject, obj); err != nil {
 		return nil, err
