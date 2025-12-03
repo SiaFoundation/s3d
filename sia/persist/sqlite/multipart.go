@@ -10,38 +10,19 @@ import (
 	"lukechampine.com/frand"
 )
 
-// UploadID is a unique identifier for a multipart upload.
-type UploadID [16]byte
-
-// NewUploadID generates a new random UploadID.
-func NewUploadID() UploadID {
-	return frand.Entropy128()
-}
-
-// ParseUploadID parses a hex string into an UploadID.
-func ParseUploadID(s string) (UploadID, error) {
+func parseUploadID(s string) (uid [16]byte, _ error) {
 	if len(s) != 32 {
-		return UploadID{}, fmt.Errorf("invalid upload id length: got %d, want 32", len(s))
+		return uid, fmt.Errorf("invalid length: got %d, want 32", len(s))
+	} else if _, err := hex.Decode(uid[:], []byte(s)); err != nil {
+		return uid, fmt.Errorf("failed to parse upload ID %q: %w", s, err)
 	}
-
-	var uid UploadID
-	if _, err := hex.Decode(uid[:], []byte(s)); err != nil {
-		return uid, fmt.Errorf("failed to parse UploadID %q: %w", s, err)
-	}
-
-	return uid, nil
-}
-
-// String returns the hex string representation of the UploadID.
-func (uid UploadID) String() string {
-	return hex.EncodeToString(uid[:])
+	return
 }
 
 // CreateMultipartUpload persists metadata for a new multipart upload and
 // returns a random upload ID.
 func (s *Store) CreateMultipartUpload(bucket, name string, meta map[string]string) (string, error) {
-	uid := NewUploadID()
-
+	uid := frand.Entropy128()
 	if err := s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
@@ -67,12 +48,12 @@ func (s *Store) CreateMultipartUpload(bucket, name string, meta map[string]strin
 		return "", err
 	}
 
-	return uid.String(), nil
+	return hex.EncodeToString(uid[:]), nil
 }
 
 // AbortMultipartUpload removes a multipart upload from the store.
 func (s *Store) AbortMultipartUpload(bucket, name, uploadID string) error {
-	uid, err := ParseUploadID(uploadID)
+	uid, err := parseUploadID(uploadID)
 	if err != nil {
 		return err
 	}

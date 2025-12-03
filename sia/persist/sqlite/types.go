@@ -75,7 +75,7 @@ func (m sqlMD5) Value() (driver.Value, error) {
 	return m[:], nil
 }
 
-type sqlUploadID UploadID
+type sqlUploadID [16]byte
 
 func (uid *sqlUploadID) Scan(src any) error {
 	switch src := src.(type) {
