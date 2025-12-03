@@ -139,14 +139,7 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, accessKeyID, dst
 	}
 
 	// parse source
-	parts := strings.SplitN(strings.TrimPrefix(source, "/"), "/", 2)
-	if len(parts) != 2 {
-		return s3errs.ErrInvalidArgument
-	}
-	srcBucket := parts[0]
-	srcObject := strings.SplitN(parts[1], "?", 2)[0]
-
-	srcObject, err := url.QueryUnescape(srcObject)
+	srcBucket, srcObject, err := parseSource(source)
 	if err != nil {
 		return err
 	}
@@ -556,6 +549,23 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID strin
 // FormatETag formats the given hash as an S3 ETag string.
 func FormatETag(hash []byte) string {
 	return `"` + hex.EncodeToString(hash) + `"`
+}
+
+// parseSource parses an X-Amz-Copy-Source string and returns the bucket and
+// object.
+func parseSource(source string) (bucket, object string, err error) {
+	parts := strings.SplitN(strings.TrimPrefix(source, "/"), "/", 2)
+	if len(parts) != 2 {
+		return "", "", s3errs.ErrInvalidArgument
+	}
+	srcBucket := parts[0]
+	srcObjectEsc := strings.SplitN(parts[1], "?", 2)[0]
+
+	srcObject, err := url.QueryUnescape(srcObjectEsc)
+	if err != nil {
+		return "", "", err
+	}
+	return srcBucket, srcObject, nil
 }
 
 // metadataHeaders extracts S3 metadata headers from the given HTTP headers.
