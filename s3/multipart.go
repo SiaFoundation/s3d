@@ -568,19 +568,36 @@ func FormatMultipartETag(hash []byte, partCount int) string {
 // size.
 func parseRange(header string, size int64) (ObjectRange, error) {
 	header = strings.TrimSpace(header)
+
+	if size <= 0 {
+		return ObjectRange{}, s3errs.ErrInvalidRange
+	}
 	if header == "" {
 		return ObjectRange{Start: 0, Length: size}, nil
 	}
-
-	var start, end int64
-	_, err := fmt.Sscanf(header, "bytes=%d-%d", &start, &end)
-	if err != nil {
+	if !strings.HasPrefix(header, "bytes=") {
 		return ObjectRange{}, s3errs.ErrInvalidArgument
 	}
 
-	if start < 0 || end < start {
+	spec := strings.TrimPrefix(header, "bytes=")
+	if strings.Contains(spec, ",") {
 		return ObjectRange{}, s3errs.ErrInvalidArgument
-	} else if end >= size {
+	}
+
+	parts := strings.Split(spec, "-")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return ObjectRange{}, s3errs.ErrInvalidArgument
+	}
+
+	start, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || start < 0 {
+		return ObjectRange{}, s3errs.ErrInvalidArgument
+	}
+	end, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || end < start {
+		return ObjectRange{}, s3errs.ErrInvalidArgument
+	}
+	if end >= size {
 		return ObjectRange{}, s3errs.ErrInvalidRange
 	}
 
