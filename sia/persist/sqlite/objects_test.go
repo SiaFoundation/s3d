@@ -260,7 +260,7 @@ func TestListObjectsMatch(t *testing.T) {
 func BenchmarkListObjects(b *testing.B) {
 	const (
 		// number of root level directories
-		dir1 = 10
+		dir1 = 1000
 		// number of second level directories
 		dir2 = 10
 		// number of third level directories

@@ -121,10 +121,10 @@ func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.
 		// rest of its [rules](https://pkg.go.dev/path#Clean) are OK to enforce
 		// here
 		if prefix.HasPrefix && prefix.Prefix != "" {
-			prefix.Prefix = pathClean(prefix.Prefix)
+			prefix.Prefix = strings.ToLower(pathClean(prefix.Prefix))
 		}
 		if prefix.HasDelimiter && prefix.Delimiter != "" {
-			prefix.Delimiter = pathClean(prefix.Delimiter)
+			prefix.Delimiter = strings.ToLower(pathClean(prefix.Delimiter))
 		}
 
 		// fetch up to maxKeys actual objects
@@ -152,8 +152,8 @@ func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.
 }
 
 func (s *Store) fetchObjects(tx *txn, bid int64, prefix s3.Prefix, page s3.ListObjectsPage) ([]*s3.Content, error) {
-	query := `SELECT o.name, o.content_md5, o.size, o.updated_at FROM objects o
-JOIN objects_fts fts ON o.id = fts.rowid
+	query := `SELECT o.name, o.content_md5, o.size, o.updated_at 
+FROM objects o
 WHERE o.bucket_id = ?`
 	args := []any{bid}
 
@@ -161,15 +161,17 @@ WHERE o.bucket_id = ?`
 		query += ` AND o.name > ?`
 		args = append(args, *page.Marker)
 	}
+
 	if prefix.HasPrefix {
-		query += ` AND fts.name LIKE ?`
-		args = append(args, prefix.Prefix+"%")
+		query += ` AND o.name_lower >= ? AND o.name_lower < ?`
+		args = append(args, prefix.Prefix, prefix.Prefix+"\xFF")
 	}
-	// exclude objects that would be common prefixes
+
 	if prefix.HasDelimiter {
-		query += ` AND fts.name NOT LIKE ?`
-		args = append(args, prefix.Prefix+"%"+prefix.Delimiter+"%")
+		query += ` AND instr(substr(o.name_lower, ?), ?) = 0`
+		args = append(args, len(prefix.Prefix)+1, prefix.Delimiter)
 	}
+
 	query += ` ORDER BY o.name LIMIT ?`
 	args = append(args, page.MaxKeys+1)
 
@@ -214,7 +216,6 @@ func (s *Store) fetchCommonPrefixes(tx *txn, bid int64, prefix s3.Prefix, page s
 	// find distinct common prefixes by selecting the minimum name for each prefix group
 	query := `
 SELECT DISTINCT substr(o.name, 1, instr(substr(o.name, ?), ?) + ?) as common_prefix FROM objects o
-JOIN objects_fts fts ON o.id = fts.rowid
 WHERE bucket_id = ?`
 
 	prefixLen := len(prefix.Prefix) + 1
@@ -224,15 +225,15 @@ WHERE bucket_id = ?`
 		query += ` AND o.name > ?`
 		args = append(args, *page.Marker)
 	}
+
 	if prefix.HasPrefix {
-		query += ` AND fts.name LIKE ?`
-		args = append(args, prefix.Prefix+"%")
+		query += ` AND o.name_lower >= ? AND o.name_lower < ?`
+		args = append(args, prefix.Prefix, prefix.Prefix+"\xFF")
 	}
-	// only include objects that have the delimiter after the prefix
-	if prefix.HasDelimiter {
-		query += ` AND fts.name LIKE ?`
-		args = append(args, prefix.Prefix+"%"+prefix.Delimiter+"%")
-	}
+
+	// Only objects with delimiter after prefix
+	query += ` AND instr(substr(o.name_lower, ?), ?) > 0`
+	args = append(args, prefixLen, prefix.Delimiter)
 
 	query += ` ORDER BY common_prefix LIMIT ?`
 	args = append(args, page.MaxKeys+1)
