@@ -38,10 +38,25 @@ type UploadPartOptions struct {
 	ContentSHA256 *[32]byte
 }
 
+// UploadPartCopyOptions contains options for copying an individual part in a
+// multipart upload.
+type UploadPartCopyOptions struct {
+	PartNumber int
+	Range      ObjectRange
+}
+
 // UploadPartResult contains metadata about an uploaded part, such as the
 // computed MD5 checksum.
 type UploadPartResult struct {
-	ContentMD5 [16]byte
+	ContentMD5   [16]byte
+	LastModified time.Time
+}
+
+// UploadPartCopyResult contains metadata about a copied part, such as the
+// computed MD5 checksum and the object's last modification time.
+type UploadPartCopyResult struct {
+	ContentMD5   [16]byte
+	LastModified time.Time
 }
 
 // ListPartsPage specifies pagination options when listing the parts of an
@@ -258,6 +273,54 @@ func (s *s3) listMultipartUploads(w http.ResponseWriter, r *http.Request, access
 	return writeXMLResponse(w, resp)
 }
 
+func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, accessKeyID, dstBucket, dstObject, uploadID string, partNumber int) error {
+	source := r.Header.Get("X-Amz-Copy-Source")
+	rnge := r.Header.Get("X-Amz-Copy-Source-Range")
+	log := s.logger.With(zap.String("dstBucket", dstBucket),
+		zap.String("dstObject", dstObject),
+		zap.String("uploadID", uploadID),
+		zap.String("source", source),
+		zap.String("range", rnge),
+		zap.Int("partNumber", partNumber),
+	)
+	log.Debug("copy part")
+
+	// parse source
+	srcBucket, srcObject, err := parseSource(source)
+	if err != nil {
+		return err
+	}
+
+	// fetch source metadata to determine size and validate range
+	obj, err := s.backend.HeadObject(r.Context(), &accessKeyID, srcBucket, srcObject, nil, nil)
+	if err != nil {
+		return err
+	} else if obj.Body != nil {
+		obj.Body.Close()
+	}
+
+	// parse range
+	objRange, err := parseRange(rnge, obj.Size)
+	if err != nil {
+		return err
+	}
+
+	result, err := s.backend.UploadPartCopy(r.Context(), accessKeyID, srcBucket, srcObject, dstBucket, dstObject, uploadID, UploadPartCopyOptions{
+		PartNumber: partNumber,
+		Range:      objRange,
+	})
+	if err != nil {
+		return err
+	}
+
+	etag := FormatETag(result.ContentMD5[:])
+	w.Header().Set("ETag", etag)
+	return writeXMLResponse(w, PartCopyResult{
+		ETag:         etag,
+		LastModified: NewContentTime(result.LastModified),
+	})
+}
+
 func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object, uploadID string) error {
 	log := s.logger.With(
 		zap.String("bucket", bucket),
@@ -273,6 +336,11 @@ func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, accessKeyID, 
 		return err
 	} else if partNumber == nil {
 		return s3errs.ErrInvalidRequest
+	}
+
+	// copy part
+	if _, ok := r.Header["X-Amz-Copy-Source"]; ok {
+		return s.copyPart(w, r, accessKeyID, bucket, object, uploadID, int(*partNumber))
 	}
 
 	// content length is mandatory
@@ -492,6 +560,34 @@ func parsePartNumber(s string) (*int32, error) {
 // along with the part count to match AWS multipart ETag semantics.
 func FormatMultipartETag(hash []byte, partCount int) string {
 	return `"` + hex.EncodeToString(hash) + "-" + strconv.Itoa(partCount) + `"`
+}
+
+// parseRange validates the X-Amz-Copy-Source-Range header. It only allows a
+// single range of the form "bytes=start-end" and returns ErrInvalidArgument for
+// malformed headers or ErrInvalidRange if the range exceeds the source object
+// size.
+func parseRange(header string, size int64) (ObjectRange, error) {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return ObjectRange{Start: 0, Length: size}, nil
+	}
+
+	var start, end int64
+	_, err := fmt.Sscanf(header, "bytes=%d-%d", &start, &end)
+	if err != nil {
+		return ObjectRange{}, s3errs.ErrInvalidArgument
+	}
+
+	if start < 0 || end < start {
+		return ObjectRange{}, s3errs.ErrInvalidArgument
+	} else if end >= size {
+		return ObjectRange{}, s3errs.ErrInvalidRange
+	}
+
+	return ObjectRange{
+		Start:  start,
+		Length: end - start + 1,
+	}, nil
 }
 
 func listPartsPageFromQuery(query url.Values) (ListPartsPage, error) {
