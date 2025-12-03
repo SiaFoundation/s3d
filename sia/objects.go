@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/md5"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -63,7 +64,28 @@ func (s *Sia) DeleteObject(ctx context.Context, accessKeyID, bucket, object stri
 // DeleteObjects deletes multiple objects from the specified bucket for the
 // user identified by the given access key.
 func (s *Sia) DeleteObjects(ctx context.Context, accessKeyID, bucket string, objects []s3.ObjectID) (*s3.ObjectsDeleteResult, error) {
-	return nil, s3errs.ErrNotImplemented
+	var result s3.ObjectsDeleteResult
+
+	for _, obj := range objects {
+		res, err := s.DeleteObject(ctx, accessKeyID, bucket, obj.Key)
+		if errors.Is(err, s3errs.ErrNoSuchBucket) {
+			return nil, err
+		}
+
+		if err != nil && !errors.Is(err, s3errs.ErrNoSuchKey) {
+			result.Error = append(result.Error, s3.ErrorResult{
+				Key:     obj.Key,
+				Code:    s3errs.ErrorCode(err),
+				Message: err.Error(),
+			})
+		} else {
+			result.Deleted = append(result.Deleted, s3.ObjectID{
+				Key:       obj.Key,
+				VersionID: res.VersionID,
+			})
+		}
+	}
+	return &result, nil
 }
 
 // GetObject retrieves the object with the given key from the specified
