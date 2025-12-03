@@ -1,6 +1,7 @@
 package s3errs
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 )
@@ -16,6 +17,16 @@ type Error struct {
 // Error implements the error interface.
 func (e Error) Error() string {
 	return fmt.Sprintf("%s (%d): %s", e.Code, e.HTTPStatus, e.Description)
+}
+
+// ErrorCode extracts the S3 error code from an error if possible and otherwise
+// returns the code for ErrInternalError.
+func ErrorCode(err error) string {
+	var s3err *Error
+	if errors.As(err, &s3err) {
+		return s3err.Code
+	}
+	return ErrInternalError.Code
 }
 
 // The following errors are taken from the official list of errors here:
