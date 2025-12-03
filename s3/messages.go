@@ -215,6 +215,8 @@ type (
 	ObjectID struct {
 		Key string `xml:"Key"`
 
+		ETag string `xml:"ETag,omitempty" json:"ETag,omitempty"`
+
 		// nolint:tagliatelle
 		VersionID string `xml:"VersionId,omitempty" json:"VersionId,omitempty"`
 	}
