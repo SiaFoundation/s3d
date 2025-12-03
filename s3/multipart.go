@@ -331,17 +331,16 @@ func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, accessKeyID, 
 	log.Debug("upload multipart part")
 
 	// parse part number
-	partPtr, err := parsePartNumber(r.URL.Query().Get("partNumber"))
+	partNumber, err := parsePartNumber(r.URL.Query().Get("partNumber"))
 	if err != nil {
 		return err
-	} else if partPtr == nil {
+	} else if partNumber == nil {
 		return s3errs.ErrInvalidRequest
 	}
-	partNumber := int(*partPtr)
 
 	// copy part
 	if _, ok := r.Header["X-Amz-Copy-Source"]; ok {
-		return s.copyPart(w, r, accessKeyID, bucket, object, uploadID, partNumber)
+		return s.copyPart(w, r, accessKeyID, bucket, object, uploadID, int(*partNumber))
 	}
 
 	// content length is mandatory
@@ -367,7 +366,7 @@ func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, accessKeyID, 
 	}
 
 	res, err := s.backend.UploadPart(r.Context(), accessKeyID, bucket, object, uploadID, r.Body, UploadPartOptions{
-		PartNumber:    partNumber,
+		PartNumber:    int(*partNumber),
 		ContentLength: r.ContentLength,
 		ContentMD5:    contentMD5,
 		ContentSHA256: contentSHA256,
@@ -561,8 +560,13 @@ func FormatMultipartETag(hash []byte, partCount int) string {
 // malformed headers or ErrInvalidRange if the range exceeds the source object
 // size.
 func parseRange(header string, size int64) (ObjectRange, error) {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return ObjectRange{Start: 0, Length: size}, nil
+	}
+
 	var start, end int64
-	_, err := fmt.Sscanf(strings.TrimSpace(header), "bytes=%d-%d", &start, &end)
+	_, err := fmt.Sscanf(header, "bytes=%d-%d", &start, &end)
 	if err != nil {
 		return ObjectRange{}, s3errs.ErrInvalidArgument
 	}
