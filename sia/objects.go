@@ -51,6 +51,9 @@ func (s *Sia) DeleteObject(ctx context.Context, accessKeyID, bucket, object stri
 	if err != nil {
 		return nil, err
 	}
+
+	// TODO: unpin the object from the indexer if no other references exist
+
 	return &s3.DeleteObjectResult{
 		IsDeleteMarker: false,
 		VersionID:      "",
