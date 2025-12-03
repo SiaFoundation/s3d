@@ -497,22 +497,29 @@ func parseCompletedParts(parts []CompleteMultipartPartXML) ([]CompletedPart, err
 	prev := 0
 	for i, part := range parts {
 		if part.PartNumber < 1 || part.PartNumber > MaxUploadPartNumber {
-			return nil, s3errs.ErrInvalidArgument
+			return nil, s3errs.ErrInvalidArgument // invalid part number
 		}
 		if i > 0 && part.PartNumber < prev {
-			return nil, s3errs.ErrInvalidPartOrder
+			return nil, s3errs.ErrInvalidPartOrder // invalid part order
 		}
+		prev = part.PartNumber
 
 		etag, err := parseCompletedPartETag(part.ETag)
 		if err != nil {
 			return nil, err
 		}
 
-		completed = append(completed, CompletedPart{
-			PartNumber: part.PartNumber,
-			ETag:       etag,
-		})
-		prev = part.PartNumber
+		if len(completed) > 0 && completed[len(completed)-1].PartNumber == part.PartNumber {
+			completed[len(completed)-1] = CompletedPart{ // overwrite duplicate part number
+				PartNumber: part.PartNumber,
+				ETag:       etag,
+			}
+		} else {
+			completed = append(completed, CompletedPart{
+				PartNumber: part.PartNumber,
+				ETag:       etag,
+			})
+		}
 	}
 
 	return completed, nil

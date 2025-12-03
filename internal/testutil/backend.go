@@ -658,16 +658,11 @@ func (b *MemoryBackend) CompleteMultipartUpload(_ context.Context, accessKeyID, 
 		return nil, s3errs.ErrInvalidRequest
 	}
 
-	// validate parts
-	var prev, totalSize int
+	// build object hash and validate parts
+	var totalSize int
 	objHash := make([]byte, 0, len(parts)*ETagSize)
 	objParts := make(map[int]objectMultipartPart, len(parts))
 	for i, completed := range parts {
-		if i > 0 && completed.PartNumber <= prev {
-			return nil, s3errs.ErrInvalidPartOrder
-		}
-		prev = completed.PartNumber
-
 		part, found := upload.parts[completed.PartNumber]
 		if !found {
 			return nil, s3errs.ErrInvalidPart
