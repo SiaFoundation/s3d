@@ -206,6 +206,16 @@ func (b *MemoryBackend) DeleteObjects(ctx context.Context, accessKeyID, bucket s
 	}
 	var res s3.ObjectsDeleteResult
 	for _, obj := range objects {
+		o, exists := bkt.objects[obj.Key]
+		if exists && obj.ETag != "" && s3.FormatETag(o.contentMD5[:]) != obj.ETag {
+			res.Error = append(res.Error, s3.ErrorResult{
+				Key:     obj.Key,
+				Code:    s3errs.ErrPreconditionFailed.Code,
+				Message: s3errs.ErrPreconditionFailed.Description,
+			})
+			continue
+		}
+
 		delete(bkt.objects, obj.Key)
 		res.Deleted = append(res.Deleted, s3.ObjectID{
 			Key:       obj.Key,
