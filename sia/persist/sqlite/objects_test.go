@@ -314,7 +314,7 @@ func BenchmarkListObjects(b *testing.B) {
 						}
 
 						name := strconv.Itoa(idx)
-						layer4 := filepath.Join(layer3, name)
+						layer4 := "/" + filepath.Join(layer3, name)
 
 						_, err = tx.Exec(`
 			INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at)
@@ -336,7 +336,7 @@ func BenchmarkListObjects(b *testing.B) {
 	}
 
 	const maxKeys = 100
-	b.Run("no_delimiter", func(b *testing.B) {
+	b.Run("no_delimiter_no_prefix", func(b *testing.B) {
 		for b.Loop() {
 			_, err := store.ListObjects(nil, bucket, s3.Prefix{}, s3.ListObjectsPage{MaxKeys: maxKeys})
 			if err != nil {
@@ -348,7 +348,9 @@ func BenchmarkListObjects(b *testing.B) {
 	b.Run("root_delimiter", func(b *testing.B) {
 		for b.Loop() {
 			_, err := store.ListObjects(nil, bucket, s3.Prefix{
-				Delimiter:    "/",
+				Prefix:       "/",
+				HasPrefix:    true,
+				Delimiter:    "/1000",
 				HasDelimiter: true,
 			}, s3.ListObjectsPage{MaxKeys: maxKeys})
 			if err != nil {
@@ -360,7 +362,8 @@ func BenchmarkListObjects(b *testing.B) {
 	b.Run("random_without_delimiter", func(b *testing.B) {
 		for b.Loop() {
 			_, err := store.ListObjects(nil, bucket, s3.Prefix{
-				Prefix: fmt.Sprintf("%d/%d/", frand.Intn(dir1), frand.Intn(dir2)),
+				Prefix:    fmt.Sprintf("/%d/%d/", frand.Intn(dir1), frand.Intn(dir2)),
+				HasPrefix: true,
 			}, s3.ListObjectsPage{MaxKeys: maxKeys})
 			if err != nil {
 				b.Fatal(err)
@@ -371,7 +374,7 @@ func BenchmarkListObjects(b *testing.B) {
 	b.Run("random_with_root_delimiter", func(b *testing.B) {
 		for b.Loop() {
 			_, err := store.ListObjects(nil, bucket, s3.Prefix{
-				Prefix:       fmt.Sprintf("%d/%d/", frand.Intn(dir1), frand.Intn(dir2)),
+				Prefix:       fmt.Sprintf("/%d/%d/", frand.Intn(dir1), frand.Intn(dir2)),
 				HasPrefix:    true,
 				Delimiter:    "/",
 				HasDelimiter: true,
@@ -385,7 +388,7 @@ func BenchmarkListObjects(b *testing.B) {
 	b.Run("folder_bottom_delimiter", func(b *testing.B) {
 		for b.Loop() {
 			_, err := store.ListObjects(nil, bucket, s3.Prefix{
-				Prefix:       "0/0/0",
+				Prefix:       "/0/0/0",
 				HasPrefix:    true,
 				Delimiter:    "1",
 				HasDelimiter: true,
@@ -399,7 +402,7 @@ func BenchmarkListObjects(b *testing.B) {
 	b.Run("folder_delimiter", func(b *testing.B) {
 		for b.Loop() {
 			_, err := store.ListObjects(nil, bucket, s3.Prefix{
-				Prefix:       "0/",
+				Prefix:       "/0/",
 				HasPrefix:    true,
 				Delimiter:    "000",
 				HasDelimiter: true,
