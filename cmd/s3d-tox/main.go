@@ -46,7 +46,7 @@ func main() {
 	s3 := s3.New(backend,
 		s3.WithHostBucketBases([]string{"localhost"}),
 		s3.WithLogger(logger))
-	if err := http.ListenAndServe("localhost:8000", s3); err != nil {
+	if err := http.ListenAndServe("localhost:59853", s3); err != nil {
 		log.Printf("failed to start server: %v", err)
 	}
 }
