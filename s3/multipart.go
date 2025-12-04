@@ -568,13 +568,17 @@ func FormatMultipartETag(hash []byte, partCount int) string {
 // size.
 func parseRange(header string, size int64) (ObjectRange, error) {
 	header = strings.TrimSpace(header)
-	if header == "" {
+
+	if size <= 0 {
+		return ObjectRange{}, s3errs.ErrInvalidRange
+	} else if header == "" {
 		return ObjectRange{Start: 0, Length: size}, nil
 	}
 
 	var start, end int64
-	_, err := fmt.Sscanf(header, "bytes=%d-%d", &start, &end)
-	if err != nil {
+	var suffix string
+	n, _ := fmt.Sscanf(header, "bytes=%d-%d%s", &start, &end, &suffix)
+	if n != 2 {
 		return ObjectRange{}, s3errs.ErrInvalidArgument
 	}
 
