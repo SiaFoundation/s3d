@@ -189,7 +189,7 @@ func (b *MemoryBackend) DeleteObject(ctx context.Context, accessKeyID, bucket st
 	if o, exists := bkt.objects[object.Key]; exists &&
 		((object.ETag != nil && s3.FormatETag(o.contentMD5[:]) != *object.ETag) ||
 			(object.Size != nil && int64(len(o.data)) != *object.Size) ||
-			(object.LastModifiedTime != nil && !o.lastModified.Round(time.Second).Equal(object.LastModifiedTime.StdTime()))) {
+			(object.LastModifiedTime != nil && !o.lastModified.Truncate(time.Second).Equal(object.LastModifiedTime.StdTime()))) {
 		return nil, s3errs.ErrPreconditionFailed
 	}
 	delete(bkt.objects, object.Key)
@@ -213,7 +213,7 @@ func (b *MemoryBackend) DeleteObjects(ctx context.Context, accessKeyID, bucket s
 		if exists &&
 			((obj.ETag != nil && s3.FormatETag(o.contentMD5[:]) != *obj.ETag) ||
 				(obj.Size != nil && int64(len(o.data)) != *obj.Size) ||
-				(obj.LastModifiedTime != nil && !o.lastModified.Round(time.Second).Equal(obj.LastModifiedTime.StdTime()))) {
+				(obj.LastModifiedTime != nil && !o.lastModified.Truncate(time.Second).Equal(obj.LastModifiedTime.StdTime()))) {
 			res.Error = append(res.Error, s3.ErrorResult{
 				Key:     obj.Key,
 				Code:    s3errs.ErrPreconditionFailed.Code,
