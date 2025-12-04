@@ -11,6 +11,18 @@ import (
 type testStore struct {
 	*Store
 	db *sql.DB
+	t  testing.TB
+}
+
+func (store *testStore) assertCount(expected int, table string) {
+	store.t.Helper()
+
+	var got int
+	if err := store.db.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&got); err != nil {
+		store.t.Fatalf("failed to scan count from %s: %v", table, err)
+	} else if got != expected {
+		store.t.Fatalf("expected %d rows in %s, got %d", expected, table, got)
+	}
 }
 
 func initTestDB(t testing.TB, log *zap.Logger) *testStore {
@@ -32,5 +44,6 @@ func initTestDB(t testing.TB, log *zap.Logger) *testStore {
 	return &testStore{
 		Store: store,
 		db:    db,
+		t:     t,
 	}
 }

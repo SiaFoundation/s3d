@@ -61,10 +61,9 @@ type Store interface {
 
 	CreateMultipartUpload(bucket, name string, meta map[string]string) (string, error)
 	AbortMultipartUpload(bucket, name, uploadID string) error
-	HasMultipartUpload(bucket, name, uploadID string) error
 
-	AddMultipartPart(uploadID string, partNumber int) error
-	FinishMultipartPart(uploadID string, partNumber int, contentMD5 [16]byte, contentSHA256 *[32]byte, contentLength int64) error
+	AddMultipartPart(bucket, name, uploadID string, partNumber int) error
+	FinishMultipartPart(bucket, name, uploadID string, partNumber int, contentMD5 [16]byte, contentSHA256 *[32]byte, contentLength int64) error
 }
 
 // New creates a new Sia backend instance.

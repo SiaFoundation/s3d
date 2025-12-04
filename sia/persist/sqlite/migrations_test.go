@@ -48,14 +48,14 @@ CREATE INDEX multipart_uploads_bucket_id_name_idx ON multipart_uploads(bucket_id
 
 CREATE TABLE multipart_parts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    upload_id BLOB NOT NULL,
+    multipart_upload_id INTEGER NOT NULL,
     part_number INTEGER NOT NULL,
     content_md5 BLOB,
     content_sha256 BLOB,
     content_length INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
-    FOREIGN KEY (upload_id) REFERENCES multipart_uploads(upload_id) ON DELETE CASCADE,
-    UNIQUE(upload_id, part_number)
+    FOREIGN KEY (multipart_upload_id) REFERENCES multipart_uploads(id) ON DELETE CASCADE,
+    UNIQUE(multipart_upload_id, part_number)
 );
 
 CREATE TABLE global_settings (

@@ -66,13 +66,8 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object, uploa
 		return nil, err
 	}
 
-	// verify multipart upload exists
-	if err := s.store.HasMultipartUpload(bucket, object, uploadID); err != nil {
-		return nil, err
-	}
-
 	// add part metadata to the database
-	if err := s.store.AddMultipartPart(uploadID, opts.PartNumber); err != nil {
+	if err := s.store.AddMultipartPart(bucket, object, uploadID, opts.PartNumber); err != nil {
 		return nil, fmt.Errorf("failed to add multipart part: %w", err)
 	}
 
@@ -158,7 +153,7 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object, uploa
 	}
 
 	// finalize part in the database
-	if err := s.store.FinishMultipartPart(uploadID, opts.PartNumber, contentMD5, contentSHA256, contentLength); err != nil {
+	if err := s.store.FinishMultipartPart(bucket, object, uploadID, opts.PartNumber, contentMD5, contentSHA256, contentLength); err != nil {
 		return nil, fmt.Errorf("failed to finish multipart part: %w", err)
 	}
 

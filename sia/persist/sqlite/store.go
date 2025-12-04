@@ -122,10 +122,6 @@ func OpenDatabase(path string, log *zap.Logger) (*Store, error) {
 }
 
 func initDB(path string) (*sql.DB, error) {
-	if !strings.HasSuffix(path, ".sqlite") {
-		return nil, fmt.Errorf("sqlite database filepath must end with .sqlite")
-	}
-
 	db, err := sql.Open("sqlite3", sqliteFilepath(path))
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
