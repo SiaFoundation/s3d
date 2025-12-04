@@ -190,7 +190,30 @@ func (s *s3) deleteObject(w http.ResponseWriter, r *http.Request, accessKeyID st
 		zap.String("object", object))
 	log.Debug("delete object")
 
-	result, err := s.backend.DeleteObject(r.Context(), accessKeyID, bucket, object)
+	// check preconditions
+	oid := ObjectID{Key: object}
+	if v, exists := r.Header["X-Amz-If-Match-Last-Modified-Time"]; exists {
+		t, err := time.Parse(http.TimeFormat, v[0])
+		if err != nil {
+			return s3errs.ErrInvalidArgument
+		}
+		lastMod := NewHttpTime(t)
+		oid.LastModifiedTime = &lastMod
+	}
+
+	if v, exists := r.Header["X-Amz-If-Match-Size"]; exists {
+		size, err := strconv.ParseInt(v[0], 10, 64)
+		if err != nil {
+			return s3errs.ErrInvalidArgument
+		}
+		oid.Size = &size
+	}
+
+	if v, exists := r.Header["If-Match"]; exists && v[0] != "*" {
+		oid.ETag = &v[0]
+	}
+
+	result, err := s.backend.DeleteObject(r.Context(), accessKeyID, bucket, oid)
 	if err != nil {
 		return err
 	}
