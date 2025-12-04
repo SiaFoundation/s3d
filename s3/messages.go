@@ -69,7 +69,7 @@ type HttpTime struct {
 	time.Time
 }
 
-// NewContentTime creates a new HttpTime instance.
+// NewHttpTime creates a new HttpTime instance.
 func NewHttpTime(t time.Time) HttpTime {
 	return HttpTime{t}
 }
