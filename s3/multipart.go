@@ -3,9 +3,7 @@ package s3
 import (
 	"encoding/base64"
 	"encoding/hex"
-	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -579,14 +577,12 @@ func parseRange(header string, size int64) (ObjectRange, error) {
 
 	var start, end int64
 	var suffix string
-	_, err := fmt.Sscanf(header, "bytes=%d-%d%s", &start, &end, &suffix)
-	if err != nil && !errors.Is(err, io.EOF) {
+	n, _ := fmt.Sscanf(header, "bytes=%d-%d%s", &start, &end, &suffix)
+	if n != 2 {
 		return ObjectRange{}, s3errs.ErrInvalidArgument
 	}
 
-	if suffix != "" {
-		return ObjectRange{}, s3errs.ErrInvalidArgument
-	} else if start < 0 || end < start {
+	if start < 0 || end < start {
 		return ObjectRange{}, s3errs.ErrInvalidArgument
 	} else if end >= size {
 		return ObjectRange{}, s3errs.ErrInvalidRange
