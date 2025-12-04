@@ -140,6 +140,10 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object, uploa
 		}
 	}
 
+	// TODO: If a part already exists, we could preserve it by moving the current
+	// file aside, write the new upload, and roll back on DB failure. If the DB
+	// update succeeds, delete the old file from its temporary location.
+
 	// sync and rename part file
 	if err := errors.Join(partFileTmp.Sync(), os.Rename(partPathTmp, partPathFinal)); err != nil {
 		return nil, fmt.Errorf("failed to sync and rename part file: %w", err)
