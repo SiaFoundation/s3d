@@ -133,7 +133,7 @@ func TestMultipartAddPart(t *testing.T) {
 	}
 
 	// verify part is on disk
-	partDir := filepath.Join(dataDir, sia.MultipartDir, uploadID)
+	partDir := filepath.Join(dataDir, sia.MultipartDirectory, uploadID)
 	partPath := filepath.Join(partDir, "1.part")
 	onDisk, err := os.ReadFile(partPath)
 	if err != nil {

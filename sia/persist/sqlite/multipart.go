@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"lukechampine.com/frand"
 )
 
@@ -55,16 +54,8 @@ func (s *Store) AbortMultipartUpload(bucket, name, uploadID string) error {
 			return err
 		}
 
-		res, err := tx.Exec(`DELETE FROM multipart_uploads WHERE id = $1`, uid)
-		if err != nil {
-			return err
-		} else if n, err := res.RowsAffected(); err != nil {
-			return err
-		} else if n == 0 {
-			return s3errs.ErrNoSuchUpload
-		}
-
-		return nil
+		_, err = tx.Exec(`DELETE FROM multipart_uploads WHERE id = $1`, uid)
+		return err
 	})
 }
 
@@ -81,22 +72,12 @@ func (s *Store) AddMultipartPart(bucket, name, uploadID string, partNumber int) 
 			return err
 		}
 
-		res, err := tx.Exec(`
+		_, err = tx.Exec(`
 			INSERT INTO multipart_parts (multipart_upload_id, part_number, created_at)
 			VALUES ($1, $2, $3)
 			ON CONFLICT(multipart_upload_id, part_number) DO UPDATE SET created_at = EXCLUDED.created_at
 		`, uid, partNumber, sqlTime(time.Now()))
-		if err != nil {
-			return fmt.Errorf("failed to insert multipart part: %w", err)
-		}
-
-		n, err := res.RowsAffected()
-		if err != nil {
-			return err
-		} else if n == 0 {
-			return fmt.Errorf("no rows affected when inserting multipart part")
-		}
-		return nil
+		return err
 	})
 }
 
@@ -117,21 +98,11 @@ func (s *Store) FinishMultipartPart(bucket, name, uploadID string, partNumber in
 		if contentSHA256 != nil {
 			sha256Bytes = contentSHA256[:]
 		}
-		res, err := tx.Exec(`
+		_, err = tx.Exec(`
 			UPDATE multipart_parts
 			SET content_md5 = $1, content_sha256 = $2, content_length = $3
 			WHERE multipart_upload_id = $4 AND part_number = $5
 		`, sqlMD5(contentMD5), sqlSHA256(sha256Bytes), contentLength, uid, partNumber)
-		if err != nil {
-			return fmt.Errorf("failed to update multipart part: %w", err)
-		}
-
-		n, err := res.RowsAffected()
-		if err != nil {
-			return err
-		} else if n == 0 {
-			return s3errs.ErrNoSuchUpload
-		}
-		return nil
+		return err
 	})
 }

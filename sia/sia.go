@@ -17,8 +17,9 @@ import (
 )
 
 const (
-	// MultipartDir is the directory name used for storing multipart uploads.
-	MultipartDir = "multipart"
+	// MultipartDirectory is the directory name used for storing multipart
+	// uploads.
+	MultipartDirectory = "multipart"
 )
 
 // Option is a configuration option for the S3 API handler.
@@ -77,7 +78,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory, accessKey, secret
 		sdk:    sdk,
 		store:  store,
 
-		directory: filepath.Join(directory, MultipartDir),
+		directory: filepath.Join(directory, MultipartDirectory),
 		accessKey: accessKey,
 		secretKey: auth.SecretAccessKey(secretKey),
 	}
