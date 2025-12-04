@@ -2,6 +2,7 @@ package s3
 
 import (
 	"encoding/xml"
+	"net/http"
 	"time"
 )
 
@@ -61,6 +62,44 @@ func (c ContentTime) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
 		return e.EncodeElement(s, start)
 	}
 	return nil
+}
+
+// HttpTime is a wrapper around time.Time to provide custom XML marshalling.
+type HttpTime struct {
+	time.Time
+}
+
+// NewContentTime creates a new HttpTime instance.
+func NewHttpTime(t time.Time) HttpTime {
+	return HttpTime{t}
+}
+
+// MarshalXML implements custom XML marshalling for HttpTime.
+func (c HttpTime) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
+	if !c.IsZero() {
+		var s = c.UTC().Format(http.TimeFormat)
+		return e.EncodeElement(s, start)
+	}
+	return nil
+}
+
+// UnmarshalXML implements custom XML unmarshalling for HttpTime.
+func (c *HttpTime) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
+	var value string
+	if err := d.DecodeElement(&value, &start); err != nil {
+		return err
+	}
+	t, err := time.Parse(http.TimeFormat, value)
+	if err != nil {
+		return err
+	}
+	c.Time = t
+	return nil
+}
+
+// StdTime returns the standard time.Time value.
+func (c *HttpTime) StdTime() time.Time {
+	return c.Time
 }
 
 // GetBucketLocation is the response to a GetBucketLocation request.
@@ -215,10 +254,12 @@ type (
 	ObjectID struct {
 		Key string `xml:"Key"`
 
-		ETag string `xml:"ETag,omitempty" json:"ETag,omitempty"`
+		ETag             *string   `xml:"ETag,omitempty"`
+		Size             *int64    `xml:"Size,omitempty"`
+		LastModifiedTime *HttpTime `xml:"LastModifiedTime,omitempty"`
 
 		// nolint:tagliatelle
-		VersionID string `xml:"VersionId,omitempty" json:"VersionId,omitempty"`
+		VersionID string `xml:"VersionId,omitempty"`
 	}
 
 	// DeleteRequest represents a multi delete request.
