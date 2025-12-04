@@ -133,7 +133,7 @@ func (b *MemoryBackend) CopyObject(ctx context.Context, accessKeyID, srcBucket, 
 	dstObjct := &object{
 		name:         dstObject,
 		data:         slices.Clone(srcObjct.data),
-		lastModified: time.Now(),
+		lastModified: time.Now().UTC(),
 		metadata:     meta,
 		contentMD5:   srcObjct.contentMD5,
 		parts:        srcObjct.parts,
@@ -207,7 +207,10 @@ func (b *MemoryBackend) DeleteObjects(ctx context.Context, accessKeyID, bucket s
 	var res s3.ObjectsDeleteResult
 	for _, obj := range objects {
 		o, exists := bkt.objects[obj.Key]
-		if exists && obj.ETag != "" && s3.FormatETag(o.contentMD5[:]) != obj.ETag {
+		if exists &&
+			((obj.ETag != nil && s3.FormatETag(o.contentMD5[:]) != *obj.ETag) ||
+				(obj.Size != nil && int64(len(o.data)) != *obj.Size) ||
+				(obj.LastModifiedTime != nil && !o.lastModified.Round(time.Second).Equal(obj.LastModifiedTime.StdTime()))) {
 			res.Error = append(res.Error, s3.ErrorResult{
 				Key:     obj.Key,
 				Code:    s3errs.ErrPreconditionFailed.Code,
@@ -343,7 +346,7 @@ func (b *MemoryBackend) PutObject(_ context.Context, accessKeyID, bucket, obj st
 		name:         obj,
 		data:         slices.Clone(data),
 		contentMD5:   contentMD5,
-		lastModified: time.Now(),
+		lastModified: time.Now().UTC(),
 		metadata:     opts.Meta,
 		parts:        make(map[int]objectMultipartPart),
 	}
@@ -371,7 +374,7 @@ func (b *MemoryBackend) CreateMultipartUpload(_ context.Context, accessKeyID, bu
 		key:       key,
 		metadata:  opts.Meta,
 		parts:     make(map[int]*multipartPart),
-		createdAt: time.Now(),
+		createdAt: time.Now().UTC(),
 	}
 
 	return &s3.CreateMultipartUploadResult{
