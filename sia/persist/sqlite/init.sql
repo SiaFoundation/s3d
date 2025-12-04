@@ -14,7 +14,6 @@ CREATE TABLE objects (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     bucket_id INTEGER REFERENCES buckets(id) NOT NULL,
     name TEXT NOT NULL,
-    name_lower TEXT GENERATED ALWAYS AS (LOWER(name)) VIRTUAL,
     object_id BLOB NOT NULL,
     content_md5 BLOB NOT NULL,
     metadata TEXT NOT NULL,
@@ -23,7 +22,6 @@ CREATE TABLE objects (
     UNIQUE(bucket_id, name)
 );
 CREATE INDEX objects_name ON objects(name);
-CREATE INDEX objects_name_lower ON objects(name_lower);
 
 CREATE TABLE global_settings (
 	id INTEGER PRIMARY KEY NOT NULL DEFAULT 0 CHECK (id = 0), -- enforce a single row

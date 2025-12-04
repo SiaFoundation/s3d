@@ -216,22 +216,22 @@ func TestListObjectsMatch(t *testing.T) {
 		{prefix: ptr("foo//bar"), objects: []string{"foo/bar"}},
 		{prefix: ptr("😊"), objects: []string{"😊/д"}},
 
-		{prefix: ptr("FOO"), objects: []string{"foo/bar", "foo/baz"}},
-		{prefix: ptr("FOO/"), objects: []string{"foo/bar", "foo/baz"}},
-		{prefix: ptr("foo/BA"), objects: []string{"foo/bar", "foo/baz"}},
-		{prefix: ptr("foo/BAR"), objects: []string{"foo/bar"}},
+		{prefix: ptr("FOO")},
+		{prefix: ptr("FOO/")},
+		{prefix: ptr("foo/BA")},
+		{prefix: ptr("foo/BAR")},
 
 		{prefix: ptr("foo"), delim: ptr("/"), commonPrefixes: []string{"foo/"}},
 		{prefix: ptr("aaa"), delim: ptr("/")},
 
-		{prefix: ptr("FOO"), delim: ptr("/"), commonPrefixes: []string{"foo/"}},
-		{prefix: ptr("FOO"), delim: ptr("//"), commonPrefixes: []string{"foo/"}},
+		{prefix: ptr("FOO"), delim: ptr("/")},
+		{prefix: ptr("FOO"), delim: ptr("//")},
 		{prefix: ptr("aaa"), delim: ptr("/")},
 
 		{delim: ptr("/"), commonPrefixes: []string{"foo/", "😊/"}},
 		{delim: ptr("//"), commonPrefixes: []string{"foo/", "😊/"}},
 		{prefix: ptr("foo"), delim: ptr("/bar"), objects: []string{"foo/baz"}, commonPrefixes: []string{"foo/"}},
-		{prefix: ptr("foo"), delim: ptr("/BAR"), objects: []string{"foo/baz"}, commonPrefixes: []string{"foo/"}},
+		{prefix: ptr("foo"), delim: ptr("/BAR"), objects: []string{"foo/bar", "foo/baz"}},
 	} {
 		t.Run(fmt.Sprint(idx), func(t *testing.T) {
 			resp, err := store.ListObjects(nil, bucket, s3.Prefix{

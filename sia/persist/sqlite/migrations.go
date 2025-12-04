@@ -8,9 +8,7 @@ import "go.uber.org/zap"
 var migrations = []func(tx *txn, log *zap.Logger) error{
 	func(tx *txn, _ *zap.Logger) error {
 		_, err := tx.Exec(`
-ALTER TABLE objects ADD COLUMN name_lower TEXT GENERATED ALWAYS AS (LOWER(name)) VIRTUAL;
 CREATE INDEX objects_name ON objects(name);
-CREATE INDEX objects_name_lower ON objects(name_lower);
 `)
 		return err
 	},

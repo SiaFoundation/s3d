@@ -121,10 +121,10 @@ func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.
 		// rest of its [rules](https://pkg.go.dev/path#Clean) are OK to enforce
 		// here
 		if prefix.HasPrefix && prefix.Prefix != "" {
-			prefix.Prefix = strings.ToLower(pathClean(prefix.Prefix))
+			prefix.Prefix = pathClean(prefix.Prefix)
 		}
 		if prefix.HasDelimiter && prefix.Delimiter != "" {
-			prefix.Delimiter = strings.ToLower(pathClean(prefix.Delimiter))
+			prefix.Delimiter = pathClean(prefix.Delimiter)
 		}
 
 		// fetch up to maxKeys actual objects
@@ -163,12 +163,12 @@ WHERE o.bucket_id = ?`
 	}
 
 	if prefix.HasPrefix {
-		query += ` AND o.name_lower >= ? AND o.name_lower < ?`
+		query += ` AND o.name >= ? AND o.name < ?`
 		args = append(args, prefix.Prefix, prefix.Prefix+"\xFF")
 	}
 
 	if prefix.HasDelimiter {
-		query += ` AND instr(substr(o.name_lower, ?), ?) = 0`
+		query += ` AND instr(substr(o.name, ?), ?) = 0`
 		args = append(args, len(prefix.Prefix)+1, prefix.Delimiter)
 	}
 
@@ -227,12 +227,12 @@ WHERE bucket_id = ?`
 	}
 
 	if prefix.HasPrefix {
-		query += ` AND o.name_lower >= ? AND o.name_lower < ?`
+		query += ` AND o.name >= ? AND o.name < ?`
 		args = append(args, prefix.Prefix, prefix.Prefix+"\xFF")
 	}
 
 	// Only objects with delimiter after prefix
-	query += ` AND instr(substr(o.name_lower, ?), ?) > 0`
+	query += ` AND instr(substr(o.name, ?), ?) > 0`
 	args = append(args, prefixLen, prefix.Delimiter)
 
 	query += ` ORDER BY common_prefix LIMIT ?`
