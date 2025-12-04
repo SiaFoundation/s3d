@@ -179,17 +179,20 @@ func (b *MemoryBackend) DeleteBucket(ctx context.Context, accessKeyID, name stri
 }
 
 // DeleteObject deletes the specified object from the given bucket.
-func (b *MemoryBackend) DeleteObject(ctx context.Context, accessKeyID, bucket, object string) (*s3.DeleteObjectResult, error) {
+func (b *MemoryBackend) DeleteObject(ctx context.Context, accessKeyID, bucket string, object s3.ObjectID) (*s3.DeleteObjectResult, error) {
 	bkt, exists := b.buckets[bucket]
 	if !exists {
 		return nil, s3errs.ErrNoSuchBucket
 	} else if bkt.owner != b.accessKeys[accessKeyID].owner {
 		return nil, s3errs.ErrAccessDenied
 	}
-	if _, exists := bkt.objects[object]; !exists {
-		return nil, s3errs.ErrNoSuchKey
+	if o, exists := bkt.objects[object.Key]; exists &&
+		((object.ETag != nil && s3.FormatETag(o.contentMD5[:]) != *object.ETag) ||
+			(object.Size != nil && int64(len(o.data)) != *object.Size) ||
+			(object.LastModifiedTime != nil && !o.lastModified.Round(time.Second).Equal(object.LastModifiedTime.StdTime()))) {
+		return nil, s3errs.ErrPreconditionFailed
 	}
-	delete(bkt.objects, object)
+	delete(bkt.objects, object.Key)
 	return &s3.DeleteObjectResult{
 		IsDeleteMarker: false,
 		VersionID:      "",

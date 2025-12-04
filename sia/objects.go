@@ -47,8 +47,8 @@ func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject,
 
 // DeleteObject deletes the object with the given key from the specified
 // bucket for the user identified by the given access key.
-func (s *Sia) DeleteObject(ctx context.Context, accessKeyID, bucket, object string) (*s3.DeleteObjectResult, error) {
-	err := s.store.DeleteObject(accessKeyID, bucket, object)
+func (s *Sia) DeleteObject(ctx context.Context, accessKeyID, bucket string, object s3.ObjectID) (*s3.DeleteObjectResult, error) {
+	err := s.store.DeleteObject(accessKeyID, bucket, object.Key)
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +67,7 @@ func (s *Sia) DeleteObjects(ctx context.Context, accessKeyID, bucket string, obj
 	var result s3.ObjectsDeleteResult
 
 	for _, obj := range objects {
-		res, err := s.DeleteObject(ctx, accessKeyID, bucket, obj.Key)
+		res, err := s.DeleteObject(ctx, accessKeyID, bucket, obj)
 		if errors.Is(err, s3errs.ErrNoSuchBucket) {
 			return nil, err
 		}
