@@ -350,7 +350,7 @@ func BenchmarkListObjects(b *testing.B) {
 			_, err := store.ListObjects(nil, bucket, s3.Prefix{
 				Prefix:       "/",
 				HasPrefix:    true,
-				Delimiter:    "/1000",
+				Delimiter:    "/",
 				HasDelimiter: true,
 			}, s3.ListObjectsPage{MaxKeys: maxKeys})
 			if err != nil {
