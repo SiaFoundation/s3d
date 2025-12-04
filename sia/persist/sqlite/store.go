@@ -106,18 +106,36 @@ func doTransaction(db *sql.DB, log *zap.Logger, fn func(tx *txn) error) error {
 
 // OpenDatabase creates a new SQLite store and initializes the database. If the
 // database does not exist, it is created.
-func OpenDatabase(fp string, log *zap.Logger) (*Store, error) {
-	log = log.Named("sqlite")
+func OpenDatabase(path string, log *zap.Logger) (*Store, error) {
+	db, err := initDB(path)
+	if err != nil {
+		return nil, err
+	}
+	store, err := initStore(db, log.Named("sqlite"))
+	if err != nil {
+		return nil, err
+	}
 
-	db, err := sql.Open("sqlite3", sqliteFilepath(fp))
+	sqliteVersion, _, _ := sqlite3.Version()
+	log.Debug("database initialized", zap.String("sqliteVersion", sqliteVersion), zap.Int("schemaVersion", len(migrations)+1), zap.String("path", path))
+	return store, nil
+}
+
+func initDB(path string) (*sql.DB, error) {
+	if !strings.HasSuffix(path, ".sqlite") {
+		return nil, fmt.Errorf("sqlite database filepath must end with .sqlite")
+	}
+
+	db, err := sql.Open("sqlite3", sqliteFilepath(path))
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	// set the number of open connections to 1 to prevent "database is locked"
-	// errors
-	db.SetMaxOpenConns(1)
+	db.SetMaxOpenConns(1) // prevent "database is locked"
+	return db, nil
+}
 
+func initStore(db *sql.DB, log *zap.Logger) (*Store, error) {
 	store := &Store{
 		db:  db,
 		log: log,
@@ -125,8 +143,6 @@ func OpenDatabase(fp string, log *zap.Logger) (*Store, error) {
 	if err := store.init(int64(len(migrations) + 1)); err != nil {
 		return nil, err
 	}
-	sqliteVersion, _, _ := sqlite3.Version()
-	log.Debug("database initialized", zap.String("sqliteVersion", sqliteVersion), zap.Int("schemaVersion", len(migrations)+1), zap.String("path", fp))
 	return store, nil
 }
 
