@@ -94,10 +94,11 @@ func (s *Store) FinishMultipartPart(bucket, name, uploadID string, partNumber in
 			return err
 		}
 
-		var sha256Bytes []byte
+		var sha256Bytes [32]byte
 		if contentSHA256 != nil {
-			sha256Bytes = contentSHA256[:]
+			sha256Bytes = *contentSHA256
 		}
+
 		_, err = tx.Exec(`
 			UPDATE multipart_parts
 			SET content_md5 = $1, content_sha256 = $2, content_length = $3
