@@ -34,7 +34,9 @@ func (s *Store) DeleteBucket(accessKeyID, bucket string) error {
 			return err
 		}
 		var inUse bool
-		err = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM objects WHERE bucket_id = $1)", bid).Scan(&inUse)
+		err = tx.QueryRow(`
+			SELECT EXISTS(SELECT 1 FROM objects WHERE bucket_id = $1) 
+				OR EXISTS(SELECT 1 FROM multipart_uploads WHERE bucket_id = $1)`, bid).Scan(&inUse)
 		if err != nil {
 			return err
 		} else if inUse {

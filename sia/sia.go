@@ -51,6 +51,9 @@ type Store interface {
 	HeadBucket(accessKeyID, bucket string) error
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
 	PutObject(accessKeyID, bucket, name string, obj *objects.Object) error
+
+	CreateMultipartUpload(bucket, name string, meta map[string]string) (string, error)
+	AbortMultipartUpload(bucket, name, uploadID string) error
 }
 
 // New creates a new Sia backend instance.
@@ -81,40 +84,4 @@ func (s *Sia) LoadSecret(ctx context.Context, accessKeyID string) (auth.SecretAc
 		return nil, s3errs.ErrInvalidAccessKeyId
 	}
 	return slices.Clone(s.secretKey), nil
-}
-
-// CreateMultipartUpload creates a new multipart upload.
-func (s *Sia) CreateMultipartUpload(ctx context.Context, accessKeyID, bucket, object string, opts s3.CreateMultipartUploadOptions) (*s3.CreateMultipartUploadResult, error) {
-	return nil, s3errs.ErrNotImplemented
-}
-
-// ListMultipartUploads lists in-progress multipart uploads.
-func (s *Sia) ListMultipartUploads(ctx context.Context, accessKeyID, bucket string, opts s3.ListMultipartUploadsOptions) (*s3.ListMultipartUploadsResult, error) {
-	return nil, s3errs.ErrNotImplemented
-}
-
-// AbortMultipartUpload aborts a multipart upload.
-func (s *Sia) AbortMultipartUpload(ctx context.Context, accessKeyID, bucket, object, uploadID string) error {
-	return s3errs.ErrNotImplemented
-}
-
-// UploadPart uploads a single multipart part.
-func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object, uploadID string, r io.Reader, opts s3.UploadPartOptions) (*s3.UploadPartResult, error) {
-	return nil, s3errs.ErrNotImplemented
-}
-
-// UploadPartCopy copies a single part from an existing object as part of a
-// multipart upload.
-func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject, uploadID string, opts s3.UploadPartCopyOptions) (*s3.UploadPartCopyResult, error) {
-	return nil, s3errs.ErrNotImplemented
-}
-
-// ListParts lists uploaded parts for a multipart upload.
-func (s *Sia) ListParts(ctx context.Context, accessKeyID, bucket, object, uploadID string, page s3.ListPartsPage) (*s3.ListPartsResult, error) {
-	return nil, s3errs.ErrNotImplemented
-}
-
-// CompleteMultipartUpload completes a multipart upload.
-func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, object, uploadID string, parts []s3.CompletedPart) (*s3.CompleteMultipartUploadResult, error) {
-	return nil, s3errs.ErrNotImplemented
 }

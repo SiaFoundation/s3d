@@ -13,6 +13,7 @@ var (
 	_ scannerValuer = (*sqlHash256)(nil)
 	_ scannerValuer = (*sqlMD5)(nil)
 	_ scannerValuer = (*sqlTime)(nil)
+	_ scannerValuer = (*sqlUploadID)(nil)
 )
 
 type scannerValuer interface {
@@ -72,4 +73,23 @@ func (m *sqlMD5) Scan(src any) error {
 
 func (m sqlMD5) Value() (driver.Value, error) {
 	return m[:], nil
+}
+
+type sqlUploadID [16]byte
+
+func (uid *sqlUploadID) Scan(src any) error {
+	switch src := src.(type) {
+	case []byte:
+		if len(src) != len(sqlUploadID{}) {
+			return fmt.Errorf("failed to scan source into UploadID due to invalid number of bytes %v != %v: %v", len(src), len(sqlUploadID{}), src)
+		}
+		copy(uid[:], src)
+		return nil
+	default:
+		return fmt.Errorf("cannot scan %T to UploadID", src)
+	}
+}
+
+func (uid sqlUploadID) Value() (driver.Value, error) {
+	return uid[:], nil
 }
