@@ -2,21 +2,49 @@ package sqlite
 
 import (
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"time"
 
+	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia/objects"
 )
 
-// DeleteObject deletes the object with the given bucket and name.
-func (s *Store) DeleteObject(accessKeyID, bucket, name string) error {
+// DeleteObject deletes the object with the given bucket and name if it exists
+// and all provided preconditions match.
+func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) error {
 	return s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec("DELETE FROM objects WHERE bucket_id = $1 AND name = $2", bid, name)
+
+		if objectID.ETag != nil || objectID.LastModifiedTime != nil || objectID.Size != nil {
+			var contentMD5 [16]byte
+			var size int64
+			var updatedAt time.Time
+			err = tx.QueryRow("SELECT content_md5, size, updated_at FROM objects WHERE bucket_id = $1 AND name = $2", bid, objectID.Key).
+				Scan((*sqlMD5)(&contentMD5), &size, (*sqlTime)(&updatedAt))
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil // object doesn't exist, nothing to delete
+			} else if err != nil {
+				return err
+			}
+
+			if objectID.ETag != nil && *objectID.ETag != hex.EncodeToString(contentMD5[:]) {
+				return s3errs.ErrPreconditionFailed
+			}
+			if objectID.Size != nil && *objectID.Size != size {
+				return s3errs.ErrPreconditionFailed
+			}
+			if objectID.LastModifiedTime != nil && !updatedAt.Truncate(time.Second).Equal(objectID.LastModifiedTime.StdTime()) {
+				return s3errs.ErrPreconditionFailed
+			}
+		}
+
+		_, err = tx.Exec("DELETE FROM objects WHERE bucket_id = $1 AND name = $2", bid, objectID.Key)
 		return err
 	})
 }
