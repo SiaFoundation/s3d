@@ -67,7 +67,7 @@ func (s *Sia) DeleteObjects(ctx context.Context, accessKeyID, bucket string, obj
 	var result s3.ObjectsDeleteResult
 
 	for _, obj := range objects {
-		res, err := s.DeleteObject(ctx, accessKeyID, bucket, obj)
+		_, err := s.DeleteObject(ctx, accessKeyID, bucket, obj)
 		if errors.Is(err, s3errs.ErrNoSuchBucket) {
 			return nil, err
 		}
@@ -81,7 +81,7 @@ func (s *Sia) DeleteObjects(ctx context.Context, accessKeyID, bucket string, obj
 		} else {
 			result.Deleted = append(result.Deleted, s3.ObjectID{
 				Key:       obj.Key,
-				VersionID: res.VersionID,
+				VersionID: "",
 			})
 		}
 	}
