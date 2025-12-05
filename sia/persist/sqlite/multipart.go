@@ -4,8 +4,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
+	"github.com/SiaFoundation/s3d/s3"
 	"lukechampine.com/frand"
 )
 
@@ -73,9 +75,9 @@ func (s *Store) AddMultipartPart(bucket, name, uploadID string, partNumber int) 
 		}
 
 		_, err = tx.Exec(`
-			INSERT INTO multipart_parts (multipart_upload_id, part_number, created_at)
-			VALUES ($1, $2, $3)
-			ON CONFLICT(multipart_upload_id, part_number) DO UPDATE SET created_at = EXCLUDED.created_at
+			INSERT INTO multipart_parts (multipart_upload_id, part_number, created_at, updated_at)
+			VALUES ($1, $2, $3, $3)
+			ON CONFLICT(multipart_upload_id, part_number) DO UPDATE SET updated_at = EXCLUDED.updated_at
 		`, uid, partNumber, sqlTime(time.Now()))
 		return err
 	})
@@ -101,9 +103,64 @@ func (s *Store) FinishMultipartPart(bucket, name, uploadID string, partNumber in
 
 		_, err = tx.Exec(`
 			UPDATE multipart_parts
-			SET content_md5 = $1, content_sha256 = $2, content_length = $3
-			WHERE multipart_upload_id = $4 AND part_number = $5
-		`, sqlMD5(contentMD5), sqlSHA256(sha256Bytes), contentLength, uid, partNumber)
+			SET content_md5 = $1, content_sha256 = $2, content_length = $3, updated_at = $4
+			WHERE multipart_upload_id = $5 AND part_number = $6
+		`, sqlMD5(contentMD5), sqlSHA256(sha256Bytes), contentLength, sqlTime(time.Now()), uid, partNumber)
 		return err
 	})
+}
+
+// ListParts lists uploaded parts for a multipart upload.
+func (s *Store) ListParts(accessKeyID, bucket, name, uploadID string, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error) {
+	res := &s3.ListPartsResult{
+		OwnerID:              "", // TODO: sia backend does not yet support owners
+		InitiatorID:          accessKeyID,
+		OwnerDisplayName:     "",
+		InitiatorDisplayName: "",
+		Parts:                make([]s3.UploadPart, 0, maxParts),
+	}
+
+	if err := s.transaction(func(tx *txn) error {
+		bid, err := bucketID(tx, bucket)
+		if err != nil {
+			return err
+		}
+
+		uid, err := multipartID(tx, uploadID, bid, name)
+		if err != nil {
+			return err
+		}
+
+		rows, err := tx.Query(`
+			SELECT part_number, content_length, content_md5, updated_at
+			FROM multipart_parts
+			WHERE content_md5 IS NOT NULL AND multipart_upload_id = $1 AND part_number > $2
+			ORDER BY part_number ASC
+			LIMIT $3
+		`, uid, partNumberMarker, maxParts+1)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			if len(res.Parts) >= int(maxParts) {
+				res.IsTruncated = true
+				res.NextPartNumberMarker = strconv.Itoa(res.Parts[len(res.Parts)-1].PartNumber)
+				break
+			}
+
+			var p s3.UploadPart
+			if err := rows.Scan(&p.PartNumber, &p.Size, (*sqlMD5)(&p.ContentMD5), (*sqlTime)(&p.LastModified)); err != nil {
+				return err
+			}
+			res.Parts = append(res.Parts, p)
+		}
+
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+
+	return res, nil
 }

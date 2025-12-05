@@ -65,6 +65,7 @@ type Store interface {
 
 	AddMultipartPart(bucket, name, uploadID string, partNumber int) error
 	FinishMultipartPart(bucket, name, uploadID string, partNumber int, contentMD5 [16]byte, contentSHA256 *[32]byte, contentLength int64) error
+	ListParts(accessKeyID, bucket, name, uploadID string, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error)
 }
 
 // New creates a new Sia backend instance.

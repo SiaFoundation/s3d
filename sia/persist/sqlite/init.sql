@@ -41,6 +41,7 @@ CREATE TABLE multipart_parts (
     content_sha256 BLOB,
     content_length INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
     FOREIGN KEY (multipart_upload_id) REFERENCES multipart_uploads(id) ON DELETE CASCADE,
     UNIQUE(multipart_upload_id, part_number)
 );

@@ -23,7 +23,7 @@ func randUUID() (uuid [8]byte) {
 
 // CreateMultipartUpload creates a new multipart upload.
 func (s *Sia) CreateMultipartUpload(ctx context.Context, accessKeyID, bucket, object string, opts s3.CreateMultipartUploadOptions) (*s3.CreateMultipartUploadResult, error) {
-	// quick check if the bucket exists
+	// check bucket access
 	if err := s.store.HeadBucket(accessKeyID, bucket); err != nil {
 		return nil, err
 	}
@@ -61,7 +61,7 @@ func (s *Sia) AbortMultipartUpload(ctx context.Context, accessKeyID, bucket, obj
 
 // UploadPart uploads a single multipart part.
 func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object, uploadID string, r io.Reader, opts s3.UploadPartOptions) (_ *s3.UploadPartResult, err error) {
-	// quick check if the bucket exists
+	// check bucket access
 	if err := s.store.HeadBucket(accessKeyID, bucket); err != nil {
 		return nil, err
 	}
@@ -167,7 +167,12 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 
 // ListParts lists uploaded parts for a multipart upload.
 func (s *Sia) ListParts(ctx context.Context, accessKeyID, bucket, object, uploadID string, page s3.ListPartsPage) (*s3.ListPartsResult, error) {
-	return nil, s3errs.ErrNotImplemented
+	// check bucket access
+	if err := s.store.HeadBucket(accessKeyID, bucket); err != nil {
+		return nil, err
+	}
+
+	return s.store.ListParts(accessKeyID, bucket, object, uploadID, page.PartNumberMarker, page.MaxParts)
 }
 
 // CompleteMultipartUpload completes a multipart upload.
