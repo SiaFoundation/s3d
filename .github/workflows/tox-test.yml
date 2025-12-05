@@ -52,7 +52,7 @@ jobs:
           for i in {1..10}; do
             if kill -0 $(cat s3d.pid); then
               sleep 1
-              if nc -z localhost 8000; then
+              if nc -z localhost 59853; then
                 break
               fi
             fi
