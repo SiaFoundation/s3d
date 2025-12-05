@@ -210,7 +210,8 @@ func (s *s3) deleteObject(w http.ResponseWriter, r *http.Request, accessKeyID st
 	}
 
 	if v, exists := r.Header["If-Match"]; exists && v[0] != "*" {
-		oid.ETag = &v[0]
+		etag := strings.Trim(v[0], `"`)
+		oid.ETag = &etag
 	}
 
 	result, err := s.backend.DeleteObject(r.Context(), accessKeyID, bucket, oid)
