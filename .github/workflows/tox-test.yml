@@ -7,7 +7,7 @@ on:
 jobs:
   test:
     name: Tox
-    runs-on: ubuntu-latest
+    runs-on: tenki-standard-autoscale
     permissions:
       contents: read
 
