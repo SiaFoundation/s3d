@@ -335,7 +335,7 @@ func BenchmarkListObjects(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	const maxKeys = 100
+	const maxKeys = 1000
 	b.Run("no_delimiter_no_prefix", func(b *testing.B) {
 		for b.Loop() {
 			_, err := store.ListObjects(nil, bucket, s3.Prefix{}, s3.ListObjectsPage{MaxKeys: maxKeys})
@@ -390,7 +390,7 @@ func BenchmarkListObjects(b *testing.B) {
 			_, err := store.ListObjects(nil, bucket, s3.Prefix{
 				Prefix:       "/0/0/0",
 				HasPrefix:    true,
-				Delimiter:    "1",
+				Delimiter:    "/",
 				HasDelimiter: true,
 			}, s3.ListObjectsPage{MaxKeys: maxKeys})
 			if err != nil {
@@ -404,7 +404,7 @@ func BenchmarkListObjects(b *testing.B) {
 			_, err := store.ListObjects(nil, bucket, s3.Prefix{
 				Prefix:       "/0/",
 				HasPrefix:    true,
-				Delimiter:    "000",
+				Delimiter:    "/",
 				HasDelimiter: true,
 			}, s3.ListObjectsPage{MaxKeys: maxKeys})
 			if err != nil {
