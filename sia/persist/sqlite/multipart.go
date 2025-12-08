@@ -4,8 +4,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
+	"unicode/utf8"
 
+	"github.com/SiaFoundation/s3d/s3"
 	"lukechampine.com/frand"
 )
 
@@ -106,4 +109,221 @@ func (s *Store) FinishMultipartPart(bucket, name, uploadID string, partNumber in
 		`, sqlMD5(contentMD5), sqlSHA256(sha256Bytes), contentLength, uid, partNumber)
 		return err
 	})
+}
+
+// ListMultipartUploads lists all multipart uploads for the given bucket and
+// filters.
+func (s *Store) ListMultipartUploads(bucket string, prefix, delimiter, keyMarker, uploadIDMarker string, maxUploads int64) (*s3.ListMultipartUploadsResult, error) {
+	if keyMarker == "" {
+		uploadIDMarker = "" // ignored if key marker is not set
+	}
+
+	// if the marker falls inside a common prefix (e.g. prefix "ac", delimiter
+	// "/", marker "acb/x"), advance past that prefix so it isn't returned
+	// twice
+	if delimiter != "" && keyMarker != "" {
+		markerRemainder := keyMarker
+		var prefixLen int
+		if after, ok := strings.CutPrefix(keyMarker, prefix); ok {
+			prefixLen = len(prefix)
+			markerRemainder = after
+		}
+		if idx := strings.Index(markerRemainder, delimiter); idx != -1 {
+			commonPrefix := keyMarker[:prefixLen+idx+len(delimiter)]
+			keyMarker = commonPrefix + string([]byte{0xFF})
+			uploadIDMarker = ""
+		}
+	}
+
+	uidMarker, err := parseUploadID(uploadIDMarker)
+	if err != nil {
+		return nil, fmt.Errorf("invalid upload ID marker: %w", err)
+	}
+
+	res := &s3.ListMultipartUploadsResult{
+		Uploads:        make([]s3.MultipartUploadInfo, 0, maxUploads),
+		CommonPrefixes: make([]string, 0, maxUploads),
+	}
+
+	if err := s.transaction(func(tx *txn) error {
+		bid, err := bucketID(tx, bucket)
+		if err != nil {
+			return err
+		}
+
+		// build uploads query
+		query, args := buildUploadsQuery(bid, prefix, delimiter, keyMarker, uidMarker)
+
+		// build common prefixes query if needed
+		if delimiter != "" {
+			query2, args2 := buildCommonPrefixesQuery(bid, prefix, delimiter, keyMarker, uidMarker)
+			query = fmt.Sprintf(`
+				WITH uploads AS (%s), prefixes AS (%s)
+				SELECT name, upload_id, created_at, is_prefix FROM uploads
+				UNION ALL
+				SELECT name, upload_id, created_at, is_prefix FROM prefixes`, query, query2)
+			args = append(args, args2...)
+		}
+
+		// order and limit
+		query += " ORDER BY name, upload_id"
+		query += " LIMIT ?"
+		args = append(args, maxUploads+1)
+
+		// collect results
+		rows, err := tx.Query(query, args...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		var prev *multipartUploadInfo
+		for rows.Next() {
+			if len(res.Uploads)+len(res.CommonPrefixes) == int(maxUploads) {
+				if prev != nil {
+					res.IsTruncated = true
+					res.NextKeyMarker = prev.Key
+					res.NextUploadIDMarker = prev.UploadID
+				}
+				break
+			}
+
+			upload, err := scanMultipartUpload(rows)
+			if err != nil {
+				return err
+			}
+			prev = &upload
+
+			if upload.IsPrefix {
+				res.CommonPrefixes = append(res.CommonPrefixes, upload.CommonPrefix(prefix, delimiter))
+			} else {
+				res.Uploads = append(res.Uploads, upload.MultipartUploadInfo)
+			}
+		}
+		return rows.Err()
+	}); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+func buildUploadsQuery(bucketID int64, prefix, delimiter, keyMarker string, uploadIDMarker [16]byte) (string, []any) {
+	var (
+		hasPrefix    = prefix != ""
+		hasDelim     = delimiter != ""
+		prefixLen    = utf8.RuneCountInString(prefix)
+		searchOffset = prefixLen + 1
+	)
+
+	// check bucket
+	where := []string{"bucket_id = ?"}
+	args := []any{bucketID}
+
+	// check prefix
+	switch {
+	case hasDelim && hasPrefix:
+		where = append(where, "SUBSTR(name, 1, ?) = ? AND INSTR(SUBSTR(name, ?), ?) = 0")
+		args = append(args, prefixLen, prefix, searchOffset, delimiter)
+	case hasDelim && !hasPrefix:
+		where = append(where, "INSTR(name, ?) = 0")
+		args = append(args, delimiter)
+	case !hasDelim && hasPrefix:
+		where = append(where, "SUBSTR(name, 1, ?) = ?")
+		args = append(args, prefixLen, prefix)
+	}
+
+	// check markers
+	if keyMarker != "" && uploadIDMarker != [16]byte{} {
+		where = append(where, "(name > ? OR (name = ? AND upload_id > ?))")
+		args = append(args, keyMarker, keyMarker, sqlUploadID(uploadIDMarker))
+	} else if keyMarker != "" {
+		where = append(where, "name > ?")
+		args = append(args, keyMarker)
+	}
+
+	return fmt.Sprintf(`SELECT name, upload_id, created_at, FALSE as is_prefix FROM multipart_uploads WHERE %s`, strings.Join(where, " AND ")), args
+}
+
+func buildCommonPrefixesQuery(bucketID int64, prefix, delimiter, keyMarker string, uploadIDMarker [16]byte) (_ string, args []any) {
+	var (
+		prefixLen    = utf8.RuneCountInString(prefix)
+		searchOffset = prefixLen + 1
+	)
+
+	// search delimiter after prefix
+	args = append(args, searchOffset, delimiter, prefixLen)
+
+	// check bucket
+	where := []string{"bucket_id = ?"}
+	args = append(args, bucketID)
+
+	// check prefix
+	if prefix != "" {
+		where = append(where, "SUBSTR(name, 1, ?) = ? AND INSTR(SUBSTR(name, ?), ?) > 0")
+		args = append(args, prefixLen, prefix, searchOffset, delimiter)
+	} else {
+		// filter out names with delimiter
+		where = append(where, "INSTR(name, ?) > 0")
+		args = append(args, delimiter)
+	}
+
+	// check markers
+	if keyMarker != "" && uploadIDMarker != [16]byte{} {
+		where = append(where, "(name > ? OR (name = ? AND upload_id > ?))")
+		args = append(args, keyMarker, keyMarker, sqlUploadID(uploadIDMarker))
+	} else if keyMarker != "" {
+		where = append(where, "name > ?")
+		args = append(args, keyMarker)
+	}
+
+	return fmt.Sprintf(`
+		SELECT name, upload_id, created_at, TRUE as is_prefix FROM (
+			SELECT
+				name,
+				upload_id,
+				created_at,
+				ROW_NUMBER() OVER (
+					PARTITION BY SUBSTR(name, 1, INSTR(SUBSTR(name, ?), ?) + ?)
+					ORDER BY name, upload_id
+				) as row
+			FROM multipart_uploads
+			WHERE %s
+		) WHERE row = 1`, strings.Join(where, " AND ")), args
+}
+
+type multipartUploadInfo struct {
+	s3.MultipartUploadInfo
+	IsPrefix bool
+}
+
+func (m multipartUploadInfo) CommonPrefix(prefix, delimiter string) string {
+	after, ok := strings.CutPrefix(m.Key, prefix)
+	if !ok {
+		return ""
+	}
+
+	idx := strings.IndexRune(after, rune(delimiter[0]))
+	if idx == -1 {
+		return ""
+	}
+
+	return prefix + after[:idx+utf8.RuneCountInString(delimiter)]
+}
+
+func scanMultipartUpload(s scanner) (multipartUploadInfo, error) {
+	var uid sqlUploadID
+	var name string
+	var initiated time.Time
+	var isPrefix bool
+	if err := s.Scan(&name, &uid, (*sqlTime)(&initiated), &isPrefix); err != nil {
+		return multipartUploadInfo{}, err
+	}
+	return multipartUploadInfo{
+		MultipartUploadInfo: s3.MultipartUploadInfo{
+			Key:       name,
+			UploadID:  hex.EncodeToString(uid[:]),
+			Initiated: initiated,
+		},
+		IsPrefix: isPrefix,
+	}, nil
 }

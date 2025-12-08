@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/SiaFoundation/s3d/s3/auth"
 
@@ -224,9 +225,11 @@ func (s *s3) listMultipartUploads(w http.ResponseWriter, r *http.Request, access
 	}
 
 	query := r.URL.Query()
-	maxUploads, err := parseClampedInt(query.Get("max-uploads"), DefaultMaxMultipartUploads, 0, MaxMultipartUploads)
+	maxUploads, err := parseClampedInt(query.Get("max-uploads"), DefaultMaxMultipartUploads, 1, MaxMultipartUploads)
 	if err != nil {
 		return err
+	} else if utf8.RuneCountInString(query.Get("delimiter")) > 1 {
+		return s3errs.ErrInvalidArgument
 	}
 
 	opts := ListMultipartUploadsOptions{

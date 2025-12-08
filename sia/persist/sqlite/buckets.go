@@ -106,7 +106,9 @@ func multipartID(t *txn, uploadID string, bucketID int64, object string) (int64,
 }
 
 func parseUploadID(s string) (uid [16]byte, _ error) {
-	if len(s) != 32 {
+	if s == "" {
+		return uid, nil
+	} else if len(s) != 32 {
 		return uid, fmt.Errorf("invalid length: got %d, want 32", len(s))
 	} else if _, err := hex.Decode(uid[:], []byte(s)); err != nil {
 		return uid, fmt.Errorf("failed to parse upload ID %q: %w", s, err)
