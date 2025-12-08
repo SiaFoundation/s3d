@@ -2,7 +2,6 @@ package sqlite
 
 import (
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"time"
@@ -33,7 +32,7 @@ func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) e
 				return err
 			}
 
-			if objectID.ETag != nil && *objectID.ETag != hex.EncodeToString(contentMD5[:]) {
+			if objectID.ETag != nil && *objectID.ETag != s3.FormatETag(contentMD5[:]) {
 				return s3errs.ErrPreconditionFailed
 			}
 			if objectID.Size != nil && *objectID.Size != size {

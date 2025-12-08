@@ -22,7 +22,7 @@ func (e Error) Error() string {
 // ErrorCode extracts the S3 error code from an error if possible and otherwise
 // returns the code for ErrInternalError.
 func ErrorCode(err error) string {
-	var s3err *Error
+	var s3err Error
 	if errors.As(err, &s3err) {
 		return s3err.Code
 	}
