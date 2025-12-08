@@ -259,7 +259,6 @@ func (b *MemoryBackend) ListObjects(ctx context.Context, accessKeyID *string, bu
 	}
 
 	var lastMatchedPart string
-
 	for _, obj := range objects {
 		match := s3.Match(prefix, obj.name)
 		switch {

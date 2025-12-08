@@ -11,7 +11,6 @@ CREATE TABLE buckets (
 );
 
 CREATE TABLE objects (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
     bucket_id INTEGER REFERENCES buckets(id) NOT NULL,
     name TEXT NOT NULL,
     object_id BLOB NOT NULL,
@@ -19,8 +18,8 @@ CREATE TABLE objects (
     metadata TEXT NOT NULL,
     size INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
-    UNIQUE(bucket_id, name)
-);
+    PRIMARY KEY(bucket_id, name)
+) WITHOUT ROWID;
 CREATE INDEX objects_name ON objects(name);
 
 CREATE TABLE multipart_uploads (

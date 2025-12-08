@@ -111,6 +111,7 @@ func pathClean(p string) string {
 // contents of the bucket and sort the results into the Contents and
 // CommonPrefixes fields of the returned ObjectsListResult.
 func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (result *s3.ObjectsListResult, err error) {
+	result = s3.NewObjectsListResult(page.MaxKeys)
 	err = s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
@@ -127,20 +128,79 @@ func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.
 			prefix.Delimiter = pathClean(prefix.Delimiter)
 		}
 
-		// fetch up to maxKeys actual objects
-		objects, err := s.fetchObjects(tx, bid, prefix, page)
-		if err != nil {
-			return err
+		query := `SELECT o.name, o.content_md5, o.size, o.updated_at
+FROM objects o
+WHERE o.bucket_id = ?`
+		args := []any{bid}
+
+		if page.Marker != nil && *page.Marker != "" {
+			query += ` AND o.name > ?`
+			args = append(args, *page.Marker)
 		}
 
-		// fetch up to maxKeys common prefixes
-		commonPrefixes, err := s.fetchCommonPrefixes(tx, bid, prefix, page)
-		if err != nil {
-			return err
+		if prefix.HasPrefix {
+			query += ` AND o.name >= ? AND o.name < ?`
+			args = append(args, prefix.Prefix, prefix.Prefix+"\xFF")
 		}
 
-		// merge results in sorted order
-		result = s.mergeResults(objects, commonPrefixes, page.MaxKeys)
+		query += ` ORDER BY o.name`
+		// query += `  LIMIT ?`
+		// args = append(args, page.MaxKeys+1)
+
+		rows, err := tx.Query(query, args...)
+		if err != nil {
+			return fmt.Errorf("failed to query objects: %w", err)
+		}
+		defer rows.Close()
+
+		var lastMatchedPart string
+		for rows.Next() {
+			var obj objects.Object
+			err = rows.Scan(
+				&obj.Name,
+				(*sqlMD5)(&obj.ContentMD5),
+				&obj.Size,
+				(*sqlTime)(&obj.UpdatedAt),
+			)
+			if err != nil {
+				return fmt.Errorf("failed to scan object: %w", err)
+			}
+
+			match := s3.Match(prefix, obj.Name)
+			switch {
+			case match == nil:
+				continue
+			case match.CommonPrefix:
+				if page.Marker != nil && strings.Compare(*page.Marker, match.MatchedPart) >= 0 {
+					continue
+				}
+				if match.MatchedPart == lastMatchedPart {
+					continue // should not count towards keys
+				}
+				result.AddPrefix(match.MatchedPart)
+				lastMatchedPart = match.MatchedPart
+			default:
+				if page.Marker != nil && strings.Compare(*page.Marker, obj.Name) >= 0 {
+					continue
+				}
+				result.Add(&s3.Content{
+					Key:          obj.Name,
+					LastModified: s3.NewContentTime(obj.UpdatedAt),
+					ETag:         s3.FormatETag(obj.ContentMD5[:]),
+					Size:         int64(obj.Size),
+				})
+			}
+
+			if result.IsTruncated {
+				break
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("failed to get rows: %w", err)
+		}
+		if !result.IsTruncated {
+			result.NextMarker = ""
+		}
 
 		return nil
 	})
@@ -149,161 +209,4 @@ func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.
 	}
 
 	return result, nil
-}
-
-func (s *Store) fetchObjects(tx *txn, bid int64, prefix s3.Prefix, page s3.ListObjectsPage) ([]*s3.Content, error) {
-	query := `SELECT o.name, o.content_md5, o.size, o.updated_at 
-FROM objects o
-WHERE o.bucket_id = ?`
-	args := []any{bid}
-
-	if page.Marker != nil && *page.Marker != "" {
-		query += ` AND o.name > ?`
-		args = append(args, *page.Marker)
-	}
-
-	if prefix.HasPrefix {
-		query += ` AND o.name >= ? AND o.name < ?`
-		args = append(args, prefix.Prefix, prefix.Prefix+"\xFF")
-	}
-
-	if prefix.HasDelimiter {
-		query += ` AND instr(substr(o.name, ?), ?) = 0`
-		args = append(args, len(prefix.Prefix)+1, prefix.Delimiter)
-	}
-
-	query += ` ORDER BY o.name LIMIT ?`
-	args = append(args, page.MaxKeys+1)
-
-	rows, err := tx.Query(query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query objects: %w", err)
-	}
-	defer rows.Close()
-
-	var objs []*s3.Content
-	for rows.Next() {
-		var obj objects.Object
-		err = rows.Scan(
-			&obj.Name,
-			(*sqlMD5)(&obj.ContentMD5),
-			&obj.Size,
-			(*sqlTime)(&obj.UpdatedAt),
-		)
-		if err != nil {
-			return nil, err
-		}
-
-		objs = append(objs, &s3.Content{
-			Key:          obj.Name,
-			LastModified: s3.NewContentTime(obj.UpdatedAt),
-			ETag:         s3.FormatETag(obj.ContentMD5[:]),
-			Size:         int64(obj.Size),
-		})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("failed to get rows: %w", err)
-	}
-
-	return objs, nil
-}
-
-func (s *Store) fetchCommonPrefixes(tx *txn, bid int64, prefix s3.Prefix, page s3.ListObjectsPage) ([]string, error) {
-	if !prefix.HasDelimiter {
-		return nil, nil
-	}
-
-	// find distinct common prefixes by selecting the minimum name for each prefix group
-	query := `
-SELECT DISTINCT substr(o.name, 1, instr(substr(o.name, ?), ?) + ?) as common_prefix FROM objects o
-WHERE bucket_id = ?`
-
-	prefixLen := len(prefix.Prefix) + 1
-	args := []any{prefixLen, strings.ToLower(prefix.Delimiter), len(prefix.Prefix), bid}
-
-	if page.Marker != nil && *page.Marker != "" {
-		query += ` AND o.name > ?`
-		args = append(args, *page.Marker)
-	}
-
-	if prefix.HasPrefix {
-		query += ` AND o.name >= ? AND o.name < ?`
-		args = append(args, prefix.Prefix, prefix.Prefix+"\xFF")
-	}
-
-	// Only objects with delimiter after prefix
-	query += ` AND instr(substr(o.name, ?), ?) > 0`
-	args = append(args, prefixLen, prefix.Delimiter)
-
-	query += ` ORDER BY common_prefix LIMIT ?`
-	args = append(args, page.MaxKeys+1)
-
-	rows, err := tx.Query(query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query common prefixes: %w", err)
-	}
-	defer rows.Close()
-
-	var prefixes []string
-	for rows.Next() {
-		var commonPrefix string
-		if err := rows.Scan(&commonPrefix); err != nil {
-			return nil, fmt.Errorf("failed to scan common prefix: %w", err)
-		}
-		prefixes = append(prefixes, commonPrefix)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("failed to get rows: %w", err)
-	}
-
-	return prefixes, nil
-}
-
-func (s *Store) mergeResults(objects []*s3.Content, prefixes []string, maxKeys int64) *s3.ObjectsListResult {
-	result := s3.NewObjectsListResult(maxKeys)
-
-	i, j := 0, 0
-	for int64(len(result.CommonPrefixes)+len(result.Contents)) < maxKeys && (i < len(objects) || j < len(prefixes)) {
-		if i >= len(objects) {
-			// only prefixes left
-			result.AddPrefix(prefixes[j])
-			j++
-		} else if j >= len(prefixes) {
-			// only objects left
-			result.Add(objects[i])
-			i++
-		} else {
-			// compare and add the smaller one
-			if objects[i].Key < prefixes[j] {
-				result.Add(objects[i])
-				i++
-			} else {
-				result.AddPrefix(prefixes[j])
-				j++
-			}
-		}
-	}
-
-	// check if there are more results
-	if i < len(objects) || j < len(prefixes) {
-		result.IsTruncated = true
-		// set NextMarker to the last added key
-		if (len(result.CommonPrefixes) + len(result.Contents)) > 0 {
-			// get the last item added (either from Contents or CommonPrefixes)
-			var lastContent string
-			if len(result.Contents) > 0 {
-				lastContent = result.Contents[len(result.Contents)-1].Key
-			}
-			var lastPrefix string
-			if len(result.CommonPrefixes) > 0 {
-				lastPrefix = result.CommonPrefixes[len(result.CommonPrefixes)-1].Prefix
-			}
-			if lastPrefix != "" && (lastContent == "" || lastPrefix > lastContent) {
-				result.NextMarker = lastPrefix
-			} else if lastContent != "" {
-				result.NextMarker = lastContent
-			}
-		}
-	}
-	return result
 }
