@@ -316,7 +316,7 @@ func TestDeleteObjects(t *testing.T) {
 	}
 
 	// delete from nonexistent bucket
-	_, err := s3Tester.DeleteObjects(t.Context(), "nonexistent", keys, nil)
+	_, err := s3Tester.DeleteObjects(t.Context(), "nonexistent", testutil.ObjectIdentifiers(keys...), nil)
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchBucket, err)
 
 	assertDeleted := func(t *testing.T, key string, deleted types.DeletedObject) {
@@ -326,9 +326,56 @@ func TestDeleteObjects(t *testing.T) {
 		}
 	}
 
+	// attempt to delete an object with wrong conditions
+	resp, err := s3Tester.DeleteObjects(t.Context(), bucket, []types.ObjectIdentifier{
+		{
+			Key:  aws.String("1"),
+			ETag: aws.String("wrong"),
+		},
+		{
+			Key:              aws.String("1"),
+			LastModifiedTime: aws.Time(time.Now().Add(-time.Hour)),
+		},
+		{
+			Key:  aws.String("1"),
+			Size: aws.Int64(147),
+		},
+	}, nil) // delete object 1
+	if err != nil {
+		t.Fatal(err)
+	} else if len(resp.Deleted) != 0 {
+		t.Fatalf("expected 0 deleted object, got %d", len(resp.Deleted))
+	} else if len(resp.Errors) != 3 {
+		t.Fatalf("expected 3 errors, got %d", len(resp.Errors))
+	}
+	for _, delErr := range resp.Errors {
+		if delErr.Code == nil || *delErr.Code != s3errs.ErrPreconditionFailed.Code {
+			t.Fatalf("expected PreconditionFailed error, got %v", *delErr.Code)
+		}
+	}
+
+	// delete object 1 with correct conditions
+	o1, err := s3Tester.HeadObject(t.Context(), bucket, "1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err = s3Tester.DeleteObjects(t.Context(), bucket, []types.ObjectIdentifier{
+		{
+			Key:              aws.String("1"),
+			ETag:             aws.String(`"` + etag + `"`),
+			LastModifiedTime: aws.Time(o1.LastModified),
+			Size:             aws.Int64(o1.Size),
+		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(resp.Deleted) != 1 {
+		t.Fatal("expected 1 deleted object, got", len(resp.Deleted))
+	}
+
 	// delete a few objects, including one that doesn't exist
 	delKeys := []string{"2", "4", "nonexistent"}
-	resp, err := s3Tester.DeleteObjects(t.Context(), bucket, delKeys, nil)
+	resp, err = s3Tester.DeleteObjects(t.Context(), bucket, testutil.ObjectIdentifiers(delKeys...), nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if len(resp.Deleted) != 3 {
@@ -351,8 +398,7 @@ func TestDeleteObjects(t *testing.T) {
 	//	}
 
 	// delete the remaining ones using 'quiet' mode
-	remainingKeys := []string{"1", "3", "5"}
-	resp, err = s3Tester.DeleteObjects(t.Context(), bucket, remainingKeys, aws.Bool(true))
+	resp, err = s3Tester.DeleteObjects(t.Context(), bucket, testutil.ObjectIdentifiers("3", "5"), aws.Bool(true))
 	if err != nil {
 		t.Fatal(err)
 	} else if len(resp.Deleted) != 0 {

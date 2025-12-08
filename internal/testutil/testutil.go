@@ -123,19 +123,24 @@ func (t *S3Tester) DeleteObject(ctx context.Context, bucket, object string) erro
 	return err
 }
 
-// DeleteObjects deletes multiple S3 objects at once. If quiet is set to true,
-// the response will only contain errors.
-func (t *S3Tester) DeleteObjects(ctx context.Context, bucket string, objects []string, quiet *bool) (*service.DeleteObjectsOutput, error) {
+// ObjectIdentifier creates an ObjectIdentifier for the given key.
+func ObjectIdentifiers(keys ...string) []types.ObjectIdentifier {
 	var objs []types.ObjectIdentifier
-	for _, o := range objects {
+	for _, o := range keys {
 		objs = append(objs, types.ObjectIdentifier{
 			Key: aws.String(o),
 		})
 	}
+	return objs
+}
+
+// DeleteObjects deletes multiple S3 objects at once. If quiet is set to true,
+// the response will only contain errors.
+func (t *S3Tester) DeleteObjects(ctx context.Context, bucket string, objects []types.ObjectIdentifier, quiet *bool) (*service.DeleteObjectsOutput, error) {
 	resp, err := t.client.DeleteObjects(ctx, &service.DeleteObjectsInput{
 		Bucket: aws.String(bucket),
 		Delete: &types.Delete{
-			Objects: objs,
+			Objects: objects,
 			Quiet:   quiet,
 		},
 	})
