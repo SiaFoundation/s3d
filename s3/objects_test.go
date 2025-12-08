@@ -387,7 +387,7 @@ func TestCopyObject(t *testing.T) {
 	}
 
 	// copy an object that doesn't exist
-	_, err = s3Tester.CopyObject(t.Context(), srcBucket, "nonexistent", dstBucket, dstBucket, types.MetadataDirectiveCopy, nil)
+	_, err = s3Tester.CopyObject(t.Context(), srcBucket, "nonexistent", dstBucket, "someDstObj", types.MetadataDirectiveCopy, nil)
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchKey, err)
 
 	// copy an object to the same bucket and key, adding additional metadata

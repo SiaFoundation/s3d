@@ -57,6 +57,12 @@ func TestBuckets(t *testing.T) {
 			t.Fatal(err)
 		}
 
+		// add a multipart upload to the bucket
+		res, err := s3Tester.CreateMultipartUpload(t.Context(), bucket, "multipart-key", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
 		// creating it again should fail
 		err = s3Tester.CreateBucket(t.Context(), bucket)
 		testutil.AssertS3Error(t, s3errs.ErrBucketAlreadyOwnedByYou, err)
@@ -71,6 +77,16 @@ func TestBuckets(t *testing.T) {
 
 		// delete the object
 		err = s3Tester.DeleteObject(t.Context(), bucket, "key")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// deleting the bucket should still fail since it's not empty
+		err = s3Tester.DeleteBucket(t.Context(), bucket)
+		testutil.AssertS3Error(t, s3errs.ErrBucketNotEmpty, err)
+
+		// abort the multipart upload
+		err = s3Tester.AbortMultipartUpload(t.Context(), bucket, "multipart-key", *res.UploadId)
 		if err != nil {
 			t.Fatal(err)
 		}
