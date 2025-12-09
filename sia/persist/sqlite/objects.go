@@ -201,6 +201,7 @@ WHERE o.bucket_id = ?`
 					return "", fmt.Errorf("failed to scan object: %w", err)
 				}
 
+				var done bool
 				match := s3.Match(prefix, obj.Name)
 				switch {
 				case match == nil:
@@ -214,7 +215,7 @@ WHERE o.bucket_id = ?`
 					}
 					result.AddPrefix(match.MatchedPart)
 					lastMatchedPart = match.MatchedPart
-					break
+					done = true
 				default:
 					if marker != nil && strings.Compare(*marker, obj.Name) >= 0 {
 						continue
@@ -227,7 +228,7 @@ WHERE o.bucket_id = ?`
 					})
 				}
 
-				if result.IsTruncated {
+				if done || result.IsTruncated {
 					break
 				}
 			}
