@@ -176,7 +176,7 @@ WHERE o.bucket_id = ?`
 
 			query += ` ORDER BY o.name`
 			query += `  LIMIT ?`
-			args = append(args, page.MaxKeys)
+			args = append(args, 100)
 
 			rows, err := tx.Query(query, args...)
 			if err != nil {
