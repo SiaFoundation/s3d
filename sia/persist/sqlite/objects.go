@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path"
 	"strings"
 
 	"time"
@@ -115,21 +114,26 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, obj *objects.Object)
 	})
 }
 
-// pathClean has the same behavior as path.Clean except it preserves
-// trailing slashes for any input besides "/"
+// pathClean replaces multiple forward slashes with a single slash.
+// "a/b/c" -> "a/b/c"
+// "a//b/c" -> "a/b/c"
 func pathClean(p string) string {
-	if p == "" {
-		return ""
-	} else if p == "/" {
-		return p
-	}
+	var inSlash bool
+	var b strings.Builder
+	for _, c := range p {
+		if c == '/' {
+			if inSlash {
+				continue
+			}
 
-	hasSlash := len(p) > 1 && p[len(p)-1] == '/'
-	cleaned := path.Clean(p)
-	if hasSlash && cleaned != "/" {
-		cleaned += "/"
+			b.WriteRune(c)
+			inSlash = true
+		} else {
+			b.WriteRune(c)
+			inSlash = false
+		}
 	}
-	return cleaned
+	return b.String()
 }
 
 // ListObjects lists objects in the specified bucket for the user identified
