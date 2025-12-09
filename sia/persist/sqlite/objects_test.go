@@ -163,7 +163,7 @@ func TestListObjectsMatch(t *testing.T) {
 	}
 
 	// upload a few objects
-	keys := []string{"/foo/baz", "/foo/bar", "/😊/д"}
+	keys := []string{"foo/baz", "foo/bar", "😊/д"}
 	obj := sdk.Object{}
 	contentMD5 := [16]byte(frand.Bytes(16))
 
@@ -208,30 +208,29 @@ func TestListObjectsMatch(t *testing.T) {
 		objects        []string
 		commonPrefixes []string
 	}{
-		{prefix: ptr("/foo"), objects: []string{"/foo/bar", "/foo/baz"}},
-		{prefix: ptr("/foo/"), objects: []string{"/foo/bar", "/foo/baz"}},
-		{prefix: ptr("/foo/ba"), objects: []string{"/foo/bar", "/foo/baz"}},
-		{prefix: ptr("/foo/bar"), objects: []string{"/foo/bar"}},
-		{prefix: ptr("/foo//ba"), objects: []string{"/foo/bar", "/foo/baz"}},
-		{prefix: ptr("/foo//bar"), objects: []string{"/foo/bar"}},
-		{prefix: ptr("/😊"), objects: []string{"/😊/д"}},
+		{prefix: ptr("foo"), objects: []string{"foo/bar", "foo/baz"}},
+		{prefix: ptr("foo/"), objects: []string{"foo/bar", "foo/baz"}},
+		{prefix: ptr("foo/ba"), objects: []string{"foo/bar", "foo/baz"}},
+		{prefix: ptr("foo/bar"), objects: []string{"foo/bar"}},
+		{prefix: ptr("foo//ba"), objects: []string{"foo/bar", "foo/baz"}},
+		{prefix: ptr("foo//bar"), objects: []string{"foo/bar"}},
+		{prefix: ptr("😊"), objects: []string{"😊/д"}},
 
-		{prefix: ptr("/FOO")},
-		{prefix: ptr("/FOO/")},
-		{prefix: ptr("/foo/BA")},
-		{prefix: ptr("/foo/BAR")},
+		{prefix: ptr("FOO")},
+		{prefix: ptr("FOO/")},
+		{prefix: ptr("foo/BA")},
+		{prefix: ptr("foo/BAR")},
 
-		{prefix: ptr("/foo"), delim: ptr("/"), commonPrefixes: []string{"foo/"}},
-		{prefix: ptr("/aaa"), delim: ptr("/")},
+		{prefix: ptr("foo"), delim: ptr("/"), commonPrefixes: []string{"foo/"}},
+		{prefix: ptr("aaa"), delim: ptr("/")},
 
-		{prefix: ptr("/FOO"), delim: ptr("/")},
-		{prefix: ptr("/FOO"), delim: ptr("//")},
-		{prefix: ptr("/aaa"), delim: ptr("/")},
+		{prefix: ptr("FOO"), delim: ptr("/")},
+		{prefix: ptr("FOO"), delim: ptr("//")},
+		{prefix: ptr("aaa"), delim: ptr("/")},
 
 		{delim: ptr("/"), commonPrefixes: []string{"foo/", "😊/"}},
 		{delim: ptr("//"), commonPrefixes: []string{"foo/", "😊/"}},
-		{prefix: ptr("/"), delim: ptr("/"), commonPrefixes: []string{"foo/", "😊/"}},
-		{prefix: ptr("/foo"), delim: ptr("/BAR"), commonPrefixes: []string{"foo/bar", "foo/baz"}},
+		{prefix: ptr(""), delim: ptr("/"), commonPrefixes: []string{"foo/", "😊/"}},
 	} {
 		t.Run(fmt.Sprint(idx), func(t *testing.T) {
 			resp, err := store.ListObjects(nil, bucket, s3.Prefix{
@@ -314,7 +313,7 @@ func BenchmarkListObjects(b *testing.B) {
 						}
 
 						name := strconv.Itoa(idx)
-						layer4 := "/" + filepath.Join(layer3, name)
+						layer4 := filepath.Join(layer3, name)
 
 						_, err = tx.Exec(`
 			INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at)
@@ -348,8 +347,6 @@ func BenchmarkListObjects(b *testing.B) {
 	b.Run("root_delimiter", func(b *testing.B) {
 		for b.Loop() {
 			_, err := store.ListObjects(nil, bucket, s3.Prefix{
-				Prefix:       "/",
-				HasPrefix:    true,
 				Delimiter:    "/",
 				HasDelimiter: true,
 			}, s3.ListObjectsPage{MaxKeys: maxKeys})
@@ -362,7 +359,7 @@ func BenchmarkListObjects(b *testing.B) {
 	b.Run("random_without_delimiter", func(b *testing.B) {
 		for b.Loop() {
 			_, err := store.ListObjects(nil, bucket, s3.Prefix{
-				Prefix:    fmt.Sprintf("/%d/%d/", frand.Intn(dir1), frand.Intn(dir2)),
+				Prefix:    fmt.Sprintf("%d/%d/", frand.Intn(dir1), frand.Intn(dir2)),
 				HasPrefix: true,
 			}, s3.ListObjectsPage{MaxKeys: maxKeys})
 			if err != nil {
@@ -374,7 +371,7 @@ func BenchmarkListObjects(b *testing.B) {
 	b.Run("random_with_root_delimiter", func(b *testing.B) {
 		for b.Loop() {
 			_, err := store.ListObjects(nil, bucket, s3.Prefix{
-				Prefix:       fmt.Sprintf("/%d/%d/", frand.Intn(dir1), frand.Intn(dir2)),
+				Prefix:       fmt.Sprintf("%d/%d/", frand.Intn(dir1), frand.Intn(dir2)),
 				HasPrefix:    true,
 				Delimiter:    "/",
 				HasDelimiter: true,
@@ -388,7 +385,7 @@ func BenchmarkListObjects(b *testing.B) {
 	b.Run("folder_bottom_delimiter", func(b *testing.B) {
 		for b.Loop() {
 			_, err := store.ListObjects(nil, bucket, s3.Prefix{
-				Prefix:       "/0/0/0",
+				Prefix:       "0/0/0",
 				HasPrefix:    true,
 				Delimiter:    "/",
 				HasDelimiter: true,
@@ -402,7 +399,7 @@ func BenchmarkListObjects(b *testing.B) {
 	b.Run("folder_delimiter", func(b *testing.B) {
 		for b.Loop() {
 			_, err := store.ListObjects(nil, bucket, s3.Prefix{
-				Prefix:       "/0/",
+				Prefix:       "0/",
 				HasPrefix:    true,
 				Delimiter:    "/",
 				HasDelimiter: true,
