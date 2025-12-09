@@ -84,7 +84,7 @@ jobs:
           S3_USE_SIGV4: "True" # We only support v4 signatures
         run: |
           tox run --skip-pkg-install -c ./s3-tests -- s3tests/functional/test_s3.py \
-            -m "(copy or list_objects_v2 or multipart) and not s3d_not_implemented and not s3d_not_supported and not bucket_logging"
+            -m "(copy or delete or list_objects_v2 or multipart) and not s3d_not_implemented and not s3d_not_supported and not bucket_logging"
 
       # NOTE: The following tests are currently disabled
       #
