@@ -377,12 +377,13 @@ func TestListMultipartUploads(t *testing.T) {
 		)
 
 		var (
-			alphabet = []rune("abc")
+			alphabet  = []rune("ÎmNotÂfraid!%_")
+			delimiter = "%"
 		)
 
 		var keys []string
 		for range numKeys {
-			keys = append(keys, randomPath(minLength, maxLength, maxDepth, alphabet))
+			keys = append(keys, randomPath(minLength, maxLength, maxDepth, alphabet, delimiter))
 		}
 		bucket, _ := setupBucket(keys)
 
@@ -402,7 +403,7 @@ func TestListMultipartUploads(t *testing.T) {
 			stack = stack[:n]
 
 			// fetch page
-			res, err := store.ListMultipartUploads(bucket, pg.prefix, slashDelim, pg.keyMarker, pg.uploadIDMarker, maxKeys)
+			res, err := store.ListMultipartUploads(bucket, pg.prefix, delimiter, pg.keyMarker, pg.uploadIDMarker, maxKeys)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -458,7 +459,7 @@ func BenchmarkListMultipartUploads(b *testing.B) {
 
 	// populate database with multipart uploads
 	for range numKeys {
-		key := randomPath(minLength, maxLength, maxDepth, alphabet)
+		key := randomPath(minLength, maxLength, maxDepth, alphabet, slashDelim)
 		_, err := store.CreateMultipartUpload(bucket, key, nil)
 		if err != nil {
 			b.Fatal(err)
@@ -478,7 +479,7 @@ func BenchmarkListMultipartUploads(b *testing.B) {
 	b.Run("no-delim", func(b *testing.B) {
 		var none int
 		for b.Loop() {
-			prefix := randomPath(1, minLength, maxDepth, alphabet)
+			prefix := randomPath(1, minLength, maxDepth, alphabet, "")
 			res, err := store.ListMultipartUploads(bucket, prefix, "", "", "", maxKeys)
 			if err != nil {
 				b.Fatal(err)
@@ -497,7 +498,7 @@ func BenchmarkListMultipartUploads(b *testing.B) {
 	b.Run("slash-delim", func(b *testing.B) {
 		var none int
 		for b.Loop() {
-			prefix := randomPath(1, minLength, maxDepth, alphabet)
+			prefix := randomPath(1, minLength, maxDepth, alphabet, slashDelim)
 			res, err := store.ListMultipartUploads(bucket, prefix, slashDelim, "", "", maxKeys)
 			if err != nil {
 				b.Fatal(err)
@@ -516,8 +517,8 @@ func BenchmarkListMultipartUploads(b *testing.B) {
 	b.Run("random-delim", func(b *testing.B) {
 		var none int
 		for b.Loop() {
-			prefix := randomPath(1, minLength, maxDepth, alphabet)
 			delimiter := string(alphabet[frand.Intn(len(alphabet))])
+			prefix := randomPath(1, minLength, maxDepth, alphabet, delimiter)
 			res, err := store.ListMultipartUploads(bucket, prefix, delimiter, "", "", maxKeys)
 			if err != nil {
 				b.Fatal(err)
@@ -538,7 +539,7 @@ func BenchmarkListMultipartUploads(b *testing.B) {
 		var prefix, prevKeyMarker, prevUploadIDMarker string
 		for b.Loop() {
 			if prefix == "" {
-				prefix = randomPath(1, minLength, maxDepth, alphabet)
+				prefix = randomPath(1, minLength, maxDepth, alphabet, slashDelim)
 			}
 
 			res, err := store.ListMultipartUploads(bucket, prefix, slashDelim, prevKeyMarker, prevUploadIDMarker, maxKeys)
@@ -561,18 +562,23 @@ func BenchmarkListMultipartUploads(b *testing.B) {
 	})
 }
 
-func randomPath(minLength, maxLength, maxDepth int, alphabet []rune) string {
+func randomPath(minLength, maxLength, maxDepth int, alphabet []rune, delimiter string) string {
 	length := frand.Intn(maxLength-minLength+1) + minLength
+
 	runes := make([]rune, length)
 	for i := range runes {
 		runes[i] = alphabet[frand.Intn(len(alphabet))]
+	}
+
+	if delimiter == "" {
+		return string(runes)
 	}
 
 	key := string(runes)
 	depth := frand.Intn(maxDepth)
 	for i := 1; i < length && depth > 0; i++ {
 		if frand.Intn(2) == 0 {
-			key = key[:i] + "/" + key[i:]
+			key = key[:i] + delimiter + key[i:]
 			i++
 			depth--
 		}
