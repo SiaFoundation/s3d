@@ -337,40 +337,46 @@ func BenchmarkListObjects(b *testing.B) {
 	const maxKeys = 1000
 	b.Run("no_delimiter_no_prefix", func(b *testing.B) {
 		for b.Loop() {
-			_, err := store.ListObjects(nil, bucket, s3.Prefix{}, s3.ListObjectsPage{MaxKeys: maxKeys})
+			result, err := store.ListObjects(nil, bucket, s3.Prefix{}, s3.ListObjectsPage{MaxKeys: maxKeys})
 			if err != nil {
 				b.Fatal(err)
+			} else if (len(result.Contents) + len(result.CommonPrefixes)) == 0 {
+				b.Fatal("no results")
 			}
 		}
 	})
 
 	b.Run("root_delimiter", func(b *testing.B) {
 		for b.Loop() {
-			_, err := store.ListObjects(nil, bucket, s3.Prefix{
+			result, err := store.ListObjects(nil, bucket, s3.Prefix{
 				Delimiter:    "/",
 				HasDelimiter: true,
 			}, s3.ListObjectsPage{MaxKeys: maxKeys})
 			if err != nil {
 				b.Fatal(err)
+			} else if (len(result.Contents) + len(result.CommonPrefixes)) == 0 {
+				b.Fatal("no results")
 			}
 		}
 	})
 
 	b.Run("random_without_delimiter", func(b *testing.B) {
 		for b.Loop() {
-			_, err := store.ListObjects(nil, bucket, s3.Prefix{
+			result, err := store.ListObjects(nil, bucket, s3.Prefix{
 				Prefix:    fmt.Sprintf("%d/%d/", frand.Intn(dir1), frand.Intn(dir2)),
 				HasPrefix: true,
 			}, s3.ListObjectsPage{MaxKeys: maxKeys})
 			if err != nil {
 				b.Fatal(err)
+			} else if (len(result.Contents) + len(result.CommonPrefixes)) == 0 {
+				b.Fatal("no results")
 			}
 		}
 	})
 
 	b.Run("random_with_root_delimiter", func(b *testing.B) {
 		for b.Loop() {
-			_, err := store.ListObjects(nil, bucket, s3.Prefix{
+			result, err := store.ListObjects(nil, bucket, s3.Prefix{
 				Prefix:       fmt.Sprintf("%d/%d/", frand.Intn(dir1), frand.Intn(dir2)),
 				HasPrefix:    true,
 				Delimiter:    "/",
@@ -378,13 +384,15 @@ func BenchmarkListObjects(b *testing.B) {
 			}, s3.ListObjectsPage{MaxKeys: maxKeys})
 			if err != nil {
 				b.Fatal(err)
+			} else if (len(result.Contents) + len(result.CommonPrefixes)) == 0 {
+				b.Fatal("no results")
 			}
 		}
 	})
 
 	b.Run("folder_bottom_delimiter", func(b *testing.B) {
 		for b.Loop() {
-			_, err := store.ListObjects(nil, bucket, s3.Prefix{
+			result, err := store.ListObjects(nil, bucket, s3.Prefix{
 				Prefix:       "0/0/0",
 				HasPrefix:    true,
 				Delimiter:    "/",
@@ -392,13 +400,15 @@ func BenchmarkListObjects(b *testing.B) {
 			}, s3.ListObjectsPage{MaxKeys: maxKeys})
 			if err != nil {
 				b.Fatal(err)
+			} else if (len(result.Contents) + len(result.CommonPrefixes)) == 0 {
+				b.Fatal("no results")
 			}
 		}
 	})
 
 	b.Run("folder_delimiter", func(b *testing.B) {
 		for b.Loop() {
-			_, err := store.ListObjects(nil, bucket, s3.Prefix{
+			result, err := store.ListObjects(nil, bucket, s3.Prefix{
 				Prefix:       "0/",
 				HasPrefix:    true,
 				Delimiter:    "/",
@@ -406,6 +416,8 @@ func BenchmarkListObjects(b *testing.B) {
 			}, s3.ListObjectsPage{MaxKeys: maxKeys})
 			if err != nil {
 				b.Fatal(err)
+			} else if (len(result.Contents) + len(result.CommonPrefixes)) == 0 {
+				b.Fatal("no results")
 			}
 		}
 	})

@@ -240,11 +240,15 @@ WHERE o.bucket_id = ?`
 				return err
 			}
 			if lastMatchedPart != "" {
-				// if we get a common prefix, skip over remainder of common prefix
+				// if we get a common prefix, skip over the remainder of it
 				lastMatchedPart += "\xFF"
 				marker = &lastMatchedPart
 			} else if result.NextMarker != "" {
-				// otherwise continue getting the matching keys
+				// if we haven't advanced at all, stop
+				if marker != nil && *marker == result.NextMarker {
+					break
+				}
+				// otherwise continue getting the matching objects
 				marker = &result.NextMarker
 			} else {
 				break
