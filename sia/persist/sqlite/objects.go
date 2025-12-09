@@ -138,6 +138,10 @@ func pathClean(p string) string {
 // CommonPrefixes fields of the returned ObjectsListResult.
 func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (result *s3.ObjectsListResult, err error) {
 	result = s3.NewObjectsListResult(page.MaxKeys)
+	if page.MaxKeys == 0 {
+		return result, nil
+	}
+
 	err = s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
@@ -154,75 +158,97 @@ func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.
 			prefix.Delimiter = pathClean(prefix.Delimiter)
 		}
 
-		query := `SELECT o.name, o.content_md5, o.size, o.updated_at
+		list := func(marker *string) (string, error) {
+			query := `SELECT o.name, o.content_md5, o.size, o.updated_at
 FROM objects o
 WHERE o.bucket_id = ?`
-		args := []any{bid}
+			args := []any{bid}
 
-		if page.Marker != nil && *page.Marker != "" {
-			query += ` AND o.name > ?`
-			args = append(args, *page.Marker)
-		}
+			if marker != nil && *marker != "" {
+				query += ` AND o.name > ?`
+				args = append(args, *marker)
+			}
 
-		if prefix.HasPrefix {
-			query += ` AND o.name >= ? AND o.name < ?`
-			args = append(args, prefix.Prefix, prefix.Prefix+"\xFF")
-		}
+			if prefix.HasPrefix {
+				query += ` AND o.name >= ? AND o.name < ?`
+				args = append(args, prefix.Prefix, prefix.Prefix+"\xFF")
+			}
 
-		query += ` ORDER BY o.name`
-		// query += `  LIMIT ?`
-		// args = append(args, page.MaxKeys+1)
+			query += ` ORDER BY o.name`
+			query += `  LIMIT ?`
+			args = append(args, page.MaxKeys)
 
-		rows, err := tx.Query(query, args...)
-		if err != nil {
-			return fmt.Errorf("failed to query objects: %w", err)
-		}
-		defer rows.Close()
-
-		var lastMatchedPart string
-		for rows.Next() {
-			var obj objects.Object
-			err = rows.Scan(
-				&obj.Name,
-				(*sqlMD5)(&obj.ContentMD5),
-				&obj.Size,
-				(*sqlTime)(&obj.UpdatedAt),
-			)
+			rows, err := tx.Query(query, args...)
 			if err != nil {
-				return fmt.Errorf("failed to scan object: %w", err)
+				return "", fmt.Errorf("failed to query objects: %w", err)
 			}
+			defer rows.Close()
 
-			match := s3.Match(prefix, obj.Name)
-			switch {
-			case match == nil:
-				continue
-			case match.CommonPrefix:
-				if page.Marker != nil && strings.Compare(*page.Marker, match.MatchedPart) >= 0 {
+			var lastMatchedPart string
+			for rows.Next() {
+				var obj objects.Object
+				err = rows.Scan(
+					&obj.Name,
+					(*sqlMD5)(&obj.ContentMD5),
+					&obj.Size,
+					(*sqlTime)(&obj.UpdatedAt),
+				)
+				if err != nil {
+					return "", fmt.Errorf("failed to scan object: %w", err)
+				}
+
+				match := s3.Match(prefix, obj.Name)
+				switch {
+				case match == nil:
 					continue
+				case match.CommonPrefix:
+					if marker != nil && strings.Compare(*marker, match.MatchedPart) >= 0 {
+						continue
+					}
+					if match.MatchedPart == lastMatchedPart {
+						continue // should not count towards keys
+					}
+					result.AddPrefix(match.MatchedPart)
+					lastMatchedPart = match.MatchedPart
+					break
+				default:
+					if marker != nil && strings.Compare(*marker, obj.Name) >= 0 {
+						continue
+					}
+					result.Add(&s3.Content{
+						Key:          obj.Name,
+						LastModified: s3.NewContentTime(obj.UpdatedAt),
+						ETag:         s3.FormatETag(obj.ContentMD5[:]),
+						Size:         int64(obj.Size),
+					})
 				}
-				if match.MatchedPart == lastMatchedPart {
-					continue // should not count towards keys
+
+				if result.IsTruncated {
+					break
 				}
-				result.AddPrefix(match.MatchedPart)
-				lastMatchedPart = match.MatchedPart
-			default:
-				if page.Marker != nil && strings.Compare(*page.Marker, obj.Name) >= 0 {
-					continue
-				}
-				result.Add(&s3.Content{
-					Key:          obj.Name,
-					LastModified: s3.NewContentTime(obj.UpdatedAt),
-					ETag:         s3.FormatETag(obj.ContentMD5[:]),
-					Size:         int64(obj.Size),
-				})
 			}
+			if err := rows.Err(); err != nil {
+				return "", fmt.Errorf("failed to get rows: %w", err)
+			}
+			return lastMatchedPart, nil
+		}
 
-			if result.IsTruncated {
+		marker := page.Marker
+		for !result.IsTruncated {
+			lastMatchedPart, err := list(marker)
+			if err != nil {
+				return err
+			}
+			if lastMatchedPart != "" {
+				// if we get a common prefix, skip over remainder of common prefix
+				lastMatchedPart += "\xFF"
+				marker = &lastMatchedPart
+			} else if result.NextMarker != "" {
+				// otherwise continue getting the matching keys
+				marker = &result.NextMarker
+			} else {
 				break
 			}
-		}
-		if err := rows.Err(); err != nil {
-			return fmt.Errorf("failed to get rows: %w", err)
 		}
 		if !result.IsTruncated {
 			result.NextMarker = ""
