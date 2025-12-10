@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -33,6 +34,11 @@ func (s *Sia) CreateMultipartUpload(ctx context.Context, accessKeyID, bucket, ob
 	uploadID, err := s.store.CreateMultipartUpload(bucket, object, opts.Meta)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create multipart upload: %w", err)
+	}
+
+	// create multipart upload directory
+	if err := os.Mkdir(filepath.Join(s.directory, uploadID), 0700); err != nil {
+		return nil, fmt.Errorf("failed to create upload directory: %w", err)
 	}
 
 	return &s3.CreateMultipartUploadResult{
@@ -62,14 +68,21 @@ func (s *Sia) AbortMultipartUpload(ctx context.Context, accessKeyID, bucket, obj
 
 // UploadPart uploads a single multipart part.
 func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object, uploadID string, r io.Reader, opts s3.UploadPartOptions) (_ *s3.UploadPartResult, err error) {
-	// quick check if the bucket exists
+	// check auth and bucket existence
 	if err := s.store.HeadBucket(accessKeyID, bucket); err != nil {
+		return nil, err
+	}
+
+	// check if the multipart upload exists
+	if err := s.store.HasMultipartUpload(bucket, object, uploadID); err != nil {
 		return nil, err
 	}
 
 	// create part directory
 	partDir := filepath.Join(s.directory, uploadID, fmt.Sprintf("%d", opts.PartNumber))
-	if err := os.MkdirAll(partDir, 0700); err != nil {
+	if err := os.Mkdir(partDir, 0700); errors.Is(err, fs.ErrNotExist) {
+		return nil, s3errs.ErrNoSuchUpload
+	} else if err != nil {
 		return nil, fmt.Errorf("failed to create part directory: %w", err)
 	}
 
@@ -125,30 +138,24 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object, uploa
 	// sync parent directory
 	dir, err := os.Open(partDir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open multipart tmp dir: %w", err)
+		return nil, fmt.Errorf("failed to open part directory: %w", err)
 	} else if err := errors.Join(dir.Sync(), dir.Close()); err != nil {
-		return nil, fmt.Errorf("failed to sync multipart part file and dir: %w", err)
-	}
-
-	// get relative location
-	location, err := filepath.Rel(s.directory, partPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get part location: %w", err)
+		return nil, fmt.Errorf("failed to sync part directory: %w", err)
 	}
 
 	// add multipart part to the database
-	previous, err := s.store.AddMultipartPart(bucket, object, uploadID, location, opts.PartNumber, contentMD5, contentSHA256, contentLength)
+	previous, err := s.store.AddMultipartPart(bucket, object, uploadID, filepath.Base(partPath), opts.PartNumber, contentMD5, contentSHA256, contentLength)
 	if err != nil {
 		if err := os.Remove(partPath); err != nil {
-			s.logger.Warn("failed to remove multipart part file",
+			s.logger.Warn("failed to remove part file",
 				zap.String("path", partPath),
 				zap.Error(err))
 		}
-		return nil, fmt.Errorf("failed to finish multipart part: %w", err)
+		return nil, fmt.Errorf("failed to add part: %w", err)
 	} else if previous != "" {
-		prevPath := filepath.Join(s.directory, previous)
+		prevPath := filepath.Join(partDir, previous)
 		if err := os.Remove(prevPath); err != nil {
-			s.logger.Warn("failed to remove previous multipart part file",
+			s.logger.Warn("failed to remove old part file",
 				zap.String("path", prevPath),
 				zap.Error(err))
 		}
