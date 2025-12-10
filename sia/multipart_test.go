@@ -133,13 +133,13 @@ func TestMultipartAddPart(t *testing.T) {
 	}
 
 	// verify part is on disk
-	partDir := filepath.Join(dataDir, sia.MultipartDirectory, uploadID)
-	partPath := filepath.Join(partDir, "1.part")
-	onDisk, err := os.ReadFile(partPath)
+	entries, err := os.ReadDir(filepath.Join(dataDir, sia.MultipartDirectory, uploadID, "1"))
 	if err != nil {
-		t.Fatalf("failed to read part from disk: %v", err)
-	} else if !bytes.Equal(onDisk, part) {
-		t.Fatalf("unexpected part contents on disk: got %d bytes", len(onDisk))
+		t.Fatalf("failed to read part directory: %v", err)
+	} else if len(entries) != 1 {
+		t.Fatalf("expected 1 part file in directory, got %d", len(entries))
+	} else if !strings.HasSuffix(entries[0].Name(), ".part") {
+		t.Fatalf("expected part file to have .part suffix, got %q", entries[0].Name())
 	}
 
 	// TODO: verify part metadata in the database

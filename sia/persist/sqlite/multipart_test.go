@@ -45,7 +45,11 @@ func TestAddMultipartPart(t *testing.T) {
 		accessKeyID = "test-accesskey"
 		bucket      = "test-bucket"
 		object      = "test-object"
+		location    = "part-location"
 	)
+
+	var contentMD5 [16]byte
+	frand.Read(contentMD5[:])
 
 	// create bucket
 	store := initTestDB(t, zap.NewNop())
@@ -54,7 +58,7 @@ func TestAddMultipartPart(t *testing.T) {
 	}
 
 	// assert [s3errs.ErrNoSuchUpload] for unknown upload ID
-	if err := store.AddMultipartPart(bucket, object, unknownUID, 1); !errors.Is(err, s3errs.ErrNoSuchUpload) {
+	if _, err := store.AddMultipartPart(bucket, object, unknownUID, location, 1, contentMD5, nil, 0); !errors.Is(err, s3errs.ErrNoSuchUpload) {
 		t.Fatal(err)
 	}
 
@@ -65,11 +69,19 @@ func TestAddMultipartPart(t *testing.T) {
 	}
 
 	// add a part (assert no error on duplicate part addition)
-	if err := store.AddMultipartPart(bucket, object, uid, 1); err != nil {
+	prev, err := store.AddMultipartPart(bucket, object, uid, location, 1, contentMD5, nil, 0)
+	if err != nil {
 		t.Fatal(err)
-	} else if err := store.AddMultipartPart(bucket, object, uid, 1); err != nil {
-		t.Fatal(err)
+	} else if prev != "" {
+		t.Fatal("expected empty previous location for first part upload", prev)
 	}
+	prev, err = store.AddMultipartPart(bucket, object, uid, location, 1, contentMD5, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	} else if prev == "" || prev != location {
+		t.Fatal("expected previous location to be returned on part overwrite")
+	}
+
 	store.assertCount(1, "multipart_parts")
 }
 
@@ -79,6 +91,7 @@ func TestAbortMultipartUpload(t *testing.T) {
 		accessKeyID = "test-accesskey"
 		bucket      = "test-bucket"
 		object      = "test-object"
+		location    = "part-location"
 	)
 
 	// create bucket
@@ -98,8 +111,11 @@ func TestAbortMultipartUpload(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	var contentMD5 [16]byte
+	frand.Read(contentMD5[:])
+
 	// add a part
-	if err := store.AddMultipartPart(bucket, object, uid, 1); err != nil {
+	if _, err := store.AddMultipartPart(bucket, object, uid, location, 1, contentMD5, nil, 0); err != nil {
 		t.Fatal(err)
 	}
 
@@ -144,16 +160,10 @@ func TestListParts(t *testing.T) {
 	// add finalized parts
 	const totalParts = 5
 	for i := 1; i <= totalParts; i++ {
-		if err := store.AddMultipartPart(bucket, object, uid, i); err != nil {
-			t.Fatal(err)
-		} else if err := store.FinishMultipartPart(bucket, object, uid, i, frand.Entropy128(), nil, int64(frand.Uint64n(100)+1)); err != nil {
+		_, err := store.AddMultipartPart(bucket, object, uid, "", i, frand.Entropy128(), nil, int64(frand.Uint64n(100)+1))
+		if err != nil {
 			t.Fatal(err)
 		}
-	}
-
-	// add a non-finalized part
-	if err := store.AddMultipartPart(bucket, object, uid, totalParts+1); err != nil {
-		t.Fatal(err)
 	}
 
 	// list parts

@@ -62,9 +62,7 @@ type Store interface {
 
 	CreateMultipartUpload(bucket, name string, meta map[string]string) (string, error)
 	AbortMultipartUpload(bucket, name, uploadID string) error
-
-	AddMultipartPart(bucket, name, uploadID string, partNumber int) error
-	FinishMultipartPart(bucket, name, uploadID string, partNumber int, contentMD5 [16]byte, contentSHA256 *[32]byte, contentLength int64) error
+	AddMultipartPart(bucket, name, uploadID, location string, partNumber int, contentMD5 [16]byte, contentSHA256 *[32]byte, contentLength int64) (string, error)
 	ListParts(accessKeyID, bucket, name, uploadID string, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error)
 }
 
