@@ -131,6 +131,7 @@ func TestMultipartAddPart(t *testing.T) {
 	} else if res2 == nil || res2.ETag == nil || *res2.ETag != s3.FormatETag(md5Sum[:]) {
 		t.Fatalf("unexpected upload part result: %+v", res2)
 	}
+	// TODO: assert various s3 errors for invalid part uploads
 
 	// verify part is on disk
 	entries, err := os.ReadDir(filepath.Join(dataDir, sia.MultipartDirectory, uploadID, "1"))
@@ -144,9 +145,18 @@ func TestMultipartAddPart(t *testing.T) {
 
 	// TODO: verify part metadata in the database
 
+	// assert multipart upload is aborted and part files are removed
+	if err := s3Tester.AbortMultipartUpload(t.Context(), bucket, object, uploadID); err != nil {
+		t.Fatal(err)
+	}
+
+	// verify multipart upload directory is removed
+	_, err = os.Stat(filepath.Join(dataDir, sia.MultipartDirectory, uploadID))
+	if !os.IsNotExist(err) {
+		t.Fatalf("expected multipart upload directory to be removed, but it exists")
+	}
+
 	// assert [s3errs.ErrNoSuchUpload] is returned for wrong upload ID
 	_, err = s3Tester.UploadPart(t.Context(), bucket, object, unknownID, 1, nil)
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchUpload, err)
-
-	// TODO: assert various s3 errors for invalid part uploads
 }

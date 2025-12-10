@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"hash"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -63,6 +62,14 @@ func (s *Sia) AbortMultipartUpload(ctx context.Context, accessKeyID, bucket, obj
 		return fmt.Errorf("failed to abort multipart upload: %w", err)
 	}
 
+	// remove multipart upload directory
+	uploadDir := filepath.Join(s.directory, uploadID)
+	if err := os.RemoveAll(uploadDir); err != nil && !errors.Is(err, os.ErrNotExist) {
+		s.logger.Warn("failed to remove multipart upload directory",
+			zap.String("path", uploadDir),
+			zap.Error(err))
+	}
+
 	return nil
 }
 
@@ -80,7 +87,7 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object, uploa
 
 	// create part directory
 	partDir := filepath.Join(s.directory, uploadID, fmt.Sprintf("%d", opts.PartNumber))
-	if err := os.Mkdir(partDir, 0700); errors.Is(err, fs.ErrNotExist) {
+	if err := os.Mkdir(partDir, 0700); errors.Is(err, os.ErrNotExist) {
 		return nil, s3errs.ErrNoSuchUpload
 	} else if err != nil {
 		return nil, fmt.Errorf("failed to create part directory: %w", err)
@@ -136,8 +143,9 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object, uploa
 	}
 
 	// sync parent directory
-	dir, err := os.Open(partDir)
-	if err != nil {
+	if dir, err := os.Open(partDir); errors.Is(err, os.ErrNotExist) {
+		return nil, s3errs.ErrNoSuchUpload
+	} else if err != nil {
 		return nil, fmt.Errorf("failed to open part directory: %w", err)
 	} else if err := errors.Join(dir.Sync(), dir.Close()); err != nil {
 		return nil, fmt.Errorf("failed to sync part directory: %w", err)
