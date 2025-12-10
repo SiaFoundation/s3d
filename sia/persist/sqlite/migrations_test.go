@@ -33,7 +33,6 @@ CREATE TABLE objects (
     updated_at INTEGER NOT NULL,
     PRIMARY KEY(bucket_id, name)
 ) WITHOUT ROWID;
-CREATE INDEX objects_name ON objects(name);
 
 CREATE TABLE multipart_uploads (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -146,15 +146,14 @@ func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.
 		return result, nil
 	}
 
+	const maxObjsPerQuery = 100
 	err = s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return fmt.Errorf("failed to get bucket ID: %w", err)
 		}
 
-		// if a string is empty, path.Clean will replace it with "." but the
-		// rest of its [rules](https://pkg.go.dev/path#Clean) are OK to enforce
-		// here
+		// replace multiple forward slashes with one
 		if prefix.HasPrefix && prefix.Prefix != "" {
 			prefix.Prefix = pathClean(prefix.Prefix)
 		}
@@ -180,7 +179,7 @@ WHERE o.bucket_id = ?`
 
 			query += ` ORDER BY o.name`
 			query += `  LIMIT ?`
-			args = append(args, 100)
+			args = append(args, maxObjsPerQuery)
 
 			rows, err := tx.Query(query, args...)
 			if err != nil {
