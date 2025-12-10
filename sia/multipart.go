@@ -13,10 +13,11 @@ import (
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"go.uber.org/zap"
 	"lukechampine.com/frand"
 )
 
-func randUUID() (uuid [8]byte) {
+func randUploadID() (uuid [8]byte) {
 	frand.Read(uuid[:])
 	return
 }
@@ -71,41 +72,23 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object, uploa
 		return nil, err
 	}
 
-	// add part metadata to the database
-	if err := s.store.AddMultipartPart(bucket, object, uploadID, opts.PartNumber); err != nil {
-		return nil, fmt.Errorf("failed to add multipart part: %w", err)
-	}
-
 	// create part directory
-	partDir := filepath.Join(s.directory, uploadID)
+	partDir := filepath.Join(s.directory, uploadID, fmt.Sprintf("%d", opts.PartNumber))
 	if err := os.MkdirAll(partDir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create part directory: %w", err)
 	}
 
-	// prepare part file locations, we upload to a temporary file first and then
-	// rename the file once the upload is complete, it's possible parts with the
-	// same part number are uploaded concurrently
-	partPathTmp := filepath.Join(partDir, fmt.Sprintf("%d-%x.part.tmp", opts.PartNumber, randUUID()))
-	partPathFinal := filepath.Join(partDir, fmt.Sprintf("%d.part", opts.PartNumber))
-
-	// create temporary part file
-	partFileTmp, err := os.Create(partPathTmp)
+	// create part file
+	partPath := filepath.Join(partDir, fmt.Sprintf("%x.part", randUploadID()))
+	partFile, err := os.Create(partPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create part file: %w", err)
 	}
-	defer partFileTmp.Close()
-
-	// defer a best effort cleanup on error
-	defer func() {
-		if err != nil {
-			_ = os.Remove(partPathTmp)
-			_ = os.Remove(partPathFinal)
-		}
-	}()
+	defer partFile.Close()
 
 	// prepare writers
 	md5Hash := md5.New()
-	writers := []io.Writer{partFileTmp, md5Hash}
+	writers := []io.Writer{partFile, md5Hash}
 
 	var sha256Hash hash.Hash
 	if opts.ContentSHA256 != nil {
@@ -114,8 +97,7 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object, uploa
 	}
 
 	// copy data and validate size
-	buf := make([]byte, 64*1024) // 64 KiB buffer for efficient copying
-	contentLength, err := io.CopyBuffer(io.MultiWriter(writers...), io.LimitReader(r, s3.MaxUploadPartSize+1), buf)
+	contentLength, err := io.Copy(io.MultiWriter(writers...), io.LimitReader(r, s3.MaxUploadPartSize+1))
 	if err != nil {
 		return nil, err
 	} else if contentLength != opts.ContentLength {
@@ -140,13 +122,9 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object, uploa
 		}
 	}
 
-	// TODO: If a part already exists, we could preserve it by moving the current
-	// file aside, write the new upload, and roll back on DB failure. If the DB
-	// update succeeds, delete the old file from its temporary location.
-
-	// sync and rename part file
-	if err := errors.Join(partFileTmp.Sync(), os.Rename(partPathTmp, partPathFinal)); err != nil {
-		return nil, fmt.Errorf("failed to sync and rename part file: %w", err)
+	// sync part file
+	if err := partFile.Sync(); err != nil {
+		return nil, fmt.Errorf("failed to sync part file: %w", err)
 	}
 
 	// sync parent directory
@@ -157,9 +135,28 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object, uploa
 		return nil, fmt.Errorf("failed to sync multipart part file and dir: %w", err)
 	}
 
-	// finalize part in the database
-	if err := s.store.FinishMultipartPart(bucket, object, uploadID, opts.PartNumber, contentMD5, contentSHA256, contentLength); err != nil {
+	// get relative location
+	location, err := filepath.Rel(s.directory, partPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get part location: %w", err)
+	}
+
+	// add multipart part to the database
+	previous, err := s.store.AddMultipartPart(bucket, object, uploadID, location, opts.PartNumber, contentMD5, contentSHA256, contentLength)
+	if err != nil {
+		if err := os.Remove(partPath); err != nil {
+			s.logger.Warn("failed to remove multipart part file",
+				zap.String("path", partPath),
+				zap.Error(err))
+		}
 		return nil, fmt.Errorf("failed to finish multipart part: %w", err)
+	} else if previous != "" {
+		prevPath := filepath.Join(s.directory, previous)
+		if err := os.Remove(prevPath); err != nil {
+			s.logger.Warn("failed to remove previous multipart part file",
+				zap.String("path", prevPath),
+				zap.Error(err))
+		}
 	}
 
 	return &s3.UploadPartResult{ContentMD5: contentMD5}, nil

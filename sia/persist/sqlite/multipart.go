@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -63,8 +64,9 @@ func (s *Store) AbortMultipartUpload(bucket, name, uploadID string) error {
 }
 
 // AddMultipartPart adds metadata for a multipart part to the store.
-func (s *Store) AddMultipartPart(bucket, name, uploadID string, partNumber int) error {
-	return s.transaction(func(tx *txn) error {
+func (s *Store) AddMultipartPart(bucket, name, uploadID, location string, partNumber int, contentMD5 [16]byte, contentSHA256 *[32]byte, contentLength int64) (string, error) {
+	var previousLocation string
+	if err := s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
@@ -75,40 +77,34 @@ func (s *Store) AddMultipartPart(bucket, name, uploadID string, partNumber int) 
 			return err
 		}
 
-		_, err = tx.Exec(`
-			INSERT INTO multipart_parts (multipart_upload_id, part_number, created_at)
-			VALUES ($1, $2, $3)
-			ON CONFLICT(multipart_upload_id, part_number) DO UPDATE SET created_at = EXCLUDED.created_at
-		`, uid, partNumber, sqlTime(time.Now()))
-		return err
-	})
-}
-
-// FinishMultipartPart updates metadata for a multipart part in the store.
-func (s *Store) FinishMultipartPart(bucket, name, uploadID string, partNumber int, contentMD5 [16]byte, contentSHA256 *[32]byte, contentLength int64) error {
-	return s.transaction(func(tx *txn) error {
-		bid, err := bucketID(tx, bucket)
-		if err != nil {
-			return err
-		}
-
-		uid, err := multipartID(tx, uploadID, bid, name)
-		if err != nil {
-			return err
-		}
-
-		var sha256Bytes [32]byte
+		var sha256Value any
 		if contentSHA256 != nil {
-			sha256Bytes = *contentSHA256
+			sha256Value = sqlHash256(*contentSHA256)
+		}
+
+		var prev sql.NullString
+		err = tx.QueryRow(`SELECT location FROM multipart_parts WHERE multipart_upload_id = $1 AND part_number = $2`, uid, partNumber).Scan(&prev)
+		if err != nil && err != sql.ErrNoRows {
+			return err
+		} else if prev.Valid {
+			previousLocation = prev.String
 		}
 
 		_, err = tx.Exec(`
-			UPDATE multipart_parts
-			SET content_md5 = $1, content_sha256 = $2, content_length = $3
-			WHERE multipart_upload_id = $4 AND part_number = $5
-		`, sqlMD5(contentMD5), sqlSHA256(sha256Bytes), contentLength, uid, partNumber)
+			INSERT INTO multipart_parts (multipart_upload_id, part_number, location, content_md5, content_sha256, content_length, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
+			ON CONFLICT(multipart_upload_id, part_number) DO UPDATE SET
+				location       = EXCLUDED.location,
+				content_md5    = EXCLUDED.content_md5,
+				content_sha256 = EXCLUDED.content_sha256,
+				content_length = EXCLUDED.content_length,
+				created_at     = EXCLUDED.created_at
+		`, uid, partNumber, location, sqlMD5(contentMD5), sha256Value, contentLength, sqlTime(time.Now()))
 		return err
-	})
+	}); err != nil {
+		return "", err
+	}
+	return previousLocation, nil
 }
 
 // ListMultipartUploads lists all multipart uploads for the given bucket and

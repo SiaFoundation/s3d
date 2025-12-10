@@ -12,7 +12,6 @@ import (
 var (
 	_ scannerValuer = (*sqlHash256)(nil)
 	_ scannerValuer = (*sqlMD5)(nil)
-	_ scannerValuer = (*sqlSHA256)(nil)
 	_ scannerValuer = (*sqlTime)(nil)
 	_ scannerValuer = (*sqlUploadID)(nil)
 )
@@ -74,25 +73,6 @@ func (m *sqlMD5) Scan(src any) error {
 
 func (m sqlMD5) Value() (driver.Value, error) {
 	return m[:], nil
-}
-
-type sqlSHA256 [32]byte
-
-func (s *sqlSHA256) Scan(src any) error {
-	switch src := src.(type) {
-	case []byte:
-		if len(src) != len(sqlSHA256{}) {
-			return fmt.Errorf("failed to scan source into SHA256 due to invalid number of bytes %v != %v: %v", len(src), len(sqlSHA256{}), src)
-		}
-		copy(s[:], src)
-		return nil
-	default:
-		return fmt.Errorf("cannot scan %T to SHA256", src)
-	}
-}
-
-func (s sqlSHA256) Value() (driver.Value, error) {
-	return s[:], nil
 }
 
 type sqlUploadID [16]byte
