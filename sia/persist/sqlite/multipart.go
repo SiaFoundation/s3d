@@ -215,17 +215,23 @@ func buildUploadsQuery(bucketID int64, prefix, delimiter, keyMarker string, uplo
 	where := []string{"bucket_id = ?"}
 	args := []any{bucketID}
 
-	// check prefix
-	switch {
-	case hasDelim && hasPrefix:
-		where = append(where, "SUBSTR(name, 1, ?) = ? AND INSTR(SUBSTR(name, ?), ?) = 0")
-		args = append(args, prefixLen, prefix, searchOffset, delimiter)
-	case hasDelim && !hasPrefix:
-		where = append(where, "INSTR(name, ?) = 0")
-		args = append(args, delimiter)
-	case !hasDelim && hasPrefix:
+	// handle prefix
+	if hasPrefix {
 		where = append(where, "SUBSTR(name, 1, ?) = ?")
 		args = append(args, prefixLen, prefix)
+	}
+
+	// handle delimiter
+	if hasDelim {
+		if hasPrefix {
+			// when we know there's a prefix, start searching after it
+			where = append(where, "INSTR(SUBSTR(name, ?), ?) = 0")
+			args = append(args, searchOffset, delimiter)
+		} else {
+			// no prefix, just ensure delimiter not in the whole name
+			where = append(where, "INSTR(name, ?) = 0")
+			args = append(args, delimiter)
+		}
 	}
 
 	// check markers
@@ -254,14 +260,8 @@ func buildCommonPrefixesQuery(bucketID int64, prefix, delimiter, keyMarker strin
 	args = append(args, bucketID)
 
 	// check prefix
-	if prefix != "" {
-		where = append(where, "SUBSTR(name, 1, ?) = ? AND INSTR(SUBSTR(name, ?), ?) > 0")
-		args = append(args, prefixLen, prefix, searchOffset, delimiter)
-	} else {
-		// filter out names with delimiter
-		where = append(where, "INSTR(name, ?) > 0")
-		args = append(args, delimiter)
-	}
+	where = append(where, "SUBSTR(name, 1, ?) = ? AND INSTR(SUBSTR(name, ?), ?) > 0")
+	args = append(args, prefixLen, prefix, searchOffset, delimiter)
 
 	// check markers
 	if keyMarker != "" && uploadIDMarker != [16]byte{} {
