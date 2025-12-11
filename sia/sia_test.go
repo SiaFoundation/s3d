@@ -14,6 +14,7 @@ import (
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/sdk"
+	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
 )
 
@@ -74,11 +75,8 @@ func (s *MemorySDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
 }
 
 func NewTester(t testing.TB, opts ...testutil.TesterOption) *testutil.S3Tester {
-	return NewCustomTester(t, t.TempDir(), opts...)
-}
-
-func NewCustomTester(t testing.TB, dir string, opts ...testutil.TesterOption) *testutil.S3Tester {
 	log := zaptest.NewLogger(t)
+	dir := t.TempDir()
 
 	// use in-memory SDK
 	sdk := NewMemorySDK()
@@ -90,6 +88,10 @@ func NewCustomTester(t testing.TB, dir string, opts ...testutil.TesterOption) *t
 	}
 	t.Cleanup(func() { store.Close() })
 
+	return NewCustomTester(t, dir, store, sdk, log, opts...)
+}
+
+func NewCustomTester(t testing.TB, dir string, store sia.Store, sdk sia.SDK, log *zap.Logger, opts ...testutil.TesterOption) *testutil.S3Tester {
 	backend, err := sia.New(context.Background(), sdk, store, dir, testutil.AccessKeyID, testutil.SecretAccessKey,
 		sia.WithLogger(log))
 	if err != nil {

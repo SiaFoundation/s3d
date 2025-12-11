@@ -212,7 +212,7 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 	}
 
 	// validate range
-	if opts.Range.Length <= 0 || opts.Range.Start < 0 || opts.Range.Start > obj.Size || opts.Range.Length > obj.Size-opts.Range.Start {
+	if opts.Range.Length <= 0 || opts.Range.Start < 0 || opts.Range.Start >= obj.Size || opts.Range.Length > obj.Size-opts.Range.Start {
 		return nil, s3errs.ErrInvalidRange
 	} else if opts.Range.Length > s3.MaxUploadPartSize {
 		return nil, s3errs.ErrEntityTooLarge
@@ -228,12 +228,12 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 	partDir := filepath.Join(s.directory, uploadID, fmt.Sprintf("%d", opts.PartNumber))
 	if err := os.Mkdir(partDir, 0700); errors.Is(err, os.ErrNotExist) {
 		return nil, s3errs.ErrNoSuchUpload
-	} else if err != nil {
+	} else if err != nil && !errors.Is(err, os.ErrExist) {
 		return nil, fmt.Errorf("failed to create part directory: %w", err)
 	}
 
 	// create part file
-	partPath := filepath.Join(partDir, fmt.Sprintf("%x.part", randUploadID()))
+	partPath := filepath.Join(partDir, randPartName())
 	partFile, err := os.Create(partPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create part file: %w", err)
@@ -278,7 +278,7 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 	previous, err := s.store.AddMultipartPart(dstBucket, dstObject, uploadID, filepath.Base(partPath), opts.PartNumber, contentMD5, nil, contentLength)
 	if err != nil {
 		if err := os.Remove(partPath); err != nil {
-			s.logger.Warn("failed to remove part file",
+			s.logger.Error("failed to remove part file",
 				zap.String("path", partPath),
 				zap.Error(err))
 		}
@@ -286,7 +286,7 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 	} else if previous != "" {
 		prevPath := filepath.Join(partDir, previous)
 		if err := os.Remove(prevPath); err != nil {
-			s.logger.Warn("failed to remove old part file",
+			s.logger.Error("failed to remove old part file",
 				zap.String("path", prevPath),
 				zap.Error(err))
 		}
