@@ -161,7 +161,7 @@ func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.
 			prefix.Delimiter = pathClean(prefix.Delimiter)
 		}
 
-		list := func(marker *string) (string, error) {
+		list := func(marker *string) (string, string, error) {
 			query := `SELECT o.name, o.content_md5, o.size, o.updated_at
 FROM objects o
 WHERE o.bucket_id = ?`
@@ -183,11 +183,11 @@ WHERE o.bucket_id = ?`
 
 			rows, err := tx.Query(query, args...)
 			if err != nil {
-				return "", fmt.Errorf("failed to query objects: %w", err)
+				return "", "", fmt.Errorf("failed to query objects: %w", err)
 			}
 			defer rows.Close()
 
-			var lastMatchedPart string
+			var lastMatchedPart, lastObj string
 			for rows.Next() {
 				var obj objects.Object
 				err = rows.Scan(
@@ -197,7 +197,7 @@ WHERE o.bucket_id = ?`
 					(*sqlTime)(&obj.UpdatedAt),
 				)
 				if err != nil {
-					return "", fmt.Errorf("failed to scan object: %w", err)
+					return "", "", fmt.Errorf("failed to scan object: %w", err)
 				}
 
 				var done bool
@@ -225,6 +225,7 @@ WHERE o.bucket_id = ?`
 						ETag:         s3.FormatETag(obj.ContentMD5[:]),
 						Size:         int64(obj.Size),
 					})
+					lastObj = obj.Name
 				}
 
 				if done || result.IsTruncated {
@@ -232,14 +233,14 @@ WHERE o.bucket_id = ?`
 				}
 			}
 			if err := rows.Err(); err != nil {
-				return "", fmt.Errorf("failed to get rows: %w", err)
+				return "", "", fmt.Errorf("failed to get rows: %w", err)
 			}
-			return lastMatchedPart, nil
+			return lastMatchedPart, lastObj, nil
 		}
 
 		marker := page.Marker
 		for !result.IsTruncated {
-			lastMatchedPart, err := list(marker)
+			lastMatchedPart, lastObj, err := list(marker)
 			if err != nil {
 				return err
 			}
@@ -247,13 +248,13 @@ WHERE o.bucket_id = ?`
 				// if we get a common prefix, skip over the remainder of it
 				lastMatchedPart += "\xFF"
 				marker = &lastMatchedPart
-			} else if result.NextMarker != "" {
+			} else if lastObj != "" {
 				// if we haven't advanced at all, stop
-				if marker != nil && *marker == result.NextMarker {
+				if marker != nil && *marker == lastObj {
 					break
 				}
 				// otherwise continue getting the matching objects
-				marker = &result.NextMarker
+				marker = &lastObj
 			} else {
 				break
 			}
