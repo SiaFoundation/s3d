@@ -160,3 +160,75 @@ func TestMultipartAddPart(t *testing.T) {
 	_, err = s3Tester.UploadPart(t.Context(), bucket, object, unknownID, 1, nil)
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchUpload, err)
 }
+
+func TestMultipartUploadPartCopy(t *testing.T) {
+	dataDir := t.TempDir()
+	s3Tester := NewCustomTester(t, dataDir)
+
+	const (
+		bucketSrc = "copy-src"
+		bucketDst = "copy-dst"
+		objectSrc = "object-src"
+		objectDst = "object-dst"
+	)
+
+	// create buckets
+	if err := s3Tester.CreateBucket(t.Context(), bucketSrc); err != nil {
+		t.Fatal(err)
+	}
+	if err := s3Tester.CreateBucket(t.Context(), bucketDst); err != nil {
+		t.Fatal(err)
+	}
+
+	// upload source object
+	srcData := bytes.Repeat([]byte("a"), int(s3.MinUploadPartSize*2))
+	if _, err := s3Tester.PutObject(t.Context(), bucketSrc, objectSrc, bytes.NewReader(srcData), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// initiate multipart upload on destination bucket
+	initRes, err := s3Tester.CreateMultipartUpload(t.Context(), bucketDst, objectDst, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if initRes.UploadId == nil {
+		t.Fatal("expected upload id in response")
+	}
+	uploadID := *initRes.UploadId
+
+	// copy a range from the source object into part 1
+	rnge := &s3.ObjectRange{
+		Start:  s3.MinUploadPartSize / 2,
+		Length: s3.MinUploadPartSize,
+	}
+	res, err := s3Tester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, uploadID, 1, rnge)
+	if err != nil {
+		t.Fatal(err)
+	} else if res.CopyPartResult == nil || res.CopyPartResult.ETag == nil {
+		t.Fatal("expected CopyPartResult in response")
+	}
+
+	// assert ETag matches the copied data
+	expectedData := srcData[rnge.Start : rnge.Start+rnge.Length]
+	expectedMD5 := md5.Sum(expectedData)
+	if got := *res.CopyPartResult.ETag; got != s3.FormatETag(expectedMD5[:]) {
+		t.Fatalf("expected ETag %q, got %q", s3.FormatETag(expectedMD5[:]), got)
+	}
+
+	// verify part is written to disk with the expected contents
+	partDir := filepath.Join(dataDir, sia.MultipartDirectory, uploadID, "1")
+	entries, err := os.ReadDir(partDir)
+	if err != nil {
+		t.Fatalf("failed to read part directory: %v", err)
+	} else if len(entries) != 1 {
+		t.Fatalf("expected 1 part file in directory, got %d", len(entries))
+	} else if !strings.HasSuffix(entries[0].Name(), ".part") {
+		t.Fatalf("expected part file to have .part suffix, got %q", entries[0].Name())
+	}
+	partData, err := os.ReadFile(filepath.Join(partDir, entries[0].Name()))
+	if err != nil {
+		t.Fatalf("failed to read part file: %v", err)
+	}
+	if !bytes.Equal(partData, expectedData) {
+		t.Fatalf("unexpected part data")
+	}
+}
