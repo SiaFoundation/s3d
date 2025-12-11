@@ -143,6 +143,22 @@ func TestMultipartAddPart(t *testing.T) {
 		t.Fatalf("expected part file to have .part suffix, got %q", entries[0].Name())
 	}
 
+	// re-upload the part to test part overwrite
+	res3, err := s3Tester.UploadPart(t.Context(), bucket, object, uploadID, 1, part)
+	if err != nil {
+		t.Fatal(err)
+	} else if res3 == nil || res3.ETag == nil || *res3.ETag != s3.FormatETag(md5Sum[:]) {
+		t.Fatalf("unexpected upload part result: %+v", res3)
+	}
+
+	// verify only one part file exists
+	entries, err = os.ReadDir(filepath.Join(dataDir, sia.MultipartDirectory, uploadID, "1"))
+	if err != nil {
+		t.Fatalf("failed to read part directory: %v", err)
+	} else if len(entries) != 1 {
+		t.Fatalf("expected 1 part file in directory after overwrite, got %d", len(entries))
+	}
+
 	// TODO: verify part metadata in the database
 
 	// assert multipart upload is aborted and part files are removed
