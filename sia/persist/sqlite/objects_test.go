@@ -3,6 +3,7 @@ package sqlite
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
@@ -31,22 +32,21 @@ func TestListObjects(t *testing.T) {
 	}
 
 	// upload a few objects
-	keys := []string{"foo", "foo/baz", "foo/bar"}
 	obj := sdk.Object{}
 	contentMD5 := [16]byte(frand.Bytes(16))
-
 	etag := s3.FormatETag(contentMD5[:])
-	for _, key := range keys {
-		err := store.PutObject("", bucket, key, &objects.Object{
-			ID:         obj.ID(),
-			ContentMD5: contentMD5,
-			Size:       0,
-			UpdatedAt:  time.Now(),
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
+
+	putObject := func(key string) {
 	}
+
+	var largeDirectoryKeys []string
+	for i := 0; i < 200; i++ {
+		key := fmt.Sprintf("large-directory/%d", i)
+
+		putObject(key)
+		largeDirectoryKeys = append(largeDirectoryKeys, key)
+	}
+	slices.Sort(largeDirectoryKeys)
 
 	ptr := func(s string) *string {
 		return &s
@@ -70,7 +70,7 @@ func TestListObjects(t *testing.T) {
 		}
 	}
 
-	tests := []struct {
+	type testCase struct {
 		name       string
 		prefix     *string
 		delimiter  *string
@@ -81,69 +81,139 @@ func TestListObjects(t *testing.T) {
 		truncated      bool
 		objects        []string
 		commonPrefixes []string
+	}
+
+	tests := []struct {
+		keys  []string
+		cases []testCase
 	}{
 		{
-			name:    "All",
-			objects: []string{"foo", "foo/bar", "foo/baz"},
-			maxKeys: 100,
+			keys: []string{"foo", "foo/bar", "foo/baz"},
+			cases: []testCase{
+				{
+					name:    "All",
+					objects: []string{"foo", "foo/bar", "foo/baz"},
+					maxKeys: 100,
+				},
+				{
+					name:       "MaxKeys",
+					objects:    []string{"foo", "foo/bar"},
+					truncated:  true,
+					nextMarker: ptr("foo/bar"),
+					maxKeys:    2,
+				},
+				{
+					name:    "Marker",
+					marker:  ptr("foo/bar"),
+					objects: []string{"foo/baz"},
+					maxKeys: 100,
+				},
+				{
+					name:    "Prefix",
+					prefix:  ptr("foo/b"),
+					objects: []string{"foo/bar", "foo/baz"},
+					maxKeys: 100,
+				},
+				{
+					name:           "Delimiter",
+					delimiter:      ptr("/"),
+					objects:        []string{"foo"},
+					commonPrefixes: []string{"foo/"},
+					maxKeys:        100,
+				},
+			},
 		},
 		{
-			name:       "MaxKeys",
-			maxKeys:    2,
-			objects:    []string{"foo", "foo/bar"},
-			truncated:  true,
-			nextMarker: ptr("foo/bar"),
+			keys: []string{"a/file1", "a/sub/file2", "a/sub/file3", "b/file4"},
+			cases: []testCase{
+				{
+					name:       "Page1",
+					prefix:     ptr("a/"),
+					delimiter:  ptr("/"),
+					maxKeys:    1,
+					objects:    []string{"a/file1"},
+					truncated:  true,
+					nextMarker: ptr("a/file1"),
+				},
+				{
+					name:           "Page2",
+					prefix:         ptr("a/"),
+					delimiter:      ptr("/"),
+					marker:         ptr("a/file1"),
+					maxKeys:        2,
+					commonPrefixes: []string{"a/sub/"},
+					truncated:      false,
+					nextMarker:     nil, // End of the 'a/' prefix
+				}},
 		},
 		{
-			name:    "Marker",
-			marker:  ptr("foo/bar"),
-			objects: []string{"foo/baz"},
-			maxKeys: 100,
-		},
-		{
-			name:    "Prefix",
-			prefix:  ptr("foo/b"),
-			objects: []string{"foo/bar", "foo/baz"},
-			maxKeys: 100,
-		},
-		{
-			name:           "Delimiter",
-			delimiter:      ptr("/"),
-			objects:        []string{"foo"},
-			commonPrefixes: []string{"foo/"},
-			maxKeys:        100,
+			keys: largeDirectoryKeys,
+			cases: []testCase{
+				{
+					name:    "Large all",
+					objects: largeDirectoryKeys,
+					maxKeys: 500,
+				},
+				{
+					name:       "Large truncated",
+					objects:    largeDirectoryKeys[:100],
+					truncated:  true,
+					nextMarker: ptr(largeDirectoryKeys[99]),
+					maxKeys:    100,
+				},
+			},
 		},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			resp, err := store.ListObjects(nil, bucket, s3.Prefix{
-				Prefix:       val(tc.prefix),
-				HasPrefix:    tc.prefix != nil,
-				Delimiter:    val(tc.delimiter),
-				HasDelimiter: tc.delimiter != nil,
-			}, s3.ListObjectsPage{
-				Marker:  tc.marker,
-				MaxKeys: tc.maxKeys,
+
+	for _, tt := range tests {
+		_, err := store.db.Exec(`DELETE FROM objects`)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		for _, key := range tt.keys {
+			err := store.PutObject("", bucket, key, &objects.Object{
+				ID:         obj.ID(),
+				ContentMD5: contentMD5,
+				Size:       0,
+				UpdatedAt:  time.Now(),
 			})
 			if err != nil {
 				t.Fatal(err)
-			} else if len(resp.Contents) != len(tc.objects) {
-				t.Fatalf("expected %d objects, got %d", len(tc.objects), len(resp.Contents))
-			} else if resp.IsTruncated != tc.truncated {
-				t.Fatalf("expected truncated=%v, got %v", tc.truncated, resp.IsTruncated)
 			}
-			for i := range tc.objects {
-				if resp.Contents[i].Key != tc.objects[i] {
-					t.Fatalf("expected object %v, got %v", tc.objects[i], resp.Contents[i].Key)
-				} else if resp.Contents[i].ETag != etag {
-					t.Fatalf("expected ETag %q, got %q", etag, resp.Contents[i].ETag)
+		}
+
+		for _, tc := range tt.cases {
+			t.Run(tc.name, func(t *testing.T) {
+				resp, err := store.ListObjects(nil, bucket, s3.Prefix{
+					Prefix:       val(tc.prefix),
+					HasPrefix:    tc.prefix != nil,
+					Delimiter:    val(tc.delimiter),
+					HasDelimiter: tc.delimiter != nil,
+				}, s3.ListObjectsPage{
+					Marker:  tc.marker,
+					MaxKeys: tc.maxKeys,
+				})
+				if err != nil {
+					t.Fatal(err)
+				} else if len(resp.Contents) != len(tc.objects) {
+					t.Fatalf("expected %d objects, got %d", len(tc.objects), len(resp.Contents))
+				} else if resp.IsTruncated != tc.truncated {
+					t.Fatalf("expected truncated=%v, got %v", tc.truncated, resp.IsTruncated)
 				}
-			}
-			assertCommonPrefixesEqual(t, tc.commonPrefixes, resp.CommonPrefixes)
-			if expectedMarker := val(tc.nextMarker); expectedMarker != resp.NextMarker {
-				t.Fatalf("expected marker %v, got %v", expectedMarker, resp.NextMarker)
-			}
-		})
+				for i := range tc.objects {
+					if resp.Contents[i].Key != tc.objects[i] {
+						t.Fatalf("expected object %v, got %v", tc.objects[i], resp.Contents[i].Key)
+					} else if resp.Contents[i].ETag != etag {
+						t.Fatalf("expected ETag %q, got %q", etag, resp.Contents[i].ETag)
+					}
+				}
+				assertCommonPrefixesEqual(t, tc.commonPrefixes, resp.CommonPrefixes)
+				if expectedMarker := val(tc.nextMarker); expectedMarker != resp.NextMarker {
+					t.Fatalf("expected marker %v, got %v", expectedMarker, resp.NextMarker)
+				}
+			})
+		}
 	}
 }
 
