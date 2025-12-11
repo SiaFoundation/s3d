@@ -240,6 +240,17 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 	}
 	defer partFile.Close()
 
+	// defer cleanup on error
+	defer func() {
+		if err != nil {
+			if removeErr := os.Remove(partPath); removeErr != nil {
+				s.logger.Error("failed to remove part file after upload failure",
+					zap.String("path", partPath),
+					zap.Error(removeErr))
+			}
+		}
+	}()
+
 	// prepare writer and download the requested range
 	md5Hash := md5.New()
 	writer := &lenWriter{
