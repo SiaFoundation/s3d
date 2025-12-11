@@ -26,12 +26,7 @@ func (store *testStore) assertCount(expected int, table string) {
 }
 
 func initTestDB(t testing.TB, log *zap.Logger) *testStore {
-	db, err := initDB(filepath.Join(t.TempDir(), "s3d.sqlite"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	store, err := initStore(db, log.Named("store"))
+	store, err := OpenDatabase(filepath.Join(t.TempDir(), "s3d.sqlite"), log)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +38,7 @@ func initTestDB(t testing.TB, log *zap.Logger) *testStore {
 
 	return &testStore{
 		Store: store,
-		db:    db,
+		db:    store.db,
 		t:     t,
 	}
 }

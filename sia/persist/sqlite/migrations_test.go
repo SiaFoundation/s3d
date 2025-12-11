@@ -52,10 +52,10 @@ CREATE TABLE multipart_parts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     multipart_upload_id INTEGER NOT NULL,
     part_number INTEGER NOT NULL,
-	location TEXT NOT NULL,
-    content_md5 BLOB,
+    filename TEXT NOT NULL,
+    content_md5 BLOB NOT NULL,
     content_sha256 BLOB,
-    content_length INTEGER NOT NULL DEFAULT 0,
+    content_length INTEGER NOT NULL,
     created_at INTEGER NOT NULL,
     FOREIGN KEY (multipart_upload_id) REFERENCES multipart_uploads(id) ON DELETE CASCADE,
     UNIQUE(multipart_upload_id, part_number)

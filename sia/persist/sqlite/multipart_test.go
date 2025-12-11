@@ -78,13 +78,13 @@ func TestAddMultipartPart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	} else if prev != "" {
-		t.Fatal("expected empty previous location for first part upload", prev)
+		t.Fatal("expected empty previous filename for first part upload", prev)
 	}
 	prev, err = store.AddMultipartPart(bucket, object, uid, location, 1, contentMD5, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	} else if prev == "" || prev != location {
-		t.Fatal("expected previous location to be returned on part overwrite")
+		t.Fatal("expected previous filename to be returned on part overwrite")
 	}
 
 	store.assertCount(1, "multipart_parts")
@@ -96,7 +96,7 @@ func TestAbortMultipartUpload(t *testing.T) {
 		accessKeyID = "test-accesskey"
 		bucket      = "test-bucket"
 		object      = "test-object"
-		location    = "part-location"
+		filename    = "part-filename"
 	)
 
 	// create bucket
@@ -120,7 +120,7 @@ func TestAbortMultipartUpload(t *testing.T) {
 	frand.Read(contentMD5[:])
 
 	// add a part
-	if _, err := store.AddMultipartPart(bucket, object, uid, location, 1, contentMD5, nil, 0); err != nil {
+	if _, err := store.AddMultipartPart(bucket, object, uid, filename, 1, contentMD5, nil, 0); err != nil {
 		t.Fatal(err)
 	}
 
@@ -133,6 +133,37 @@ func TestAbortMultipartUpload(t *testing.T) {
 
 	// assert [s3errs.ErrNoSuchUpload] for aborted upload
 	if err := store.AbortMultipartUpload(bucket, object, uid); !errors.Is(err, s3errs.ErrNoSuchUpload) {
+		t.Fatal(err)
+	}
+}
+
+func TestHasMultipartUpload(t *testing.T) {
+	const (
+		unknownUID  = "a0188aceb938ca67b1d8ac03dfd361e9"
+		accessKeyID = "test-accesskey"
+		bucket      = "test-bucket"
+		object      = "test-object"
+	)
+
+	// create bucket
+	store := initTestDB(t, zap.NewNop())
+	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// assert [s3errs.ErrNoSuchUpload] for unknown upload ID
+	if err := store.HasMultipartUpload(bucket, object, unknownUID); !errors.Is(err, s3errs.ErrNoSuchUpload) {
+		t.Fatal(err)
+	}
+
+	// create multipart upload
+	uid, err := store.CreateMultipartUpload(bucket, object, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// assert no error for existing upload
+	if err := store.HasMultipartUpload(bucket, object, uid); err != nil {
 		t.Fatal(err)
 	}
 }
