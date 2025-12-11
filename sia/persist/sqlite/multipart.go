@@ -143,7 +143,7 @@ func (s *Store) ListParts(accessKeyID, bucket, name, uploadID string, partNumber
 		rows, err := tx.Query(`
 			SELECT part_number, content_length, content_md5, created_at
 			FROM multipart_parts
-			WHERE content_md5 IS NOT NULL AND multipart_upload_id = $1 AND part_number > $2
+			WHERE multipart_upload_id = $1 AND part_number > $2
 			ORDER BY part_number ASC
 			LIMIT $3
 		`, uid, partNumberMarker, maxParts+1)
