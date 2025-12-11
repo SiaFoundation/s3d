@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"slices"
 
@@ -60,9 +61,10 @@ type Store interface {
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
 	PutObject(accessKeyID, bucket, name string, obj *objects.Object) error
 
+	HasMultipartUpload(bucket, name, uploadID string) error
 	CreateMultipartUpload(bucket, name string, meta map[string]string) (string, error)
 	AbortMultipartUpload(bucket, name, uploadID string) error
-	AddMultipartPart(bucket, name, uploadID, location string, partNumber int, contentMD5 [16]byte, contentSHA256 *[32]byte, contentLength int64) (string, error)
+	AddMultipartPart(bucket, name, uploadID, filename string, partNumber int, contentMD5 [16]byte, contentSHA256 *[32]byte, contentLength int64) (string, error)
 	ListParts(accessKeyID, bucket, name, uploadID string, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error)
 }
 
@@ -72,12 +74,17 @@ func New(ctx context.Context, sdk SDK, store Store, directory, accessKey, secret
 		return nil, fmt.Errorf("sia backend requires both access key and secret key")
 	}
 
+	directory = filepath.Join(directory, MultipartDirectory)
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		return nil, fmt.Errorf("failed to create multipart upload directory: %w", err)
+	}
+
 	sia := &Sia{
 		logger: zap.NewNop(),
 		sdk:    sdk,
 		store:  store,
 
-		directory: filepath.Join(directory, MultipartDirectory),
+		directory: directory,
 		accessKey: accessKey,
 		secretKey: auth.SecretAccessKey(secretKey),
 	}

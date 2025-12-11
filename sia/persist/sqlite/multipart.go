@@ -63,8 +63,8 @@ func (s *Store) AbortMultipartUpload(bucket, name, uploadID string) error {
 }
 
 // AddMultipartPart adds metadata for a multipart part to the store.
-func (s *Store) AddMultipartPart(bucket, name, uploadID, location string, partNumber int, contentMD5 [16]byte, contentSHA256 *[32]byte, contentLength int64) (string, error) {
-	var previousLocation string
+func (s *Store) AddMultipartPart(bucket, name, uploadID, filename string, partNumber int, contentMD5 [16]byte, contentSHA256 *[32]byte, contentLength int64) (string, error) {
+	var prevFilename string
 	if err := s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
@@ -82,28 +82,41 @@ func (s *Store) AddMultipartPart(bucket, name, uploadID, location string, partNu
 		}
 
 		var prev sql.NullString
-		err = tx.QueryRow(`SELECT location FROM multipart_parts WHERE multipart_upload_id = $1 AND part_number = $2`, uid, partNumber).Scan(&prev)
+		err = tx.QueryRow(`SELECT filename FROM multipart_parts WHERE multipart_upload_id = $1 AND part_number = $2`, uid, partNumber).Scan(&prev)
 		if err != nil && err != sql.ErrNoRows {
 			return err
 		} else if prev.Valid {
-			previousLocation = prev.String
+			prevFilename = prev.String
 		}
 
 		_, err = tx.Exec(`
-			INSERT INTO multipart_parts (multipart_upload_id, part_number, location, content_md5, content_sha256, content_length, created_at)
+			INSERT INTO multipart_parts (multipart_upload_id, part_number, filename, content_md5, content_sha256, content_length, created_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7)
 			ON CONFLICT(multipart_upload_id, part_number) DO UPDATE SET
-				location       = EXCLUDED.location,
+				filename       = EXCLUDED.filename,
 				content_md5    = EXCLUDED.content_md5,
 				content_sha256 = EXCLUDED.content_sha256,
 				content_length = EXCLUDED.content_length,
 				created_at     = EXCLUDED.created_at
-		`, uid, partNumber, location, sqlMD5(contentMD5), sha256Value, contentLength, sqlTime(time.Now()))
+		`, uid, partNumber, filename, sqlMD5(contentMD5), sha256Value, contentLength, sqlTime(time.Now()))
 		return err
 	}); err != nil {
 		return "", err
 	}
-	return previousLocation, nil
+	return prevFilename, nil
+}
+
+// HasMultipartUpload checks if a multipart upload exists.
+func (s *Store) HasMultipartUpload(bucket, name, uploadID string) error {
+	return s.transaction(func(tx *txn) error {
+		bid, err := bucketID(tx, bucket)
+		if err != nil {
+			return err
+		}
+
+		_, err = multipartID(tx, uploadID, bid, name)
+		return err
+	})
 }
 
 // ListParts lists uploaded parts for a multipart upload.
