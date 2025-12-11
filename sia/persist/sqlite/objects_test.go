@@ -36,15 +36,9 @@ func TestListObjects(t *testing.T) {
 	contentMD5 := [16]byte(frand.Bytes(16))
 	etag := s3.FormatETag(contentMD5[:])
 
-	putObject := func(key string) {
-	}
-
 	var largeDirectoryKeys []string
 	for i := 0; i < 200; i++ {
-		key := fmt.Sprintf("large-directory/%d", i)
-
-		putObject(key)
-		largeDirectoryKeys = append(largeDirectoryKeys, key)
+		largeDirectoryKeys = append(largeDirectoryKeys, fmt.Sprintf("large-directory/%d", i))
 	}
 	slices.Sort(largeDirectoryKeys)
 
