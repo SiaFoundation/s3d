@@ -17,9 +17,10 @@ import (
 	"lukechampine.com/frand"
 )
 
-func randUploadID() (uuid [8]byte) {
+func randPartName() string {
+	var uuid [8]byte
 	frand.Read(uuid[:])
-	return
+	return fmt.Sprintf("%x.part", uuid[:])
 }
 
 // CreateMultipartUpload creates a new multipart upload.
@@ -37,6 +38,13 @@ func (s *Sia) CreateMultipartUpload(ctx context.Context, accessKeyID, bucket, ob
 
 	// create multipart upload directory
 	if err := os.Mkdir(filepath.Join(s.directory, uploadID), 0700); err != nil {
+		if abortErr := s.store.AbortMultipartUpload(bucket, object, uploadID); abortErr != nil {
+			s.logger.Error("failed to abort multipart upload after directory creation failure",
+				zap.String("bucket", bucket),
+				zap.String("object", object),
+				zap.String("uploadID", uploadID),
+				zap.Error(abortErr))
+		}
 		return nil, fmt.Errorf("failed to create upload directory: %w", err)
 	}
 
@@ -57,17 +65,17 @@ func (s *Sia) AbortMultipartUpload(ctx context.Context, accessKeyID, bucket, obj
 		return err
 	}
 
-	// abort the multipart upload in the database
-	if err := s.store.AbortMultipartUpload(bucket, object, uploadID); err != nil {
-		return fmt.Errorf("failed to abort multipart upload: %w", err)
-	}
-
 	// remove multipart upload directory
 	uploadDir := filepath.Join(s.directory, uploadID)
 	if err := os.RemoveAll(uploadDir); err != nil && !errors.Is(err, os.ErrNotExist) {
-		s.logger.Warn("failed to remove multipart upload directory",
+		s.logger.Error("failed to remove multipart upload directory",
 			zap.String("path", uploadDir),
 			zap.Error(err))
+	}
+
+	// abort the multipart upload in the database
+	if err := s.store.AbortMultipartUpload(bucket, object, uploadID); err != nil {
+		return fmt.Errorf("failed to abort multipart upload: %w", err)
 	}
 
 	return nil
@@ -94,12 +102,23 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object, uploa
 	}
 
 	// create part file
-	partPath := filepath.Join(partDir, fmt.Sprintf("%x.part", randUploadID()))
+	partPath := filepath.Join(partDir, randPartName())
 	partFile, err := os.Create(partPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create part file: %w", err)
 	}
 	defer partFile.Close()
+
+	// defer cleanup on error
+	defer func() {
+		if err != nil {
+			if removeErr := os.Remove(partPath); removeErr != nil {
+				s.logger.Error("failed to remove part file after upload failure",
+					zap.String("path", partPath),
+					zap.Error(removeErr))
+			}
+		}
+	}()
 
 	// prepare writers
 	md5Hash := md5.New()
@@ -155,7 +174,7 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object, uploa
 	previous, err := s.store.AddMultipartPart(bucket, object, uploadID, filepath.Base(partPath), opts.PartNumber, contentMD5, contentSHA256, contentLength)
 	if err != nil {
 		if err := os.Remove(partPath); err != nil {
-			s.logger.Warn("failed to remove part file",
+			s.logger.Error("failed to remove part file",
 				zap.String("path", partPath),
 				zap.Error(err))
 		}
@@ -163,7 +182,7 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object, uploa
 	} else if previous != "" {
 		prevPath := filepath.Join(partDir, previous)
 		if err := os.Remove(prevPath); err != nil {
-			s.logger.Warn("failed to remove old part file",
+			s.logger.Error("failed to remove old part file",
 				zap.String("path", prevPath),
 				zap.Error(err))
 		}
