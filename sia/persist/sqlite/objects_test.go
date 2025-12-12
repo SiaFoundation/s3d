@@ -42,16 +42,6 @@ func TestListObjects(t *testing.T) {
 	}
 	slices.Sort(largeDirectoryKeys)
 
-	ptr := func(s string) *string {
-		return &s
-	}
-	val := func(s *string) string {
-		if s == nil {
-			return ""
-		}
-		return *s
-	}
-
 	assertCommonPrefixesEqual := func(t *testing.T, expected []string, actual []s3.CommonPrefix) {
 		t.Helper()
 		if len(expected) != len(actual) {
@@ -66,10 +56,10 @@ func TestListObjects(t *testing.T) {
 
 	type testCase struct {
 		name       string
-		prefix     *string
-		delimiter  *string
-		marker     *string
-		nextMarker *string
+		prefix     string
+		delimiter  string
+		marker     string
+		nextMarker string
 		maxKeys    int64
 
 		truncated      bool
@@ -93,24 +83,24 @@ func TestListObjects(t *testing.T) {
 					name:       "MaxKeys",
 					objects:    []string{"foo", "foo/bar"},
 					truncated:  true,
-					nextMarker: ptr("foo/bar"),
+					nextMarker: "foo/bar",
 					maxKeys:    2,
 				},
 				{
 					name:    "Marker",
-					marker:  ptr("foo/bar"),
+					marker:  "foo/bar",
 					objects: []string{"foo/baz"},
 					maxKeys: 100,
 				},
 				{
 					name:    "Prefix",
-					prefix:  ptr("foo/b"),
+					prefix:  "foo/b",
 					objects: []string{"foo/bar", "foo/baz"},
 					maxKeys: 100,
 				},
 				{
 					name:           "Delimiter",
-					delimiter:      ptr("/"),
+					delimiter:      "/",
 					objects:        []string{"foo"},
 					commonPrefixes: []string{"foo/"},
 					maxKeys:        100,
@@ -122,22 +112,20 @@ func TestListObjects(t *testing.T) {
 			cases: []testCase{
 				{
 					name:       "Page1",
-					prefix:     ptr("a/"),
-					delimiter:  ptr("/"),
+					prefix:     "a/",
+					delimiter:  "/",
 					maxKeys:    1,
 					objects:    []string{"a/file1"},
 					truncated:  true,
-					nextMarker: ptr("a/file1"),
+					nextMarker: "a/file1",
 				},
 				{
 					name:           "Page2",
-					prefix:         ptr("a/"),
-					delimiter:      ptr("/"),
-					marker:         ptr("a/file1"),
+					prefix:         "a/",
+					delimiter:      "/",
+					marker:         "a/file1",
 					maxKeys:        2,
 					commonPrefixes: []string{"a/sub/"},
-					truncated:      false,
-					nextMarker:     nil, // End of the 'a/' prefix
 				}},
 		},
 		{
@@ -152,7 +140,7 @@ func TestListObjects(t *testing.T) {
 					name:       "Large truncated",
 					objects:    largeDirectoryKeys[:100],
 					truncated:  true,
-					nextMarker: ptr(largeDirectoryKeys[99]),
+					nextMarker: largeDirectoryKeys[99],
 					maxKeys:    100,
 				},
 			},
@@ -179,13 +167,20 @@ func TestListObjects(t *testing.T) {
 
 		for _, tc := range tt.cases {
 			t.Run(tc.name, func(t *testing.T) {
+
 				resp, err := store.ListObjects(nil, bucket, s3.Prefix{
-					Prefix:       val(tc.prefix),
-					HasPrefix:    tc.prefix != nil,
-					Delimiter:    val(tc.delimiter),
-					HasDelimiter: tc.delimiter != nil,
+					Prefix:       tc.prefix,
+					HasPrefix:    tc.prefix != "",
+					Delimiter:    tc.delimiter,
+					HasDelimiter: tc.delimiter != "",
 				}, s3.ListObjectsPage{
-					Marker:  tc.marker,
+					Marker: func() *string {
+						if tc.marker == "" {
+							return nil
+						}
+						v := tc.marker
+						return &v
+					}(),
 					MaxKeys: tc.maxKeys,
 				})
 				if err != nil {
@@ -195,16 +190,20 @@ func TestListObjects(t *testing.T) {
 				} else if resp.IsTruncated != tc.truncated {
 					t.Fatalf("expected truncated=%v, got %v", tc.truncated, resp.IsTruncated)
 				}
+
 				for i := range tc.objects {
 					if resp.Contents[i].Key != tc.objects[i] {
 						t.Fatalf("expected object %v, got %v", tc.objects[i], resp.Contents[i].Key)
-					} else if resp.Contents[i].ETag != etag {
+					}
+					if resp.Contents[i].ETag != etag {
 						t.Fatalf("expected ETag %q, got %q", etag, resp.Contents[i].ETag)
 					}
 				}
+
 				assertCommonPrefixesEqual(t, tc.commonPrefixes, resp.CommonPrefixes)
-				if expectedMarker := val(tc.nextMarker); expectedMarker != resp.NextMarker {
-					t.Fatalf("expected marker %v, got %v", expectedMarker, resp.NextMarker)
+
+				if tc.nextMarker != resp.NextMarker {
+					t.Fatalf("expected marker %v, got %v", tc.nextMarker, resp.NextMarker)
 				}
 			})
 		}
@@ -230,8 +229,8 @@ func TestListObjectsMatch(t *testing.T) {
 	keys := []string{"a//b", "foo/baz", "foo/bar", "😊/д"}
 	obj := sdk.Object{}
 	contentMD5 := [16]byte(frand.Bytes(16))
-
 	etag := s3.FormatETag(contentMD5[:])
+
 	for _, key := range keys {
 		err := store.PutObject("", bucket, key, &objects.Object{
 			ID:         obj.ID(),
@@ -256,54 +255,44 @@ func TestListObjectsMatch(t *testing.T) {
 		}
 	}
 
-	ptr := func(s string) *string {
-		return &s
-	}
-	val := func(s *string) string {
-		if s == nil {
-			return ""
-		}
-		return *s
-	}
-
 	for idx, tc := range []struct {
-		prefix         *string
-		delim          *string
+		prefix         string
+		delim          string
 		objects        []string
 		commonPrefixes []string
 	}{
-		{prefix: ptr("a"), objects: []string{"a//b"}},
-		{prefix: ptr("a/"), objects: []string{"a//b"}},
-		{prefix: ptr("a//"), objects: []string{"a//b"}},
+		{prefix: "a", objects: []string{"a//b"}},
+		{prefix: "a/", objects: []string{"a//b"}},
+		{prefix: "a//", objects: []string{"a//b"}},
 
-		{prefix: ptr("foo"), objects: []string{"foo/bar", "foo/baz"}},
-		{prefix: ptr("foo/"), objects: []string{"foo/bar", "foo/baz"}},
-		{prefix: ptr("foo/ba"), objects: []string{"foo/bar", "foo/baz"}},
-		{prefix: ptr("foo/bar"), objects: []string{"foo/bar"}},
-		{prefix: ptr("foo//ba")},
-		{prefix: ptr("😊"), objects: []string{"😊/д"}},
+		{prefix: "foo", objects: []string{"foo/bar", "foo/baz"}},
+		{prefix: "foo/", objects: []string{"foo/bar", "foo/baz"}},
+		{prefix: "foo/ba", objects: []string{"foo/bar", "foo/baz"}},
+		{prefix: "foo/bar", objects: []string{"foo/bar"}},
+		{prefix: "foo//ba"},
+		{prefix: "😊", objects: []string{"😊/д"}},
 
-		{prefix: ptr("FOO")},
-		{prefix: ptr("FOO/")},
-		{prefix: ptr("foo/BA")},
-		{prefix: ptr("foo/BAR")},
+		{prefix: "FOO"},
+		{prefix: "FOO/"},
+		{prefix: "foo/BA"},
+		{prefix: "foo/BAR"},
 
-		{prefix: ptr("foo"), delim: ptr("/"), commonPrefixes: []string{"foo/"}},
-		{prefix: ptr("aaa"), delim: ptr("/")},
+		{prefix: "foo", delim: "/", commonPrefixes: []string{"foo/"}},
+		{prefix: "aaa", delim: "/"},
 
-		{prefix: ptr("FOO"), delim: ptr("/")},
-		{prefix: ptr("FOO"), delim: ptr("//")},
-		{prefix: ptr("aaa"), delim: ptr("/")},
+		{prefix: "FOO", delim: "/"},
+		{prefix: "FOO", delim: "//"},
+		{prefix: "aaa", delim: "/"},
 
-		{delim: ptr("/"), commonPrefixes: []string{"a/", "foo/", "😊/"}},
-		{prefix: ptr(""), delim: ptr("/"), commonPrefixes: []string{"a/", "foo/", "😊/"}},
+		{delim: "/", commonPrefixes: []string{"a/", "foo/", "😊/"}},
+		{prefix: "", delim: "/", commonPrefixes: []string{"a/", "foo/", "😊/"}},
 	} {
 		t.Run(fmt.Sprint(idx), func(t *testing.T) {
 			resp, err := store.ListObjects(nil, bucket, s3.Prefix{
-				Prefix:       val(tc.prefix),
-				HasPrefix:    tc.prefix != nil,
-				Delimiter:    val(tc.delim),
-				HasDelimiter: tc.delim != nil,
+				Prefix:       tc.prefix,
+				HasPrefix:    tc.prefix != "",
+				Delimiter:    tc.delim,
+				HasDelimiter: tc.delim != "",
 			}, s3.ListObjectsPage{MaxKeys: 100})
 			if err != nil {
 				t.Fatal(err)
