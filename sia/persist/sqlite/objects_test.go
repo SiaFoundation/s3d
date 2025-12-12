@@ -364,8 +364,11 @@ func TestListObjectsWalk(t *testing.T) {
 	obj := sdk.Object{}
 	contentMD5 := [16]byte(frand.Bytes(16))
 
+	keysSeen := make(map[string]struct{})
+	keysAll := make(map[string]struct{})
 	for range numKeys {
 		key := randomPath(minLength, maxLength, maxDepth, alphabet, delimiter)
+		keysAll[key] = struct{}{}
 		err := store.PutObject("", bucket, key, &objects.Object{
 			ID:         obj.ID(),
 			ContentMD5: contentMD5,
@@ -410,6 +413,9 @@ func TestListObjectsWalk(t *testing.T) {
 			t.Fatal(err)
 		}
 		visited += len(res.Contents)
+		for _, obj := range res.Contents {
+			keysSeen[obj.Key] = struct{}{}
+		}
 
 		// push subdirectories
 		for _, cp := range res.CommonPrefixes {
@@ -429,8 +435,13 @@ func TestListObjectsWalk(t *testing.T) {
 		}
 	}
 
-	if visited != numKeys {
-		t.Fatalf("expected to visit %d uploads, visited %d", numKeys, visited)
+	for key := range keysAll {
+		if _, ok := keysSeen[key]; !ok {
+			t.Logf("missing %s", key)
+		}
+	}
+	if len(keysAll) != len(keysSeen) {
+		t.Fatalf("didn't see some keys: %d vs %d", len(keysAll), len(keysSeen))
 	}
 }
 
