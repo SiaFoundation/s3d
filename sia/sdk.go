@@ -17,15 +17,11 @@ type IndexdSDK struct {
 	perUploadInflight   int
 }
 
-// NewSDK creates a new IndexdSDK instance using the Go Indexd SDK.
-func NewSDK(baseURL string, appKey types.PrivateKey, opts ...sdk.Option) (*IndexdSDK, error) {
-	sdk, err := sdk.NewSDK(baseURL, appKey, opts...)
-	if err != nil {
-		return nil, err
-	}
+// NewSDK wraps an indexd SDK for use in s3d.
+func NewSDK(sdk *sdk.SDK) *IndexdSDK {
 	return &IndexdSDK{
 		inner: sdk,
-	}, nil
+	}
 }
 
 // Download downloads an object from indexd.
