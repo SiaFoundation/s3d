@@ -35,8 +35,8 @@ CREATE TABLE objects (
     updated_at INTEGER NOT NULL,
     UNIQUE(bucket_id, name)
 );
-CREATE INDEX objects_list_idx ON objects(bucket_id, name, content_md5, size, updated_at);
-CREATE INDEX objects_slash_delim_idx ON objects(bucket_id, name, content_md5, size, updated_at) WHERE INSTR(name, '/') > 0;
+CREATE INDEX objects_list_idx ON objects(bucket_id, name, updated_at, size, content_md5);
+CREATE INDEX objects_slash_delim_idx ON objects(bucket_id, name, updated_at, size, content_md5) WHERE INSTR(name, '/') > 0;
 
 CREATE TABLE multipart_uploads (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
