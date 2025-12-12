@@ -114,28 +114,6 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, obj *objects.Object)
 	})
 }
 
-// pathClean replaces multiple forward slashes with a single slash.
-// "a/b/c" -> "a/b/c"
-// "a//b/c" -> "a/b/c"
-func pathClean(p string) string {
-	var inSlash bool
-	var b strings.Builder
-	for _, c := range p {
-		if c == '/' {
-			if inSlash {
-				continue
-			}
-
-			b.WriteRune(c)
-			inSlash = true
-		} else {
-			b.WriteRune(c)
-			inSlash = false
-		}
-	}
-	return b.String()
-}
-
 // ListObjects lists objects in the specified bucket for the user identified
 // by the given access key. The backend should use the prefix to limit the
 // contents of the bucket and sort the results into the Contents and
@@ -151,14 +129,6 @@ func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return fmt.Errorf("failed to get bucket ID: %w", err)
-		}
-
-		// replace multiple forward slashes with one
-		if prefix.HasPrefix && prefix.Prefix != "" {
-			prefix.Prefix = pathClean(prefix.Prefix)
-		}
-		if prefix.HasDelimiter && prefix.Delimiter != "" {
-			prefix.Delimiter = pathClean(prefix.Delimiter)
 		}
 
 		list := func(marker *string) (string, string, error) {

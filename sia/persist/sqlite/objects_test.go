@@ -227,7 +227,7 @@ func TestListObjectsMatch(t *testing.T) {
 	}
 
 	// upload a few objects
-	keys := []string{"foo/baz", "foo/bar", "😊/д"}
+	keys := []string{"a//b", "foo/baz", "foo/bar", "😊/д"}
 	obj := sdk.Object{}
 	contentMD5 := [16]byte(frand.Bytes(16))
 
@@ -272,12 +272,15 @@ func TestListObjectsMatch(t *testing.T) {
 		objects        []string
 		commonPrefixes []string
 	}{
+		{prefix: ptr("a"), objects: []string{"a//b"}},
+		{prefix: ptr("a/"), objects: []string{"a//b"}},
+		{prefix: ptr("a//"), objects: []string{"a//b"}},
+
 		{prefix: ptr("foo"), objects: []string{"foo/bar", "foo/baz"}},
 		{prefix: ptr("foo/"), objects: []string{"foo/bar", "foo/baz"}},
 		{prefix: ptr("foo/ba"), objects: []string{"foo/bar", "foo/baz"}},
 		{prefix: ptr("foo/bar"), objects: []string{"foo/bar"}},
-		{prefix: ptr("foo//ba"), objects: []string{"foo/bar", "foo/baz"}},
-		{prefix: ptr("foo//bar"), objects: []string{"foo/bar"}},
+		{prefix: ptr("foo//ba")},
 		{prefix: ptr("😊"), objects: []string{"😊/д"}},
 
 		{prefix: ptr("FOO")},
@@ -292,9 +295,8 @@ func TestListObjectsMatch(t *testing.T) {
 		{prefix: ptr("FOO"), delim: ptr("//")},
 		{prefix: ptr("aaa"), delim: ptr("/")},
 
-		{delim: ptr("/"), commonPrefixes: []string{"foo/", "😊/"}},
-		{delim: ptr("//"), commonPrefixes: []string{"foo/", "😊/"}},
-		{prefix: ptr(""), delim: ptr("/"), commonPrefixes: []string{"foo/", "😊/"}},
+		{delim: ptr("/"), commonPrefixes: []string{"a/", "foo/", "😊/"}},
+		{prefix: ptr(""), delim: ptr("/"), commonPrefixes: []string{"a/", "foo/", "😊/"}},
 	} {
 		t.Run(fmt.Sprint(idx), func(t *testing.T) {
 			resp, err := store.ListObjects(nil, bucket, s3.Prefix{
