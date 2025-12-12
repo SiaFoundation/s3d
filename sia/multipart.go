@@ -38,13 +38,6 @@ func (s *Sia) CreateMultipartUpload(ctx context.Context, accessKeyID, bucket, ob
 
 	// create multipart upload directory
 	if err := os.Mkdir(filepath.Join(s.directory, uploadID), 0700); err != nil {
-		if abortErr := s.store.AbortMultipartUpload(bucket, object, uploadID); abortErr != nil {
-			s.logger.Error("failed to abort multipart upload after directory creation failure",
-				zap.String("bucket", bucket),
-				zap.String("object", object),
-				zap.String("uploadID", uploadID),
-				zap.Error(abortErr))
-		}
 		return nil, fmt.Errorf("failed to create upload directory: %w", err)
 	}
 
@@ -65,17 +58,17 @@ func (s *Sia) AbortMultipartUpload(ctx context.Context, accessKeyID, bucket, obj
 		return err
 	}
 
+	// abort the multipart upload in the database
+	if err := s.store.AbortMultipartUpload(bucket, object, uploadID); err != nil {
+		return fmt.Errorf("failed to abort multipart upload: %w", err)
+	}
+
 	// remove multipart upload directory
 	uploadDir := filepath.Join(s.directory, uploadID)
 	if err := os.RemoveAll(uploadDir); err != nil && !errors.Is(err, os.ErrNotExist) {
 		s.logger.Error("failed to remove multipart upload directory",
 			zap.String("path", uploadDir),
 			zap.Error(err))
-	}
-
-	// abort the multipart upload in the database
-	if err := s.store.AbortMultipartUpload(bucket, object, uploadID); err != nil {
-		return fmt.Errorf("failed to abort multipart upload: %w", err)
 	}
 
 	return nil
