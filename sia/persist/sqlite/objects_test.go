@@ -387,7 +387,6 @@ func TestListObjectsWalk(t *testing.T) {
 
 	seen := make(map[string]struct{})
 	stack := []page{{}}
-	var visited int
 	for len(stack) > 0 {
 		// pop from stack
 		n := len(stack) - 1
@@ -412,7 +411,6 @@ func TestListObjectsWalk(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		visited += len(res.Contents)
 		for _, obj := range res.Contents {
 			keysSeen[obj.Key] = struct{}{}
 		}
