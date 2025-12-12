@@ -159,11 +159,11 @@ func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.
 		}
 
 		// build uploads query
-		query, args := buildContentsQuery(bid, prefix.Prefix, prefix.Delimiter, page.Marker)
+		query, args := buildContentsQuery(bid, prefix, page)
 
 		// build common prefixes query if needed
 		if prefix.HasDelimiter {
-			query2, args2 := buildCommonPrefixesQuery(bid, prefix.Prefix, prefix.Delimiter, page.Marker)
+			query2, args2 := buildCommonPrefixesQuery(bid, prefix, page)
 			query = fmt.Sprintf(`
 				WITH uploads AS (%s), prefixes AS (%s)
 				SELECT name, content_md5, size, updated_at, is_prefix FROM uploads
@@ -221,11 +221,9 @@ func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.
 	return result, nil
 }
 
-func buildContentsQuery(bucketID int64, prefix, delimiter string, keyMarker *string) (string, []any) {
+func buildContentsQuery(bucketID int64, prefix s3.Prefix, page s3.ListObjectsPage) (string, []any) {
 	var (
-		hasPrefix    = prefix != ""
-		hasDelim     = delimiter != ""
-		prefixLen    = utf8.RuneCountInString(prefix)
+		prefixLen    = utf8.RuneCountInString(prefix.Prefix)
 		searchOffset = prefixLen + 1
 	)
 
@@ -234,40 +232,40 @@ func buildContentsQuery(bucketID int64, prefix, delimiter string, keyMarker *str
 	args := []any{bucketID}
 
 	// handle prefix
-	if hasPrefix {
+	if prefix.HasPrefix {
 		where = append(where, "SUBSTR(name, 1, ?) = ?")
-		args = append(args, prefixLen, prefix)
+		args = append(args, prefixLen, prefix.Prefix)
 	}
 
 	// handle delimiter
-	if hasDelim {
-		if hasPrefix {
+	if prefix.HasDelimiter {
+		if prefix.HasPrefix {
 			// when we know there's a prefix, start searching after it
 			where = append(where, "INSTR(SUBSTR(name, ?), ?) = 0")
-			args = append(args, searchOffset, delimiter)
+			args = append(args, searchOffset, prefix.Delimiter)
 		} else {
 			// no prefix, just ensure delimiter not in the whole name
 			where = append(where, "INSTR(name, ?) = 0")
-			args = append(args, delimiter)
+			args = append(args, prefix.Delimiter)
 		}
 	}
 
-	if keyMarker != nil {
+	if page.Marker != nil {
 		where = append(where, "name > ?")
-		args = append(args, *keyMarker)
+		args = append(args, *page.Marker)
 	}
 
 	return fmt.Sprintf(`SELECT name, content_md5, size, updated_at, FALSE as is_prefix FROM objects WHERE %s`, strings.Join(where, " AND ")), args
 }
 
-func buildCommonPrefixesQuery(bucketID int64, prefix, delimiter string, keyMarker *string) (_ string, args []any) {
+func buildCommonPrefixesQuery(bucketID int64, prefix s3.Prefix, page s3.ListObjectsPage) (_ string, args []any) {
 	var (
-		prefixLen    = utf8.RuneCountInString(prefix)
+		prefixLen    = utf8.RuneCountInString(prefix.Prefix)
 		searchOffset = prefixLen + 1
 	)
 
 	// search delimiter after prefix
-	args = append(args, searchOffset, delimiter, prefixLen)
+	args = append(args, searchOffset, prefix.Delimiter, prefixLen)
 
 	// check bucket
 	where := []string{"bucket_id = ?"}
@@ -275,11 +273,11 @@ func buildCommonPrefixesQuery(bucketID int64, prefix, delimiter string, keyMarke
 
 	// check prefix
 	where = append(where, "SUBSTR(name, 1, ?) = ? AND INSTR(SUBSTR(name, ?), ?) > 0")
-	args = append(args, prefixLen, prefix, searchOffset, delimiter)
+	args = append(args, prefixLen, prefix.Prefix, searchOffset, prefix.Delimiter)
 
-	if keyMarker != nil {
+	if page.Marker != nil {
 		where = append(where, "name > ?")
-		args = append(args, *keyMarker)
+		args = append(args, *page.Marker)
 	}
 
 	return fmt.Sprintf(`
