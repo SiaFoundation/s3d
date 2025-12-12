@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"bytes"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -15,6 +16,10 @@ func TestAppKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
+
+	if _, err := store.AppKey(); !errors.Is(err, ErrNoAppKey) {
+		t.Fatal(err)
+	}
 
 	key := types.GeneratePrivateKey()
 	if err := store.SetAppKey(key); err != nil {
