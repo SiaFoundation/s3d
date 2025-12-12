@@ -2,9 +2,7 @@ package sqlite
 
 import (
 	"database/sql"
-	"encoding/hex"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
@@ -93,23 +91,12 @@ func bucketID(t *txn, bucket string) (bucketID int64, err error) {
 
 // multipartID returns the ID of the multipart upload with the given upload ID
 // or an error if it does not exist.
-func multipartID(t *txn, uploadID string, bucketID int64, object string) (int64, error) {
+func multipartID(t *txn, uploadID s3.UploadID, bucketID int64, object string) (int64, error) {
 	var id int64
-	if uid, err := parseUploadID(uploadID); err != nil {
-		return 0, s3errs.ErrNoSuchUpload
-	} else if err := t.QueryRow(`SELECT id FROM multipart_uploads WHERE upload_id = $1 AND bucket_id = $2 AND name = $3`, sqlUploadID(uid), bucketID, object).Scan(&id); errors.Is(err, sql.ErrNoRows) {
+	if err := t.QueryRow(`SELECT id FROM multipart_uploads WHERE upload_id = $1 AND bucket_id = $2 AND name = $3`, sqlUploadID(uploadID), bucketID, object).Scan(&id); errors.Is(err, sql.ErrNoRows) {
 		return 0, s3errs.ErrNoSuchUpload
 	} else if err != nil {
 		return 0, err
 	}
 	return id, nil
-}
-
-func parseUploadID(s string) (uid [16]byte, _ error) {
-	if len(s) != 32 {
-		return uid, fmt.Errorf("invalid length: got %d, want 32", len(s))
-	} else if _, err := hex.Decode(uid[:], []byte(s)); err != nil {
-		return uid, fmt.Errorf("failed to parse upload ID %q: %w", s, err)
-	}
-	return
 }

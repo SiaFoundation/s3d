@@ -61,10 +61,10 @@ type Store interface {
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
 	PutObject(accessKeyID, bucket, name string, obj *objects.Object) error
 
-	HasMultipartUpload(bucket, name, uploadID string) error
-	CreateMultipartUpload(bucket, name string, meta map[string]string) (string, error)
-	AbortMultipartUpload(bucket, name, uploadID string) error
-	AddMultipartPart(bucket, name, uploadID, filename string, partNumber int, contentMD5 [16]byte, contentSHA256 *[32]byte, contentLength int64) (string, error)
+	HasMultipartUpload(bucket, name string, uploadID s3.UploadID) error
+	CreateMultipartUpload(bucket, name string, uploadID s3.UploadID, meta map[string]string) error
+	AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) error
+	AddMultipartPart(bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentSHA256 *[32]byte, contentLength int64) (string, error)
 }
 
 // New creates a new Sia backend instance.
