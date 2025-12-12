@@ -23,7 +23,9 @@ CREATE TABLE buckets (
     name TEXT NOT NULL UNIQUE
 );
 
+
 CREATE TABLE objects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     bucket_id INTEGER REFERENCES buckets(id) NOT NULL,
     name TEXT NOT NULL,
     object_id BLOB NOT NULL,
@@ -31,8 +33,10 @@ CREATE TABLE objects (
     metadata TEXT NOT NULL,
     size INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
-    PRIMARY KEY(bucket_id, name)
-) WITHOUT ROWID;
+    UNIQUE(bucket_id, name)
+);
+CREATE INDEX objects_list_idx ON objects(bucket_id, name, content_md5, size, updated_at);
+CREATE INDEX objects_slash_delim_idx ON objects(bucket_id, name, content_md5, size, updated_at) WHERE INSTR(name, '/') > 0;
 
 CREATE TABLE multipart_uploads (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

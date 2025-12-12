@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"time"
 
@@ -114,130 +115,185 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, obj *objects.Object)
 	})
 }
 
+func commonPrefix(key, prefix, delimiter string) string {
+	after, ok := strings.CutPrefix(key, prefix)
+	if !ok {
+		return ""
+	}
+
+	idx := strings.IndexRune(after, rune(delimiter[0]))
+	if idx == -1 {
+		return ""
+	}
+
+	return prefix + after[:idx+utf8.RuneCountInString(delimiter)]
+}
+
 // ListObjects lists objects in the specified bucket for the user identified
 // by the given access key. The backend should use the prefix to limit the
 // contents of the bucket and sort the results into the Contents and
 // CommonPrefixes fields of the returned ObjectsListResult.
 func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (result *s3.ObjectsListResult, err error) {
 	result = s3.NewObjectsListResult(page.MaxKeys)
-	if page.MaxKeys == 0 {
-		return result, nil
+
+	// if the marker falls inside a common prefix (e.g. prefix "ac", delimiter
+	// "/", marker "acb/x"), advance past that prefix so it isn't returned
+	// twice
+	if prefix.Delimiter != "" && page.Marker != nil && *page.Marker != "" {
+		markerRemainder := *page.Marker
+		var prefixLen int
+		if after, ok := strings.CutPrefix(*page.Marker, prefix.Prefix); ok {
+			prefixLen = len(prefix.Prefix)
+			markerRemainder = after
+		}
+		if idx := strings.Index(markerRemainder, prefix.Delimiter); idx != -1 {
+			commonPrefix := (*page.Marker)[:prefixLen+idx+len(prefix.Delimiter)]
+			*page.Marker = commonPrefix + string([]byte{0xFF})
+		}
 	}
 
-	const maxObjsPerQuery = 100
 	err = s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return fmt.Errorf("failed to get bucket ID: %w", err)
 		}
 
-		list := func(marker *string) (string, string, error) {
-			query := `SELECT o.name, o.content_md5, o.size, o.updated_at
-FROM objects o
-WHERE o.bucket_id = ?`
-			args := []any{bid}
+		// build uploads query
+		query, args := buildContentsQuery(bid, prefix.Prefix, prefix.Delimiter, page.Marker)
 
-			if marker != nil && *marker != "" {
-				query += ` AND o.name > ?`
-				args = append(args, *marker)
-			}
-
-			if prefix.HasPrefix {
-				query += ` AND o.name >= ? AND o.name < ?`
-				args = append(args, prefix.Prefix, prefix.Prefix+"\xFF")
-			}
-
-			query += ` ORDER BY o.name`
-			query += `  LIMIT ?`
-			args = append(args, maxObjsPerQuery)
-
-			rows, err := tx.Query(query, args...)
-			if err != nil {
-				return "", "", fmt.Errorf("failed to query objects: %w", err)
-			}
-			defer rows.Close()
-
-			var lastMatchedPart, lastObj string
-			for rows.Next() {
-				var obj objects.Object
-				err = rows.Scan(
-					&obj.Name,
-					(*sqlMD5)(&obj.ContentMD5),
-					&obj.Size,
-					(*sqlTime)(&obj.UpdatedAt),
-				)
-				if err != nil {
-					return "", "", fmt.Errorf("failed to scan object: %w", err)
-				}
-
-				var done bool
-				match := s3.Match(prefix, obj.Name)
-				switch {
-				case match == nil:
-					continue
-				case match.CommonPrefix:
-					if marker != nil && strings.Compare(*marker, match.MatchedPart) >= 0 {
-						continue
-					}
-					if match.MatchedPart == lastMatchedPart {
-						continue // should not count towards keys
-					}
-					result.AddPrefix(match.MatchedPart)
-					lastMatchedPart = match.MatchedPart
-					done = true
-				default:
-					if marker != nil && strings.Compare(*marker, obj.Name) >= 0 {
-						continue
-					}
-					result.Add(&s3.Content{
-						Key:          obj.Name,
-						LastModified: s3.NewContentTime(obj.UpdatedAt),
-						ETag:         s3.FormatETag(obj.ContentMD5[:]),
-						Size:         int64(obj.Size),
-					})
-					lastObj = obj.Name
-				}
-
-				if done || result.IsTruncated {
-					break
-				}
-			}
-			if err := rows.Err(); err != nil {
-				return "", "", fmt.Errorf("failed to get rows: %w", err)
-			}
-			return lastMatchedPart, lastObj, nil
+		// build common prefixes query if needed
+		if prefix.HasDelimiter {
+			query2, args2 := buildCommonPrefixesQuery(bid, prefix.Prefix, prefix.Delimiter, page.Marker)
+			query = fmt.Sprintf(`
+				WITH uploads AS (%s), prefixes AS (%s)
+				SELECT name, content_md5, size, updated_at, is_prefix FROM uploads
+				UNION ALL
+				SELECT name, content_md5, size, updated_at, is_prefix FROM prefixes`, query, query2)
+			args = append(args, args2...)
 		}
 
-		marker := page.Marker
-		for !result.IsTruncated {
-			lastMatchedPart, lastObj, err := list(marker)
+		// order and limit
+		query += " ORDER BY name"
+		query += " LIMIT ?"
+		args = append(args, page.MaxKeys+1)
+
+		// collect results
+		rows, err := tx.Query(query, args...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		for rows.Next() && !result.IsTruncated {
+			var obj objects.Object
+			var isPrefix bool
+			err = rows.Scan(
+				&obj.Name,
+				(*sqlMD5)(&obj.ContentMD5),
+				&obj.Size,
+				(*sqlTime)(&obj.UpdatedAt),
+				&isPrefix,
+			)
 			if err != nil {
-				return err
+				return fmt.Errorf("failed to scan object: %w", err)
 			}
-			if lastMatchedPart != "" {
-				// if we get a common prefix, skip over the remainder of it
-				lastMatchedPart += "\xFF"
-				marker = &lastMatchedPart
-			} else if lastObj != "" {
-				// if we haven't advanced at all, stop
-				if marker != nil && *marker == lastObj {
-					break
-				}
-				// otherwise continue getting the matching objects
-				marker = &lastObj
+
+			if isPrefix {
+				result.AddPrefix(commonPrefix(obj.Name, prefix.Prefix, prefix.Delimiter))
 			} else {
-				break
+				result.Add(&s3.Content{
+					Key:          obj.Name,
+					LastModified: s3.NewContentTime(obj.UpdatedAt),
+					ETag:         s3.FormatETag(obj.ContentMD5[:]),
+					Size:         int64(obj.Size),
+				})
 			}
 		}
-		if !result.IsTruncated {
-			result.NextMarker = ""
-		}
-
-		return nil
+		return rows.Err()
 	})
 	if err != nil {
 		return nil, err
 	}
 
+	if !result.IsTruncated {
+		result.NextMarker = ""
+	}
 	return result, nil
+}
+
+func buildContentsQuery(bucketID int64, prefix, delimiter string, keyMarker *string) (string, []any) {
+	var (
+		hasPrefix    = prefix != ""
+		hasDelim     = delimiter != ""
+		prefixLen    = utf8.RuneCountInString(prefix)
+		searchOffset = prefixLen + 1
+	)
+
+	// check bucket
+	where := []string{"bucket_id = ?"}
+	args := []any{bucketID}
+
+	// handle prefix
+	if hasPrefix {
+		where = append(where, "SUBSTR(name, 1, ?) = ?")
+		args = append(args, prefixLen, prefix)
+	}
+
+	// handle delimiter
+	if hasDelim {
+		if hasPrefix {
+			// when we know there's a prefix, start searching after it
+			where = append(where, "INSTR(SUBSTR(name, ?), ?) = 0")
+			args = append(args, searchOffset, delimiter)
+		} else {
+			// no prefix, just ensure delimiter not in the whole name
+			where = append(where, "INSTR(name, ?) = 0")
+			args = append(args, delimiter)
+		}
+	}
+
+	if keyMarker != nil {
+		where = append(where, "name > ?")
+		args = append(args, *keyMarker)
+	}
+
+	return fmt.Sprintf(`SELECT name, content_md5, size, updated_at, FALSE as is_prefix FROM objects WHERE %s`, strings.Join(where, " AND ")), args
+}
+
+func buildCommonPrefixesQuery(bucketID int64, prefix, delimiter string, keyMarker *string) (_ string, args []any) {
+	var (
+		prefixLen    = utf8.RuneCountInString(prefix)
+		searchOffset = prefixLen + 1
+	)
+
+	// search delimiter after prefix
+	args = append(args, searchOffset, delimiter, prefixLen)
+
+	// check bucket
+	where := []string{"bucket_id = ?"}
+	args = append(args, bucketID)
+
+	// check prefix
+	where = append(where, "SUBSTR(name, 1, ?) = ? AND INSTR(SUBSTR(name, ?), ?) > 0")
+	args = append(args, prefixLen, prefix, searchOffset, delimiter)
+
+	if keyMarker != nil {
+		where = append(where, "name > ?")
+		args = append(args, *keyMarker)
+	}
+
+	return fmt.Sprintf(`
+		SELECT name, content_md5, size, updated_at, TRUE as is_prefix FROM (
+			SELECT
+				name,
+				content_md5,
+				size,
+				updated_at,
+				ROW_NUMBER() OVER (
+					PARTITION BY SUBSTR(name, 1, INSTR(SUBSTR(name, ?), ?) + ?)
+					ORDER BY name
+				) as row
+			FROM objects
+			WHERE %s
+		) WHERE row = 1`, strings.Join(where, " AND ")), args
 }

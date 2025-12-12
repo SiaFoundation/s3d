@@ -167,7 +167,6 @@ func TestListObjects(t *testing.T) {
 
 		for _, tc := range tt.cases {
 			t.Run(tc.name, func(t *testing.T) {
-
 				resp, err := store.ListObjects(nil, bucket, s3.Prefix{
 					Prefix:       tc.prefix,
 					HasPrefix:    tc.prefix != "",
@@ -189,6 +188,8 @@ func TestListObjects(t *testing.T) {
 					t.Fatalf("expected %d objects, got %d", len(tc.objects), len(resp.Contents))
 				} else if resp.IsTruncated != tc.truncated {
 					t.Fatalf("expected truncated=%v, got %v", tc.truncated, resp.IsTruncated)
+				} else if tc.nextMarker != resp.NextMarker {
+					t.Fatalf("expected marker %v, got %v", tc.nextMarker, resp.NextMarker)
 				}
 
 				for i := range tc.objects {
@@ -199,12 +200,7 @@ func TestListObjects(t *testing.T) {
 						t.Fatalf("expected ETag %q, got %q", etag, resp.Contents[i].ETag)
 					}
 				}
-
 				assertCommonPrefixesEqual(t, tc.commonPrefixes, resp.CommonPrefixes)
-
-				if tc.nextMarker != resp.NextMarker {
-					t.Fatalf("expected marker %v, got %v", tc.nextMarker, resp.NextMarker)
-				}
 			})
 		}
 	}
@@ -400,7 +396,7 @@ func TestListObjectsWalk(t *testing.T) {
 			Prefix:       pg.prefix,
 			HasPrefix:    pg.prefix != "",
 			Delimiter:    delimiter,
-			HasDelimiter: delimiter != "",
+			HasDelimiter: true,
 		}, s3.ListObjectsPage{
 			MaxKeys: maxKeys,
 			Marker: func() *string {
