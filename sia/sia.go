@@ -55,7 +55,7 @@ type SDK interface {
 type Store interface {
 	CreateBucket(accessKeyID, bucket string) error
 	DeleteBucket(accessKeyID, bucket string) error
-	DeleteObject(accessKeyID, bucket, name string) error
+	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) error
 	GetObject(accessKeyID *string, bucket, object string) (*objects.Object, error)
 	HeadBucket(accessKeyID, bucket string) error
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)

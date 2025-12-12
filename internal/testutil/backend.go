@@ -131,7 +131,7 @@ func (b *MemoryBackend) CopyObject(ctx context.Context, accessKeyID, srcBucket, 
 	dstObjct := &object{
 		name:         dstObject,
 		data:         slices.Clone(srcObjct.data),
-		lastModified: time.Now(),
+		lastModified: nowUTC(),
 		metadata:     meta,
 		contentMD5:   srcObjct.contentMD5,
 		parts:        srcObjct.parts,
@@ -177,17 +177,17 @@ func (b *MemoryBackend) DeleteBucket(ctx context.Context, accessKeyID, name stri
 }
 
 // DeleteObject deletes the specified object from the given bucket.
-func (b *MemoryBackend) DeleteObject(ctx context.Context, accessKeyID, bucket, object string) (*s3.DeleteObjectResult, error) {
+func (b *MemoryBackend) DeleteObject(ctx context.Context, accessKeyID, bucket string, object s3.ObjectID) (*s3.DeleteObjectResult, error) {
 	bkt, exists := b.buckets[bucket]
 	if !exists {
 		return nil, s3errs.ErrNoSuchBucket
 	} else if bkt.owner != b.accessKeys[accessKeyID].owner {
 		return nil, s3errs.ErrAccessDenied
 	}
-	if _, exists := bkt.objects[object]; !exists {
-		return nil, s3errs.ErrNoSuchKey
+	if o, exists := bkt.objects[object.Key]; exists && !o.matches(object) {
+		return nil, s3errs.ErrPreconditionFailed
 	}
-	delete(bkt.objects, object)
+	delete(bkt.objects, object.Key)
 	return &s3.DeleteObjectResult{
 		IsDeleteMarker: false,
 		VersionID:      "",
@@ -204,6 +204,16 @@ func (b *MemoryBackend) DeleteObjects(ctx context.Context, accessKeyID, bucket s
 	}
 	var res s3.ObjectsDeleteResult
 	for _, obj := range objects {
+		o, exists := bkt.objects[obj.Key]
+		if exists && !o.matches(obj) {
+			res.Error = append(res.Error, s3.ErrorResult{
+				Key:     obj.Key,
+				Code:    s3errs.ErrPreconditionFailed.Code,
+				Message: s3errs.ErrPreconditionFailed.Description,
+			})
+			continue
+		}
+
 		delete(bkt.objects, obj.Key)
 		res.Deleted = append(res.Deleted, s3.ObjectID{
 			Key:       obj.Key,
@@ -331,7 +341,7 @@ func (b *MemoryBackend) PutObject(_ context.Context, accessKeyID, bucket, obj st
 		name:         obj,
 		data:         slices.Clone(data),
 		contentMD5:   contentMD5,
-		lastModified: time.Now(),
+		lastModified: nowUTC(),
 		metadata:     opts.Meta,
 		parts:        make(map[int]objectMultipartPart),
 	}
@@ -356,7 +366,7 @@ func (b *MemoryBackend) CreateMultipartUpload(_ context.Context, accessKeyID, bu
 		key:       key,
 		metadata:  opts.Meta,
 		parts:     make(map[int]*multipartPart),
-		createdAt: time.Now(),
+		createdAt: nowUTC(),
 	}
 
 	return &s3.CreateMultipartUploadResult{
@@ -522,7 +532,7 @@ func (b *MemoryBackend) UploadPart(_ context.Context, accessKeyID, bucket, key, 
 	upload.parts[opts.PartNumber] = &multipartPart{
 		data:         data,
 		contentMD5:   contentMD5,
-		lastModified: time.Now(),
+		lastModified: nowUTC(),
 	}
 
 	return &s3.UploadPartResult{
@@ -576,7 +586,7 @@ func (b *MemoryBackend) UploadPartCopy(_ context.Context, accessKeyID, srcBucket
 	upload.parts[opts.PartNumber] = &multipartPart{
 		data:         partData,
 		contentMD5:   contentMD5,
-		lastModified: time.Now(),
+		lastModified: nowUTC(),
 	}
 
 	return &s3.UploadPartCopyResult{
@@ -724,7 +734,7 @@ func (b *MemoryBackend) CompleteMultipartUpload(_ context.Context, accessKeyID, 
 	bkt.objects[key] = &object{
 		name:         key,
 		data:         objData,
-		lastModified: time.Now(),
+		lastModified: nowUTC(),
 		metadata:     upload.metadata,
 		contentMD5:   objMD5,
 		parts:        objParts,
@@ -745,7 +755,7 @@ func (b *MemoryBackend) ListBuckets(ctx context.Context, accessKeyID string) ([]
 		if bucket.owner == b.accessKeys[accessKeyID].owner {
 			buckets = append(buckets, s3.BucketInfo{
 				Name:         name,
-				CreationDate: s3.NewContentTime(time.Now()),
+				CreationDate: s3.NewContentTime(nowUTC()),
 			})
 		}
 	}
@@ -824,4 +834,20 @@ func (b *MemoryBackend) headOrGetObject(_ context.Context, accessKeyID *string, 
 		Size:         size,
 		PartsCount:   partCount,
 	}, nil
+}
+
+// matches checks if the object matches the given ObjectID.
+//
+// NOTE: The LastModifiedTime comparison truncates to seconds, as the timestamp
+// is transmitted in http.TimeFormat which is truncated to seconds as well.
+func (o object) matches(oid s3.ObjectID) bool {
+	return o.name == oid.Key &&
+		(oid.ETag == nil || s3.FormatETag(o.contentMD5[:]) == *oid.ETag) &&
+		(oid.Size == nil || int64(len(o.data)) == *oid.Size) &&
+		(oid.LastModifiedTime == nil || o.lastModified.Equal(oid.LastModifiedTime.StdTime()))
+}
+
+// nowUTC returns the current time in UTC truncated to seconds.
+func nowUTC() time.Time {
+	return time.Now().UTC().Truncate(time.Second)
 }

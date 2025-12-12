@@ -12,6 +12,7 @@ import (
 	"github.com/SiaFoundation/s3d/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"lukechampine.com/frand"
 )
@@ -293,4 +294,125 @@ func TestCopyObject(t *testing.T) {
 	} else if obj.LastModified.Before(copyTime) {
 		t.Fatalf("last modified mismatch: expected after %v, got %v", copyTime, obj.LastModified)
 	}
+}
+
+func TestDeleteObjects(t *testing.T) {
+	s3Tester := NewTester(t)
+
+	// prepare a bucket
+	bucket := "foo"
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// upload a few objects
+	const etag = "d41d8cd98f00b204e9800998ecf8427e"
+	keys := []string{"1", "2", "3", "4", "5"}
+	for _, key := range keys {
+		_, err := s3Tester.PutObject(t.Context(), bucket, key, bytes.NewReader([]byte{}), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// delete from nonexistent bucket
+	_, err := s3Tester.DeleteObjects(t.Context(), "nonexistent", testutil.ObjectIdentifiers(keys...), nil)
+	testutil.AssertS3Error(t, s3errs.ErrNoSuchBucket, err)
+
+	assertDeleted := func(t *testing.T, key string, deleted types.DeletedObject) {
+		t.Helper()
+		if *deleted.Key != key {
+			t.Fatalf("expected deleted key %v, got %v", key, *deleted.Key)
+		}
+	}
+
+	// attempt to delete an object with wrong conditions
+	resp, err := s3Tester.DeleteObjects(t.Context(), bucket, []types.ObjectIdentifier{
+		{
+			Key:  aws.String("1"),
+			ETag: aws.String("wrong"),
+		},
+		{
+			Key:              aws.String("1"),
+			LastModifiedTime: aws.Time(time.Now().Add(-time.Hour)),
+		},
+		{
+			Key:  aws.String("1"),
+			Size: aws.Int64(147),
+		},
+	}, nil) // delete object 1
+	if err != nil {
+		t.Fatal(err)
+	} else if len(resp.Deleted) != 0 {
+		t.Fatalf("expected 0 deleted object, got %d", len(resp.Deleted))
+	} else if len(resp.Errors) != 3 {
+		t.Fatalf("expected 3 errors, got %d", len(resp.Errors))
+	}
+	for _, delErr := range resp.Errors {
+		if delErr.Code == nil || *delErr.Code != s3errs.ErrPreconditionFailed.Code {
+			t.Fatalf("expected PreconditionFailed error, got %v", *delErr.Code)
+		}
+	}
+
+	// delete object 1 with correct conditions
+	o1, err := s3Tester.HeadObject(t.Context(), bucket, "1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err = s3Tester.DeleteObjects(t.Context(), bucket, []types.ObjectIdentifier{
+		{
+			Key:              aws.String("1"),
+			ETag:             aws.String(`"` + etag + `"`),
+			LastModifiedTime: aws.Time(o1.LastModified),
+			Size:             aws.Int64(o1.Size),
+		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(resp.Deleted) != 1 {
+		t.Fatal("expected 1 deleted object, got", len(resp.Deleted))
+	}
+
+	// delete a few objects, including one that doesn't exist
+	delKeys := []string{"2", "4", "nonexistent"}
+	resp, err = s3Tester.DeleteObjects(t.Context(), bucket, testutil.ObjectIdentifiers(delKeys...), nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(resp.Deleted) != 3 {
+		t.Fatalf("expected 3 deleted objects, got %d", len(resp.Deleted))
+	}
+	assertDeleted(t, "2", resp.Deleted[0])
+	assertDeleted(t, "4", resp.Deleted[1])
+	assertDeleted(t, "nonexistent", resp.Deleted[2])
+
+	// verify deleted objects are gone and others remain
+	// TODO: Re-enable once ListObjectsV2 is implemented
+	//	objs, err := s3Tester.ListObjectsV2(t.Context(), bucket, nil, nil, s3.ListObjectsPage{})
+	//	if err != nil {
+	//		t.Fatal(err)
+	//	}
+	//	if *objs.KeyCount != 3 {
+	//		t.Fatalf("expected 3 remaining objects, got %d", objs.KeyCount)
+	//	} else if *objs.Contents[0].Key != "1" || *objs.Contents[1].Key != "3" || *objs.Contents[2].Key != "5" {
+	//		t.Fatalf("remaining objects mismatch: %+v", objs.Contents)
+	//	}
+
+	// delete the remaining ones using 'quiet' mode
+	resp, err = s3Tester.DeleteObjects(t.Context(), bucket, testutil.ObjectIdentifiers("3", "5"), aws.Bool(true))
+	if err != nil {
+		t.Fatal(err)
+	} else if len(resp.Deleted) != 0 {
+		t.Fatalf("expected 0 deleted objects in quiet mode, got %d", len(resp.Deleted))
+	} else if len(resp.Errors) != 0 {
+		t.Fatalf("expected 0 errors in quiet mode, got %d", len(resp.Errors))
+	}
+
+	// verify deleted objects are gone and others remain
+	// TODO: Re-enable once ListObjectsV2 is implemented
+	// objs, err = s3Tester.ListObjectsV2(t.Context(), bucket, nil, nil, s3.ListObjectsPage{})
+	// if err != nil {
+	// 	t.Fatal(err)
+	// } else if objs.KeyCount != nil {
+	// 	t.Fatalf("expected 0 remaining objects, got %d", *objs.KeyCount)
+	// }
 }
