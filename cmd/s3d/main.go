@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/pbkdf2"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net"
@@ -19,8 +17,6 @@ import (
 	"github.com/SiaFoundation/s3d/sia"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"go.sia.tech/core/types"
-	"go.sia.tech/coreutils/wallet"
-	"go.sia.tech/indexd/api/app"
 	"go.sia.tech/indexd/sdk"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -28,18 +24,18 @@ import (
 )
 
 const (
-	appSecretEnvVar = "S3D_APP_SECRET"
-	accessKeyEnv    = "S3D_ACCESS_KEY"
-	secretKeyEnv    = "S3D_SECRET_KEY"
+	recoveryPhraseEnv = "S3D_RECOVERY_PHRASE"
+	accessKeyEnv      = "S3D_ACCESS_KEY"
+	secretKeyEnv      = "S3D_SECRET_KEY"
 
 	configFileEnvVar = "S3D_CONFIG_FILE"
 	dataDirEnvVar    = "S3D_DATA_DIR"
 )
 
 var cfg = Config{
-	ApiAddress: "127.0.0.1:8000",
-	AppSecret:  os.Getenv(appSecretEnvVar),
-	Directory:  os.Getenv(dataDirEnvVar),
+	ApiAddress:     "127.0.0.1:8000",
+	RecoveryPhrase: os.Getenv(recoveryPhraseEnv),
+	Directory:      os.Getenv(dataDirEnvVar),
 	Log: Log{
 		File: FileLog{
 			Level:   zap.NewAtomicLevelAt(zapcore.InfoLevel),
@@ -166,36 +162,53 @@ func main() {
 	}
 	defer store.Close()
 
-	pk, err := loadPrivateKey(cfg.AppSecret)
-	if err != nil {
-		log.Fatal("failed to load private key", zap.Error(err))
-	}
-
-	resp, connected, err := sdk.Connect(ctx, cfg.Sia.IndexerURL, pk, app.RegisterAppRequest{
+	builder := sdk.NewBuilder(cfg.Sia.IndexerURL, sdk.AppMetadata{
+		ID:          types.HashBytes([]byte("s3d")),
 		Name:        "S3d",
 		Description: "A S3-compatible storage service backed by Sia",
 		LogoURL:     "https://example.com/logo.png",
-		ServiceURL:  "https://example.com/service",
+		ServiceURL:  "https://github.com/Siafoundation/s3d",
 	})
-	if err != nil {
-		log.Fatal("failed to connect app", zap.Error(err))
-	} else if !connected {
-		log.Info("please approve app connection", zap.String("url", resp.ResponseURL))
-		connected, err := resp.WaitForApproval(ctx)
+
+	var sdkClient *sdk.SDK
+	appKey, err := store.AppKey()
+	if err == nil {
+		sdkClient, err = builder.SDK(appKey, sdk.WithLogger(log.Named("sdk")))
+		if err != nil {
+			checkFatalError("failed to create SDK client", err)
+		}
+	} else if errors.Is(err, sqlite.ErrNoAppKey) {
+		// register app
+		if cfg.RecoveryPhrase == "" {
+			cfg.RecoveryPhrase = sdk.NewSeedPhrase()
+			fmt.Println("No recovery phrase found. Generated new recovery phrase...")
+			fmt.Println("IMPORTANT: Store this recovery phrase in a safe place. It is required to recover your S3d account and data:")
+			fmt.Println(cfg.RecoveryPhrase)
+		}
+		respURL, err := builder.RequestConnection(ctx)
+		if err != nil {
+			log.Fatal("failed to request app connection", zap.Error(err))
+		}
+		fmt.Println("Please approve the app connection by visiting the following URL:", respURL)
+		approved, err := builder.WaitForApproval(ctx)
 		if err != nil {
 			log.Fatal("failed to wait for app approval", zap.Error(err))
+		} else if !approved {
+			log.Info("app connection was declined")
+			os.Exit(0)
 		}
-		if !connected {
-			log.Fatal("user denied app connection")
+		sdkClient, err = builder.Register(ctx, cfg.RecoveryPhrase)
+		if err != nil {
+			log.Fatal("failed to register app", zap.Error(err))
 		}
+		if err := store.SetAppKey(sdkClient.AppKey()); err != nil {
+			log.Fatal("failed to store app key in database", zap.Error(err))
+		}
+	} else {
+		checkFatalError("failed to get app key from database", err)
 	}
 
-	sdkClient, err := sia.NewSDK(cfg.Sia.IndexerURL, pk, sdk.WithLogger(log.Named("sdk")))
-	if err != nil {
-		log.Fatal("failed to create SDK client", zap.Error(err))
-	}
-
-	backend, err := sia.New(ctx, sdkClient, store, cfg.Sia.AccessKey, cfg.Sia.SecretKey)
+	backend, err := sia.New(ctx, sia.NewSDK(sdkClient), store, cfg.Sia.AccessKey, cfg.Sia.SecretKey)
 	if err != nil {
 		checkFatalError("failed to create Sia backend", err)
 	}
@@ -356,17 +369,4 @@ func humanEncoder(showColors bool) zapcore.Encoder {
 	cfg.StacktraceKey = ""
 	cfg.CallerKey = ""
 	return zapcore.NewConsoleEncoder(cfg)
-}
-
-func loadPrivateKey(appSecret string) (types.PrivateKey, error) {
-	if appSecret == "" {
-		return types.PrivateKey{}, fmt.Errorf("app secret is required")
-	}
-	derived, err := pbkdf2.Key(sha256.New, appSecret, []byte("s3d-pk-salt"), 4096, 32)
-	if err != nil {
-		return types.PrivateKey{}, fmt.Errorf("failed to derive key: %w", err)
-	}
-	var seed [32]byte
-	copy(seed[:], derived)
-	return wallet.KeyFromSeed(&seed, 0), nil
 }
