@@ -4,11 +4,14 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
+	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"github.com/SiaFoundation/s3d/sia/multipart"
 	"lukechampine.com/frand"
 )
 
@@ -42,6 +45,43 @@ func (s *Store) CreateMultipartUpload(bucket, name string, meta map[string]strin
 	}
 
 	return hex.EncodeToString(uid[:]), nil
+}
+
+// CompleteMultipartUpload finalizes a multipart upload by creating the final
+// object and removing the multipart upload from the store.
+func (s *Store) CompleteMultipartUpload(bucket, name, uploadID string, parts []multipart.Part) error {
+	return s.transaction(func(tx *txn) error {
+		bid, err := bucketID(tx, bucket)
+		if err != nil {
+			return err
+		}
+
+		uid, err := multipartID(tx, uploadID, bid, name)
+		if err != nil {
+			return err
+		}
+
+		var objID int64
+		err = tx.QueryRow(`SELECT id FROM objects WHERE bucket_id = $1 AND name = $2`, bid, name).Scan(&objID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return s3errs.ErrNoSuchKey
+		} else if err != nil {
+			return err
+		}
+
+		var offset int64
+		for _, part := range parts {
+			_, err = tx.Exec(`INSERT INTO object_parts (object_id, part_number, content_md5, offset, length) VALUES ($1, $2, $3, $4, $5)`,
+				objID, part.PartNumber, sqlMD5(part.MD5), offset, part.Size)
+			if err != nil {
+				return err
+			}
+			offset += part.Size
+		}
+
+		_, err = tx.Exec(`DELETE FROM multipart_uploads WHERE id = $1`, uid)
+		return err
+	})
 }
 
 // AbortMultipartUpload removes a multipart upload from the store.
@@ -119,6 +159,52 @@ func (s *Store) HasMultipartUpload(bucket, name, uploadID string) error {
 	})
 }
 
+// MultipartUpload returns the parts belonging to the specified multipart
+// upload.
+func (s *Store) MultipartUpload(bucket, name, uploadID string) (multipart.Upload, error) {
+	upload := multipart.Upload{Parts: make([]multipart.Part, 0, s3.MaxUploadListParts)}
+	if err := s.transaction(func(tx *txn) error {
+		bid, err := bucketID(tx, bucket)
+		if err != nil {
+			return err
+		}
+
+		uid, err := multipartID(tx, uploadID, bid, name)
+		if err != nil {
+			return err
+		}
+
+		var meta string
+		if err := tx.QueryRow(`SELECT metadata FROM multipart_uploads WHERE id = $1`, uid).Scan(&meta); err != nil {
+			return err
+		} else if err := json.Unmarshal([]byte(meta), &upload.Meta); err != nil {
+			return err
+		}
+
+		rows, err := tx.Query(`
+			SELECT part_number, filename, content_md5, content_length
+			FROM multipart_parts 
+			WHERE multipart_upload_id = $1 
+			ORDER BY part_number ASC`, uid)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var part multipart.Part
+			if err := rows.Scan(&part.PartNumber, &part.Filename, (*sqlMD5)(&part.MD5), &part.Size); err != nil {
+				return err
+			}
+			upload.Parts = append(upload.Parts, part)
+		}
+		return rows.Err()
+	}); err != nil {
+		return multipart.Upload{}, err
+	}
+	return upload, nil
+}
+
 // ListParts lists uploaded parts for a multipart upload.
 func (s *Store) ListParts(accessKeyID, bucket, name, uploadID string, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error) {
 	res := &s3.ListPartsResult{
@@ -166,7 +252,7 @@ func (s *Store) ListParts(accessKeyID, bucket, name, uploadID string, partNumber
 			res.Parts = append(res.Parts, p)
 		}
 
-		return nil
+		return rows.Err()
 	}); err != nil {
 		return nil, err
 	}

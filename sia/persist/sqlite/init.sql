@@ -22,6 +22,17 @@ CREATE TABLE objects (
     UNIQUE(bucket_id, name)
 );
 
+CREATE TABLE object_parts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    object_id INTEGER NOT NULL,
+    part_number INTEGER NOT NULL,
+    content_md5 BLOB NOT NULL,
+    offset INTEGER NOT NULL,
+    length INTEGER NOT NULL,
+    FOREIGN KEY (object_id) REFERENCES objects(id) ON DELETE CASCADE,
+    UNIQUE(object_id, part_number)
+);
+
 CREATE TABLE multipart_uploads (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     upload_id BLOB NOT NULL UNIQUE,

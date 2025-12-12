@@ -638,6 +638,11 @@ func (b *MemoryBackend) ListParts(_ context.Context, accessKeyID, bucket, key, u
 }
 
 // CompleteMultipartUpload assembles the uploaded parts into the final object.
+//
+// NOTE: the given parts slice is expected to have passed a validation step
+// already, asserting the part numbers and ETags are correct, the backend still
+// validates that only the last part can be smaller than MinUploadPartSize and
+// the given ETag matches.
 func (b *MemoryBackend) CompleteMultipartUpload(_ context.Context, accessKeyID, bucket, key, uploadID string, parts []s3.CompletedPart) (*s3.CompleteMultipartUploadResult, error) {
 	bkt, exists := b.buckets[bucket]
 	if !exists {

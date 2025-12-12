@@ -456,7 +456,7 @@ func (s *s3) completeMultipartUpload(w http.ResponseWriter, r *http.Request, acc
 		return err
 	}
 
-	completedParts, err := parseCompletedParts(req.Parts)
+	completedParts, err := validateCompletedParts(req.Parts)
 	if err != nil {
 		return err
 	}
@@ -488,29 +488,29 @@ func (s *s3) completeMultipartUpload(w http.ResponseWriter, r *http.Request, acc
 	})
 }
 
-func parseCompletedParts(parts []CompleteMultipartPartXML) ([]CompletedPart, error) {
+// validateCompletedParts parses and validates the list of completed parts from
+// the XML request body. The parts have to be in ascending order, start from 1
+// and not contain duplicates. Every part number must be between 1 and
+// MaxUploadPartNumber and have a valid ETag.
+func validateCompletedParts(parts []CompleteMultipartPartXML) ([]CompletedPart, error) {
 	if len(parts) == 0 {
 		return nil, s3errs.ErrInvalidRequest
+	} else if len(parts) > MaxUploadPartNumber {
+		return nil, fmt.Errorf("too many parts: %d (maximum is %d); %w", len(parts), MaxUploadPartNumber, s3errs.ErrInvalidRequest)
 	}
 
+	// parse completed parts (potentially dedupe)
 	completed := make([]CompletedPart, 0, len(parts))
-	prev := 0
-	for i, part := range parts {
-		if part.PartNumber < 1 || part.PartNumber > MaxUploadPartNumber {
-			return nil, s3errs.ErrInvalidArgument // invalid part number
-		}
-		if i > 0 && part.PartNumber < prev {
-			return nil, s3errs.ErrInvalidPartOrder // invalid part order
-		}
-		prev = part.PartNumber
-
-		etag, err := parseCompletedPartETag(part.ETag)
+	for _, part := range parts {
+		// parse ETag
+		etag, err := parseETag(part.ETag)
 		if err != nil {
 			return nil, err
 		}
 
+		// overwrite duplicate part number
 		if len(completed) > 0 && completed[len(completed)-1].PartNumber == part.PartNumber {
-			completed[len(completed)-1] = CompletedPart{ // overwrite duplicate part number
+			completed[len(completed)-1] = CompletedPart{
 				PartNumber: part.PartNumber,
 				ETag:       etag,
 			}
@@ -522,10 +522,18 @@ func parseCompletedParts(parts []CompleteMultipartPartXML) ([]CompletedPart, err
 		}
 	}
 
+	// assert part numbers are contiguous
+	for i, part := range completed {
+		expectedPartNumber := i + 1
+		if part.PartNumber != expectedPartNumber {
+			return nil, s3errs.ErrInvalidPartOrder
+		}
+	}
+
 	return completed, nil
 }
 
-func parseCompletedPartETag(etagStr string) (etag [16]byte, _ error) {
+func parseETag(etagStr string) (etag [16]byte, _ error) {
 	etagStr = strings.TrimSpace(etagStr)
 	etagStr = strings.Trim(etagStr, `"`)
 	if etagStr == "" {

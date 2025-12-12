@@ -225,6 +225,8 @@ type Backend interface {
 	// - If any referenced part is missing or its ETag does not match,
 	//   [ErrInvalidPart] must be returned.
 	//
+	// - If a part is too small, [ErrEntityTooSmall] must be returned.
+	//
 	// NOTE: the parts slice is expected to be sorted by part number and contain
 	// no duplicates.
 	CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, object, uploadID string, parts []CompletedPart) (*CompleteMultipartUploadResult, error)

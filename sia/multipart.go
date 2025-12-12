@@ -10,9 +10,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"github.com/SiaFoundation/s3d/sia/multipart"
+	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.uber.org/zap"
 	"lukechampine.com/frand"
 )
@@ -207,6 +210,73 @@ func (s *Sia) ListParts(ctx context.Context, accessKeyID, bucket, object, upload
 }
 
 // CompleteMultipartUpload completes a multipart upload.
+//
+// NOTE: the given parts slice is expected to have passed a validation step
+// already, asserting the part numbers and ETags are correct, the backend still
+// validates that only the last part can be smaller than MinUploadPartSize.
 func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, object, uploadID string, parts []s3.CompletedPart) (*s3.CompleteMultipartUploadResult, error) {
-	return nil, s3errs.ErrNotImplemented
+	// check bucket access
+	if err := s.store.HeadBucket(accessKeyID, bucket); err != nil {
+		return nil, err
+	}
+
+	// validate parts
+
+	// get multipart upload
+	upload, err := s.store.MultipartUpload(bucket, object, uploadID)
+	if err != nil {
+		return nil, err
+	} else if err := upload.Validate(parts); err != nil {
+		return nil, fmt.Errorf("failed to complete multipart upload: %w", err)
+	}
+
+	// assert the upload directory exists
+	uploadDir := filepath.Join(s.directory, uploadID)
+	if _, err := os.Stat(uploadDir); err != nil {
+		return nil, fmt.Errorf("failed to stat upload directory: %w", err)
+	}
+
+	// assert all part files exist
+	for _, part := range upload.Parts {
+		partPath := filepath.Join(uploadDir, fmt.Sprintf("%d", part.PartNumber), part.Filename)
+		if _, err := os.Stat(partPath); err != nil {
+			return nil, fmt.Errorf("failed to stat part file %d: %w", part.PartNumber, err)
+		}
+	}
+
+	// upload the combined object to Sia
+	r := multipart.NewReader(upload, uploadDir)
+	obj, err := s.sdk.Upload(ctx, r)
+	if err != nil {
+		return nil, fmt.Errorf("failed to upload object to Sia: %w", err)
+	}
+	contentMD5 := r.MD5Sum()
+
+	// store the object in the database
+	if err := s.store.PutObject(accessKeyID, bucket, object, &objects.Object{
+		ID:         obj.ID(),
+		ContentMD5: contentMD5,
+		Meta:       upload.Meta,
+		Size:       r.Size(),
+		UpdatedAt:  time.Now(),
+	}); err != nil {
+		return nil, fmt.Errorf("failed to store object metadata: %w", err)
+	}
+
+	// complete the multipart upload in the database
+	if err := s.store.CompleteMultipartUpload(bucket, object, uploadID, upload.Parts); err != nil {
+		return nil, fmt.Errorf("failed to complete multipart upload in store: %w", err)
+	}
+
+	// remove multipart upload directory
+	if err := os.RemoveAll(uploadDir); err != nil {
+		s.logger.Error("failed to remove multipart upload directory after completion",
+			zap.String("path", uploadDir),
+			zap.Error(err))
+	}
+
+	return &s3.CompleteMultipartUploadResult{
+		ETag:       s3.FormatETag(contentMD5[:]),
+		ContentMD5: contentMD5,
+	}, nil
 }

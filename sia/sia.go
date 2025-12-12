@@ -11,6 +11,7 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/auth"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"github.com/SiaFoundation/s3d/sia/multipart"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/sdk"
@@ -64,6 +65,8 @@ type Store interface {
 	HasMultipartUpload(bucket, name, uploadID string) error
 	CreateMultipartUpload(bucket, name string, meta map[string]string) (string, error)
 	AbortMultipartUpload(bucket, name, uploadID string) error
+	CompleteMultipartUpload(bucket, name, uploadID string, parts []multipart.Part) error
+	MultipartUpload(bucket, name, uploadID string) (multipart.Upload, error)
 	AddMultipartPart(bucket, name, uploadID, filename string, partNumber int, contentMD5 [16]byte, contentSHA256 *[32]byte, contentLength int64) (string, error)
 	ListParts(accessKeyID, bucket, name, uploadID string, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error)
 }

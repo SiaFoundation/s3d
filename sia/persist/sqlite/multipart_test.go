@@ -3,8 +3,12 @@ package sqlite
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"github.com/SiaFoundation/s3d/sia/multipart"
+	"github.com/SiaFoundation/s3d/sia/objects"
+	"go.sia.tech/indexd/sdk"
 	"go.uber.org/zap"
 	"lukechampine.com/frand"
 )
@@ -231,5 +235,86 @@ func TestListParts(t *testing.T) {
 			t.Fatalf("expected part number %d, got %d", partNumberMarker+1, result.Parts[0].PartNumber)
 		}
 		partNumberMarker = result.Parts[0].PartNumber
+	}
+}
+
+func TestCompleteMultipartUpload(t *testing.T) {
+	const (
+		accessKeyID = "test-accesskey"
+		bucket      = "test-bucket"
+		object      = "test-object"
+	)
+
+	store := initTestDB(t, zap.NewNop())
+	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	uid, err := store.CreateMultipartUpload(bucket, object, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	obj := sdk.Object{}
+	var contentMD5 [16]byte
+	frand.Read(contentMD5[:])
+	if err := store.PutObject(accessKeyID, bucket, object, &objects.Object{
+		ID:         obj.ID(),
+		ContentMD5: contentMD5,
+		Size:       15,
+		UpdatedAt:  time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	partMD5A := frand.Entropy128()
+	partMD5B := frand.Entropy128()
+	parts := []multipart.Part{
+		{PartNumber: 1, Filename: "part-1", Size: 10, MD5: partMD5A},
+		{PartNumber: 2, Filename: "part-2", Size: 5, MD5: partMD5B},
+	}
+
+	if err := store.CompleteMultipartUpload(bucket, object, uid, parts); err != nil {
+		t.Fatal(err)
+	}
+
+	store.assertCount(0, "multipart_uploads")
+	store.assertCount(len(parts), "object_parts")
+
+	rows, err := store.db.Query(`SELECT part_number, content_md5, offset, length FROM object_parts ORDER BY part_number`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+
+	var offsets []int64
+	for rows.Next() {
+		var partNumber int
+		var length int64
+		var offset int64
+		var contentMD5 sqlMD5
+		if err := rows.Scan(&partNumber, &contentMD5, &offset, &length); err != nil {
+			t.Fatal(err)
+		}
+		idx := partNumber - 1
+		if idx < 0 || idx >= len(parts) {
+			t.Fatalf("unexpected part number %d", partNumber)
+		}
+		if parts[idx].Size != int64(length) {
+			t.Fatalf("expected length %d, got %d", parts[idx].Size, length)
+		}
+		if parts[idx].MD5 != [16]byte(contentMD5) {
+			t.Fatalf("expected MD5 %x, got %x", parts[idx].MD5, contentMD5)
+		}
+		offsets = append(offsets, offset)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(offsets) != len(parts) {
+		t.Fatalf("expected %d parts, got %d", len(parts), len(offsets))
+	}
+	if offsets[0] != 0 || offsets[1] != parts[0].Size {
+		t.Fatalf("unexpected offsets: %v", offsets)
 	}
 }
