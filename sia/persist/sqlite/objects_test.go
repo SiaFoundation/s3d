@@ -311,6 +311,133 @@ func TestListObjectsMatch(t *testing.T) {
 	}
 }
 
+func randomPath(minLength, maxLength, maxDepth int, alphabet []rune, delimiter string) string {
+	length := frand.Intn(maxLength-minLength+1) + minLength
+
+	runes := make([]rune, length)
+	for i := range runes {
+		runes[i] = alphabet[frand.Intn(len(alphabet))]
+	}
+
+	if delimiter == "" {
+		return string(runes)
+	}
+
+	key := string(runes)
+	depth := frand.Intn(maxDepth)
+	for i := 1; i < length && depth > 0; i++ {
+		if frand.Intn(2) == 0 {
+			key = key[:i] + delimiter + key[i:]
+			i++
+			depth--
+		}
+	}
+
+	return key
+}
+
+func TestListObjectsWalk(t *testing.T) {
+	const (
+		numKeys   = 10000
+		maxKeys   = 100
+		maxDepth  = 4
+		minLength = 4
+		maxLength = 10
+	)
+
+	var (
+		alphabet  = []rune("ÎmNotÂfraid!%_")
+		delimiter = "%"
+	)
+
+	log := zaptest.NewLogger(t)
+	fp := filepath.Join(t.TempDir(), "s3d.sqlite3")
+
+	store, err := OpenDatabase(fp, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// prepare a bucket
+	bucket := "foo"
+	if err := store.CreateBucket("", bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// upload a few objects
+	obj := sdk.Object{}
+	contentMD5 := [16]byte(frand.Bytes(16))
+
+	for range numKeys {
+		key := randomPath(minLength, maxLength, maxDepth, alphabet, delimiter)
+		err := store.PutObject("", bucket, key, &objects.Object{
+			ID:         obj.ID(),
+			ContentMD5: contentMD5,
+			Size:       0,
+			UpdatedAt:  time.Now(),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	type page struct {
+		prefix    string
+		keyMarker string
+	}
+
+	seen := make(map[string]struct{})
+	stack := []page{{}}
+	var visited int
+	for len(stack) > 0 {
+		// pop from stack
+		n := len(stack) - 1
+		pg := stack[n]
+		stack = stack[:n]
+
+		// fetch page
+		res, err := store.ListObjects(nil, bucket, s3.Prefix{
+			Prefix:       pg.prefix,
+			HasPrefix:    pg.prefix != "",
+			Delimiter:    delimiter,
+			HasDelimiter: delimiter != "",
+		}, s3.ListObjectsPage{
+			MaxKeys: maxKeys,
+			Marker: func() *string {
+				if pg.keyMarker != "" {
+					return &pg.keyMarker
+				}
+				return nil
+			}(),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		visited += len(res.Contents)
+
+		// push subdirectories
+		for _, cp := range res.CommonPrefixes {
+			if _, ok := seen[cp.Prefix]; ok {
+				t.Fatalf("already seen common prefix %q", cp)
+			}
+			seen[cp.Prefix] = struct{}{}
+			stack = append(stack, page{prefix: cp.Prefix})
+		}
+
+		// re-enqueue if truncated
+		if res.IsTruncated {
+			stack = append(stack, page{
+				prefix:    pg.prefix,
+				keyMarker: res.NextMarker,
+			})
+		}
+	}
+
+	if visited != numKeys {
+		t.Fatalf("expected to visit %d uploads, visited %d", numKeys, visited)
+	}
+}
+
 func BenchmarkListObjects(b *testing.B) {
 	const (
 		// number of root level directories
