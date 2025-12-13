@@ -471,7 +471,7 @@ func (b *MemoryBackend) ListMultipartUploads(_ context.Context, accessKeyID, buc
 func (b *MemoryBackend) AbortMultipartUpload(_ context.Context, accessKeyID, bucket, key, uploadID string) error {
 	uid, err := s3.UploadIDFromString(uploadID)
 	if err != nil {
-		return s3errs.ErrInvalidArgument
+		return s3errs.ErrNoSuchUpload
 	}
 	bkt, exists := b.buckets[bucket]
 	if !exists {
@@ -495,7 +495,7 @@ func (b *MemoryBackend) AbortMultipartUpload(_ context.Context, accessKeyID, buc
 func (b *MemoryBackend) UploadPart(_ context.Context, accessKeyID, bucket, key, uploadID string, r io.Reader, opts s3.UploadPartOptions) (*s3.UploadPartResult, error) {
 	uid, err := s3.UploadIDFromString(uploadID)
 	if err != nil {
-		return nil, s3errs.ErrInvalidArgument
+		return nil, s3errs.ErrNoSuchUpload
 	}
 	bkt, exists := b.buckets[bucket]
 	if !exists {
@@ -545,7 +545,7 @@ func (b *MemoryBackend) UploadPart(_ context.Context, accessKeyID, bucket, key, 
 func (b *MemoryBackend) UploadPartCopy(_ context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject, uploadID string, opts s3.UploadPartCopyOptions) (*s3.UploadPartCopyResult, error) {
 	uid, err := s3.UploadIDFromString(uploadID)
 	if err != nil {
-		return nil, s3errs.ErrInvalidArgument
+		return nil, s3errs.ErrNoSuchUpload
 	}
 	srcBkt, exists := b.buckets[srcBucket]
 	if !exists {
@@ -599,7 +599,7 @@ func (b *MemoryBackend) UploadPartCopy(_ context.Context, accessKeyID, srcBucket
 func (b *MemoryBackend) ListParts(_ context.Context, accessKeyID, bucket, key, uploadID string, page s3.ListPartsPage) (*s3.ListPartsResult, error) {
 	uid, err := s3.UploadIDFromString(uploadID)
 	if err != nil {
-		return nil, s3errs.ErrInvalidArgument
+		return nil, s3errs.ErrNoSuchUpload
 	}
 	bkt, exists := b.buckets[bucket]
 	if !exists {
@@ -663,7 +663,7 @@ func (b *MemoryBackend) ListParts(_ context.Context, accessKeyID, bucket, key, u
 func (b *MemoryBackend) CompleteMultipartUpload(_ context.Context, accessKeyID, bucket, key, uploadID string, parts []s3.CompletedPart) (*s3.CompleteMultipartUploadResult, error) {
 	uid, err := s3.UploadIDFromString(uploadID)
 	if err != nil {
-		return nil, s3errs.ErrInvalidArgument
+		return nil, s3errs.ErrNoSuchUpload
 	}
 	bkt, exists := b.buckets[bucket]
 	if !exists {
