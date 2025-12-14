@@ -368,6 +368,8 @@ func TestListObjectsWalk(t *testing.T) {
 	obj := sdk.Object{}
 	contentMD5 := [16]byte(frand.Bytes(16))
 
+	keysAll := make(map[string]struct{})
+	keysSeen := make(map[string]struct{})
 	for range numKeys {
 		key := randomPath(minLength, maxLength, maxDepth, alphabet, delimiter)
 		err := store.PutObject("", bucket, key, &objects.Object{
@@ -379,6 +381,7 @@ func TestListObjectsWalk(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		keysAll[key] = struct{}{}
 	}
 
 	type page struct {
@@ -388,7 +391,6 @@ func TestListObjectsWalk(t *testing.T) {
 
 	seen := make(map[string]struct{})
 	stack := []page{{}}
-	var visited int
 	for len(stack) > 0 {
 		// pop from stack
 		n := len(stack) - 1
@@ -413,7 +415,9 @@ func TestListObjectsWalk(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		visited += len(res.Contents)
+		for _, key := range res.Contents {
+			keysSeen[key.Key] = struct{}{}
+		}
 
 		// push subdirectories
 		for _, cp := range res.CommonPrefixes {
@@ -433,8 +437,8 @@ func TestListObjectsWalk(t *testing.T) {
 		}
 	}
 
-	if visited != numKeys {
-		t.Fatalf("expected to visit %d uploads, visited %d", numKeys, visited)
+	if len(keysSeen) != len(keysAll) {
+		t.Fatalf("expected to visit %d uploads, visited %d", len(keysAll), len(keysSeen))
 	}
 }
 

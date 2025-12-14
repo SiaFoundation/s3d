@@ -216,15 +216,16 @@ WHERE o.bucket_id = ?`
 			}
 			if lastMatchedPart != "" {
 				// if we get a common prefix, skip over the remainder of it
-				lastMatchedPart += "\xFF"
-				marker = &lastMatchedPart
+				m := lastMatchedPart + "\xFF"
+				marker = &m
 			} else if lastObj != "" {
 				// if we haven't advanced at all, stop
 				if marker != nil && *marker == lastObj {
 					break
 				}
 				// otherwise continue getting the matching objects
-				marker = &lastObj
+				m := lastObj
+				marker = &m
 			} else {
 				break
 			}
