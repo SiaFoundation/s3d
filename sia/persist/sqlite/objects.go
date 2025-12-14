@@ -184,7 +184,7 @@ func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.
 		}
 		defer rows.Close()
 
-		for !result.IsTruncated && rows.Next() {
+		for rows.Next() && !result.IsTruncated {
 			var obj objects.Object
 			var isPrefix bool
 			err = rows.Scan(
