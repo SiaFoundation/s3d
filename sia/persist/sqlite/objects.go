@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
+	"log"
 
 	"time"
 
@@ -158,7 +158,7 @@ WHERE o.bucket_id = ?`
 			defer rows.Close()
 
 			var lastMatchedPart, lastObj string
-			for rows.Next() {
+			for rows.Next() && !result.IsTruncated {
 				var obj objects.Object
 				err = rows.Scan(
 					&obj.Name,
@@ -170,25 +170,19 @@ WHERE o.bucket_id = ?`
 					return "", "", fmt.Errorf("failed to scan object: %w", err)
 				}
 
-				var done bool
 				match := s3.Match(prefix, obj.Name)
 				switch {
 				case match == nil:
 					continue
 				case match.CommonPrefix:
-					if marker != nil && strings.Compare(*marker, match.MatchedPart) >= 0 {
-						continue
-					}
 					if match.MatchedPart == lastMatchedPart {
 						continue // should not count towards keys
 					}
+					lastObj = obj.Name
+					log.Println("Prefix:", match.MatchedPart)
 					result.AddPrefix(match.MatchedPart)
 					lastMatchedPart = match.MatchedPart
-					done = true
 				default:
-					if marker != nil && strings.Compare(*marker, obj.Name) >= 0 {
-						continue
-					}
 					result.Add(&s3.Content{
 						Key:          obj.Name,
 						LastModified: s3.NewContentTime(obj.UpdatedAt),
@@ -196,10 +190,8 @@ WHERE o.bucket_id = ?`
 						Size:         int64(obj.Size),
 					})
 					lastObj = obj.Name
-				}
-
-				if done || result.IsTruncated {
-					break
+					lastMatchedPart = ""
+					log.Println("Key:", obj.Name)
 				}
 			}
 			if err := rows.Err(); err != nil {
@@ -208,26 +200,32 @@ WHERE o.bucket_id = ?`
 			return lastMatchedPart, lastObj, nil
 		}
 
+		log.Println("------")
+		log.Printf("Prefix: %+v", prefix)
+		defer log.Println("-------------")
+
 		marker := page.Marker
 		for !result.IsTruncated {
+			if marker == nil {
+				log.Println("Marker:", nil)
+			} else {
+				log.Println("Marker:", *marker)
+			}
 			lastMatchedPart, lastObj, err := list(marker)
 			if err != nil {
 				return err
 			}
-			if lastMatchedPart != "" {
-				// if we get a common prefix, skip over the remainder of it
-				m := lastMatchedPart + "\xFF"
-				marker = &m
-			} else if lastObj != "" {
-				// if we haven't advanced at all, stop
+			log.Println("lastMatchedPart:", lastMatchedPart, ", lastObj:", lastObj)
+			if lastObj != "" {
+				// The NextMarker should always be the last object name scanned
+				// to ensure we continue from the next item in the lexicographical order.
 				if marker != nil && *marker == lastObj {
-					break
+					break // Haven't advanced, we are done.
 				}
-				// otherwise continue getting the matching objects
 				m := lastObj
 				marker = &m
 			} else {
-				break
+				break // No more keys or prefixes were found.
 			}
 		}
 		if !result.IsTruncated {
