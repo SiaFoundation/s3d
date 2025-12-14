@@ -233,8 +233,8 @@ func buildContentsQuery(bucketID int64, prefix s3.Prefix, page s3.ListObjectsPag
 
 	// handle prefix
 	if prefix.HasPrefix {
-		where = append(where, "SUBSTR(name, 1, ?) = ?")
-		args = append(args, prefixLen, prefix.Prefix)
+		where = append(where, "name >= ? and name < ?")
+		args = append(args, prefix.Prefix, prefix.Prefix+"\xFF")
 	}
 
 	// handle delimiter
@@ -269,8 +269,8 @@ func buildCommonPrefixesQuery(bucketID int64, prefix s3.Prefix, page s3.ListObje
 	args = append(args, bucketID)
 
 	// check prefix
-	where = append(where, "SUBSTR(name, 1, ?) = ? AND INSTR(SUBSTR(name, ?), ?) > 0")
-	args = append(args, prefixLen, prefix.Prefix, searchOffset, prefix.Delimiter)
+	where = append(where, "name >= ? and name < ? AND INSTR(SUBSTR(name, ?), ?) > 0")
+	args = append(args, prefix.Prefix, prefix.Prefix+"\xFF", searchOffset, prefix.Delimiter)
 
 	query := fmt.Sprintf(`
         SELECT
