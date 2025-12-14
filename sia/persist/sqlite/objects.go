@@ -148,7 +148,7 @@ func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.
 		}
 		if idx := strings.Index(markerRemainder, prefix.Delimiter); idx != -1 {
 			commonPrefix := (*page.Marker)[:prefixLen+idx+len(prefix.Delimiter)]
-			*page.Marker = commonPrefix + "\xFF"
+			*page.Marker = commonPrefix + string([]byte{0xFF})
 		}
 	}
 
@@ -184,7 +184,7 @@ func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.
 		}
 		defer rows.Close()
 
-		for rows.Next() && !result.IsTruncated {
+		for !result.IsTruncated && rows.Next() {
 			var obj objects.Object
 			var isPrefix bool
 			err = rows.Scan(
@@ -264,6 +264,9 @@ func buildCommonPrefixesQuery(bucketID int64, prefix s3.Prefix, page s3.ListObje
 		searchOffset = prefixLen + 1
 	)
 
+	// search delimiter after prefix
+	args = append(args, searchOffset, prefix.Delimiter, prefixLen)
+
 	// check bucket
 	where := []string{"bucket_id = ?"}
 	args = append(args, bucketID)
@@ -272,24 +275,23 @@ func buildCommonPrefixesQuery(bucketID int64, prefix s3.Prefix, page s3.ListObje
 	where = append(where, "SUBSTR(name, 1, ?) = ? AND INSTR(SUBSTR(name, ?), ?) > 0")
 	args = append(args, prefixLen, prefix.Prefix, searchOffset, prefix.Delimiter)
 
-	query := fmt.Sprintf(`
-        SELECT
-            name,
-            content_md5,
-            0 as size,
-            updated_at,
-            TRUE as is_prefix
-        FROM objects
-        WHERE %s
-        GROUP BY SUBSTR(name, 1, INSTR(SUBSTR(name, ?), ?) + ?)`,
-		strings.Join(where, " AND "))
-
-	args = append(args, searchOffset, prefix.Delimiter, prefixLen)
-
 	if page.Marker != nil {
-		query += " HAVING name > ?"
+		where = append(where, "name > ?")
 		args = append(args, *page.Marker)
 	}
 
-	return query, args
+	return fmt.Sprintf(`
+		SELECT name, content_md5, size, updated_at, TRUE as is_prefix FROM (
+			SELECT
+				name,
+				content_md5,
+				size,
+				updated_at,
+				ROW_NUMBER() OVER (
+					PARTITION BY SUBSTR(name, 1, INSTR(SUBSTR(name, ?), ?) + ?)
+					ORDER BY name
+				) as row
+			FROM objects
+			WHERE %s
+		) WHERE row = 1`, strings.Join(where, " AND ")), args
 }
