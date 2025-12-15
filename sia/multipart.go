@@ -46,13 +46,20 @@ func (s *Sia) CreateMultipartUpload(ctx context.Context, accessKeyID, bucket, ob
 }
 
 // ListMultipartUploads lists in-progress multipart uploads.
-func (s *Sia) ListMultipartUploads(ctx context.Context, accessKeyID, bucket string, opts s3.ListMultipartUploadsOptions) (*s3.ListMultipartUploadsResult, error) {
+func (s *Sia) ListMultipartUploads(ctx context.Context, accessKeyID, bucket string, opts s3.ListMultipartUploadsOptions, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error) {
 	// assert auth
 	if err := s.store.HeadBucket(accessKeyID, bucket); err != nil {
 		return nil, err
 	}
 
-	return s.store.ListMultipartUploads(bucket, opts.Prefix, opts.Delimiter, opts.KeyMarker, opts.UploadIDMarker, opts.MaxUploads)
+	prefix := s3.Prefix{
+		HasPrefix:    opts.Prefix != "",
+		Prefix:       opts.Prefix,
+		HasDelimiter: opts.Delimiter != "",
+		Delimiter:    opts.Delimiter,
+	}
+
+	return s.store.ListMultipartUploads(bucket, prefix, page)
 }
 
 // AbortMultipartUpload aborts a multipart upload.

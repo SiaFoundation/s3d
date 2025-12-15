@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/SiaFoundation/s3d/s3"
+	"github.com/SiaFoundation/s3d/s3/s3errs"
 )
 
 // CreateMultipartUpload persists metadata for a new multipart upload.
@@ -48,13 +48,17 @@ func (s *Store) AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) 
 			return err
 		}
 
-		uid, err := multipartID(tx, uploadID, bid, name)
+		res, err := tx.Exec(`DELETE FROM multipart_uploads WHERE upload_id = $1 AND bucket_id = $2 AND name = $3`,
+			sqlUploadID(uploadID), bid, name)
 		if err != nil {
 			return err
 		}
-
-		_, err = tx.Exec(`DELETE FROM multipart_uploads WHERE id = $1`, uid)
-		return err
+		if n, err := res.RowsAffected(); err != nil {
+			return err
+		} else if n == 0 {
+			return s3errs.ErrNoSuchUpload
+		}
+		return nil
 	})
 }
 
@@ -67,9 +71,15 @@ func (s *Store) AddMultipartPart(bucket, name string, uploadID s3.UploadID, file
 			return err
 		}
 
-		uid, err := multipartID(tx, uploadID, bid, name)
+		// Verify the multipart upload exists
+		var exists bool
+		err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM multipart_uploads WHERE upload_id = $1 AND bucket_id = $2 AND name = $3)`,
+			sqlUploadID(uploadID), bid, name).Scan(&exists)
 		if err != nil {
 			return err
+		}
+		if !exists {
+			return s3errs.ErrNoSuchUpload
 		}
 
 		var sha256Value any
@@ -77,7 +87,8 @@ func (s *Store) AddMultipartPart(bucket, name string, uploadID s3.UploadID, file
 			sha256Value = sqlHash256(*contentSHA256)
 		}
 
-		err = tx.QueryRow(`SELECT filename FROM multipart_parts WHERE multipart_upload_id = $1 AND part_number = $2`, uid, partNumber).Scan(&prevFilename)
+		err = tx.QueryRow(`SELECT filename FROM multipart_parts WHERE multipart_upload_id = $1 AND part_number = $2`,
+			sqlUploadID(uploadID), partNumber).Scan(&prevFilename)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
@@ -91,7 +102,7 @@ func (s *Store) AddMultipartPart(bucket, name string, uploadID s3.UploadID, file
 				content_sha256 = EXCLUDED.content_sha256,
 				content_length = EXCLUDED.content_length,
 				created_at     = EXCLUDED.created_at
-		`, uid, partNumber, filename, sqlMD5(contentMD5), sha256Value, contentLength, sqlTime(time.Now()))
+		`, sqlUploadID(uploadID), partNumber, filename, sqlMD5(contentMD5), sha256Value, contentLength, sqlTime(time.Now()))
 		return err
 	}); err != nil {
 		return "", err
@@ -107,8 +118,16 @@ func (s *Store) HasMultipartUpload(bucket, name string, uploadID s3.UploadID) er
 			return err
 		}
 
-		_, err = multipartID(tx, uploadID, bid, name)
-		return err
+		var exists bool
+		err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM multipart_uploads WHERE upload_id = $1 AND bucket_id = $2 AND name = $3)`,
+			sqlUploadID(uploadID), bid, name).Scan(&exists)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return s3errs.ErrNoSuchUpload
+		}
+		return nil
 	})
 }
 
@@ -127,9 +146,15 @@ func (s *Store) ListParts(bucket, name string, uploadID s3.UploadID, partNumberM
 		if err != nil {
 			return err
 		}
-		uid, err := multipartID(tx, uploadID, bid, name)
+
+		var exists bool
+		err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM multipart_uploads WHERE upload_id = $1 AND bucket_id = $2 AND name = $3)`,
+			sqlUploadID(uploadID), bid, name).Scan(&exists)
 		if err != nil {
 			return err
+		}
+		if !exists {
+			return s3errs.ErrNoSuchUpload
 		}
 
 		rows, err := tx.Query(`
@@ -138,7 +163,7 @@ func (s *Store) ListParts(bucket, name string, uploadID s3.UploadID, partNumberM
 			WHERE multipart_upload_id = $1 AND part_number > $2
 			ORDER BY part_number ASC
 			LIMIT $3
-		`, uid, partNumberMarker, maxParts+1)
+		`, sqlUploadID(uploadID), partNumberMarker, maxParts+1)
 		if err != nil {
 			return err
 		}
@@ -168,142 +193,165 @@ func (s *Store) ListParts(bucket, name string, uploadID s3.UploadID, partNumberM
 
 // ListMultipartUploads lists all multipart uploads for the given bucket and
 // filters.
-func (s *Store) ListMultipartUploads(bucket, prefix, delimiter, keyMarker string, uploadIDMarker s3.UploadID, maxUploads int64) (*s3.ListMultipartUploadsResult, error) {
+func (s *Store) ListMultipartUploads(bucket string, prefix s3.Prefix, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error) {
+	uploadIDMarker := page.UploadIDMarker
+
+	// adjust marker if it falls inside a common prefix
+	keyMarker := page.KeyMarker
+	if adjustedKey, resetUploadID := adjustMarkerForCommonPrefix(prefix, keyMarker); resetUploadID {
+		keyMarker = adjustedKey
+		uploadIDMarker = [16]byte{}
+	}
+
+	// ignore upload ID marker if no key marker is set
 	if keyMarker == "" {
-		uploadIDMarker = [16]byte{} // ignored if key marker is not set
+		uploadIDMarker = [16]byte{}
 	}
 
-	// if the marker falls inside a common prefix (e.g. prefix "ac", delimiter
-	// "/", marker "acb/x"), advance past that prefix so it isn't returned
-	// twice
-	if delimiter != "" && keyMarker != "" {
-		markerRemainder := keyMarker
-		var prefixLen int
-		if after, ok := strings.CutPrefix(keyMarker, prefix); ok {
-			prefixLen = len(prefix)
-			markerRemainder = after
-		}
-		if idx := strings.Index(markerRemainder, delimiter); idx != -1 {
-			commonPrefix := keyMarker[:prefixLen+idx+len(delimiter)]
-			keyMarker = commonPrefix + string([]byte{0xFF})
-			uploadIDMarker = [16]byte{}
-		}
+	// set default max uploads
+	maxUploads := page.MaxUploads
+	if maxUploads == 0 {
+		maxUploads = 1000
 	}
 
-	// helper to compute common prefix from upload key
-	commonPrefix := func(key string) string {
-		after, ok := strings.CutPrefix(key, prefix)
-		if !ok {
-			return ""
-		}
-
-		idx := strings.IndexRune(after, rune(delimiter[0]))
-		if idx == -1 {
-			return ""
-		}
-
-		return prefix + after[:idx+utf8.RuneCountInString(delimiter)]
+	if prefix.HasDelimiter {
+		return s.listMultipartUploadsWithDelim(bucket, prefix, keyMarker, uploadIDMarker, maxUploads)
 	}
+	return s.listMultipartUploadsNoDelim(bucket, prefix.Prefix, keyMarker, uploadIDMarker, maxUploads)
+}
 
+func (s *Store) listMultipartUploadsWithDelim(bucket string, prefix s3.Prefix, keyMarker string, uploadIDMarker [16]byte, maxUploads int64) (*s3.ListMultipartUploadsResult, error) {
 	res := &s3.ListMultipartUploadsResult{
 		Uploads:        make([]s3.MultipartUploadInfo, 0, maxUploads),
 		CommonPrefixes: make([]string, 0, maxUploads),
 	}
 
-	if err := s.transaction(func(tx *txn) error {
+	err := s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
 
-		// build uploads query
-		query, args := buildUploadsQuery(bid, prefix, delimiter, keyMarker, uploadIDMarker)
+		currentKeyMarker := keyMarker
+		currentUploadIDMarker := uploadIDMarker
 
-		// build common prefixes query if needed
-		if delimiter != "" {
-			query2, args2 := buildCommonPrefixesQuery(bid, prefix, delimiter, keyMarker, uploadIDMarker)
-			query = fmt.Sprintf(`
-				WITH uploads AS (%s), prefixes AS (%s)
-				SELECT name, upload_id, created_at, is_prefix FROM uploads
-				UNION ALL
-				SELECT name, upload_id, created_at, is_prefix FROM prefixes`, query, query2)
-			args = append(args, args2...)
+		for !res.IsTruncated {
+			query, args := buildUploadsQuery(bid, prefix.Prefix, currentKeyMarker, currentUploadIDMarker, 100)
+			rows, err := tx.Query(query, args...)
+			if err != nil {
+				return err
+			}
+
+			var lastMatchedPrefix string
+			var foundRow bool
+			for rows.Next() {
+				foundRow = true
+				var upload s3.MultipartUploadInfo
+				if err := rows.Scan(&upload.Key, (*sqlUploadID)(&upload.UploadID), (*sqlTime)(&upload.Initiated)); err != nil {
+					rows.Close()
+					return err
+				}
+
+				commonPrefix := prefix.CommonPrefix(upload.Key)
+				if commonPrefix != "" && commonPrefix != lastMatchedPrefix {
+					res.CommonPrefixes = append(res.CommonPrefixes, commonPrefix)
+					lastMatchedPrefix = commonPrefix
+					currentKeyMarker = commonPrefix + "\xFF"
+					currentUploadIDMarker = [16]byte{}
+
+					// set marker for next iteration
+					if len(res.Uploads)+len(res.CommonPrefixes) >= int(maxUploads) {
+						res.IsTruncated = true
+						res.NextKeyMarker = currentKeyMarker
+						res.NextUploadIDMarker = currentUploadIDMarker
+						break
+					}
+					continue
+				} else if commonPrefix == "" {
+					res.Uploads = append(res.Uploads, upload)
+					currentKeyMarker = upload.Key
+					currentUploadIDMarker = upload.UploadID
+
+					// set marker for next iteration
+					if len(res.Uploads)+len(res.CommonPrefixes) >= int(maxUploads) {
+						res.IsTruncated = true
+						res.NextKeyMarker = currentKeyMarker
+						res.NextUploadIDMarker = currentUploadIDMarker
+						break
+					}
+				}
+			}
+			if err := rows.Close(); err != nil {
+				return err
+			}
+			if err := rows.Err(); err != nil {
+				return err
+			}
+
+			if !foundRow {
+				break
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+func (s *Store) listMultipartUploadsNoDelim(bucket, prefix, keyMarker string, uploadIDMarker [16]byte, maxUploads int64) (*s3.ListMultipartUploadsResult, error) {
+	res := &s3.ListMultipartUploadsResult{
+		Uploads: make([]s3.MultipartUploadInfo, 0, maxUploads),
+	}
+
+	err := s.transaction(func(tx *txn) error {
+		bid, err := bucketID(tx, bucket)
+		if err != nil {
+			return err
 		}
 
-		// order and limit
-		query += " ORDER BY name, upload_id"
-		query += " LIMIT ?"
-		args = append(args, maxUploads+1)
-
-		// collect results
+		query, args := buildUploadsQuery(bid, prefix, keyMarker, uploadIDMarker, maxUploads+1)
 		rows, err := tx.Query(query, args...)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 
-		var prev *s3.MultipartUploadInfo
 		for rows.Next() {
-			if len(res.Uploads)+len(res.CommonPrefixes) == int(maxUploads) {
-				if prev != nil {
-					res.IsTruncated = true
-					res.NextKeyMarker = prev.Key
-					res.NextUploadIDMarker = prev.UploadID
-				}
+			if len(res.Uploads) == int(maxUploads) {
+				res.IsTruncated = true
+				last := res.Uploads[len(res.Uploads)-1]
+				res.NextKeyMarker = last.Key
+				res.NextUploadIDMarker = last.UploadID
 				break
 			}
 
-			upload, isPrefix, err := scanMultipartUpload(rows)
-			if err != nil {
+			var upload s3.MultipartUploadInfo
+			if err := rows.Scan(&upload.Key, (*sqlUploadID)(&upload.UploadID), (*sqlTime)(&upload.Initiated)); err != nil {
 				return err
 			}
-			prev = &upload
-
-			if isPrefix {
-				res.CommonPrefixes = append(res.CommonPrefixes, commonPrefix(upload.Key))
-			} else {
-				res.Uploads = append(res.Uploads, upload)
-			}
+			res.Uploads = append(res.Uploads, upload)
 		}
 		return rows.Err()
-	}); err != nil {
+	})
+	if err != nil {
 		return nil, err
 	}
 	return res, nil
 }
 
-func buildUploadsQuery(bucketID int64, prefix, delimiter, keyMarker string, uploadIDMarker [16]byte) (string, []any) {
-	var (
-		hasPrefix    = prefix != ""
-		hasDelim     = delimiter != ""
-		prefixLen    = utf8.RuneCountInString(prefix)
-		searchOffset = prefixLen + 1
-	)
-
-	// check bucket
+func buildUploadsQuery(bucketID int64, prefix, keyMarker string, uploadIDMarker [16]byte, limit int64) (string, []any) {
 	where := []string{"bucket_id = ?"}
 	args := []any{bucketID}
 
 	// handle prefix
-	if hasPrefix {
+	if prefix != "" {
 		where = append(where, "name >= ? AND name < ?")
 		args = append(args, prefix, prefix+"\xFF")
 	}
 
-	// handle delimiter
-	if hasDelim {
-		if hasPrefix {
-			// when we know there's a prefix, start searching after it
-			where = append(where, "INSTR(SUBSTR(name, ?), ?) = 0")
-			args = append(args, searchOffset, delimiter)
-		} else {
-			// no prefix, just ensure delimiter not in the whole name
-			where = append(where, "INSTR(name, ?) = 0")
-			args = append(args, delimiter)
-		}
-	}
-
-	// check markers
+	// handle markers
 	if keyMarker != "" && uploadIDMarker != [16]byte{} {
 		where = append(where, "(name > ? OR (name = ? AND upload_id > ?))")
 		args = append(args, keyMarker, keyMarker, sqlUploadID(uploadIDMarker))
@@ -312,55 +360,31 @@ func buildUploadsQuery(bucketID int64, prefix, delimiter, keyMarker string, uplo
 		args = append(args, keyMarker)
 	}
 
-	return fmt.Sprintf(`SELECT name, upload_id, created_at, FALSE as is_prefix FROM multipart_uploads WHERE %s`, strings.Join(where, " AND ")), args
+	query := fmt.Sprintf("SELECT name, upload_id, created_at FROM multipart_uploads WHERE %s ORDER BY name, upload_id LIMIT ?", strings.Join(where, " AND "))
+	args = append(args, limit)
+	return query, args
 }
 
-func buildCommonPrefixesQuery(bucketID int64, prefix, delimiter, keyMarker string, uploadIDMarker [16]byte) (_ string, args []any) {
-	var (
-		prefixLen    = utf8.RuneCountInString(prefix)
-		searchOffset = prefixLen + 1
-	)
-
-	// search delimiter after prefix
-	args = append(args, searchOffset, delimiter, prefixLen)
-
-	// check bucket
-	where := []string{"bucket_id = ?"}
-	args = append(args, bucketID)
-
-	// check prefix
-	where = append(where, "name >= ? AND name < ? AND INSTR(SUBSTR(name, ?), ?) > 0")
-	args = append(args, prefix, prefix+"\xFF", searchOffset, delimiter)
-
-	// check markers
-	if keyMarker != "" && uploadIDMarker != [16]byte{} {
-		where = append(where, "(name > ? OR (name = ? AND upload_id > ?))")
-		args = append(args, keyMarker, keyMarker, sqlUploadID(uploadIDMarker))
-	} else if keyMarker != "" {
-		where = append(where, "name > ?")
-		args = append(args, keyMarker)
+// adjustMarkerForCommonPrefix adjusts the key marker if it falls inside a common
+// prefix. For example, if prefix="ac", delimiter="/", and marker="acb/x", this
+// advances the marker past the "acb/" prefix so it isn't returned twice in
+// paginated results.
+func adjustMarkerForCommonPrefix(prefix s3.Prefix, keyMarker string) (adjustedKey string, resetUploadID bool) {
+	if !prefix.HasDelimiter || keyMarker == "" {
+		return keyMarker, false
 	}
 
-	return fmt.Sprintf(`
-		SELECT name, upload_id, created_at, TRUE as is_prefix FROM (
-			SELECT
-				name,
-				upload_id,
-				created_at,
-				ROW_NUMBER() OVER (
-					PARTITION BY SUBSTR(name, 1, INSTR(SUBSTR(name, ?), ?) + ?)
-					ORDER BY name, upload_id
-				) as row
-			FROM multipart_uploads
-			WHERE %s
-		) WHERE row = 1`, strings.Join(where, " AND ")), args
-}
-
-func scanMultipartUpload(s scanner) (s3.MultipartUploadInfo, bool, error) {
-	var info s3.MultipartUploadInfo
-	var isPrefix bool
-	if err := s.Scan(&info.Key, (*sqlUploadID)(&info.UploadID), (*sqlTime)(&info.Initiated), &isPrefix); err != nil {
-		return s3.MultipartUploadInfo{}, false, err
+	markerRemainder := keyMarker
+	var prefixLen int
+	if after, ok := strings.CutPrefix(keyMarker, prefix.Prefix); ok {
+		prefixLen = len(prefix.Prefix)
+		markerRemainder = after
 	}
-	return info, isPrefix, nil
+
+	if idx := strings.Index(markerRemainder, prefix.Delimiter); idx != -1 {
+		commonPrefix := keyMarker[:prefixLen+idx+len(prefix.Delimiter)]
+		return commonPrefix + string([]byte{0xFF}), true
+	}
+
+	return keyMarker, false
 }

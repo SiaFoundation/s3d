@@ -106,11 +106,26 @@ type CompleteMultipartUploadResult struct {
 // ListMultipartUploadsOptions contains options for listing in-progress
 // multipart uploads for a bucket.
 type ListMultipartUploadsOptions struct {
-	Prefix         string
-	Delimiter      string
-	KeyMarker      string
+	Prefix    string
+	Delimiter string
+}
+
+// ListMultipartUploadsPage contains pagination parameters for listing
+// multipart uploads.
+type ListMultipartUploadsPage struct {
+	// KeyMarker specifies the key in the bucket that represents the last item
+	// in the previous page. The first key in the returned page will be the next
+	// lexicographically (UTF-8 binary) sorted key after KeyMarker.
+	KeyMarker string
+
+	// UploadIDMarker specifies the upload ID of the last upload in the previous
+	// page when multiple uploads exist for the same key. Only used when KeyMarker
+	// is also specified.
 	UploadIDMarker UploadID
-	MaxUploads     int64
+
+	// MaxUploads sets the maximum number of uploads returned in the response.
+	// The response might contain fewer uploads, but will never contain more.
+	MaxUploads int64
 }
 
 // MultipartUploadInfo represents a single multipart upload in a listing.
@@ -261,14 +276,16 @@ func (s *s3) listMultipartUploads(w http.ResponseWriter, r *http.Request, access
 
 	uploadIDMarker, _ := UploadIDFromString(query.Get("upload-id-marker"))
 	opts := ListMultipartUploadsOptions{
-		Prefix:         query.Get("prefix"),
-		Delimiter:      query.Get("delimiter"),
+		Prefix:    query.Get("prefix"),
+		Delimiter: query.Get("delimiter"),
+	}
+	page := ListMultipartUploadsPage{
 		KeyMarker:      query.Get("key-marker"),
 		UploadIDMarker: uploadIDMarker,
 		MaxUploads:     maxUploads,
 	}
 
-	result, err := s.backend.ListMultipartUploads(r.Context(), accessKeyID, bucket, opts)
+	result, err := s.backend.ListMultipartUploads(r.Context(), accessKeyID, bucket, opts, page)
 	if err != nil {
 		return err
 	}
@@ -278,8 +295,8 @@ func (s *s3) listMultipartUploads(w http.ResponseWriter, r *http.Request, access
 		Bucket:             bucket,
 		Prefix:             opts.Prefix,
 		Delimiter:          opts.Delimiter,
-		KeyMarker:          opts.KeyMarker,
-		UploadIDMarker:     opts.UploadIDMarker.String(),
+		KeyMarker:          page.KeyMarker,
+		UploadIDMarker:     page.UploadIDMarker.String(),
 		MaxUploads:         maxUploads,
 		IsTruncated:        result.IsTruncated,
 		NextKeyMarker:      result.NextKeyMarker,

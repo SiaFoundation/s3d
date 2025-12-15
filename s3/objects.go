@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/SiaFoundation/s3d/s3/auth"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
@@ -64,6 +65,27 @@ type Prefix struct {
 
 	HasDelimiter bool
 	Delimiter    string
+}
+
+// CommonPrefix computes the common prefix for the given key based on this
+// prefix's delimiter. Returns an empty string if the key doesn't match the
+// prefix or if no delimiter is set.
+func (p Prefix) CommonPrefix(key string) string {
+	if !p.HasDelimiter {
+		return ""
+	}
+
+	after, ok := strings.CutPrefix(key, p.Prefix)
+	if !ok {
+		return ""
+	}
+
+	idx := strings.IndexRune(after, rune(p.Delimiter[0]))
+	if idx == -1 {
+		return ""
+	}
+
+	return p.Prefix + after[:idx+utf8.RuneCountInString(p.Delimiter)]
 }
 
 func prefixFromQuery(query url.Values) Prefix {

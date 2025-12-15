@@ -339,7 +339,18 @@ func TestListMultipartUploads(t *testing.T) {
 			{keyMarker: "", uploadIDMarker: uids["foo"][1], expectedKeys: orderedKeys}, // uploadID marker ignored without key marker
 		}
 		for i, tc := range cases {
-			result, err := store.ListMultipartUploads(bucket, tc.prefix, noDelim, tc.keyMarker, tc.uploadIDMarker, 10)
+			prefix := s3.Prefix{
+				HasPrefix:    tc.prefix != "",
+				Prefix:       tc.prefix,
+				HasDelimiter: noDelim != "",
+				Delimiter:    noDelim,
+			}
+			page := s3.ListMultipartUploadsPage{
+				KeyMarker:      tc.keyMarker,
+				UploadIDMarker: tc.uploadIDMarker,
+				MaxUploads:     10,
+			}
+			result, err := store.ListMultipartUploads(bucket, prefix, page)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -351,7 +362,13 @@ func TestListMultipartUploads(t *testing.T) {
 		var prevKeyMarker string
 		var prevUploadIDMarker s3.UploadID
 		for i := range orderedKeys {
-			result, err := store.ListMultipartUploads(bucket, "", noDelim, prevKeyMarker, prevUploadIDMarker, 1)
+			prefix := s3.Prefix{HasDelimiter: false}
+			page := s3.ListMultipartUploadsPage{
+				KeyMarker:      prevKeyMarker,
+				UploadIDMarker: prevUploadIDMarker,
+				MaxUploads:     1,
+			}
+			result, err := store.ListMultipartUploads(bucket, prefix, page)
 			if err != nil {
 				t.Fatal(err)
 			} else if !result.IsTruncated && i != len(orderedKeys)-1 {
@@ -412,7 +429,18 @@ func TestListMultipartUploads(t *testing.T) {
 			if tc.maxUploads == 0 {
 				tc.maxUploads = 10
 			}
-			result, err := store.ListMultipartUploads(bucket, tc.prefix, slashDelim, tc.keyMarker, tc.uploadIDMarker, tc.maxUploads)
+			prefix := s3.Prefix{
+				HasPrefix:    tc.prefix != "",
+				Prefix:       tc.prefix,
+				HasDelimiter: true,
+				Delimiter:    slashDelim,
+			}
+			page := s3.ListMultipartUploadsPage{
+				KeyMarker:      tc.keyMarker,
+				UploadIDMarker: tc.uploadIDMarker,
+				MaxUploads:     tc.maxUploads,
+			}
+			result, err := store.ListMultipartUploads(bucket, prefix, page)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -421,7 +449,10 @@ func TestListMultipartUploads(t *testing.T) {
 		}
 
 		// paginate through results of the same bucket to ensure we advance past common prefixes
-		first, err := store.ListMultipartUploads(bucket, "", slashDelim, "", [16]byte{}, 1)
+		prefix := s3.Prefix{HasDelimiter: true, Delimiter: slashDelim}
+		first, err := store.ListMultipartUploads(bucket, prefix, s3.ListMultipartUploadsPage{
+			MaxUploads: 1,
+		})
 		if err != nil {
 			t.Fatal(err)
 		} else if !first.IsTruncated {
@@ -430,7 +461,11 @@ func TestListMultipartUploads(t *testing.T) {
 			t.Fatalf("expected caseSensitive, got %+v", first.Uploads)
 		}
 
-		second, err := store.ListMultipartUploads(bucket, "", slashDelim, first.NextKeyMarker, first.NextUploadIDMarker, 1)
+		second, err := store.ListMultipartUploads(bucket, prefix, s3.ListMultipartUploadsPage{
+			KeyMarker:      first.NextKeyMarker,
+			UploadIDMarker: first.NextUploadIDMarker,
+			MaxUploads:     1,
+		})
 		if err != nil {
 			t.Fatal(err)
 		} else if !second.IsTruncated {
@@ -439,7 +474,11 @@ func TestListMultipartUploads(t *testing.T) {
 			t.Fatalf("expected common prefix double/, got %+v", second.CommonPrefixes)
 		}
 
-		third, err := store.ListMultipartUploads(bucket, "", slashDelim, second.NextKeyMarker, second.NextUploadIDMarker, 1)
+		third, err := store.ListMultipartUploads(bucket, prefix, s3.ListMultipartUploadsPage{
+			KeyMarker:      second.NextKeyMarker,
+			UploadIDMarker: second.NextUploadIDMarker,
+			MaxUploads:     1,
+		})
 		if err != nil {
 			t.Fatal(err)
 		} else if len(third.Uploads) != 1 || third.Uploads[0].Key != "foo" {
@@ -483,7 +522,18 @@ func TestListMultipartUploads(t *testing.T) {
 		}
 
 		for i, tc := range cases {
-			result, err := store.ListMultipartUploads(bucket, tc.prefix, otherDelim, tc.keyMarker, tc.uploadIDMarker, 10)
+			prefix := s3.Prefix{
+				HasPrefix:    tc.prefix != "",
+				Prefix:       tc.prefix,
+				HasDelimiter: true,
+				Delimiter:    otherDelim,
+			}
+			page := s3.ListMultipartUploadsPage{
+				KeyMarker:      tc.keyMarker,
+				UploadIDMarker: tc.uploadIDMarker,
+				MaxUploads:     10,
+			}
+			result, err := store.ListMultipartUploads(bucket, prefix, page)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -529,7 +579,18 @@ func TestListMultipartUploads(t *testing.T) {
 			stack = stack[:n]
 
 			// fetch page
-			res, err := store.ListMultipartUploads(bucket, pg.prefix, delimiter, pg.keyMarker, pg.uploadIDMarker, maxKeys)
+			prefix := s3.Prefix{
+				HasPrefix:    pg.prefix != "",
+				Prefix:       pg.prefix,
+				HasDelimiter: true,
+				Delimiter:    delimiter,
+			}
+			listPage := s3.ListMultipartUploadsPage{
+				KeyMarker:      pg.keyMarker,
+				UploadIDMarker: pg.uploadIDMarker,
+				MaxUploads:     maxKeys,
+			}
+			res, err := store.ListMultipartUploads(bucket, prefix, listPage)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -583,13 +644,29 @@ func BenchmarkListMultipartUploads(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	// populate database with multipart uploads
-	for range numKeys {
-		key := randomPath(minLength, maxLength, maxDepth, alphabet, slashDelim)
-		err := store.CreateMultipartUpload(bucket, key, s3.NewUploadID(), nil)
+	// create multipart uploads
+	err := store.transaction(func(tx *txn) error {
+		bid, err := bucketID(tx, bucket)
 		if err != nil {
-			b.Fatal(err)
+			return err
 		}
+
+		now := time.Now()
+		for range numKeys {
+			key := randomPath(minLength, maxLength, maxDepth, alphabet, slashDelim)
+			uploadID := s3.NewUploadID()
+			_, err = tx.Exec(`
+				INSERT INTO multipart_uploads (bucket_id, name, upload_id, metadata, created_at)
+				VALUES ($1, $2, $3, $4, $5)
+			`, bid, key, sqlUploadID(uploadID), "{}", sqlTime(now))
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		b.Fatal(err)
 	}
 
 	// optimize database for benchmarking
@@ -603,73 +680,95 @@ func BenchmarkListMultipartUploads(b *testing.B) {
 
 	// benchmark no-delimiter with random prefix
 	b.Run("no-delim", func(b *testing.B) {
-		var none int
+		var consec bool
 		for b.Loop() {
 			prefix := randomPath(1, minLength, maxDepth, alphabet, "")
-			res, err := store.ListMultipartUploads(bucket, prefix, "", "", [16]byte{}, maxKeys)
+			prefixArg := s3.Prefix{
+				HasPrefix: prefix != "",
+				Prefix:    prefix,
+			}
+			listPage := s3.ListMultipartUploadsPage{
+				MaxUploads: maxKeys,
+			}
+			res, err := store.ListMultipartUploads(bucket, prefixArg, listPage)
 			if err != nil {
 				b.Fatal(err)
 			} else if len(res.Uploads)+len(res.CommonPrefixes) == 0 {
-				none++
-				if none == 3 {
-					b.Fatalf("no results for 3 consecutive iterations, last prefix: %q", prefix)
+				if consec {
+					b.Fatalf("no results for two consecutive iterations, last prefix: %q", prefix)
 				}
+				consec = true
 			} else {
-				none = 0
+				consec = false
 			}
 		}
 	})
 
 	// benchmark / delimiter with random prefix
-	b.Run("slash-delim", func(b *testing.B) {
-		var none int
+	b.Run("slash-delim-no-prefix", func(b *testing.B) {
 		for b.Loop() {
-			prefix := randomPath(1, minLength, maxDepth, alphabet, slashDelim)
-			res, err := store.ListMultipartUploads(bucket, prefix, slashDelim, "", [16]byte{}, maxKeys)
+			prefix := s3.Prefix{
+				HasDelimiter: true,
+				Delimiter:    slashDelim,
+			}
+			listPage := s3.ListMultipartUploadsPage{
+				MaxUploads: maxKeys,
+			}
+			res, err := store.ListMultipartUploads(bucket, prefix, listPage)
 			if err != nil {
 				b.Fatal(err)
 			} else if len(res.Uploads)+len(res.CommonPrefixes) == 0 {
-				none++
-				if none == 3 {
-					b.Fatalf("no results for 3 consecutive iterations, last prefix: %q", prefix)
-				}
-			} else {
-				none = 0
+				b.Fatal("no results for empty prefix")
 			}
 		}
 	})
 
-	// benchmark random delimiter with random prefix
-	b.Run("random-delim", func(b *testing.B) {
-		var none int
+	// benchmark / delimiter with random prefix
+	b.Run("slash-delim-rand-prefix", func(b *testing.B) {
+		var consec bool
 		for b.Loop() {
-			delimiter := string(alphabet[frand.Intn(len(alphabet))])
-			prefix := randomPath(1, minLength, maxDepth, alphabet, delimiter)
-			res, err := store.ListMultipartUploads(bucket, prefix, delimiter, "", [16]byte{}, maxKeys)
+			prefix := randomPath(1, minLength, maxDepth, alphabet, slashDelim)
+			prefixArg := s3.Prefix{
+				HasPrefix:    prefix != "",
+				Prefix:       prefix,
+				HasDelimiter: true,
+				Delimiter:    slashDelim,
+			}
+			listPage := s3.ListMultipartUploadsPage{
+				MaxUploads: maxKeys,
+			}
+			res, err := store.ListMultipartUploads(bucket, prefixArg, listPage)
 			if err != nil {
 				b.Fatal(err)
 			} else if len(res.Uploads)+len(res.CommonPrefixes) == 0 {
-				none++
-				if none == 3 {
-					b.Fatalf("no results for 3 consecutive iterations, last prefix: %q", prefix)
+				if consec {
+					b.Fatalf("no results for two consecutive iterations, last prefix: %q", prefix)
 				}
+				consec = true
 			} else {
-				none = 0
+				consec = false
 			}
 		}
 	})
 
 	// benchmark / delimiter with random prefix and paging
-	b.Run("paging", func(b *testing.B) {
+	b.Run("slash-delim-paging", func(b *testing.B) {
 		var paged int
-		var prefix, prevKeyMarker string
+		var prevKeyMarker, prefix string
 		var prevUploadIDMarker s3.UploadID
 		for b.Loop() {
-			if prefix == "" {
-				prefix = randomPath(1, minLength, maxDepth, alphabet, slashDelim)
+			prefixArg := s3.Prefix{
+				HasPrefix:    prefix != "",
+				Prefix:       prefix,
+				HasDelimiter: true,
+				Delimiter:    slashDelim,
 			}
-
-			res, err := store.ListMultipartUploads(bucket, prefix, slashDelim, prevKeyMarker, prevUploadIDMarker, maxKeys)
+			listPage := s3.ListMultipartUploadsPage{
+				KeyMarker:      prevKeyMarker,
+				UploadIDMarker: prevUploadIDMarker,
+				MaxUploads:     maxKeys,
+			}
+			res, err := store.ListMultipartUploads(bucket, prefixArg, listPage)
 			if err != nil {
 				b.Fatal(err)
 			} else if res.IsTruncated {
@@ -677,14 +776,46 @@ func BenchmarkListMultipartUploads(b *testing.B) {
 				prevUploadIDMarker = res.NextUploadIDMarker
 				prevKeyMarker = res.NextKeyMarker
 				continue
+			} else if len(res.CommonPrefixes) > 0 {
+				prefix = res.CommonPrefixes[len(res.CommonPrefixes)-1]
+				continue
 			}
 
+			prefix = ""
 			prevKeyMarker = ""
 			prevUploadIDMarker = [16]byte{}
-			prefix = ""
 		}
 		if paged == 0 {
 			b.Fatal("no pagination occurred during benchmark")
+		}
+	})
+
+	// benchmark random delimiter with random prefix
+	b.Run("random-delim", func(b *testing.B) {
+		var consec bool
+		for b.Loop() {
+			delim := string(alphabet[frand.Intn(len(alphabet))])
+			prefix := randomPath(1, minLength, maxDepth, alphabet, delim)
+			prefixArg := s3.Prefix{
+				HasPrefix:    prefix != "",
+				Prefix:       prefix,
+				HasDelimiter: true,
+				Delimiter:    delim,
+			}
+			listPage := s3.ListMultipartUploadsPage{
+				MaxUploads: maxKeys,
+			}
+			res, err := store.ListMultipartUploads(bucket, prefixArg, listPage)
+			if err != nil {
+				b.Fatal(err)
+			} else if len(res.Uploads)+len(res.CommonPrefixes) == 0 {
+				if consec {
+					b.Fatalf("no results for two consecutive iterations, last prefix: %q", prefix)
+				}
+				consec = true
+			} else {
+				consec = false
+			}
 		}
 	})
 }
