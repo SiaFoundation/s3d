@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"go.uber.org/zap"
 	"lukechampine.com/frand"
@@ -19,29 +20,29 @@ func TestCreateMultipartUpload(t *testing.T) {
 	store := initTestDB(t, zap.NewNop())
 
 	// assert [s3errs.ErrNoSuchBucket] for unknown bucket - then create it
-	if _, err := store.CreateMultipartUpload(bucket, object, nil); !errors.Is(err, s3errs.ErrNoSuchBucket) {
+	if err := store.CreateMultipartUpload(bucket, object, s3.NewUploadID(), nil); !errors.Is(err, s3errs.ErrNoSuchBucket) {
 		t.Fatal(err)
 	} else if err := store.CreateBucket(accessKeyID, bucket); err != nil {
 		t.Fatal(err)
 	}
 
-	// create multipart upload (and assert no error on duplicate creation)
-	uid1, err := store.CreateMultipartUpload(bucket, object, nil)
+	// create multipart upload
+	uid1 := s3.NewUploadID()
+	err := store.CreateMultipartUpload(bucket, object, uid1, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	uid2, err := store.CreateMultipartUpload(bucket, object, nil)
-	if err != nil {
+	store.assertCount(1, "multipart_uploads")
+
+	// abort the multipart upload
+	if err := store.AbortMultipartUpload(bucket, object, uid1); err != nil {
 		t.Fatal(err)
-	} else if uid1 == uid2 {
-		t.Fatal("expected unique upload IDs")
 	}
-	store.assertCount(2, "multipart_uploads")
+	store.assertCount(0, "multipart_uploads")
 }
 
 func TestAddMultipartPart(t *testing.T) {
 	const (
-		unknownUID  = "a0188aceb938ca67b1d8ac03dfd361e9"
 		accessKeyID = "test-accesskey"
 		bucket      = "test-bucket"
 		object      = "test-object"
@@ -58,12 +59,13 @@ func TestAddMultipartPart(t *testing.T) {
 	}
 
 	// assert [s3errs.ErrNoSuchUpload] for unknown upload ID
-	if _, err := store.AddMultipartPart(bucket, object, unknownUID, location, 1, contentMD5, nil, 0); !errors.Is(err, s3errs.ErrNoSuchUpload) {
+	if _, err := store.AddMultipartPart(bucket, object, s3.NewUploadID(), location, 1, contentMD5, nil, 0); !errors.Is(err, s3errs.ErrNoSuchUpload) {
 		t.Fatal(err)
 	}
 
 	// create multipart upload
-	uid, err := store.CreateMultipartUpload(bucket, object, nil)
+	uid := s3.NewUploadID()
+	err := store.CreateMultipartUpload(bucket, object, uid, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,11 +77,12 @@ func TestAddMultipartPart(t *testing.T) {
 	} else if prev != "" {
 		t.Fatal("expected empty previous filename for first part upload", prev)
 	}
+
 	prev, err = store.AddMultipartPart(bucket, object, uid, location, 1, contentMD5, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	} else if prev == "" || prev != location {
-		t.Fatal("expected previous filename to be returned on part overwrite")
+		t.Fatal("expected previous filename to be returned on part overwrite", prev)
 	}
 
 	store.assertCount(1, "multipart_parts")
@@ -87,7 +90,6 @@ func TestAddMultipartPart(t *testing.T) {
 
 func TestAbortMultipartUpload(t *testing.T) {
 	const (
-		unknownUID  = "a0188aceb938ca67b1d8ac03dfd361e9"
 		accessKeyID = "test-accesskey"
 		bucket      = "test-bucket"
 		object      = "test-object"
@@ -101,12 +103,13 @@ func TestAbortMultipartUpload(t *testing.T) {
 	}
 
 	// assert [s3errs.ErrNoSuchUpload] for unknown upload ID
-	if err := store.AbortMultipartUpload(bucket, object, unknownUID); !errors.Is(err, s3errs.ErrNoSuchUpload) {
+	if err := store.AbortMultipartUpload(bucket, object, s3.NewUploadID()); !errors.Is(err, s3errs.ErrNoSuchUpload) {
 		t.Fatal(err)
 	}
 
 	// create multipart upload
-	uid, err := store.CreateMultipartUpload(bucket, object, nil)
+	uid := s3.NewUploadID()
+	err := store.CreateMultipartUpload(bucket, object, uid, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +137,6 @@ func TestAbortMultipartUpload(t *testing.T) {
 
 func TestHasMultipartUpload(t *testing.T) {
 	const (
-		unknownUID  = "a0188aceb938ca67b1d8ac03dfd361e9"
 		accessKeyID = "test-accesskey"
 		bucket      = "test-bucket"
 		object      = "test-object"
@@ -147,12 +149,13 @@ func TestHasMultipartUpload(t *testing.T) {
 	}
 
 	// assert [s3errs.ErrNoSuchUpload] for unknown upload ID
-	if err := store.HasMultipartUpload(bucket, object, unknownUID); !errors.Is(err, s3errs.ErrNoSuchUpload) {
+	if err := store.HasMultipartUpload(bucket, object, s3.NewUploadID()); !errors.Is(err, s3errs.ErrNoSuchUpload) {
 		t.Fatal(err)
 	}
 
 	// create multipart upload
-	uid, err := store.CreateMultipartUpload(bucket, object, nil)
+	uid := s3.NewUploadID()
+	err := store.CreateMultipartUpload(bucket, object, uid, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,12 +181,13 @@ func TestListParts(t *testing.T) {
 	}
 
 	// assert [s3errs.ErrNoSuchUpload] for unknown upload ID
-	if _, err := store.ListParts(accessKeyID, bucket, object, unknownUID, 0, 1000); !errors.Is(err, s3errs.ErrNoSuchUpload) {
+	if _, err := store.ListParts(accessKeyID, bucket, object, s3.NewUploadID(), 0, 1000); !errors.Is(err, s3errs.ErrNoSuchUpload) {
 		t.Fatal(err)
 	}
 
 	// create multipart upload
-	uid, err := store.CreateMultipartUpload(bucket, object, nil)
+	uid := s3.NewUploadID()
+	err := store.CreateMultipartUpload(bucket, object, uid, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
