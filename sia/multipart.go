@@ -200,18 +200,13 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 
 // ListParts lists uploaded parts for a multipart upload.
 func (s *Sia) ListParts(ctx context.Context, accessKeyID, bucket, object, uploadID string, page s3.ListPartsPage) (*s3.ListPartsResult, error) {
-	// check bucket access
-	if err := s.store.HeadBucket(accessKeyID, bucket); err != nil {
-		return nil, err
-	}
-
 	// parse upload ID
 	uid, err := s3.UploadIDFromString(uploadID)
 	if err != nil {
-		return nil, s3errs.ErrInvalidArgument
+		return nil, s3errs.ErrNoSuchUpload
 	}
 
-	return s.store.ListParts(accessKeyID, bucket, object, uid, page.PartNumberMarker, page.MaxParts)
+	return s.store.ListParts(bucket, object, uid, page.PartNumberMarker, page.MaxParts)
 }
 
 // CompleteMultipartUpload completes a multipart upload.

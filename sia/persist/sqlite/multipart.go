@@ -196,10 +196,10 @@ func (s *Store) MultipartUpload(bucket, name string, uploadID s3.UploadID) (mult
 }
 
 // ListParts lists uploaded parts for a multipart upload.
-func (s *Store) ListParts(accessKeyID, bucket, name string, uploadID s3.UploadID, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error) {
+func (s *Store) ListParts(bucket, name string, uploadID s3.UploadID, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error) {
 	res := &s3.ListPartsResult{
 		OwnerID:              "", // TODO: sia backend does not yet support owners
-		InitiatorID:          accessKeyID,
+		InitiatorID:          "", // TODO: sia backend does not yet support initiators
 		OwnerDisplayName:     "",
 		InitiatorDisplayName: "",
 		Parts:                make([]s3.UploadPart, 0, maxParts),

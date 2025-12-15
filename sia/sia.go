@@ -68,7 +68,7 @@ type Store interface {
 	CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, parts []multipart.Part) error
 	MultipartUpload(bucket, name string, uploadID s3.UploadID) (multipart.Upload, error)
 	AddMultipartPart(bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentSHA256 *[32]byte, contentLength int64) (string, error)
-	ListParts(accessKeyID, bucket, name string, uploadID s3.UploadID, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error)
+	ListParts(bucket, name string, uploadID s3.UploadID, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error)
 }
 
 // New creates a new Sia backend instance.
