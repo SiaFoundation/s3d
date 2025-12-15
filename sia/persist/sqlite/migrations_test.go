@@ -35,17 +35,6 @@ CREATE TABLE objects (
     UNIQUE(bucket_id, name)
 );
 
-CREATE TABLE object_parts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    object_id INTEGER NOT NULL,
-    part_number INTEGER NOT NULL,
-    content_md5 BLOB NOT NULL,
-    offset INTEGER NOT NULL,
-    length INTEGER NOT NULL,
-    FOREIGN KEY (object_id) REFERENCES objects(id) ON DELETE CASCADE,
-    UNIQUE(object_id, part_number)
-);
-
 CREATE TABLE multipart_uploads (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     upload_id BLOB NOT NULL UNIQUE,
@@ -57,18 +46,34 @@ CREATE TABLE multipart_uploads (
 );
 CREATE INDEX multipart_uploads_bucket_id_name_idx ON multipart_uploads(bucket_id, name);
 
-CREATE TABLE multipart_parts (
+CREATE TABLE parts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    multipart_upload_id INTEGER NOT NULL,
     part_number INTEGER NOT NULL,
-    filename TEXT NOT NULL,
     content_md5 BLOB NOT NULL,
-    content_sha256 BLOB,
     content_length INTEGER NOT NULL,
-    created_at INTEGER NOT NULL,
+
+    created_at INTEGER, -- nulled when the part is finalized
+    filename TEXT, -- nulled when the part is finalized
+    offset INTEGER, -- set when the part is finalized
+
+    -- one of these foreign keys must be set
+    multipart_upload_id INTEGER,
+    object_id INTEGER,
+
+    -- enforce atomicity
+    CHECK (
+        (multipart_upload_id IS NOT NULL AND object_id IS NULL) OR
+        (multipart_upload_id IS NULL AND object_id IS NOT NULL AND created_at IS NULL AND filename IS NULL AND offset IS NOT NULL)
+    ),
+
     FOREIGN KEY (multipart_upload_id) REFERENCES multipart_uploads(id) ON DELETE CASCADE,
-    UNIQUE(multipart_upload_id, part_number)
+    FOREIGN KEY (object_id) REFERENCES objects(id) ON DELETE CASCADE,
+
+    UNIQUE(multipart_upload_id, part_number),
+    UNIQUE(object_id, part_number)
 );
+CREATE INDEX parts_multipart_upload_id_idx ON parts(multipart_upload_id) WHERE multipart_upload_id IS NOT NULL;
+CREATE INDEX parts_object_id_idx ON parts(object_id) WHERE object_id IS NOT NULL;
 
 CREATE TABLE global_settings (
 	id INTEGER PRIMARY KEY NOT NULL DEFAULT 0 CHECK (id = 0), -- enforce a single row

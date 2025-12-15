@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/md5"
 	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"maps"
 	"slices"
@@ -661,11 +662,8 @@ func (b *MemoryBackend) ListParts(_ context.Context, accessKeyID, bucket, key, u
 
 // CompleteMultipartUpload assembles the uploaded parts into the final object.
 //
-// NOTE: the given parts slice is expected to have passed a validation step
-// already, asserting the part numbers and ETags are correct, the backend still
-// validates that only the last part can be smaller than MinUploadPartSize and
-// the given ETag matches.
-func (b *MemoryBackend) CompleteMultipartUpload(_ context.Context, accessKeyID, bucket, key, uploadID string, parts []s3.CompletedPart) (*s3.CompleteMultipartUploadResult, error) {
+// NOTE: parts must be non-nil and not exceed MaxParts.
+func (b *MemoryBackend) CompleteMultipartUpload(_ context.Context, accessKeyID, bucket, key, uploadID string, parts []s3.CompleteMultipartPart) (*s3.CompleteMultipartUploadResult, error) {
 	uid, err := s3.UploadIDFromString(uploadID)
 	if err != nil {
 		return nil, s3errs.ErrNoSuchUpload
@@ -685,41 +683,54 @@ func (b *MemoryBackend) CompleteMultipartUpload(_ context.Context, accessKeyID, 
 		return nil, s3errs.ErrNoSuchUpload
 	}
 
-	if len(parts) == 0 {
-		return nil, s3errs.ErrInvalidRequest
+	// deduplicate parts
+	for i := 1; i < len(parts); i++ {
+		if parts[i].PartNumber == parts[i-1].PartNumber {
+			parts = append(parts[:i-1], parts[i:]...)
+			i--
+		}
 	}
 
-	// build object hash and validate parts
+	// validate parts
 	var totalSize int
-	objHash := make([]byte, 0, len(parts)*ETagSize)
-	objParts := make(map[int]objectMultipartPart, len(parts))
-	for i, completed := range parts {
-		part, found := upload.parts[completed.PartNumber]
-		if !found {
-			return nil, s3errs.ErrInvalidPart
-		} else if part.contentMD5 != completed.ETag {
+	for i, part := range parts {
+		uploaded, ok := upload.parts[part.PartNumber]
+		if !ok {
 			return nil, s3errs.ErrInvalidPart
 		}
-
+		totalSize += len(uploaded.data)
+		if tryParseETag(part.ETag) != uploaded.contentMD5 {
+			return nil, s3errs.ErrInvalidPart
+		}
 		lastPart := i == len(parts)-1
-		if !lastPart && int64(len(part.data)) < s3.MinUploadPartSize {
+		if !lastPart && int64(len(uploaded.data)) < s3.MinUploadPartSize {
 			return nil, s3errs.ErrEntityTooSmall
 		}
-
-		objHash = append(objHash, part.contentMD5[:]...)
-		objParts[completed.PartNumber] = objectMultipartPart{
-			offset:     int64(totalSize),
-			length:     int64(len(part.data)),
-			contentMD5: part.contentMD5,
-		}
-
-		totalSize += len(part.data)
 	}
 
-	// collect object data
+	// validate part numbers
+	for i, part := range parts {
+		expectedPartNumber := i + 1
+		if part.PartNumber != expectedPartNumber {
+			return nil, s3errs.ErrInvalidPartOrder
+		}
+	}
+
+	// collect object data and parts info
 	objData := make([]byte, 0, totalSize)
-	for _, completed := range parts {
-		objData = append(objData, upload.parts[completed.PartNumber].data...)
+	objHash := make([]byte, 0, len(parts)*ETagSize)
+	objParts := make(map[int]objectMultipartPart, len(parts))
+	var offset int64
+	for _, part := range parts {
+		uploaded := upload.parts[part.PartNumber]
+		objData = append(objData, uploaded.data...)
+		objHash = append(objHash, uploaded.contentMD5[:]...)
+		objParts[part.PartNumber] = objectMultipartPart{
+			offset:     offset,
+			length:     int64(len(uploaded.data)),
+			contentMD5: uploaded.contentMD5,
+		}
+		offset += int64(len(uploaded.data))
 	}
 	objMD5 := md5.Sum(objData)
 
@@ -855,4 +866,22 @@ func (o object) matches(oid s3.ObjectID) bool {
 // nowUTC returns the current time in UTC truncated to seconds.
 func nowUTC() time.Time {
 	return time.Now().UTC().Truncate(time.Second)
+}
+
+// tryParseETag attempts to parse the given ETag string into a 16-byte MD5 sum.
+func tryParseETag(s string) [16]byte {
+	s = strings.TrimSpace(s)
+	s = strings.Trim(s, `"`)
+	if s == "" {
+		return [16]byte{}
+	}
+
+	var etag [16]byte
+	decoded, err := hex.DecodeString(s)
+	if err != nil {
+		return [16]byte{}
+	}
+	copy(etag[:], decoded)
+
+	return etag
 }

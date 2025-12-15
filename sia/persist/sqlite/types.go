@@ -3,6 +3,7 @@ package sqlite
 import (
 	"database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -15,6 +16,7 @@ var (
 	_ scannerValuer = (*sqlMD5)(nil)
 	_ scannerValuer = (*sqlTime)(nil)
 	_ scannerValuer = (*sqlUploadID)(nil)
+	_ scannerValuer = (*sqlMetaJSON)(nil)
 )
 
 type scannerValuer interface {
@@ -93,4 +95,25 @@ func (uid *sqlUploadID) Scan(src any) error {
 
 func (uid sqlUploadID) Value() (driver.Value, error) {
 	return uid[:], nil
+}
+
+type sqlMetaJSON map[string]string
+
+func (m *sqlMetaJSON) Scan(src any) error {
+	switch src := src.(type) {
+	case string:
+		return json.Unmarshal([]byte(src), m)
+	case []byte:
+		return json.Unmarshal(src, m)
+	default:
+		return fmt.Errorf("cannot scan %T to MetaJSON", src)
+	}
+}
+
+func (m sqlMetaJSON) Value() (driver.Value, error) {
+	data, err := json.Marshal(m)
+	if err != nil {
+		return nil, err
+	}
+	return string(data), nil
 }

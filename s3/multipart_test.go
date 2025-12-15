@@ -425,9 +425,10 @@ func TestCompleteMultipartUpload(t *testing.T) {
 	testutil.AssertS3Error(t, s3errs.ErrInvalidPart, err)
 
 	// assert [s3errs.ErrInvalidPartOrder] is returned for parts out of order
-	uploadID, outOfOrderParts := newTestMultipartUpload(t, s3Tester, bucket, object, [][]byte{p1Data, p2Data})
-	outOfOrderParts[0], outOfOrderParts[1] = outOfOrderParts[1], outOfOrderParts[0]
-	_, err = s3Tester.CompleteMultipartUpload(t.Context(), bucket, object, uploadID, outOfOrderParts)
+	p3Data := bytes.Repeat([]byte("a"), int(s3.MinUploadPartSize))
+	uploadID, invalidOrder := newTestMultipartUpload(t, s3Tester, bucket, object, [][]byte{p1Data, p3Data, p2Data})
+	invalidOrder[0], invalidOrder[1] = invalidOrder[1], invalidOrder[0]
+	_, err = s3Tester.CompleteMultipartUpload(t.Context(), bucket, object, uploadID, invalidOrder)
 	testutil.AssertS3Error(t, s3errs.ErrInvalidPartOrder, err)
 
 	// assert [s3errs.ErrAccessDenied] is returned for unauthorized access

@@ -4,17 +4,17 @@ import (
 	"context"
 	"crypto/md5"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"hash"
 	"io"
 	"os"
 	"path/filepath"
-	"time"
+	"strings"
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
-	"github.com/SiaFoundation/s3d/sia/multipart"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.uber.org/zap"
 	"lukechampine.com/frand"
@@ -173,7 +173,7 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object, uploa
 	}
 
 	// add multipart part to the database
-	previous, err := s.store.AddMultipartPart(bucket, object, uid, filepath.Base(partPath), opts.PartNumber, contentMD5, contentSHA256, contentLength)
+	previous, err := s.store.AddMultipartPart(bucket, object, uid, filepath.Base(partPath), opts.PartNumber, contentMD5, contentLength)
 	if err != nil {
 		if err := os.Remove(partPath); err != nil {
 			s.logger.Error("failed to remove part file",
@@ -211,15 +211,8 @@ func (s *Sia) ListParts(ctx context.Context, accessKeyID, bucket, object, upload
 
 // CompleteMultipartUpload completes a multipart upload.
 //
-// NOTE: the given parts slice is expected to have passed a validation step
-// already, asserting the part numbers and ETags are correct, the backend still
-// validates that only the last part can be smaller than MinUploadPartSize.
-func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, object, uploadID string, parts []s3.CompletedPart) (*s3.CompleteMultipartUploadResult, error) {
-	// check bucket access
-	if err := s.store.HeadBucket(accessKeyID, bucket); err != nil {
-		return nil, err
-	}
-
+// NOTE: parts must be non-nil and not exceed MaxParts.
+func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, object, uploadID string, parts []s3.CompleteMultipartPart) (*s3.CompleteMultipartUploadResult, error) {
 	// parse upload ID
 	uid, err := s3.UploadIDFromString(uploadID)
 	if err != nil {
@@ -227,29 +220,49 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 	}
 
 	// get multipart upload
-	upload, err := s.store.MultipartUpload(bucket, object, uid)
+	uploaded, err := s.store.MultipartParts(bucket, object, uid)
 	if err != nil {
 		return nil, err
 	}
 
-	// update parts based on the provided completed parts
-	if len(parts) > len(upload.Parts) {
-		return nil, s3errs.ErrInvalidArgument
-	} else if len(parts) != len(upload.Parts) {
-		upload.Parts = upload.Parts[:len(parts)]
+	// build map of uploaded parts
+	lookup := make(map[int]objects.Part)
+	for _, part := range uploaded {
+		lookup[part.PartNumber] = part
+	}
+
+	// deduplicate parts
+	for i := 1; i < len(parts); i++ {
+		if parts[i].PartNumber == parts[i-1].PartNumber {
+			parts = append(parts[:i], parts[i+1:]...)
+			i--
+		}
 	}
 
 	// validate parts
-	for i, part := range upload.Parts {
-		if part.PartNumber != parts[i].PartNumber {
+	var totalSize int
+	completed := make([]objects.Part, len(parts))
+	for i, p := range parts {
+		part, ok := lookup[p.PartNumber]
+		if !ok {
 			return nil, s3errs.ErrInvalidPart
 		}
-		if part.MD5 != parts[i].ETag {
-			return nil, s3errs.ErrBadDigest
+		totalSize += int(part.Size)
+		if tryParseETag(p.ETag) != part.ContentMD5 {
+			return nil, s3errs.ErrInvalidPart
 		}
 		lastPart := i == len(parts)-1
 		if !lastPart && part.Size < s3.MinUploadPartSize {
 			return nil, s3errs.ErrEntityTooSmall
+		}
+		completed[i] = part
+	}
+
+	// validate part numbers
+	for i, part := range parts {
+		expectedPartNumber := i + 1
+		if part.PartNumber != expectedPartNumber {
+			return nil, s3errs.ErrInvalidPartOrder
 		}
 	}
 
@@ -259,35 +272,21 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 		return nil, fmt.Errorf("failed to stat upload directory: %w", err)
 	}
 
-	// assert all part files exist
-	for _, part := range upload.Parts {
-		partPath := filepath.Join(uploadDir, fmt.Sprintf("%d", part.PartNumber), part.Filename)
-		if _, err := os.Stat(partPath); err != nil {
-			return nil, fmt.Errorf("failed to stat part file %d: %w", part.PartNumber, err)
-		}
+	// create reader for the completed object
+	r, err := objects.NewReader(completed, uploadDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create multipart reader: %w", err)
 	}
+	defer r.Close()
 
 	// upload the combined object to Sia
-	r := multipart.NewReader(upload, uploadDir)
 	obj, err := s.sdk.Upload(ctx, r)
 	if err != nil {
 		return nil, fmt.Errorf("failed to upload object to Sia: %w", err)
 	}
-	contentMD5 := r.MD5Sum()
-
-	// store the object in the database
-	if err := s.store.PutObject(accessKeyID, bucket, object, &objects.Object{
-		ID:         obj.ID(),
-		ContentMD5: contentMD5,
-		Meta:       upload.Meta,
-		Size:       r.Size(),
-		UpdatedAt:  time.Now(),
-	}); err != nil {
-		return nil, fmt.Errorf("failed to store object metadata: %w", err)
-	}
 
 	// complete the multipart upload in the database
-	if err := s.store.CompleteMultipartUpload(bucket, object, uid, upload.Parts); err != nil {
+	if err := s.store.CompleteMultipartUpload(bucket, object, uid, obj.ID(), r.MD5Sum(), r.Size()); err != nil {
 		return nil, fmt.Errorf("failed to complete multipart upload in store: %w", err)
 	}
 
@@ -298,8 +297,27 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 			zap.Error(err))
 	}
 
+	contentMD5 := r.MD5Sum()
 	return &s3.CompleteMultipartUploadResult{
 		ETag:       s3.FormatETag(contentMD5[:]),
 		ContentMD5: contentMD5,
 	}, nil
+}
+
+// tryParseETag attempts to parse the given ETag string into a 16-byte MD5 sum.
+func tryParseETag(s string) [16]byte {
+	s = strings.TrimSpace(s)
+	s = strings.Trim(s, `"`)
+	if s == "" {
+		return [16]byte{}
+	}
+
+	var etag [16]byte
+	decoded, err := hex.DecodeString(s)
+	if err != nil {
+		return [16]byte{}
+	}
+	copy(etag[:], decoded)
+
+	return etag
 }

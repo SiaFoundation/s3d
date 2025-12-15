@@ -1,4 +1,4 @@
-package multipart
+package objects
 
 import (
 	"crypto/md5"
@@ -28,22 +28,32 @@ type Reader struct {
 }
 
 // NewReader creates a new Reader for the given multipart upload.
-func NewReader(upload Upload, basePath string) *Reader {
+func NewReader(parts []Part, basePath string) (*Reader, error) {
+	for _, part := range parts {
+		partPath := filepath.Join(basePath, fmt.Sprintf("%d", part.PartNumber), part.Filename)
+		if _, err := os.Stat(partPath); err != nil {
+			return nil, fmt.Errorf("failed to stat part file %d: %w", part.PartNumber, err)
+		}
+	}
 	var total int64
-	for _, p := range upload.Parts {
+	for _, p := range parts {
 		total += p.Size
 	}
 	return &Reader{
-		parts:     upload.Parts,
+		parts:     parts,
 		basePath:  basePath,
 		currIdx:   -1,
 		totalSize: total,
 		totalHash: md5.New(),
-	}
+	}, nil
 }
 
 // Read reads data from the multipart upload parts sequentially.
 func (r *Reader) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+
 	for {
 		// no current part, open next
 		if r.curr == nil || r.bytesLeft == 0 {
@@ -74,6 +84,10 @@ func (r *Reader) Read(p []byte) (int, error) {
 			}
 			if r.bytesLeft == 0 {
 				if err := r.finishPart(); err != nil {
+					if r.curr != nil {
+						r.curr.Close()
+						r.curr = nil
+					}
 					return n, err
 				}
 			}
@@ -131,6 +145,16 @@ func (r *Reader) openNext() error {
 		return fmt.Errorf("failed to open part at %s: %w", path, err)
 	}
 
+	stat, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return fmt.Errorf("failed to stat part %d: %w", p.PartNumber, err)
+	}
+	if stat.Size() != p.Size {
+		f.Close()
+		return fmt.Errorf("part %d size mismatch: file is %d bytes, expected %d", p.PartNumber, stat.Size(), p.Size)
+	}
+
 	r.curr = f
 	r.bytesLeft = p.Size
 	r.partHash = md5.New()
@@ -138,17 +162,17 @@ func (r *Reader) openNext() error {
 }
 
 func (r *Reader) finishPart() error {
-	if r.curr != nil {
-		r.curr.Close()
-		r.curr = nil
-	}
 	if r.partHash == nil {
 		return nil
 	}
 	var sum [16]byte
 	copy(sum[:], r.partHash.Sum(nil))
-	if sum != r.parts[r.currIdx].MD5 {
-		return s3errs.ErrBadDigest
+	if sum != r.parts[r.currIdx].ContentMD5 {
+		return fmt.Errorf("part %d MD5 mismatch (expected %x, got %x): %w",
+			r.parts[r.currIdx].PartNumber,
+			r.parts[r.currIdx].ContentMD5,
+			sum,
+			s3errs.ErrBadDigest)
 	}
 	r.partHash = nil
 	return nil

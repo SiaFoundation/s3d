@@ -11,7 +11,6 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/auth"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
-	"github.com/SiaFoundation/s3d/sia/multipart"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/sdk"
@@ -57,18 +56,18 @@ type Store interface {
 	CreateBucket(accessKeyID, bucket string) error
 	DeleteBucket(accessKeyID, bucket string) error
 	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) error
-	GetObject(accessKeyID *string, bucket, object string) (*objects.Object, error)
+	GetObject(accessKeyID *string, bucket, object string, partNumber *int32) (*objects.Object, error)
 	HeadBucket(accessKeyID, bucket string) error
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
-	PutObject(accessKeyID, bucket, name string, obj *objects.Object) error
+	PutObject(accessKeyID, bucket, name string, objectID types.Hash256, metadata map[string]string, contentMD5 [16]byte, contentLength int64) error
 
-	HasMultipartUpload(bucket, name string, uploadID s3.UploadID) error
-	CreateMultipartUpload(bucket, name string, uploadID s3.UploadID, meta map[string]string) error
 	AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) error
-	CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, parts []multipart.Part) error
-	MultipartUpload(bucket, name string, uploadID s3.UploadID) (multipart.Upload, error)
-	AddMultipartPart(bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentSHA256 *[32]byte, contentLength int64) (string, error)
+	AddMultipartPart(bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (string, error)
+	CreateMultipartUpload(bucket, name string, uploadID s3.UploadID, meta map[string]string) error
+	CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, objectID types.Hash256, contentMD5 [16]byte, contentLength int64) error
+	HasMultipartUpload(bucket, name string, uploadID s3.UploadID) error
 	ListParts(bucket, name string, uploadID s3.UploadID, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error)
+	MultipartParts(bucket, name string, uploadID s3.UploadID) ([]objects.Part, error)
 }
 
 // New creates a new Sia backend instance.

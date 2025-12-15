@@ -3,13 +3,10 @@ package sqlite
 import (
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
-	"github.com/SiaFoundation/s3d/sia/multipart"
 	"github.com/SiaFoundation/s3d/sia/objects"
-	"go.sia.tech/indexd/sdk"
 	"go.uber.org/zap"
 	"lukechampine.com/frand"
 )
@@ -63,7 +60,7 @@ func TestAddMultipartPart(t *testing.T) {
 	}
 
 	// assert [s3errs.ErrNoSuchUpload] for unknown upload ID
-	if _, err := store.AddMultipartPart(bucket, object, s3.NewUploadID(), location, 1, contentMD5, nil, 0); !errors.Is(err, s3errs.ErrNoSuchUpload) {
+	if _, err := store.AddMultipartPart(bucket, object, s3.NewUploadID(), location, 1, contentMD5, 0); !errors.Is(err, s3errs.ErrNoSuchUpload) {
 		t.Fatal(err)
 	}
 
@@ -75,21 +72,21 @@ func TestAddMultipartPart(t *testing.T) {
 	}
 
 	// add a part (assert no error on duplicate part addition)
-	prev, err := store.AddMultipartPart(bucket, object, uid, location, 1, contentMD5, nil, 0)
+	prev, err := store.AddMultipartPart(bucket, object, uid, location, 1, contentMD5, 0)
 	if err != nil {
 		t.Fatal(err)
 	} else if prev != "" {
 		t.Fatal("expected empty previous filename for first part upload", prev)
 	}
 
-	prev, err = store.AddMultipartPart(bucket, object, uid, location, 1, contentMD5, nil, 0)
+	prev, err = store.AddMultipartPart(bucket, object, uid, location, 1, contentMD5, 0)
 	if err != nil {
 		t.Fatal(err)
 	} else if prev == "" || prev != location {
 		t.Fatal("expected previous filename to be returned on part overwrite", prev)
 	}
 
-	store.assertCount(1, "multipart_parts")
+	store.assertCount(1, "parts")
 }
 
 func TestAbortMultipartUpload(t *testing.T) {
@@ -122,7 +119,7 @@ func TestAbortMultipartUpload(t *testing.T) {
 	frand.Read(contentMD5[:])
 
 	// add a part
-	if _, err := store.AddMultipartPart(bucket, object, uid, filename, 1, contentMD5, nil, 0); err != nil {
+	if _, err := store.AddMultipartPart(bucket, object, uid, filename, 1, contentMD5, 0); err != nil {
 		t.Fatal(err)
 	}
 
@@ -131,7 +128,7 @@ func TestAbortMultipartUpload(t *testing.T) {
 		t.Fatal(err)
 	}
 	store.assertCount(0, "multipart_uploads")
-	store.assertCount(0, "multipart_parts")
+	store.assertCount(0, "parts")
 
 	// assert [s3errs.ErrNoSuchUpload] for aborted upload
 	if err := store.AbortMultipartUpload(bucket, object, uid); !errors.Is(err, s3errs.ErrNoSuchUpload) {
@@ -198,7 +195,7 @@ func TestListParts(t *testing.T) {
 	// add finalized parts
 	const totalParts = 5
 	for i := 1; i <= totalParts; i++ {
-		_, err := store.AddMultipartPart(bucket, object, uid, "", i, frand.Entropy128(), nil, int64(frand.Uint64n(100)+1))
+		_, err := store.AddMultipartPart(bucket, object, uid, "", i, frand.Entropy128(), int64(frand.Uint64n(100)+1))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -259,33 +256,31 @@ func TestCompleteMultipartUpload(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	obj := sdk.Object{}
-	var contentMD5 [16]byte
-	frand.Read(contentMD5[:])
-	if err := store.PutObject(accessKeyID, bucket, object, &objects.Object{
-		ID:         obj.ID(),
-		ContentMD5: contentMD5,
-		Size:       15,
-		UpdatedAt:  time.Now(),
-	}); err != nil {
-		t.Fatal(err)
-	}
-
 	partMD5A := frand.Entropy128()
 	partMD5B := frand.Entropy128()
-	parts := []multipart.Part{
-		{PartNumber: 1, Filename: "part-1", Size: 10, MD5: partMD5A},
-		{PartNumber: 2, Filename: "part-2", Size: 5, MD5: partMD5B},
+	parts := []objects.Part{
+		{PartNumber: 1, Filename: "part-1", Size: s3.MinUploadPartSize, ContentMD5: partMD5A},
+		{PartNumber: 2, Filename: "part-2", Size: 5, ContentMD5: partMD5B}, // Last part can be any size
 	}
 
-	if err := store.CompleteMultipartUpload(bucket, object, uid, parts); err != nil {
+	// Add parts to the upload
+	for _, part := range parts {
+		if _, err := store.AddMultipartPart(bucket, object, uid, part.Filename, part.PartNumber, part.ContentMD5, part.Size); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	objID := frand.Entropy256()
+	contentMD5 := frand.Entropy128()
+	totalSize := s3.MinUploadPartSize + 5 // part1 + part2
+	if err := store.CompleteMultipartUpload(bucket, object, uid, objID, contentMD5, int64(totalSize)); err != nil {
 		t.Fatal(err)
 	}
 
 	store.assertCount(0, "multipart_uploads")
-	store.assertCount(len(parts), "object_parts")
+	store.assertCount(len(parts), "parts")
 
-	rows, err := store.db.Query(`SELECT part_number, content_md5, offset, length FROM object_parts ORDER BY part_number`)
+	rows, err := store.db.Query(`SELECT part_number, content_md5, offset, content_length FROM parts WHERE object_id IS NOT NULL ORDER BY part_number`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,8 +302,8 @@ func TestCompleteMultipartUpload(t *testing.T) {
 		if parts[idx].Size != int64(length) {
 			t.Fatalf("expected length %d, got %d", parts[idx].Size, length)
 		}
-		if parts[idx].MD5 != [16]byte(contentMD5) {
-			t.Fatalf("expected MD5 %x, got %x", parts[idx].MD5, contentMD5)
+		if parts[idx].ContentMD5 != [16]byte(contentMD5) {
+			t.Fatalf("expected MD5 %x, got %x", parts[idx].ContentMD5, contentMD5)
 		}
 		offsets = append(offsets, offset)
 	}

@@ -9,6 +9,7 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia/objects"
+	"go.sia.tech/core/types"
 )
 
 // DeleteObject deletes the object with the given bucket and name if it exists
@@ -49,49 +50,67 @@ func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) e
 }
 
 // GetObject retrieves the object with the given bucket and name.
-func (s *Store) GetObject(accessKeyID *string, bucket, name string) (*objects.Object, error) {
+func (s *Store) GetObject(accessKeyID *string, bucket, name string, partNumber *int32) (*objects.Object, error) {
 	var obj objects.Object
-	err := s.transaction(func(tx *txn) error {
+	if err := s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
 
-		var meta string
+		// get parts count
 		err = tx.QueryRow(`
-			SELECT object_id, content_md5, metadata, size, updated_at
-			FROM objects
-			WHERE bucket_id = $1 AND name = $2
-		`, bid, name).
-			Scan((*sqlHash256)(&obj.ID), (*sqlMD5)(&obj.ContentMD5), &meta,
-				&obj.Size, (*sqlTime)(&obj.UpdatedAt))
-		if errors.Is(err, sql.ErrNoRows) {
-			return s3errs.ErrNoSuchKey
-		} else if err != nil {
+			SELECT COUNT(*)
+			FROM parts JOIN objects ON objects.id = parts.object_id
+			WHERE objects.bucket_id = $1 AND objects.name = $2
+		`, bid, name).Scan(&obj.PartsCount)
+		if err != nil {
 			return err
 		}
 
-		err = json.Unmarshal([]byte(meta), &obj.Meta)
-		if err != nil {
-			return errors.New("failed to unmarshal object metadata: " + err.Error())
+		// return full object if no part specified
+		if partNumber == nil || obj.PartsCount == 0 {
+			if obj.PartsCount == 0 && partNumber != nil {
+				if *partNumber != 1 {
+					return s3errs.ErrInvalidPart
+				}
+				obj.PartsCount = *partNumber
+			}
+			return tx.QueryRow(`
+				SELECT object_id, metadata, updated_at, size, content_md5
+				FROM objects
+				WHERE bucket_id = $1 AND name = $2
+			`, bid, name).Scan((*sqlHash256)(&obj.ID), (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Length, (*sqlMD5)(&obj.ContentMD5))
 		}
-		return nil
-	})
-	return &obj, err
+
+		// part specified - validate and return single part
+		return tx.QueryRow(`
+			SELECT o.object_id, o.metadata, o.updated_at, p.offset, p.content_length, p.content_md5
+			FROM parts p
+			JOIN objects o ON o.id = p.object_id
+			WHERE o.bucket_id = $1 AND o.name = $2 AND p.part_number = $3
+		`, bid, name, *partNumber).Scan((*sqlHash256)(&obj.ID), (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Offset, &obj.Length, (*sqlMD5)(&obj.ContentMD5))
+	}); errors.Is(err, sql.ErrNoRows) {
+		return nil, s3errs.ErrNoSuchKey
+	} else if err != nil {
+		return nil, err
+	}
+
+	return &obj, nil
 }
 
 // PutObject stores the given object in the given bucket with the given name or
 // overwrites it if it already exists.
-func (s *Store) PutObject(accessKeyID, bucket, name string, obj *objects.Object) error {
+func (s *Store) PutObject(accessKeyID, bucket, name string, objectID types.Hash256, metadata map[string]string, contentMD5 [16]byte, contentLength int64) error {
 	return s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
-		if obj.Meta == nil {
-			obj.Meta = make(map[string]string) // force '{}' instead of 'null' in JSON
+		if metadata == nil {
+			metadata = make(map[string]string) // force '{}' instead of 'null' in JSON
 		}
-		metaJson, err := json.Marshal(obj.Meta)
+		metaJson, err := json.Marshal(metadata)
 		if err != nil {
 			return err
 		}
@@ -105,8 +124,8 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, obj *objects.Object)
 				metadata = excluded.metadata,
 				size = excluded.size,
 				updated_at = excluded.updated_at
-		`, bid, name, sqlHash256(obj.ID), sqlMD5(obj.ContentMD5),
-			string(metaJson), obj.Size, sqlTime(obj.UpdatedAt))
+		`, bid, name, sqlHash256(objectID), sqlMD5(contentMD5),
+			string(metaJson), contentLength, sqlTime(time.Now()))
 		return err
 	})
 }
