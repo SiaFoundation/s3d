@@ -436,17 +436,7 @@ func (t *S3Tester) ListParts(ctx context.Context, bucket, object, uploadID strin
 		PartNumberMarker: marker,
 		MaxParts:         maxParts,
 	}
-	resp, err := t.client.ListParts(ctx, input)
-	if err != nil {
-		return nil, err
-	}
-	for i := range resp.Parts {
-		if resp.Parts[i].ETag != nil {
-			trimmed := strings.Trim(*resp.Parts[i].ETag, `"`)
-			resp.Parts[i].ETag = aws.String(trimmed)
-		}
-	}
-	return resp, nil
+	return t.client.ListParts(ctx, input)
 }
 
 // CompleteMultipartUpload is a convenience wrapper around the AWS SDK's
