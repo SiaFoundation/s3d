@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -111,9 +112,63 @@ func (s *Store) HasMultipartUpload(bucket, name string, uploadID s3.UploadID) er
 	})
 }
 
+// ListParts lists uploaded parts for a multipart upload.
+func (s *Store) ListParts(bucket, name string, uploadID s3.UploadID, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error) {
+	res := &s3.ListPartsResult{
+		OwnerID:              "", // TODO: sia backend does not yet support owners
+		InitiatorID:          "", // TODO: sia backend does not yet support initiators
+		OwnerDisplayName:     "",
+		InitiatorDisplayName: "",
+		Parts:                make([]s3.UploadPart, 0, maxParts),
+	}
+
+	if err := s.transaction(func(tx *txn) error {
+		bid, err := bucketID(tx, bucket)
+		if err != nil {
+			return err
+		}
+		uid, err := multipartID(tx, uploadID, bid, name)
+		if err != nil {
+			return err
+		}
+
+		rows, err := tx.Query(`
+			SELECT part_number, content_length, content_md5, created_at
+			FROM multipart_parts
+			WHERE multipart_upload_id = $1 AND part_number > $2
+			ORDER BY part_number ASC
+			LIMIT $3
+		`, uid, partNumberMarker, maxParts+1)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			if len(res.Parts) >= int(maxParts) {
+				res.IsTruncated = true
+				res.NextPartNumberMarker = strconv.Itoa(res.Parts[len(res.Parts)-1].PartNumber)
+				break
+			}
+
+			var p s3.UploadPart
+			if err := rows.Scan(&p.PartNumber, &p.Size, (*sqlMD5)(&p.ContentMD5), (*sqlTime)(&p.LastModified)); err != nil {
+				return err
+			}
+			res.Parts = append(res.Parts, p)
+		}
+
+		return rows.Err()
+	}); err != nil {
+		return nil, err
+	}
+
+	return res, nil
+}
+
 // ListMultipartUploads lists all multipart uploads for the given bucket and
 // filters.
-func (s *Store) ListMultipartUploads(bucket string, prefix, delimiter, keyMarker string, uploadIDMarker s3.UploadID, maxUploads int64) (*s3.ListMultipartUploadsResult, error) {
+func (s *Store) ListMultipartUploads(bucket, prefix, delimiter, keyMarker string, uploadIDMarker s3.UploadID, maxUploads int64) (*s3.ListMultipartUploadsResult, error) {
 	if keyMarker == "" {
 		uploadIDMarker = [16]byte{} // ignored if key marker is not set
 	}
@@ -154,6 +209,7 @@ func (s *Store) ListMultipartUploads(bucket string, prefix, delimiter, keyMarker
 		Uploads:        make([]s3.MultipartUploadInfo, 0, maxUploads),
 		CommonPrefixes: make([]string, 0, maxUploads),
 	}
+
 	if err := s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {

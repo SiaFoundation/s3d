@@ -608,9 +608,10 @@ func TestListParts(t *testing.T) {
 	}
 
 	for i, got := range res.Parts {
+		etag := strings.Trim(*got.ETag, `"`)
 		if got.PartNumber == nil || *got.PartNumber != int32(i+1) {
 			t.Fatalf("part %d: expected part number %d, got %v", i, i+1, got.PartNumber)
-		} else if expectedMD5 := md5.Sum(parts[i]); got.ETag == nil || *got.ETag != hex.EncodeToString(expectedMD5[:]) {
+		} else if expectedMD5 := md5.Sum(parts[i]); etag != hex.EncodeToString(expectedMD5[:]) {
 			t.Fatalf("part %d: expected ETag %x, got %v", i, expectedMD5, got.ETag)
 		} else if got.Size == nil || *got.Size != int64(len(parts[i])) {
 			t.Fatalf("part %d: expected size %d, got %v", i, len(parts[i]), got.Size)
