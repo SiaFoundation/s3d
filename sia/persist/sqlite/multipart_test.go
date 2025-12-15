@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"bytes"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -24,29 +25,29 @@ func TestCreateMultipartUpload(t *testing.T) {
 	store := initTestDB(t, zap.NewNop())
 
 	// assert [s3errs.ErrNoSuchBucket] for unknown bucket - then create it
-	if _, err := store.CreateMultipartUpload(bucket, object, nil); !errors.Is(err, s3errs.ErrNoSuchBucket) {
+	if err := store.CreateMultipartUpload(bucket, object, s3.NewUploadID(), nil); !errors.Is(err, s3errs.ErrNoSuchBucket) {
 		t.Fatal(err)
 	} else if err := store.CreateBucket(accessKeyID, bucket); err != nil {
 		t.Fatal(err)
 	}
 
-	// create multipart upload (and assert no error on duplicate creation)
-	uid1, err := store.CreateMultipartUpload(bucket, object, nil)
+	// create multipart upload
+	uid1 := s3.NewUploadID()
+	err := store.CreateMultipartUpload(bucket, object, uid1, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	uid2, err := store.CreateMultipartUpload(bucket, object, nil)
-	if err != nil {
+	store.assertCount(1, "multipart_uploads")
+
+	// abort the multipart upload
+	if err := store.AbortMultipartUpload(bucket, object, uid1); err != nil {
 		t.Fatal(err)
-	} else if uid1 == uid2 {
-		t.Fatal("expected unique upload IDs")
 	}
-	store.assertCount(2, "multipart_uploads")
+	store.assertCount(0, "multipart_uploads")
 }
 
 func TestAddMultipartPart(t *testing.T) {
 	const (
-		unknownUID  = "a0188aceb938ca67b1d8ac03dfd361e9"
 		accessKeyID = "test-accesskey"
 		bucket      = "test-bucket"
 		object      = "test-object"
@@ -63,12 +64,13 @@ func TestAddMultipartPart(t *testing.T) {
 	}
 
 	// assert [s3errs.ErrNoSuchUpload] for unknown upload ID
-	if _, err := store.AddMultipartPart(bucket, object, unknownUID, location, 1, contentMD5, nil, 0); !errors.Is(err, s3errs.ErrNoSuchUpload) {
+	if _, err := store.AddMultipartPart(bucket, object, s3.NewUploadID(), location, 1, contentMD5, nil, 0); !errors.Is(err, s3errs.ErrNoSuchUpload) {
 		t.Fatal(err)
 	}
 
 	// create multipart upload
-	uid, err := store.CreateMultipartUpload(bucket, object, nil)
+	uid := s3.NewUploadID()
+	err := store.CreateMultipartUpload(bucket, object, uid, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,11 +82,12 @@ func TestAddMultipartPart(t *testing.T) {
 	} else if prev != "" {
 		t.Fatal("expected empty previous filename for first part upload", prev)
 	}
+
 	prev, err = store.AddMultipartPart(bucket, object, uid, location, 1, contentMD5, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	} else if prev == "" || prev != location {
-		t.Fatal("expected previous filename to be returned on part overwrite")
+		t.Fatal("expected previous filename to be returned on part overwrite", prev)
 	}
 
 	store.assertCount(1, "multipart_parts")
@@ -92,7 +95,6 @@ func TestAddMultipartPart(t *testing.T) {
 
 func TestAbortMultipartUpload(t *testing.T) {
 	const (
-		unknownUID  = "a0188aceb938ca67b1d8ac03dfd361e9"
 		accessKeyID = "test-accesskey"
 		bucket      = "test-bucket"
 		object      = "test-object"
@@ -106,12 +108,13 @@ func TestAbortMultipartUpload(t *testing.T) {
 	}
 
 	// assert [s3errs.ErrNoSuchUpload] for unknown upload ID
-	if err := store.AbortMultipartUpload(bucket, object, unknownUID); !errors.Is(err, s3errs.ErrNoSuchUpload) {
+	if err := store.AbortMultipartUpload(bucket, object, s3.NewUploadID()); !errors.Is(err, s3errs.ErrNoSuchUpload) {
 		t.Fatal(err)
 	}
 
 	// create multipart upload
-	uid, err := store.CreateMultipartUpload(bucket, object, nil)
+	uid := s3.NewUploadID()
+	err := store.CreateMultipartUpload(bucket, object, uid, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +142,6 @@ func TestAbortMultipartUpload(t *testing.T) {
 
 func TestHasMultipartUpload(t *testing.T) {
 	const (
-		unknownUID  = "a0188aceb938ca67b1d8ac03dfd361e9"
 		accessKeyID = "test-accesskey"
 		bucket      = "test-bucket"
 		object      = "test-object"
@@ -152,12 +154,13 @@ func TestHasMultipartUpload(t *testing.T) {
 	}
 
 	// assert [s3errs.ErrNoSuchUpload] for unknown upload ID
-	if err := store.HasMultipartUpload(bucket, object, unknownUID); !errors.Is(err, s3errs.ErrNoSuchUpload) {
+	if err := store.HasMultipartUpload(bucket, object, s3.NewUploadID()); !errors.Is(err, s3errs.ErrNoSuchUpload) {
 		t.Fatal(err)
 	}
 
 	// create multipart upload
-	uid, err := store.CreateMultipartUpload(bucket, object, nil)
+	uid := s3.NewUploadID()
+	err := store.CreateMultipartUpload(bucket, object, uid, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +174,7 @@ func TestHasMultipartUpload(t *testing.T) {
 func TestListMultipartUploads(t *testing.T) {
 	store := initTestDB(t, zap.NewNop())
 
-	setupBucket := func(keys []string) (string, map[string][]string) {
+	setupBucket := func(keys []string) (string, map[string][]s3.UploadID) {
 		t.Helper()
 
 		entropy := frand.Entropy128()
@@ -180,14 +183,17 @@ func TestListMultipartUploads(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		uids := make(map[string][]string)
+		uids := make(map[string][]s3.UploadID)
 		for _, key := range keys {
-			uid, err := store.CreateMultipartUpload(bucket, key, nil)
+			uid := s3.NewUploadID()
+			err := store.CreateMultipartUpload(bucket, key, uid, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
 			uids[key] = append(uids[key], uid)
-			sort.Strings(uids[key])
+			sort.Slice(uids[key], func(i, j int) bool {
+				return bytes.Compare(uids[key][i][:], uids[key][j][:]) < 0
+			})
 		}
 
 		return bucket, uids
@@ -237,7 +243,7 @@ func TestListMultipartUploads(t *testing.T) {
 		cases := []struct {
 			prefix         string
 			keyMarker      string
-			uploadIDMarker string
+			uploadIDMarker s3.UploadID
 			expectedKeys   []string
 		}{
 			// no filters
@@ -270,7 +276,8 @@ func TestListMultipartUploads(t *testing.T) {
 		}
 
 		// paginate through results
-		var prevKeyMarker, prevUploadIDMarker string
+		var prevKeyMarker string
+		var prevUploadIDMarker s3.UploadID
 		for i := range orderedKeys {
 			result, err := store.ListMultipartUploads(bucket, "", noDelim, prevKeyMarker, prevUploadIDMarker, 1)
 			if err != nil {
@@ -305,7 +312,7 @@ func TestListMultipartUploads(t *testing.T) {
 		cases := []struct {
 			prefix           string
 			keyMarker        string
-			uploadIDMarker   string
+			uploadIDMarker   s3.UploadID
 			maxUploads       int64
 			expectedKeys     []string
 			expectedPrefixes []string
@@ -342,7 +349,7 @@ func TestListMultipartUploads(t *testing.T) {
 		}
 
 		// paginate through results of the same bucket to ensure we advance past common prefixes
-		first, err := store.ListMultipartUploads(bucket, "", slashDelim, "", "", 1)
+		first, err := store.ListMultipartUploads(bucket, "", slashDelim, "", [16]byte{}, 1)
 		if err != nil {
 			t.Fatal(err)
 		} else if !first.IsTruncated {
@@ -383,7 +390,7 @@ func TestListMultipartUploads(t *testing.T) {
 		cases := []struct {
 			prefix           string
 			keyMarker        string
-			uploadIDMarker   string
+			uploadIDMarker   s3.UploadID
 			expectedKeys     []string
 			expectedPrefixes []string
 		}{
@@ -437,7 +444,7 @@ func TestListMultipartUploads(t *testing.T) {
 		type page struct {
 			prefix         string
 			keyMarker      string
-			uploadIDMarker string
+			uploadIDMarker s3.UploadID
 		}
 
 		seen := make(map[string]struct{})
@@ -507,7 +514,7 @@ func BenchmarkListMultipartUploads(b *testing.B) {
 	// populate database with multipart uploads
 	for range numKeys {
 		key := randomPath(minLength, maxLength, maxDepth, alphabet, slashDelim)
-		_, err := store.CreateMultipartUpload(bucket, key, nil)
+		err := store.CreateMultipartUpload(bucket, key, s3.NewUploadID(), nil)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -527,7 +534,7 @@ func BenchmarkListMultipartUploads(b *testing.B) {
 		var none int
 		for b.Loop() {
 			prefix := randomPath(1, minLength, maxDepth, alphabet, "")
-			res, err := store.ListMultipartUploads(bucket, prefix, "", "", "", maxKeys)
+			res, err := store.ListMultipartUploads(bucket, prefix, "", "", [16]byte{}, maxKeys)
 			if err != nil {
 				b.Fatal(err)
 			} else if len(res.Uploads)+len(res.CommonPrefixes) == 0 {
@@ -546,7 +553,7 @@ func BenchmarkListMultipartUploads(b *testing.B) {
 		var none int
 		for b.Loop() {
 			prefix := randomPath(1, minLength, maxDepth, alphabet, slashDelim)
-			res, err := store.ListMultipartUploads(bucket, prefix, slashDelim, "", "", maxKeys)
+			res, err := store.ListMultipartUploads(bucket, prefix, slashDelim, "", [16]byte{}, maxKeys)
 			if err != nil {
 				b.Fatal(err)
 			} else if len(res.Uploads)+len(res.CommonPrefixes) == 0 {
@@ -566,7 +573,7 @@ func BenchmarkListMultipartUploads(b *testing.B) {
 		for b.Loop() {
 			delimiter := string(alphabet[frand.Intn(len(alphabet))])
 			prefix := randomPath(1, minLength, maxDepth, alphabet, delimiter)
-			res, err := store.ListMultipartUploads(bucket, prefix, delimiter, "", "", maxKeys)
+			res, err := store.ListMultipartUploads(bucket, prefix, delimiter, "", [16]byte{}, maxKeys)
 			if err != nil {
 				b.Fatal(err)
 			} else if len(res.Uploads)+len(res.CommonPrefixes) == 0 {
@@ -583,7 +590,8 @@ func BenchmarkListMultipartUploads(b *testing.B) {
 	// benchmark / delimiter with random prefix and paging
 	b.Run("paging", func(b *testing.B) {
 		var paged int
-		var prefix, prevKeyMarker, prevUploadIDMarker string
+		var prefix, prevKeyMarker string
+		var prevUploadIDMarker s3.UploadID
 		for b.Loop() {
 			if prefix == "" {
 				prefix = randomPath(1, minLength, maxDepth, alphabet, slashDelim)
@@ -600,7 +608,7 @@ func BenchmarkListMultipartUploads(b *testing.B) {
 			}
 
 			prevKeyMarker = ""
-			prevUploadIDMarker = ""
+			prevUploadIDMarker = [16]byte{}
 			prefix = ""
 		}
 		if paged == 0 {

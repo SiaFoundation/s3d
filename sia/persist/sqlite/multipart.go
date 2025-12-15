@@ -2,30 +2,28 @@ package sqlite
 
 import (
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/SiaFoundation/s3d/s3"
-	"lukechampine.com/frand"
 )
 
-// CreateMultipartUpload persists metadata for a new multipart upload and
-// returns a random upload ID.
-func (s *Store) CreateMultipartUpload(bucket, name string, meta map[string]string) (string, error) {
-	uid := frand.Entropy128()
-	if err := s.transaction(func(tx *txn) error {
+// CreateMultipartUpload persists metadata for a new multipart upload.
+func (s *Store) CreateMultipartUpload(bucket, name string, uploadID s3.UploadID, meta map[string]string) error {
+	if meta == nil {
+		meta = make(map[string]string) // force '{}' instead of 'null' in JSON
+	}
+
+	return s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
 
-		if meta == nil {
-			meta = make(map[string]string) // force '{}' instead of 'null' in JSON
-		}
 		metaJson, err := json.Marshal(meta)
 		if err != nil {
 			return err
@@ -34,19 +32,15 @@ func (s *Store) CreateMultipartUpload(bucket, name string, meta map[string]strin
 		if _, err := tx.Exec(`
 				INSERT INTO multipart_uploads (upload_id, bucket_id, name, metadata, created_at)
 				VALUES ($1, $2, $3, $4, $5)
-			`, sqlUploadID(uid), bid, name, string(metaJson), sqlTime(time.Now())); err != nil {
+			`, sqlUploadID(uploadID), bid, name, string(metaJson), sqlTime(time.Now())); err != nil {
 			return fmt.Errorf("failed to insert multipart upload: %w", err)
 		}
 		return nil
-	}); err != nil {
-		return "", err
-	}
-
-	return hex.EncodeToString(uid[:]), nil
+	})
 }
 
 // AbortMultipartUpload removes a multipart upload from the store.
-func (s *Store) AbortMultipartUpload(bucket, name, uploadID string) error {
+func (s *Store) AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) error {
 	return s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
@@ -64,7 +58,7 @@ func (s *Store) AbortMultipartUpload(bucket, name, uploadID string) error {
 }
 
 // AddMultipartPart adds metadata for a multipart part to the store.
-func (s *Store) AddMultipartPart(bucket, name, uploadID, filename string, partNumber int, contentMD5 [16]byte, contentSHA256 *[32]byte, contentLength int64) (string, error) {
+func (s *Store) AddMultipartPart(bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentSHA256 *[32]byte, contentLength int64) (string, error) {
 	var prevFilename string
 	if err := s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
@@ -82,12 +76,9 @@ func (s *Store) AddMultipartPart(bucket, name, uploadID, filename string, partNu
 			sha256Value = sqlHash256(*contentSHA256)
 		}
 
-		var prev sql.NullString
-		err = tx.QueryRow(`SELECT filename FROM multipart_parts WHERE multipart_upload_id = $1 AND part_number = $2`, uid, partNumber).Scan(&prev)
-		if err != nil && err != sql.ErrNoRows {
+		err = tx.QueryRow(`SELECT filename FROM multipart_parts WHERE multipart_upload_id = $1 AND part_number = $2`, uid, partNumber).Scan(&prevFilename)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
-		} else if prev.Valid {
-			prevFilename = prev.String
 		}
 
 		_, err = tx.Exec(`
@@ -108,7 +99,7 @@ func (s *Store) AddMultipartPart(bucket, name, uploadID, filename string, partNu
 }
 
 // HasMultipartUpload checks if a multipart upload exists.
-func (s *Store) HasMultipartUpload(bucket, name, uploadID string) error {
+func (s *Store) HasMultipartUpload(bucket, name string, uploadID s3.UploadID) error {
 	return s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
@@ -122,9 +113,9 @@ func (s *Store) HasMultipartUpload(bucket, name, uploadID string) error {
 
 // ListMultipartUploads lists all multipart uploads for the given bucket and
 // filters.
-func (s *Store) ListMultipartUploads(bucket string, prefix, delimiter, keyMarker, uploadIDMarker string, maxUploads int64) (*s3.ListMultipartUploadsResult, error) {
+func (s *Store) ListMultipartUploads(bucket string, prefix, delimiter, keyMarker string, uploadIDMarker s3.UploadID, maxUploads int64) (*s3.ListMultipartUploadsResult, error) {
 	if keyMarker == "" {
-		uploadIDMarker = "" // ignored if key marker is not set
+		uploadIDMarker = [16]byte{} // ignored if key marker is not set
 	}
 
 	// if the marker falls inside a common prefix (e.g. prefix "ac", delimiter
@@ -140,20 +131,29 @@ func (s *Store) ListMultipartUploads(bucket string, prefix, delimiter, keyMarker
 		if idx := strings.Index(markerRemainder, delimiter); idx != -1 {
 			commonPrefix := keyMarker[:prefixLen+idx+len(delimiter)]
 			keyMarker = commonPrefix + string([]byte{0xFF})
-			uploadIDMarker = ""
+			uploadIDMarker = [16]byte{}
 		}
 	}
 
-	uidMarker, err := parseUploadID(uploadIDMarker)
-	if err != nil {
-		return nil, fmt.Errorf("invalid upload ID marker: %w", err)
+	// helper to compute common prefix from upload key
+	commonPrefix := func(key string) string {
+		after, ok := strings.CutPrefix(key, prefix)
+		if !ok {
+			return ""
+		}
+
+		idx := strings.IndexRune(after, rune(delimiter[0]))
+		if idx == -1 {
+			return ""
+		}
+
+		return prefix + after[:idx+utf8.RuneCountInString(delimiter)]
 	}
 
 	res := &s3.ListMultipartUploadsResult{
 		Uploads:        make([]s3.MultipartUploadInfo, 0, maxUploads),
 		CommonPrefixes: make([]string, 0, maxUploads),
 	}
-
 	if err := s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
@@ -161,11 +161,11 @@ func (s *Store) ListMultipartUploads(bucket string, prefix, delimiter, keyMarker
 		}
 
 		// build uploads query
-		query, args := buildUploadsQuery(bid, prefix, delimiter, keyMarker, uidMarker)
+		query, args := buildUploadsQuery(bid, prefix, delimiter, keyMarker, uploadIDMarker)
 
 		// build common prefixes query if needed
 		if delimiter != "" {
-			query2, args2 := buildCommonPrefixesQuery(bid, prefix, delimiter, keyMarker, uidMarker)
+			query2, args2 := buildCommonPrefixesQuery(bid, prefix, delimiter, keyMarker, uploadIDMarker)
 			query = fmt.Sprintf(`
 				WITH uploads AS (%s), prefixes AS (%s)
 				SELECT name, upload_id, created_at, is_prefix FROM uploads
@@ -186,7 +186,7 @@ func (s *Store) ListMultipartUploads(bucket string, prefix, delimiter, keyMarker
 		}
 		defer rows.Close()
 
-		var prev *multipartUploadInfo
+		var prev *s3.MultipartUploadInfo
 		for rows.Next() {
 			if len(res.Uploads)+len(res.CommonPrefixes) == int(maxUploads) {
 				if prev != nil {
@@ -197,16 +197,16 @@ func (s *Store) ListMultipartUploads(bucket string, prefix, delimiter, keyMarker
 				break
 			}
 
-			upload, err := scanMultipartUpload(rows)
+			upload, isPrefix, err := scanMultipartUpload(rows)
 			if err != nil {
 				return err
 			}
 			prev = &upload
 
-			if upload.IsPrefix {
-				res.CommonPrefixes = append(res.CommonPrefixes, upload.CommonPrefix(prefix, delimiter))
+			if isPrefix {
+				res.CommonPrefixes = append(res.CommonPrefixes, commonPrefix(upload.Key))
 			} else {
-				res.Uploads = append(res.Uploads, upload.MultipartUploadInfo)
+				res.Uploads = append(res.Uploads, upload)
 			}
 		}
 		return rows.Err()
@@ -300,39 +300,11 @@ func buildCommonPrefixesQuery(bucketID int64, prefix, delimiter, keyMarker strin
 		) WHERE row = 1`, strings.Join(where, " AND ")), args
 }
 
-type multipartUploadInfo struct {
-	s3.MultipartUploadInfo
-	IsPrefix bool
-}
-
-func (m multipartUploadInfo) CommonPrefix(prefix, delimiter string) string {
-	after, ok := strings.CutPrefix(m.Key, prefix)
-	if !ok {
-		return ""
-	}
-
-	idx := strings.IndexRune(after, rune(delimiter[0]))
-	if idx == -1 {
-		return ""
-	}
-
-	return prefix + after[:idx+utf8.RuneCountInString(delimiter)]
-}
-
-func scanMultipartUpload(s scanner) (multipartUploadInfo, error) {
-	var uid sqlUploadID
-	var name string
-	var initiated time.Time
+func scanMultipartUpload(s scanner) (s3.MultipartUploadInfo, bool, error) {
+	var info s3.MultipartUploadInfo
 	var isPrefix bool
-	if err := s.Scan(&name, &uid, (*sqlTime)(&initiated), &isPrefix); err != nil {
-		return multipartUploadInfo{}, err
+	if err := s.Scan(&info.Key, (*sqlUploadID)(&info.UploadID), (*sqlTime)(&info.Initiated), &isPrefix); err != nil {
+		return s3.MultipartUploadInfo{}, false, err
 	}
-	return multipartUploadInfo{
-		MultipartUploadInfo: s3.MultipartUploadInfo{
-			Key:       name,
-			UploadID:  hex.EncodeToString(uid[:]),
-			Initiated: initiated,
-		},
-		IsPrefix: isPrefix,
-	}, nil
+	return info, isPrefix, nil
 }

@@ -55,17 +55,17 @@ type SDK interface {
 type Store interface {
 	CreateBucket(accessKeyID, bucket string) error
 	DeleteBucket(accessKeyID, bucket string) error
-	DeleteObject(accessKeyID, bucket, name string) error
+	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) error
 	GetObject(accessKeyID *string, bucket, object string) (*objects.Object, error)
 	HeadBucket(accessKeyID, bucket string) error
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
 	PutObject(accessKeyID, bucket, name string, obj *objects.Object) error
 
-	HasMultipartUpload(bucket, name, uploadID string) error
-	CreateMultipartUpload(bucket, name string, meta map[string]string) (string, error)
-	AbortMultipartUpload(bucket, name, uploadID string) error
-	ListMultipartUploads(bucket string, prefix, delimiter, keyMarker, uploadIDMarker string, maxUploads int64) (*s3.ListMultipartUploadsResult, error)
-	AddMultipartPart(bucket, name, uploadID, location string, partNumber int, contentMD5 [16]byte, contentSHA256 *[32]byte, contentLength int64) (string, error)
+	HasMultipartUpload(bucket, name string, uploadID s3.UploadID) error
+	CreateMultipartUpload(bucket, name string, uploadID s3.UploadID, meta map[string]string) error
+	AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) error
+	ListMultipartUploads(bucket string, prefix, delimiter, keyMarker string, uploadIDMarker s3.UploadID, maxUploads int64) (*s3.ListMultipartUploadsResult, error)
+	AddMultipartPart(bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentSHA256 *[32]byte, contentLength int64) (string, error)
 }
 
 // New creates a new Sia backend instance.

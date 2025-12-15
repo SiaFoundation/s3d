@@ -30,27 +30,19 @@ func (s *Sia) CreateMultipartUpload(ctx context.Context, accessKeyID, bucket, ob
 		return nil, err
 	}
 
+	// create multipart upload directory
+	uploadID := s3.NewUploadID()
+	if err := os.Mkdir(filepath.Join(s.directory, uploadID.String()), 0700); err != nil {
+		return nil, fmt.Errorf("failed to create upload directory: %w", err)
+	}
+
 	// create multipart upload in the database
-	uploadID, err := s.store.CreateMultipartUpload(bucket, object, opts.Meta)
+	err := s.store.CreateMultipartUpload(bucket, object, uploadID, opts.Meta)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create multipart upload: %w", err)
 	}
 
-	// create multipart upload directory
-	if err := os.Mkdir(filepath.Join(s.directory, uploadID), 0700); err != nil {
-		if abortErr := s.store.AbortMultipartUpload(bucket, object, uploadID); abortErr != nil {
-			s.logger.Error("failed to abort multipart upload after directory creation failure",
-				zap.String("bucket", bucket),
-				zap.String("object", object),
-				zap.String("uploadID", uploadID),
-				zap.Error(abortErr))
-		}
-		return nil, fmt.Errorf("failed to create upload directory: %w", err)
-	}
-
-	return &s3.CreateMultipartUploadResult{
-		UploadID: uploadID,
-	}, nil
+	return &s3.CreateMultipartUploadResult{UploadID: uploadID}, nil
 }
 
 // ListMultipartUploads lists in-progress multipart uploads.
@@ -70,6 +62,17 @@ func (s *Sia) AbortMultipartUpload(ctx context.Context, accessKeyID, bucket, obj
 		return err
 	}
 
+	// parse upload ID
+	uid, err := s3.UploadIDFromString(uploadID)
+	if err != nil {
+		return s3errs.ErrNoSuchUpload
+	}
+
+	// abort the multipart upload in the database
+	if err := s.store.AbortMultipartUpload(bucket, object, uid); err != nil {
+		return fmt.Errorf("failed to abort multipart upload: %w", err)
+	}
+
 	// remove multipart upload directory
 	uploadDir := filepath.Join(s.directory, uploadID)
 	if err := os.RemoveAll(uploadDir); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -78,23 +81,19 @@ func (s *Sia) AbortMultipartUpload(ctx context.Context, accessKeyID, bucket, obj
 			zap.Error(err))
 	}
 
-	// abort the multipart upload in the database
-	if err := s.store.AbortMultipartUpload(bucket, object, uploadID); err != nil {
-		return fmt.Errorf("failed to abort multipart upload: %w", err)
-	}
-
 	return nil
 }
 
 // UploadPart uploads a single multipart part.
 func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object, uploadID string, r io.Reader, opts s3.UploadPartOptions) (_ *s3.UploadPartResult, err error) {
-	// check auth and bucket existence
-	if err := s.store.HeadBucket(accessKeyID, bucket); err != nil {
-		return nil, err
+	// parse upload ID
+	uid, err := s3.UploadIDFromString(uploadID)
+	if err != nil {
+		return nil, s3errs.ErrNoSuchUpload
 	}
 
 	// check if the multipart upload exists
-	if err := s.store.HasMultipartUpload(bucket, object, uploadID); err != nil {
+	if err := s.store.HasMultipartUpload(bucket, object, uid); err != nil {
 		return nil, err
 	}
 
@@ -176,7 +175,7 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object, uploa
 	}
 
 	// add multipart part to the database
-	previous, err := s.store.AddMultipartPart(bucket, object, uploadID, filepath.Base(partPath), opts.PartNumber, contentMD5, contentSHA256, contentLength)
+	previous, err := s.store.AddMultipartPart(bucket, object, uid, filepath.Base(partPath), opts.PartNumber, contentMD5, contentSHA256, contentLength)
 	if err != nil {
 		if err := os.Remove(partPath); err != nil {
 			s.logger.Error("failed to remove part file",
