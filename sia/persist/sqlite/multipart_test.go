@@ -181,7 +181,7 @@ func TestListParts(t *testing.T) {
 	}
 
 	// assert [s3errs.ErrNoSuchUpload] for unknown upload ID
-	if _, err := store.ListParts(accessKeyID, bucket, object, s3.NewUploadID(), 0, 1000); !errors.Is(err, s3errs.ErrNoSuchUpload) {
+	if _, err := store.ListParts(bucket, object, s3.NewUploadID(), 0, 1000); !errors.Is(err, s3errs.ErrNoSuchUpload) {
 		t.Fatal(err)
 	}
 
@@ -202,7 +202,7 @@ func TestListParts(t *testing.T) {
 	}
 
 	// list parts
-	result, err := store.ListParts(accessKeyID, bucket, object, uid, 0, 1000)
+	result, err := store.ListParts(bucket, object, uid, 0, 1000)
 	if err != nil {
 		t.Fatal(err)
 	} else if result.IsTruncated {
@@ -222,7 +222,7 @@ func TestListParts(t *testing.T) {
 	// paginate through parts
 	var partNumberMarker int
 	for partNumberMarker < totalParts {
-		result, err := store.ListParts(accessKeyID, bucket, object, uid, partNumberMarker, 1)
+		result, err := store.ListParts(bucket, object, uid, partNumberMarker, 1)
 		if err != nil {
 			t.Fatal(err)
 		} else if !result.IsTruncated && partNumberMarker < totalParts-1 {

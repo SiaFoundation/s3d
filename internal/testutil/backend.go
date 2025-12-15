@@ -624,7 +624,7 @@ func (b *MemoryBackend) ListParts(_ context.Context, accessKeyID, bucket, key, u
 
 	result := &s3.ListPartsResult{
 		OwnerID:              bkt.owner,
-		InitiatorID:          accessKeyID,
+		InitiatorID:          "",
 		OwnerDisplayName:     "",
 		InitiatorDisplayName: "",
 	}
