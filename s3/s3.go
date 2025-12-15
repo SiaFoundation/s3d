@@ -62,9 +62,7 @@ type Backend interface {
 	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
 	//
-	// - If the object with the given key in the specified bucket does not exist,
-	//   [ErrNoSuchKey] must be returned.
-	DeleteObject(ctx context.Context, accessKeyID, bucket, object string) (*DeleteObjectResult, error)
+	DeleteObject(ctx context.Context, accessKeyID, bucket string, object ObjectID) (*DeleteObjectResult, error)
 
 	// DeleteObjects deletes multiple objects from the specified bucket for the
 	// user identified by the given access key.

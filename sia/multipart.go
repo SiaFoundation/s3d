@@ -63,7 +63,7 @@ func (s *Sia) AbortMultipartUpload(ctx context.Context, accessKeyID, bucket, obj
 	// parse upload ID
 	uid, err := s3.UploadIDFromString(uploadID)
 	if err != nil {
-		return s3errs.ErrInvalidArgument
+		return s3errs.ErrNoSuchUpload
 	}
 
 	// abort the multipart upload in the database
@@ -87,7 +87,7 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object, uploa
 	// parse upload ID
 	uid, err := s3.UploadIDFromString(uploadID)
 	if err != nil {
-		return nil, s3errs.ErrInvalidArgument
+		return nil, s3errs.ErrNoSuchUpload
 	}
 
 	// check if the multipart upload exists

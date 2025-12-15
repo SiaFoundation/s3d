@@ -72,7 +72,8 @@ CREATE TABLE multipart_parts (
 
 CREATE TABLE global_settings (
 	id INTEGER PRIMARY KEY NOT NULL DEFAULT 0 CHECK (id = 0), -- enforce a single row
-	db_version INTEGER NOT NULL -- used for migrations
+	db_version INTEGER NOT NULL, -- used for migrations
+	app_key BLOB
 );
 
 INSERT INTO global_settings (id, db_version) VALUES (0, 1); -- version must be updated when the schema changes`
