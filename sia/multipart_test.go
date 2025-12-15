@@ -5,6 +5,7 @@ import (
 	"crypto/md5"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/SiaFoundation/s3d/sia"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"go.sia.tech/core/types"
 	"go.uber.org/zap"
 )
@@ -185,6 +187,96 @@ func TestMultipartAddPart(t *testing.T) {
 	// assert [s3errs.ErrNoSuchUpload] is returned for wrong upload ID
 	_, err = s3Tester.UploadPart(t.Context(), bucket, object, unknownID, 1, nil)
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchUpload, err)
+}
+
+func TestMultipartListParts(t *testing.T) {
+	s3Tester := NewTester(t)
+
+	const (
+		bucket = "list-parts-bucket"
+		object = "object"
+	)
+
+	var (
+		uid = s3.NewUploadID().String()
+	)
+
+	// assert [s3errs.ErrNoSuchBucket] for missing bucket
+	_, err := s3Tester.ListParts(t.Context(), "nonexistent-bucket", object, uid, nil, nil)
+	testutil.AssertS3Error(t, s3errs.ErrNoSuchBucket, err)
+
+	// create target bucket
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// assert [s3errs.ErrNoSuchUpload] for unknown upload ID
+	_, err = s3Tester.ListParts(t.Context(), bucket, object, uid, nil, nil)
+	testutil.AssertS3Error(t, s3errs.ErrNoSuchUpload, err)
+
+	// create multipart upload
+	resp, err := s3Tester.CreateMultipartUpload(t.Context(), bucket, object, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if resp.UploadId == nil || *resp.UploadId == "" {
+		t.Fatal("expected upload id in response")
+	}
+	uploadID := *resp.UploadId
+
+	// add parts
+	partData := [][]byte{
+		bytes.Repeat([]byte("a"), int(s3.MinUploadPartSize)),
+		bytes.Repeat([]byte("b"), int(s3.MinUploadPartSize)),
+		bytes.Repeat([]byte("c"), int(s3.MinUploadPartSize)),
+	}
+	etags := make([]string, len(partData))
+	for i, data := range partData {
+		md5Sum := md5.Sum(data)
+		res, err := s3Tester.UploadPart(t.Context(), bucket, object, uploadID, int32(i+1), data)
+		if err != nil {
+			t.Fatal(err)
+		} else if res == nil || res.ETag == nil || *res.ETag != s3.FormatETag(md5Sum[:]) {
+			t.Fatalf("unexpected upload part result: %+v", res)
+		}
+		etags[i] = *res.ETag
+	}
+
+	// list parts without pagination
+	res, err := s3Tester.ListParts(t.Context(), bucket, object, uploadID, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if *res.IsTruncated {
+		t.Fatal("expected non-truncated result")
+	} else if len(res.Parts) != len(partData) {
+		t.Fatalf("expected %d parts, got %d", len(partData), len(res.Parts))
+	}
+	for i, p := range res.Parts {
+		expectedPartNumber := int32(i + 1)
+		if *p.PartNumber != expectedPartNumber {
+			t.Fatalf("part %d: expected part number %d, got %d", i, expectedPartNumber, p.PartNumber)
+		}
+		if *p.ETag != etags[i] {
+			t.Fatalf("part %d: expected ETag %q, got %q", i, etags[i], *p.ETag)
+		}
+	}
+
+	// list parts with pagination
+	var partNumberMarker int32
+	for partNumberMarker < int32(len(partData)) {
+		res, err := s3Tester.ListParts(t.Context(), bucket, object, uploadID, aws.String(strconv.Itoa(int(partNumberMarker))), aws.Int32(1))
+		if err != nil {
+			t.Fatal(err)
+		} else if !*res.IsTruncated && partNumberMarker < int32(len(partData))-1 {
+			t.Fatal("expected truncated result")
+		} else if *res.IsTruncated && partNumberMarker == int32(len(partData))-1 {
+			t.Fatal("expected non-truncated result")
+		} else if len(res.Parts) != 1 {
+			t.Fatalf("expected 1 part, got %d", len(res.Parts))
+		} else if *res.Parts[0].PartNumber != partNumberMarker+1 {
+			t.Fatalf("expected part number %d, got %d", partNumberMarker+1, *res.Parts[0].PartNumber)
+		}
+		partNumberMarker = *res.Parts[0].PartNumber
+	}
 }
 
 func TestMultipartUploadPartCopy(t *testing.T) {

@@ -125,17 +125,11 @@ func (t *S3Tester) DeleteObject(ctx context.Context, bucket, object string) erro
 
 // DeleteObjects deletes multiple S3 objects at once. If quiet is set to true,
 // the response will only contain errors.
-func (t *S3Tester) DeleteObjects(ctx context.Context, bucket string, objects []string, quiet *bool) (*service.DeleteObjectsOutput, error) {
-	var objs []types.ObjectIdentifier
-	for _, o := range objects {
-		objs = append(objs, types.ObjectIdentifier{
-			Key: aws.String(o),
-		})
-	}
+func (t *S3Tester) DeleteObjects(ctx context.Context, bucket string, objects []types.ObjectIdentifier, quiet *bool) (*service.DeleteObjectsOutput, error) {
 	resp, err := t.client.DeleteObjects(ctx, &service.DeleteObjectsInput{
 		Bucket: aws.String(bucket),
 		Delete: &types.Delete{
-			Objects: objs,
+			Objects: objects,
 			Quiet:   quiet,
 		},
 	})
@@ -442,17 +436,7 @@ func (t *S3Tester) ListParts(ctx context.Context, bucket, object, uploadID strin
 		PartNumberMarker: marker,
 		MaxParts:         maxParts,
 	}
-	resp, err := t.client.ListParts(ctx, input)
-	if err != nil {
-		return nil, err
-	}
-	for i := range resp.Parts {
-		if resp.Parts[i].ETag != nil {
-			trimmed := strings.Trim(*resp.Parts[i].ETag, `"`)
-			resp.Parts[i].ETag = aws.String(trimmed)
-		}
-	}
-	return resp, nil
+	return t.client.ListParts(ctx, input)
 }
 
 // CompleteMultipartUpload is a convenience wrapper around the AWS SDK's
@@ -595,6 +579,18 @@ func AssertS3StatusCode(t testing.TB, expected s3errs.Error, got error) {
 	if code != expected.HTTPStatus {
 		t.Fatalf("expected status code %d, got %d", expected.HTTPStatus, code)
 	}
+}
+
+// ObjectIdentifiers is a convenience function to create a slice of
+// ObjectIdentifiers from object keys.
+func ObjectIdentifiers(keys ...string) []types.ObjectIdentifier {
+	var objs []types.ObjectIdentifier
+	for _, o := range keys {
+		objs = append(objs, types.ObjectIdentifier{
+			Key: aws.String(o),
+		})
+	}
+	return objs
 }
 
 // parseRange parses a Content-Range header value from a http response.

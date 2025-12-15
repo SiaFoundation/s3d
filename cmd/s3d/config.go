@@ -55,12 +55,12 @@ type (
 
 	// Config contains the configuration for S3d.
 	Config struct {
-		ApiAddress string `yaml:"apiAddress"`
-		AppSecret  string `yaml:"appSecret"`
-		Directory  string `yaml:"directory"`
-		Log        Log    `yaml:"log"`
-		S3         S3     `yaml:"s3"`
-		Sia        Sia    `yaml:"sia"`
+		ApiAddress     string `yaml:"apiAddress"`
+		RecoveryPhrase string `yaml:"recoveryPhrase"`
+		Directory      string `yaml:"directory"`
+		Log            Log    `yaml:"log"`
+		S3             S3     `yaml:"s3"`
+		Sia            Sia    `yaml:"sia"`
 	}
 )
 
@@ -106,16 +106,6 @@ func runConfigCmd(fp string) {
 
 	fmt.Println("")
 	setDataDirectory()
-
-	fmt.Println("")
-	if cfg.AppSecret != "" {
-		fmt.Println(ansiStyle("33m", "An app secret is already set."))
-		if promptYesNo("Would you like to change your app secret?") {
-			setAppSecret()
-		}
-	} else {
-		setAppSecret()
-	}
 
 	fmt.Println("")
 	if cfg.Sia.AccessKey != "" && cfg.Sia.SecretKey != "" {
@@ -206,20 +196,6 @@ func setAdvancedConfig() {
 	fmt.Println("The HTTP address is used to serve the S3 API.")
 	fmt.Println("It should only be exposed to the public internet via an https reverse proxy")
 	setListenAddress("HTTP Address", &cfg.ApiAddress)
-}
-
-func setAppSecret() {
-	for {
-		fmt.Println("Please choose an application secret.")
-		fmt.Println("This will be used to authenticate with the Indexer.")
-		fmt.Println("(It must be at least 16 characters.)")
-		cfg.AppSecret = readPasswordInput("Enter password")
-		if len(cfg.AppSecret) >= 16 {
-			break
-		}
-		fmt.Println(ansiStyle("31m", "Application secret must be at least 16 characters."))
-		fmt.Println("")
-	}
 }
 
 // setAPIPassword prompts the user to enter an API password if one is not

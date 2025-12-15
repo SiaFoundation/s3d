@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/SiaFoundation/s3d/s3"
 	"go.sia.tech/core/types"
 )
 
@@ -45,7 +46,7 @@ type sqlTime time.Time
 func (t *sqlTime) Scan(src any) error {
 	switch src := src.(type) {
 	case int64:
-		*t = sqlTime(time.UnixMilli(src))
+		*t = sqlTime(time.Unix(src, 0))
 		return nil
 	default:
 		return fmt.Errorf("cannot scan %T to time.Time", src)
@@ -53,7 +54,7 @@ func (t *sqlTime) Scan(src any) error {
 }
 
 func (t sqlTime) Value() (driver.Value, error) {
-	return time.Time(t).UnixMilli(), nil
+	return time.Time(t).Unix(), nil
 }
 
 type sqlMD5 [16]byte
@@ -75,13 +76,13 @@ func (m sqlMD5) Value() (driver.Value, error) {
 	return m[:], nil
 }
 
-type sqlUploadID [16]byte
+type sqlUploadID s3.UploadID
 
 func (uid *sqlUploadID) Scan(src any) error {
 	switch src := src.(type) {
 	case []byte:
-		if len(src) != len(sqlUploadID{}) {
-			return fmt.Errorf("failed to scan source into UploadID due to invalid number of bytes %v != %v: %v", len(src), len(sqlUploadID{}), src)
+		if len(src) != len(s3.UploadID{}) {
+			return fmt.Errorf("failed to scan source into UploadID due to invalid number of bytes %v != %v: %v", len(src), len(s3.UploadID{}), src)
 		}
 		copy(uid[:], src)
 		return nil

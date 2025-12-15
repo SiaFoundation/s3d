@@ -51,9 +51,9 @@ CREATE TABLE multipart_parts (
     multipart_upload_id INTEGER NOT NULL,
     part_number INTEGER NOT NULL,
     filename TEXT NOT NULL,
-    content_md5 BLOB,
+    content_md5 BLOB NOT NULL,
     content_sha256 BLOB,
-    content_length INTEGER NOT NULL DEFAULT 0,
+    content_length INTEGER NOT NULL,
     created_at INTEGER NOT NULL,
     FOREIGN KEY (multipart_upload_id) REFERENCES multipart_uploads(id) ON DELETE CASCADE,
     UNIQUE(multipart_upload_id, part_number)
@@ -61,7 +61,8 @@ CREATE TABLE multipart_parts (
 
 CREATE TABLE global_settings (
 	id INTEGER PRIMARY KEY NOT NULL DEFAULT 0 CHECK (id = 0), -- enforce a single row
-	db_version INTEGER NOT NULL -- used for migrations
+	db_version INTEGER NOT NULL, -- used for migrations
+	app_key BLOB
 );
 
 INSERT INTO global_settings (id, db_version) VALUES (0, 1); -- version must be updated when the schema changes`

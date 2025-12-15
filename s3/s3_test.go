@@ -56,7 +56,7 @@ func TestAccessDenied(t *testing.T) {
 		return err
 	})
 	assertAccessDenied(t, "DeleteObjects", func(t *testing.T, s3 *testutil.S3Tester) error {
-		_, err := s3.DeleteObjects(t.Context(), "bucket", []string{"object1", "object2"}, nil)
+		_, err := s3.DeleteObjects(t.Context(), "bucket", testutil.ObjectIdentifiers("object1", "object2"), nil)
 		return err
 	})
 

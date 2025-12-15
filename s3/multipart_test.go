@@ -162,7 +162,7 @@ func TestUploadPart(t *testing.T) {
 	testutil.AssertS3Error(t, s3errs.ErrInvalidArgument, err)
 
 	// assert [s3errs.ErrNoSuchUpload] is returned for invalid upload id
-	_, err = s3Tester.UploadPart(t.Context(), bucket, object, "nonexistent-upload", 1, data)
+	_, err = s3Tester.UploadPart(t.Context(), bucket, object, s3.NewUploadID().String(), 1, data)
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchUpload, err)
 
 	// assert [s3errs.ErrAccessDenied] is returned for unauthorized access
@@ -312,11 +312,11 @@ func TestUploadPartCopy(t *testing.T) {
 	}
 
 	// assert [s3errs.ErrInvalidArgument] is returned for invalid part number
-	_, err = s3Tester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, "nonexistent-upload", math.MaxInt32, nil)
+	_, err = s3Tester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, s3.NewUploadID().String(), math.MaxInt32, nil)
 	testutil.AssertS3Error(t, s3errs.ErrInvalidArgument, err)
 
 	// assert [s3errs.ErrNoSuchUpload] is returned for invalid upload id
-	_, err = s3Tester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, "nonexistent-upload", 1, nil)
+	_, err = s3Tester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, s3.NewUploadID().String(), 1, nil)
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchUpload, err)
 
 	// assert [s3errs.ErrAccessDenied] is returned for unauthorized access
@@ -405,7 +405,7 @@ func TestCompleteMultipartUpload(t *testing.T) {
 	}
 
 	// assert [s3errs.ErrNoSuchUpload] is returned for invalid upload id
-	_, err = s3Tester.CompleteMultipartUpload(t.Context(), bucket, object, "nonexistent-upload", parts)
+	_, err = s3Tester.CompleteMultipartUpload(t.Context(), bucket, object, s3.NewUploadID().String(), parts)
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchUpload, err)
 
 	// assert [s3errs.ErrNoSuchBucket] is returned for nonexistent bucket
@@ -608,9 +608,10 @@ func TestListParts(t *testing.T) {
 	}
 
 	for i, got := range res.Parts {
+		etag := strings.Trim(*got.ETag, `"`)
 		if got.PartNumber == nil || *got.PartNumber != int32(i+1) {
 			t.Fatalf("part %d: expected part number %d, got %v", i, i+1, got.PartNumber)
-		} else if expectedMD5 := md5.Sum(parts[i]); got.ETag == nil || *got.ETag != hex.EncodeToString(expectedMD5[:]) {
+		} else if expectedMD5 := md5.Sum(parts[i]); etag != hex.EncodeToString(expectedMD5[:]) {
 			t.Fatalf("part %d: expected ETag %x, got %v", i, expectedMD5, got.ETag)
 		} else if got.Size == nil || *got.Size != int64(len(parts[i])) {
 			t.Fatalf("part %d: expected size %d, got %v", i, len(parts[i]), got.Size)
