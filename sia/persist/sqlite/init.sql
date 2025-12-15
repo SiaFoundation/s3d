@@ -33,7 +33,6 @@ CREATE TABLE multipart_uploads (
 );
 CREATE INDEX multipart_uploads_bucket_id_name_idx ON multipart_uploads(bucket_id, name);
 CREATE INDEX multipart_uploads_list_idx ON multipart_uploads(bucket_id, name, upload_id, created_at);
-CREATE INDEX multipart_uploads_slash_delim_idx ON multipart_uploads(bucket_id, name, upload_id, created_at) WHERE INSTR(name, '/') > 0;
 
 CREATE TABLE multipart_parts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

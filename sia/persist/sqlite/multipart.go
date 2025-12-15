@@ -230,8 +230,8 @@ func buildUploadsQuery(bucketID int64, prefix, delimiter, keyMarker string, uplo
 
 	// handle prefix
 	if hasPrefix {
-		where = append(where, "SUBSTR(name, 1, ?) = ?")
-		args = append(args, prefixLen, prefix)
+		where = append(where, "name >= ? AND name < ?")
+		args = append(args, prefix, prefix+"\xFF")
 	}
 
 	// handle delimiter
@@ -273,8 +273,8 @@ func buildCommonPrefixesQuery(bucketID int64, prefix, delimiter, keyMarker strin
 	args = append(args, bucketID)
 
 	// check prefix
-	where = append(where, "SUBSTR(name, 1, ?) = ? AND INSTR(SUBSTR(name, ?), ?) > 0")
-	args = append(args, prefixLen, prefix, searchOffset, delimiter)
+	where = append(where, "name >= ? AND name < ? AND INSTR(SUBSTR(name, ?), ?) > 0")
+	args = append(args, prefix, prefix+"\xFF", searchOffset, delimiter)
 
 	// check markers
 	if keyMarker != "" && uploadIDMarker != [16]byte{} {
