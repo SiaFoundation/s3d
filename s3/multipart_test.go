@@ -162,7 +162,7 @@ func TestUploadPart(t *testing.T) {
 	testutil.AssertS3Error(t, s3errs.ErrInvalidArgument, err)
 
 	// assert [s3errs.ErrNoSuchUpload] is returned for invalid upload id
-	_, err = s3Tester.UploadPart(t.Context(), bucket, object, "nonexistent-upload", 1, data)
+	_, err = s3Tester.UploadPart(t.Context(), bucket, object, s3.NewUploadID().String(), 1, data)
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchUpload, err)
 
 	// assert [s3errs.ErrAccessDenied] is returned for unauthorized access
@@ -312,11 +312,11 @@ func TestUploadPartCopy(t *testing.T) {
 	}
 
 	// assert [s3errs.ErrInvalidArgument] is returned for invalid part number
-	_, err = s3Tester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, "nonexistent-upload", math.MaxInt32, nil)
+	_, err = s3Tester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, s3.NewUploadID().String(), math.MaxInt32, nil)
 	testutil.AssertS3Error(t, s3errs.ErrInvalidArgument, err)
 
 	// assert [s3errs.ErrNoSuchUpload] is returned for invalid upload id
-	_, err = s3Tester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, "nonexistent-upload", 1, nil)
+	_, err = s3Tester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, s3.NewUploadID().String(), 1, nil)
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchUpload, err)
 
 	// assert [s3errs.ErrAccessDenied] is returned for unauthorized access
@@ -405,7 +405,7 @@ func TestCompleteMultipartUpload(t *testing.T) {
 	}
 
 	// assert [s3errs.ErrNoSuchUpload] is returned for invalid upload id
-	_, err = s3Tester.CompleteMultipartUpload(t.Context(), bucket, object, "nonexistent-upload", parts)
+	_, err = s3Tester.CompleteMultipartUpload(t.Context(), bucket, object, s3.NewUploadID().String(), parts)
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchUpload, err)
 
 	// assert [s3errs.ErrNoSuchBucket] is returned for nonexistent bucket

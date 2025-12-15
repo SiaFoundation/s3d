@@ -208,7 +208,7 @@ func main() {
 		checkFatalError("failed to get app key from database", err)
 	}
 
-	backend, err := sia.New(ctx, sia.NewSDK(sdkClient), store, cfg.Sia.AccessKey, cfg.Sia.SecretKey)
+	backend, err := sia.New(ctx, sia.NewSDK(sdkClient), store, cfg.Directory, cfg.Sia.AccessKey, cfg.Sia.SecretKey)
 	if err != nil {
 		checkFatalError("failed to create Sia backend", err)
 	}

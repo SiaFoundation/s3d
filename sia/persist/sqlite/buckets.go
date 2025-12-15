@@ -88,3 +88,15 @@ func bucketID(t *txn, bucket string) (bucketID int64, err error) {
 	}
 	return
 }
+
+// multipartID returns the ID of the multipart upload with the given upload ID
+// or an error if it does not exist.
+func multipartID(t *txn, uploadID s3.UploadID, bucketID int64, object string) (int64, error) {
+	var id int64
+	if err := t.QueryRow(`SELECT id FROM multipart_uploads WHERE upload_id = $1 AND bucket_id = $2 AND name = $3`, sqlUploadID(uploadID), bucketID, object).Scan(&id); errors.Is(err, sql.ErrNoRows) {
+		return 0, s3errs.ErrNoSuchUpload
+	} else if err != nil {
+		return 0, err
+	}
+	return id, nil
+}
