@@ -1,9 +1,11 @@
-package s3
+package testutil
 
 import (
 	"fmt"
 	"reflect"
 	"testing"
+
+	"github.com/SiaFoundation/s3d/s3"
 )
 
 func TestPrefixMatch(t *testing.T) {
@@ -39,14 +41,14 @@ func TestPrefixMatch(t *testing.T) {
 		{key: "foo/bar", prefix: s(""), out: s("")},
 	} {
 		t.Run("", func(t *testing.T) {
-			prefix := Prefix{
+			prefix := s3.Prefix{
 				HasPrefix:    tc.prefix != nil,
 				HasDelimiter: tc.delim != nil,
 				Prefix:       unwrapStr(tc.prefix),
 				Delimiter:    unwrapStr(tc.delim),
 			}
 
-			match := Match(prefix, tc.key)
+			match := match(prefix, tc.key)
 			if (tc.out == nil) != (match == nil) {
 				t.Fatal("prefix match failed at index", idx)
 			}
@@ -67,15 +69,15 @@ func TestNewPrefix(t *testing.T) {
 
 	for _, tc := range []struct {
 		prefix, delim *string
-		out           Prefix
+		out           s3.Prefix
 	}{
-		{nil, nil, Prefix{}},
-		{s("foo"), nil, Prefix{HasPrefix: true, Prefix: "foo"}},
-		{nil, s("foo"), Prefix{HasDelimiter: true, Delimiter: "foo"}},
-		{s("foo"), s("bar"), Prefix{HasPrefix: true, Prefix: "foo", HasDelimiter: true, Delimiter: "bar"}},
+		{nil, nil, s3.Prefix{}},
+		{s("foo"), nil, s3.Prefix{HasPrefix: true, Prefix: "foo"}},
+		{nil, s("foo"), s3.Prefix{HasDelimiter: true, Delimiter: "foo"}},
+		{s("foo"), s("bar"), s3.Prefix{HasPrefix: true, Prefix: "foo", HasDelimiter: true, Delimiter: "bar"}},
 	} {
 		t.Run("", func(t *testing.T) {
-			exp := NewPrefix(tc.prefix, tc.delim)
+			exp := newPrefix(tc.prefix, tc.delim)
 			if !reflect.DeepEqual(tc.out, exp) {
 				t.Fatal(tc.out, "!=", exp)
 			}
@@ -105,9 +107,9 @@ func TestPrefixFilePrefix(t *testing.T) {
 		{s("foo-bar"), s("-"), false, "", ""},
 	} {
 		t.Run(fmt.Sprintf("%d/(%s-%s)", idx, tc.path, tc.rem), func(t *testing.T) {
-			prefix := NewPrefix(tc.p, tc.d)
+			prefix := newPrefix(tc.p, tc.d)
 
-			foundPath, foundRem, ok := FilePrefix(prefix)
+			foundPath, foundRem, ok := filePrefix(prefix)
 			if tc.ok != ok {
 				t.Fatal()
 			} else if tc.ok {
