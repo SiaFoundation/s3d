@@ -158,7 +158,7 @@ WHERE o.bucket_id = ?`
 			defer rows.Close()
 
 			var lastMatchedPart, lastObj string
-			for rows.Next() && !result.IsTruncated {
+			for rows.Next() && !result.IsTruncated && lastMatchedPart == "" {
 				var obj objects.Object
 				err = rows.Scan(
 					&obj.Name,
@@ -178,7 +178,6 @@ WHERE o.bucket_id = ?`
 					if match.MatchedPart == lastMatchedPart {
 						continue // should not count towards keys
 					}
-					lastObj = obj.Name
 					log.Println("Prefix:", match.MatchedPart)
 					result.AddPrefix(match.MatchedPart)
 					lastMatchedPart = match.MatchedPart
@@ -190,7 +189,6 @@ WHERE o.bucket_id = ?`
 						Size:         int64(obj.Size),
 					})
 					lastObj = obj.Name
-					lastMatchedPart = ""
 					log.Println("Key:", obj.Name)
 				}
 			}
@@ -216,14 +214,16 @@ WHERE o.bucket_id = ?`
 				return err
 			}
 			log.Println("lastMatchedPart:", lastMatchedPart, ", lastObj:", lastObj)
-			if lastObj != "" {
+			if lastMatchedPart != "" {
+				lastMatchedPart += "\xFF"
+				marker = &lastMatchedPart
+			} else if lastObj != "" {
 				// The NextMarker should always be the last object name scanned
 				// to ensure we continue from the next item in the lexicographical order.
 				if marker != nil && *marker == lastObj {
 					break // Haven't advanced, we are done.
 				}
-				m := lastObj
-				marker = &m
+				marker = &lastObj
 			} else {
 				break // No more keys or prefixes were found.
 			}

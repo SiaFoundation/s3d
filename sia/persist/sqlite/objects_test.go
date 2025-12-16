@@ -343,18 +343,18 @@ func TestListObjectsWalk(t *testing.T) {
 
 	const (
 		numKeys   = 100
-		maxKeys   = 100
+		maxKeys   = 10
 		maxDepth  = 4
 		minLength = 4
 		maxLength = 10
 	)
 
 	var (
-		// alphabet  = []rune("ÎmNotÂfraid!%_")
-		// delimiter = "%"
+		alphabet  = []rune("ÎmNotÂfraid!%_")
+		delimiter = "%"
 
-		alphabet  = []rune("abcd/")
-		delimiter = "/"
+		// alphabet  = []rune("abcd/")
+		// delimiter = "/"
 	)
 
 	log := zaptest.NewLogger(t)
@@ -433,7 +433,7 @@ func TestListObjectsWalk(t *testing.T) {
 		// push subdirectories
 		for _, cp := range res.CommonPrefixes {
 			if _, ok := seen[cp.Prefix]; ok {
-				// t.Fatalf("already seen common prefix %q", cp)
+				t.Fatalf("already seen common prefix %q", cp)
 			}
 			seen[cp.Prefix] = struct{}{}
 			stack = append(stack, page{prefix: cp.Prefix})
