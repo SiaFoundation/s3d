@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -379,9 +378,6 @@ func TestListObjectsWalk(t *testing.T) {
 	keysSeen := make(map[string]struct{})
 	for range numKeys {
 		key := randomPath(minLength, maxLength, maxDepth, alphabet, delimiter)
-		if strings.HasPrefix(key, delimiter) {
-			continue
-		}
 		err := store.PutObject("", bucket, key, &objects.Object{
 			ID:         obj.ID(),
 			ContentMD5: contentMD5,
