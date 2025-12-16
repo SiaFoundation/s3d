@@ -342,7 +342,7 @@ func TestListObjectsWalk(t *testing.T) {
 	rand.Seed(1)
 
 	const (
-		numKeys   = 100
+		numKeys   = 10000
 		maxKeys   = 10
 		maxDepth  = 4
 		minLength = 4
