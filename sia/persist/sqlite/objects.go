@@ -173,9 +173,6 @@ WHERE o.bucket_id = ?`
 
 				cp := commonPrefix(obj.Name, prefix)
 				if cp != "" {
-					if cp == lastMatchedPart {
-						continue // should not count towards keys
-					}
 					result.AddPrefix(cp)
 					lastMatchedPart = cp
 				} else {
@@ -205,10 +202,6 @@ WHERE o.bucket_id = ?`
 				lastMatchedPart += "\xFF"
 				marker = &lastMatchedPart
 			} else if lastObj != "" {
-				// if we haven't advanced at all, stop
-				if marker != nil && *marker == lastObj {
-					break
-				}
 				// otherwise continue getting the matching objects
 				marker = &lastObj
 			} else {
