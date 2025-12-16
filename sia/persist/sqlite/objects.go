@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"time"
 
@@ -158,7 +159,7 @@ WHERE o.bucket_id = ?`
 			defer rows.Close()
 
 			var lastMatchedPart, lastObj string
-			for rows.Next() {
+			for rows.Next() && !result.IsTruncated && lastMatchedPart == "" {
 				var obj objects.Object
 				err = rows.Scan(
 					&obj.Name,
@@ -170,25 +171,14 @@ WHERE o.bucket_id = ?`
 					return "", "", fmt.Errorf("failed to scan object: %w", err)
 				}
 
-				var done bool
-				match := s3.Match(prefix, obj.Name)
-				switch {
-				case match == nil:
-					continue
-				case match.CommonPrefix:
-					if marker != nil && strings.Compare(*marker, match.MatchedPart) >= 0 {
-						continue
-					}
-					if match.MatchedPart == lastMatchedPart {
+				cp := commonPrefix(obj.Name, prefix)
+				if cp != "" {
+					if cp == lastMatchedPart {
 						continue // should not count towards keys
 					}
-					result.AddPrefix(match.MatchedPart)
-					lastMatchedPart = match.MatchedPart
-					done = true
-				default:
-					if marker != nil && strings.Compare(*marker, obj.Name) >= 0 {
-						continue
-					}
+					result.AddPrefix(cp)
+					lastMatchedPart = cp
+				} else {
 					result.Add(&s3.Content{
 						Key:          obj.Name,
 						LastModified: s3.NewContentTime(obj.UpdatedAt),
@@ -196,10 +186,6 @@ WHERE o.bucket_id = ?`
 						Size:         int64(obj.Size),
 					})
 					lastObj = obj.Name
-				}
-
-				if done || result.IsTruncated {
-					break
 				}
 			}
 			if err := rows.Err(); err != nil {
@@ -229,8 +215,13 @@ WHERE o.bucket_id = ?`
 				break
 			}
 		}
+
 		if !result.IsTruncated {
 			result.NextMarker = ""
+		} else if prefix.HasDelimiter && strings.HasSuffix(result.NextMarker, prefix.Delimiter) {
+			// NextMarker is a common prefix. Append \xFF to skip past all objects
+			// with that prefix on the next call.
+			result.NextMarker += "\xFF"
 		}
 
 		return nil
@@ -240,4 +231,21 @@ WHERE o.bucket_id = ?`
 	}
 
 	return result, nil
+}
+
+func commonPrefix(key string, prefix s3.Prefix) string {
+	if !prefix.HasDelimiter {
+		return ""
+	}
+
+	after, ok := strings.CutPrefix(key, prefix.Prefix)
+	if !ok {
+		return ""
+	}
+	idx := strings.IndexRune(after, rune(prefix.Delimiter[0]))
+	if idx == -1 {
+		return ""
+	}
+
+	return prefix.Prefix + after[:idx+utf8.RuneCountInString(prefix.Delimiter)]
 }

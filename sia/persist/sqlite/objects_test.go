@@ -368,6 +368,7 @@ func TestListObjectsWalk(t *testing.T) {
 	obj := sdk.Object{}
 	contentMD5 := [16]byte(frand.Bytes(16))
 
+	keysAll := make(map[string]struct{})
 	for range numKeys {
 		key := randomPath(minLength, maxLength, maxDepth, alphabet, delimiter)
 		err := store.PutObject("", bucket, key, &objects.Object{
@@ -379,6 +380,7 @@ func TestListObjectsWalk(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		keysAll[key] = struct{}{}
 	}
 
 	type page struct {
@@ -433,8 +435,8 @@ func TestListObjectsWalk(t *testing.T) {
 		}
 	}
 
-	if visited != numKeys {
-		t.Fatalf("expected to visit %d uploads, visited %d", numKeys, visited)
+	if len(keysAll) != visited {
+		t.Fatalf("expected to visit %d uploads, visited %d", len(keysAll), visited)
 	}
 }
 
