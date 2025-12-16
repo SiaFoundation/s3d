@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"unicode/utf8"
 
 	"time"
 
@@ -171,18 +172,15 @@ WHERE o.bucket_id = ?`
 					return "", "", fmt.Errorf("failed to scan object: %w", err)
 				}
 
-				match := s3.Match(prefix, obj.Name)
-				switch {
-				case match == nil:
-					continue
-				case match.CommonPrefix:
-					if match.MatchedPart == lastMatchedPart {
+				cp := commonPrefix(obj.Name, prefix)
+				if cp != "" {
+					if cp == lastMatchedPart {
 						continue // should not count towards keys
 					}
-					log.Println("Prefix:", match.MatchedPart)
-					result.AddPrefix(match.MatchedPart)
-					lastMatchedPart = match.MatchedPart
-				default:
+					log.Println("Prefix:", cp)
+					result.AddPrefix(cp)
+					lastMatchedPart = cp
+				} else {
 					result.Add(&s3.Content{
 						Key:          obj.Name,
 						LastModified: s3.NewContentTime(obj.UpdatedAt),
@@ -244,4 +242,22 @@ WHERE o.bucket_id = ?`
 	}
 
 	return result, nil
+}
+
+func commonPrefix(key string, prefix s3.Prefix) string {
+	if !prefix.HasDelimiter {
+		return ""
+	}
+
+	after, ok := strings.CutPrefix(key, prefix.Prefix)
+	if !ok {
+		return ""
+	}
+
+	idx := strings.IndexRune(after, rune(prefix.Delimiter[0]))
+	if idx == -1 {
+		return ""
+	}
+
+	return prefix.Prefix + after[:idx+utf8.RuneCountInString(prefix.Delimiter)]
 }
