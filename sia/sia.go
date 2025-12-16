@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"slices"
 
 	"github.com/SiaFoundation/s3d/s3"
@@ -13,6 +15,12 @@ import (
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/sdk"
 	"go.uber.org/zap"
+)
+
+const (
+	// MultipartDirectory is the directory name used for storing multipart
+	// uploads.
+	MultipartDirectory = "multipart"
 )
 
 // Option is a configuration option for the S3 API handler.
@@ -31,6 +39,7 @@ type Sia struct {
 	logger *zap.Logger
 	store  Store
 
+	directory string
 	accessKey string
 	secretKey auth.SecretAccessKey
 }
@@ -52,14 +61,22 @@ type Store interface {
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
 	PutObject(accessKeyID, bucket, name string, obj *objects.Object) error
 
-	CreateMultipartUpload(bucket, name string, meta map[string]string) (string, error)
-	AbortMultipartUpload(bucket, name, uploadID string) error
+	HasMultipartUpload(bucket, name string, uploadID s3.UploadID) error
+	CreateMultipartUpload(bucket, name string, uploadID s3.UploadID, meta map[string]string) error
+	AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) error
+	AddMultipartPart(bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentSHA256 *[32]byte, contentLength int64) (string, error)
+	ListParts(bucket, name string, uploadID s3.UploadID, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error)
 }
 
 // New creates a new Sia backend instance.
-func New(ctx context.Context, sdk SDK, store Store, accessKey, secretKey string, opts ...Option) (*Sia, error) {
+func New(ctx context.Context, sdk SDK, store Store, directory, accessKey, secretKey string, opts ...Option) (*Sia, error) {
 	if accessKey == "" || secretKey == "" {
 		return nil, fmt.Errorf("sia backend requires both access key and secret key")
+	}
+
+	directory = filepath.Join(directory, MultipartDirectory)
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		return nil, fmt.Errorf("failed to create multipart upload directory: %w", err)
 	}
 
 	sia := &Sia{
@@ -67,6 +84,7 @@ func New(ctx context.Context, sdk SDK, store Store, accessKey, secretKey string,
 		sdk:    sdk,
 		store:  store,
 
+		directory: directory,
 		accessKey: accessKey,
 		secretKey: auth.SecretAccessKey(secretKey),
 	}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/SiaFoundation/s3d/s3"
 	"go.sia.tech/core/types"
 )
 
@@ -75,13 +76,13 @@ func (m sqlMD5) Value() (driver.Value, error) {
 	return m[:], nil
 }
 
-type sqlUploadID [16]byte
+type sqlUploadID s3.UploadID
 
 func (uid *sqlUploadID) Scan(src any) error {
 	switch src := src.(type) {
 	case []byte:
-		if len(src) != len(sqlUploadID{}) {
-			return fmt.Errorf("failed to scan source into UploadID due to invalid number of bytes %v != %v: %v", len(src), len(sqlUploadID{}), src)
+		if len(src) != len(s3.UploadID{}) {
+			return fmt.Errorf("failed to scan source into UploadID due to invalid number of bytes %v != %v: %v", len(src), len(s3.UploadID{}), src)
 		}
 		copy(uid[:], src)
 		return nil

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3/auth"
+	"lukechampine.com/frand"
 
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"go.uber.org/zap"
@@ -26,7 +27,7 @@ type CreateMultipartUploadOptions struct {
 // multipart upload. This ID is used to identify the multipart upload in
 // subsequent requests.
 type CreateMultipartUploadResult struct {
-	UploadID string
+	UploadID UploadID
 }
 
 // UploadPartOptions contains options for uploading an individual part in a
@@ -114,7 +115,7 @@ type ListMultipartUploadsOptions struct {
 // MultipartUploadInfo represents a single multipart upload in a listing.
 type MultipartUploadInfo struct {
 	Key       string
-	UploadID  string
+	UploadID  UploadID
 	Initiated time.Time
 }
 
@@ -125,7 +126,33 @@ type ListMultipartUploadsResult struct {
 	CommonPrefixes     []string
 	IsTruncated        bool
 	NextKeyMarker      string
-	NextUploadIDMarker string
+	NextUploadIDMarker UploadID
+}
+
+// UploadID is a unique identifier for a multipart upload.
+type UploadID [16]byte
+
+// NewUploadID generates a new random upload ID.
+func NewUploadID() (uid UploadID) {
+	frand.Read(uid[:])
+	return
+}
+
+// UploadIDFromString parses an upload ID from its hexadecimal string
+// representation.
+func UploadIDFromString(s string) (UploadID, error) {
+	var uid UploadID
+	if len(s) != 32 {
+		return UploadID{}, fmt.Errorf("invalid length: got %d, want 32", len(s))
+	} else if _, err := hex.Decode(uid[:], []byte(s)); err != nil {
+		return UploadID{}, fmt.Errorf("failed to parse upload ID %q: %w", s, err)
+	}
+	return uid, nil
+}
+
+// String returns the hexadecimal string representation of the upload ID.
+func (uid UploadID) String() string {
+	return hex.EncodeToString(uid[:])
 }
 
 // routeMultipartUpload operates on routes that contain '?uploadId=<id>' in the
@@ -214,7 +241,7 @@ func (s *s3) createMultipartUpload(w http.ResponseWriter, r *http.Request, acces
 		Xmlns:    "http://s3.amazonaws.com/doc/2006-03-01/",
 		Bucket:   bucket,
 		Key:      object,
-		UploadID: result.UploadID,
+		UploadID: result.UploadID.String(),
 	})
 }
 
@@ -252,7 +279,7 @@ func (s *s3) listMultipartUploads(w http.ResponseWriter, r *http.Request, access
 		MaxUploads:         maxUploads,
 		IsTruncated:        result.IsTruncated,
 		NextKeyMarker:      result.NextKeyMarker,
-		NextUploadIDMarker: result.NextUploadIDMarker,
+		NextUploadIDMarker: result.NextUploadIDMarker.String(),
 	}
 
 	for _, cp := range result.CommonPrefixes {
@@ -262,7 +289,7 @@ func (s *s3) listMultipartUploads(w http.ResponseWriter, r *http.Request, access
 	for _, upload := range result.Uploads {
 		resp.Uploads = append(resp.Uploads, ListedMultipartUpload{
 			Key:          upload.Key,
-			UploadID:     upload.UploadID,
+			UploadID:     upload.UploadID.String(),
 			Initiator:    globalUserInfo,
 			Owner:        globalUserInfo,
 			StorageClass: StorageClass("STANDARD"),
