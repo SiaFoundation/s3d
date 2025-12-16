@@ -167,7 +167,6 @@ func TestListObjects(t *testing.T) {
 
 		for _, tc := range tt.cases {
 			t.Run(tc.name, func(t *testing.T) {
-
 				resp, err := store.ListObjects(nil, bucket, s3.Prefix{
 					Prefix:       tc.prefix,
 					HasPrefix:    tc.prefix != "",
