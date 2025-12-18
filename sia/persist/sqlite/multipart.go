@@ -208,16 +208,16 @@ func (s *Store) ListMultipartUploads(bucket string, prefix s3.Prefix, page s3.Li
 		uploadIDMarker = [16]byte{}
 	}
 
-	if prefix.HasDelimiter {
-		return s.listMultipartUploadsWithDelim(bucket, prefix, keyMarker, uploadIDMarker, page.MaxUploads)
+	// without a delimiter we can fetch all results in a single query since we
+	// won't need to skip over common prefixes
+	batchLimit := int64(100)
+	if !prefix.HasDelimiter {
+		batchLimit = page.MaxUploads + 1
 	}
-	return s.listMultipartUploadsNoDelim(bucket, prefix.Prefix, keyMarker, uploadIDMarker, page.MaxUploads)
-}
 
-func (s *Store) listMultipartUploadsWithDelim(bucket string, prefix s3.Prefix, keyMarker string, uploadIDMarker [16]byte, maxUploads int64) (*s3.ListMultipartUploadsResult, error) {
 	res := &s3.ListMultipartUploadsResult{
-		Uploads:        make([]s3.MultipartUploadInfo, 0, maxUploads),
-		CommonPrefixes: make([]string, 0, maxUploads),
+		Uploads:        make([]s3.MultipartUploadInfo, 0, page.MaxUploads),
+		CommonPrefixes: make([]string, 0, page.MaxUploads),
 	}
 
 	err := s.transaction(func(tx *txn) error {
@@ -230,7 +230,7 @@ func (s *Store) listMultipartUploadsWithDelim(bucket string, prefix s3.Prefix, k
 		currentUploadIDMarker := uploadIDMarker
 
 		for !res.IsTruncated {
-			query, args := buildUploadsQuery(bid, prefix.Prefix, currentKeyMarker, currentUploadIDMarker, 100)
+			query, args := buildUploadsQuery(bid, prefix.Prefix, currentKeyMarker, currentUploadIDMarker, batchLimit)
 			rows, err := tx.Query(query, args...)
 			if err != nil {
 				return err
@@ -253,8 +253,7 @@ func (s *Store) listMultipartUploadsWithDelim(bucket string, prefix s3.Prefix, k
 					currentKeyMarker = commonPrefix + "\xFF"
 					currentUploadIDMarker = [16]byte{}
 
-					// set marker for next iteration
-					if len(res.Uploads)+len(res.CommonPrefixes) >= int(maxUploads) {
+					if len(res.Uploads)+len(res.CommonPrefixes) >= int(page.MaxUploads) {
 						res.IsTruncated = true
 						res.NextKeyMarker = currentKeyMarker
 						res.NextUploadIDMarker = currentUploadIDMarker
@@ -266,8 +265,7 @@ func (s *Store) listMultipartUploadsWithDelim(bucket string, prefix s3.Prefix, k
 					currentKeyMarker = upload.Key
 					currentUploadIDMarker = upload.UploadID
 
-					// set marker for next iteration
-					if len(res.Uploads)+len(res.CommonPrefixes) >= int(maxUploads) {
+					if len(res.Uploads)+len(res.CommonPrefixes) >= int(page.MaxUploads) {
 						res.IsTruncated = true
 						res.NextKeyMarker = currentKeyMarker
 						res.NextUploadIDMarker = currentUploadIDMarker
@@ -287,47 +285,6 @@ func (s *Store) listMultipartUploadsWithDelim(bucket string, prefix s3.Prefix, k
 			}
 		}
 		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return res, nil
-}
-
-func (s *Store) listMultipartUploadsNoDelim(bucket, prefix, keyMarker string, uploadIDMarker [16]byte, maxUploads int64) (*s3.ListMultipartUploadsResult, error) {
-	res := &s3.ListMultipartUploadsResult{
-		Uploads: make([]s3.MultipartUploadInfo, 0, maxUploads),
-	}
-
-	err := s.transaction(func(tx *txn) error {
-		bid, err := bucketID(tx, bucket)
-		if err != nil {
-			return err
-		}
-
-		query, args := buildUploadsQuery(bid, prefix, keyMarker, uploadIDMarker, maxUploads+1)
-		rows, err := tx.Query(query, args...)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-
-		for rows.Next() {
-			if len(res.Uploads) == int(maxUploads) {
-				res.IsTruncated = true
-				last := res.Uploads[len(res.Uploads)-1]
-				res.NextKeyMarker = last.Key
-				res.NextUploadIDMarker = last.UploadID
-				break
-			}
-
-			var upload s3.MultipartUploadInfo
-			if err := rows.Scan(&upload.Key, (*sqlUploadID)(&upload.UploadID), (*sqlTime)(&upload.Initiated)); err != nil {
-				return err
-			}
-			res.Uploads = append(res.Uploads, upload)
-		}
-		return rows.Err()
 	})
 	if err != nil {
 		return nil, err

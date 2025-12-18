@@ -43,7 +43,7 @@ CREATE TABLE multipart_uploads (
     FOREIGN KEY (bucket_id) REFERENCES buckets(id)
 );
 CREATE INDEX multipart_uploads_bucket_id_name_idx ON multipart_uploads(bucket_id, name);
-CREATE INDEX multipart_uploads_bucket_id_name_upload_id_created_at_idx ON multipart_uploads(bucket_id, name, upload_id, created_at);
+CREATE INDEX multipart_uploads_bucket_id_name_upload_id_idx ON multipart_uploads(bucket_id, name, upload_id);
 
 CREATE TABLE multipart_parts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
