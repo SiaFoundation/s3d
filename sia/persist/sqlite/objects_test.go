@@ -310,31 +310,6 @@ func TestListObjectsMatch(t *testing.T) {
 	}
 }
 
-func randomPath(minLength, maxLength, maxDepth int, alphabet []rune, delimiter string) string {
-	length := frand.Intn(maxLength-minLength+1) + minLength
-
-	runes := make([]rune, length)
-	for i := range runes {
-		runes[i] = alphabet[frand.Intn(len(alphabet))]
-	}
-
-	if delimiter == "" {
-		return string(runes)
-	}
-
-	key := string(runes)
-	depth := frand.Intn(maxDepth)
-	for i := 1; i < length && depth > 0; i++ {
-		if frand.Intn(2) == 0 {
-			key = key[:i] + delimiter + key[i:]
-			i++
-			depth--
-		}
-	}
-
-	return key
-}
-
 func TestListObjectsWalk(t *testing.T) {
 	const (
 		numKeys   = 10000

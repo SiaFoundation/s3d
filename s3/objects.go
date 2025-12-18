@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/SiaFoundation/s3d/s3/auth"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
@@ -80,12 +79,12 @@ func (p Prefix) CommonPrefix(key string) string {
 		return ""
 	}
 
-	idx := strings.IndexRune(after, rune(p.Delimiter[0]))
+	idx := strings.Index(after, p.Delimiter)
 	if idx == -1 {
 		return ""
 	}
 
-	return p.Prefix + after[:idx+utf8.RuneCountInString(p.Delimiter)]
+	return p.Prefix + after[:idx+len(p.Delimiter)]
 }
 
 func prefixFromQuery(query url.Values) Prefix {

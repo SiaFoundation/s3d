@@ -208,16 +208,10 @@ func (s *Store) ListMultipartUploads(bucket string, prefix s3.Prefix, page s3.Li
 		uploadIDMarker = [16]byte{}
 	}
 
-	// set default max uploads
-	maxUploads := page.MaxUploads
-	if maxUploads == 0 {
-		maxUploads = 1000
-	}
-
 	if prefix.HasDelimiter {
-		return s.listMultipartUploadsWithDelim(bucket, prefix, keyMarker, uploadIDMarker, maxUploads)
+		return s.listMultipartUploadsWithDelim(bucket, prefix, keyMarker, uploadIDMarker, page.MaxUploads)
 	}
-	return s.listMultipartUploadsNoDelim(bucket, prefix.Prefix, keyMarker, uploadIDMarker, maxUploads)
+	return s.listMultipartUploadsNoDelim(bucket, prefix.Prefix, keyMarker, uploadIDMarker, page.MaxUploads)
 }
 
 func (s *Store) listMultipartUploadsWithDelim(bucket string, prefix s3.Prefix, keyMarker string, uploadIDMarker [16]byte, maxUploads int64) (*s3.ListMultipartUploadsResult, error) {
