@@ -66,6 +66,7 @@ type Store interface {
 	CreateMultipartUpload(bucket, name string, uploadID s3.UploadID, meta map[string]string) error
 	CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, objectID types.Hash256, contentMD5 [16]byte, contentLength int64) error
 	HasMultipartUpload(bucket, name string, uploadID s3.UploadID) error
+	ListMultipartUploads(bucket string, prefix s3.Prefix, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error)
 	ListParts(bucket, name string, uploadID s3.UploadID, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error)
 	MultipartParts(bucket, name string, uploadID s3.UploadID) ([]objects.Part, error)
 }

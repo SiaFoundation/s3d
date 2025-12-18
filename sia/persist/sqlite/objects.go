@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"unicode/utf8"
-
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
@@ -65,8 +63,8 @@ func (s *Store) GetObject(accessKeyID *string, bucket, name string, partNumber *
 		// get parts count
 		err = tx.QueryRow(`
 			SELECT COUNT(*)
-			FROM parts JOIN objects ON objects.id = parts.object_id
-			WHERE objects.bucket_id = $1 AND objects.name = $2
+			FROM parts
+			WHERE object_bucket_id = $1 AND object_name = $2
 		`, bid, name).Scan(&obj.PartsCount)
 		if err != nil {
 			return err
@@ -91,7 +89,7 @@ func (s *Store) GetObject(accessKeyID *string, bucket, name string, partNumber *
 		return tx.QueryRow(`
 			SELECT o.object_id, o.metadata, o.updated_at, p.offset, p.content_length, p.content_md5
 			FROM parts p
-			JOIN objects o ON o.id = p.object_id
+			JOIN objects o ON o.bucket_id = p.object_bucket_id AND o.name = p.object_name
 			WHERE o.bucket_id = $1 AND o.name = $2 AND p.part_number = $3
 		`, bid, name, *partNumber).Scan((*sqlHash256)(&obj.ID), (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Offset, &obj.Length, (*sqlMD5)(&obj.ContentMD5))
 	}); errors.Is(err, sql.ErrNoRows) {
@@ -144,6 +142,14 @@ func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.
 		return result, nil
 	}
 
+	// adjust marker if it falls inside a common prefix
+	marker := page.Marker
+	if marker != nil && *marker != "" {
+		if adjustedKey, adjusted := adjustMarkerForCommonPrefix(prefix, *marker); adjusted {
+			marker = &adjustedKey
+		}
+	}
+
 	const maxObjsPerQuery = 100
 	err = s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
@@ -190,7 +196,7 @@ WHERE o.bucket_id = ?`
 					return "", "", fmt.Errorf("failed to scan object: %w", err)
 				}
 
-				cp := commonPrefix(obj.Name, prefix)
+				cp := prefix.CommonPrefix(obj.Name)
 				if cp != "" {
 					result.AddPrefix(cp)
 					lastMatchedPart = cp
@@ -210,19 +216,19 @@ WHERE o.bucket_id = ?`
 			return lastMatchedPart, lastObj, nil
 		}
 
-		marker := page.Marker
+		innerMarker := marker
 		for !result.IsTruncated {
-			lastMatchedPart, lastObj, err := list(marker)
+			lastMatchedPart, lastObj, err := list(innerMarker)
 			if err != nil {
 				return err
 			}
 			if lastMatchedPart != "" {
 				// if we get a common prefix, skip over the remainder of it
 				lastMatchedPart += "\xFF"
-				marker = &lastMatchedPart
+				innerMarker = &lastMatchedPart
 			} else if lastObj != "" {
 				// otherwise continue getting the matching objects
-				marker = &lastObj
+				innerMarker = &lastObj
 			} else {
 				break
 			}
@@ -243,21 +249,4 @@ WHERE o.bucket_id = ?`
 	}
 
 	return result, nil
-}
-
-func commonPrefix(key string, prefix s3.Prefix) string {
-	if !prefix.HasDelimiter {
-		return ""
-	}
-
-	after, ok := strings.CutPrefix(key, prefix.Prefix)
-	if !ok {
-		return ""
-	}
-	idx := strings.IndexRune(after, rune(prefix.Delimiter[0]))
-	if idx == -1 {
-		return ""
-	}
-
-	return prefix.Prefix + after[:idx+utf8.RuneCountInString(prefix.Delimiter)]
 }

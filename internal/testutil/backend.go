@@ -375,7 +375,7 @@ func (b *MemoryBackend) CreateMultipartUpload(_ context.Context, accessKeyID, bu
 }
 
 // ListMultipartUploads lists in-progress multipart uploads for the given bucket.
-func (b *MemoryBackend) ListMultipartUploads(_ context.Context, accessKeyID, bucket string, opts s3.ListMultipartUploadsOptions) (*s3.ListMultipartUploadsResult, error) {
+func (b *MemoryBackend) ListMultipartUploads(_ context.Context, accessKeyID, bucket string, opts s3.ListMultipartUploadsOptions, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error) {
 	bkt, exists := b.buckets[bucket]
 	if !exists {
 		return nil, s3errs.ErrNoSuchBucket
@@ -413,15 +413,15 @@ func (b *MemoryBackend) ListMultipartUploads(_ context.Context, accessKeyID, buc
 	})
 
 	// apply markers
-	if opts.KeyMarker != "" {
+	if page.KeyMarker != "" {
 		i := 0
 		for i < len(entries) {
-			cmp := strings.Compare(entries[i].key, opts.KeyMarker)
+			cmp := strings.Compare(entries[i].key, page.KeyMarker)
 			if cmp < 0 {
 				i++
 				continue
 			}
-			if cmp == 0 && opts.UploadIDMarker != "" && entries[i].uploadID.String() <= opts.UploadIDMarker {
+			if cmp == 0 && page.UploadIDMarker.String() != "" && entries[i].uploadID.String() <= page.UploadIDMarker.String() {
 				i++
 				continue
 			}
@@ -431,8 +431,9 @@ func (b *MemoryBackend) ListMultipartUploads(_ context.Context, accessKeyID, buc
 	}
 
 	// sanitize max uploads
-	if opts.MaxUploads <= 0 || opts.MaxUploads > s3.MaxMultipartUploads {
-		opts.MaxUploads = s3.MaxMultipartUploads
+	maxUploads := page.MaxUploads
+	if maxUploads <= 0 || maxUploads > s3.MaxMultipartUploads {
+		maxUploads = s3.MaxMultipartUploads
 	}
 
 	// collect results
@@ -443,7 +444,7 @@ func (b *MemoryBackend) ListMultipartUploads(_ context.Context, accessKeyID, buc
 			UploadID:  entry.uploadID,
 			Initiated: entry.created,
 		})
-		if int64(len(uploads)) == opts.MaxUploads {
+		if int64(len(uploads)) == maxUploads {
 			break
 		}
 	}
