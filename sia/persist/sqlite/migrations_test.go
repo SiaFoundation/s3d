@@ -12,9 +12,10 @@ import (
 
 // nolint:misspell
 const initialSchema = `/*
-	When changing the schema, the version must be incremented at the bottom of
-	this file and a migration added to migrations.go
+	When changing the schema, a new migration function must be added to
+	migrations.go
 */
+
 
 CREATE TABLE buckets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -23,17 +24,15 @@ CREATE TABLE buckets (
 );
 
 CREATE TABLE objects (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    bucket_id INTEGER NOT NULL,
+    bucket_id INTEGER REFERENCES buckets(id) NOT NULL,
     name TEXT NOT NULL,
     object_id BLOB NOT NULL,
     content_md5 BLOB NOT NULL,
     metadata TEXT NOT NULL,
     size INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
-    FOREIGN KEY (bucket_id) REFERENCES buckets(id),
-    UNIQUE(bucket_id, name)
-);
+    PRIMARY KEY(bucket_id, name)
+) WITHOUT ROWID;
 
 CREATE TABLE multipart_uploads (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -65,7 +64,8 @@ CREATE TABLE global_settings (
 	app_key BLOB
 );
 
-INSERT INTO global_settings (id, db_version) VALUES (0, 1); -- version must be updated when the schema changes`
+-- initialize the global settings table
+INSERT INTO global_settings (id, db_version) VALUES (0, 1); -- should not be changed`
 
 func initDBVersion(tb testing.TB, fp string, target int64, log *zap.Logger) *Store {
 	db, err := sql.Open("sqlite3", sqliteFilepath(fp))
