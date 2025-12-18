@@ -26,8 +26,12 @@ func NewSDK(sdk *sdk.SDK) *IndexdSDK {
 
 // Download downloads an object from indexd.
 func (s *IndexdSDK) Download(ctx context.Context, w io.Writer, obj sdk.Object, rnge *s3.ObjectRange) error {
-	// TODO: support range downloads once the SDK supports them
-	return s.inner.Download(ctx, w, obj, sdk.WithDownloadInflight(s.perDownloadInflight))
+	var opts []sdk.DownloadOption
+	if rnge != nil {
+		opts = append(opts, sdk.WithDownloadRange(uint64(rnge.Start), uint64(rnge.Length)))
+	}
+	opts = append(opts, sdk.WithDownloadInflight(s.perDownloadInflight))
+	return s.inner.Download(ctx, w, obj, opts...)
 }
 
 // Upload uploads an object to indexd without pinning it.

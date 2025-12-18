@@ -3,6 +3,7 @@
 	migrations.go
 */
 
+
 CREATE TABLE buckets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at INTEGER NOT NULL,
@@ -10,17 +11,15 @@ CREATE TABLE buckets (
 );
 
 CREATE TABLE objects (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    bucket_id INTEGER NOT NULL,
+    bucket_id INTEGER REFERENCES buckets(id) NOT NULL,
     name TEXT NOT NULL,
     object_id BLOB NOT NULL,
     content_md5 BLOB NOT NULL,
     metadata TEXT NOT NULL,
     size INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
-    FOREIGN KEY (bucket_id) REFERENCES buckets(id),
-    UNIQUE(bucket_id, name)
-);
+    PRIMARY KEY(bucket_id, name)
+) WITHOUT ROWID;
 
 CREATE TABLE multipart_uploads (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -4,6 +4,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
+	"unicode/utf8"
+
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
@@ -128,4 +132,132 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, objectID types.Hash2
 			string(metaJson), contentLength, sqlTime(time.Now()))
 		return err
 	})
+}
+
+// ListObjects lists objects in the specified bucket for the user identified
+// by the given access key. The backend should use the prefix to limit the
+// contents of the bucket and sort the results into the Contents and
+// CommonPrefixes fields of the returned ObjectsListResult.
+func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (result *s3.ObjectsListResult, err error) {
+	result = s3.NewObjectsListResult(page.MaxKeys)
+	if page.MaxKeys == 0 {
+		return result, nil
+	}
+
+	const maxObjsPerQuery = 100
+	err = s.transaction(func(tx *txn) error {
+		bid, err := bucketID(tx, bucket)
+		if err != nil {
+			return fmt.Errorf("failed to get bucket ID: %w", err)
+		}
+
+		list := func(marker *string) (string, string, error) {
+			query := `SELECT o.name, o.content_md5, o.size, o.updated_at
+FROM objects o
+WHERE o.bucket_id = ?`
+			args := []any{bid}
+
+			if marker != nil && *marker != "" {
+				query += ` AND o.name > ?`
+				args = append(args, *marker)
+			}
+
+			if prefix.HasPrefix {
+				query += ` AND o.name >= ? AND o.name < ?`
+				args = append(args, prefix.Prefix, prefix.Prefix+"\xFF")
+			}
+
+			query += ` ORDER BY o.name`
+			query += `  LIMIT ?`
+			args = append(args, maxObjsPerQuery)
+
+			rows, err := tx.Query(query, args...)
+			if err != nil {
+				return "", "", fmt.Errorf("failed to query objects: %w", err)
+			}
+			defer rows.Close()
+
+			var lastMatchedPart, lastObj string
+			for rows.Next() && !result.IsTruncated && lastMatchedPart == "" {
+				var obj objects.Object
+				err = rows.Scan(
+					&obj.Name,
+					(*sqlMD5)(&obj.ContentMD5),
+					&obj.Length,
+					(*sqlTime)(&obj.LastModified),
+				)
+				if err != nil {
+					return "", "", fmt.Errorf("failed to scan object: %w", err)
+				}
+
+				cp := commonPrefix(obj.Name, prefix)
+				if cp != "" {
+					result.AddPrefix(cp)
+					lastMatchedPart = cp
+				} else {
+					result.Add(&s3.Content{
+						Key:          obj.Name,
+						LastModified: s3.NewContentTime(obj.LastModified),
+						ETag:         s3.FormatETag(obj.ContentMD5[:]),
+						Size:         int64(obj.Length),
+					})
+					lastObj = obj.Name
+				}
+			}
+			if err := rows.Err(); err != nil {
+				return "", "", fmt.Errorf("failed to get rows: %w", err)
+			}
+			return lastMatchedPart, lastObj, nil
+		}
+
+		marker := page.Marker
+		for !result.IsTruncated {
+			lastMatchedPart, lastObj, err := list(marker)
+			if err != nil {
+				return err
+			}
+			if lastMatchedPart != "" {
+				// if we get a common prefix, skip over the remainder of it
+				lastMatchedPart += "\xFF"
+				marker = &lastMatchedPart
+			} else if lastObj != "" {
+				// otherwise continue getting the matching objects
+				marker = &lastObj
+			} else {
+				break
+			}
+		}
+
+		if !result.IsTruncated {
+			result.NextMarker = ""
+		} else if prefix.HasDelimiter && strings.HasSuffix(result.NextMarker, prefix.Delimiter) {
+			// NextMarker is a common prefix. Append \xFF to skip past all objects
+			// with that prefix on the next call.
+			result.NextMarker += "\xFF"
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+func commonPrefix(key string, prefix s3.Prefix) string {
+	if !prefix.HasDelimiter {
+		return ""
+	}
+
+	after, ok := strings.CutPrefix(key, prefix.Prefix)
+	if !ok {
+		return ""
+	}
+	idx := strings.IndexRune(after, rune(prefix.Delimiter[0]))
+	if idx == -1 {
+		return ""
+	}
+
+	return prefix.Prefix + after[:idx+utf8.RuneCountInString(prefix.Delimiter)]
 }
