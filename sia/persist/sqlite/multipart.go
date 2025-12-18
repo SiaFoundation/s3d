@@ -2,7 +2,6 @@ package sqlite
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -27,15 +26,10 @@ func (s *Store) CreateMultipartUpload(bucket, name string, uploadID s3.UploadID,
 			return err
 		}
 
-		metaJson, err := json.Marshal(meta)
-		if err != nil {
-			return err
-		}
-
 		if _, err := tx.Exec(`
 				INSERT INTO multipart_uploads (upload_id, bucket_id, name, metadata, created_at)
 				VALUES ($1, $2, $3, $4, $5)
-			`, sqlUploadID(uploadID), bid, name, string(metaJson), sqlTime(time.Now())); err != nil {
+			`, sqlUploadID(uploadID), bid, name, sqlMetaJSON(meta), sqlTime(time.Now())); err != nil {
 			return fmt.Errorf("failed to insert multipart upload: %w", err)
 		}
 		return nil

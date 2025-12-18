@@ -2,7 +2,6 @@ package sqlite
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -112,10 +111,6 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, objectID types.Hash2
 		if metadata == nil {
 			metadata = make(map[string]string) // force '{}' instead of 'null' in JSON
 		}
-		metaJson, err := json.Marshal(metadata)
-		if err != nil {
-			return err
-		}
 
 		_, err = tx.Exec(`
 			INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at)
@@ -127,7 +122,7 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, objectID types.Hash2
 				size = excluded.size,
 				updated_at = excluded.updated_at
 		`, bid, name, sqlHash256(objectID), sqlMD5(contentMD5),
-			string(metaJson), contentLength, sqlTime(time.Now()))
+			sqlMetaJSON(metadata), contentLength, sqlTime(time.Now()))
 		return err
 	})
 }
