@@ -172,11 +172,6 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object, uploa
 	// add multipart part to the database
 	previous, err := s.store.AddMultipartPart(bucket, object, uid, filepath.Base(partPath), opts.PartNumber, contentMD5, contentSHA256, contentLength)
 	if err != nil {
-		if err := os.Remove(partPath); err != nil {
-			s.logger.Error("failed to remove part file",
-				zap.String("path", partPath),
-				zap.Error(err))
-		}
 		return nil, fmt.Errorf("failed to add part: %w", err)
 	} else if previous != "" {
 		prevPath := filepath.Join(partDir, previous)
@@ -286,11 +281,6 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 	// add multipart part to the database
 	previous, err := s.store.AddMultipartPart(dstBucket, dstObject, uid, filepath.Base(partPath), opts.PartNumber, contentMD5, nil, contentLength)
 	if err != nil {
-		if err := os.Remove(partPath); err != nil {
-			s.logger.Error("failed to remove part file",
-				zap.String("path", partPath),
-				zap.Error(err))
-		}
 		return nil, fmt.Errorf("failed to add part: %w", err)
 	} else if previous != "" {
 		prevPath := filepath.Join(partDir, previous)
