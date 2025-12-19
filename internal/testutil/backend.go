@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/md5"
 	"crypto/sha256"
-	"encoding/hex"
 	"io"
 	"maps"
 	"slices"
@@ -683,7 +682,7 @@ func (b *MemoryBackend) CompleteMultipartUpload(_ context.Context, accessKeyID, 
 		return nil, s3errs.ErrNoSuchUpload
 	}
 
-	// deduplicate parts
+	// deduplicate parts, keeping the last occurrence
 	for i := 1; i < len(parts); i++ {
 		if parts[i].PartNumber == parts[i-1].PartNumber {
 			parts = append(parts[:i-1], parts[i:]...)
@@ -699,7 +698,7 @@ func (b *MemoryBackend) CompleteMultipartUpload(_ context.Context, accessKeyID, 
 			return nil, s3errs.ErrInvalidPart
 		}
 		totalSize += len(uploaded.data)
-		if tryParseETag(part.ETag) != uploaded.contentMD5 {
+		if s3.ParseETag(part.ETag) != uploaded.contentMD5 {
 			return nil, s3errs.ErrInvalidPart
 		}
 		lastPart := i == len(parts)-1
@@ -866,22 +865,4 @@ func (o object) matches(oid s3.ObjectID) bool {
 // nowUTC returns the current time in UTC truncated to seconds.
 func nowUTC() time.Time {
 	return time.Now().UTC().Truncate(time.Second)
-}
-
-// tryParseETag attempts to parse the given ETag string into a 16-byte MD5 sum.
-func tryParseETag(s string) [16]byte {
-	s = strings.TrimSpace(s)
-	s = strings.Trim(s, `"`)
-	if s == "" {
-		return [16]byte{}
-	}
-
-	var etag [16]byte
-	decoded, err := hex.DecodeString(s)
-	if err != nil {
-		return [16]byte{}
-	}
-	copy(etag[:], decoded)
-
-	return etag
 }

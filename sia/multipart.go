@@ -4,14 +4,12 @@ import (
 	"context"
 	"crypto/md5"
 	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"hash"
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
@@ -345,10 +343,10 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 		lookup[part.PartNumber] = part
 	}
 
-	// deduplicate parts
+	// deduplicate parts, keeping the last occurrence
 	for i := 1; i < len(parts); i++ {
 		if parts[i].PartNumber == parts[i-1].PartNumber {
-			parts = append(parts[:i], parts[i+1:]...)
+			parts = append(parts[:i-1], parts[i:]...)
 			i--
 		}
 	}
@@ -362,7 +360,7 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 			return nil, s3errs.ErrInvalidPart
 		}
 		totalSize += int(part.Size)
-		if tryParseETag(p.ETag) != part.ContentMD5 {
+		if s3.ParseETag(p.ETag) != part.ContentMD5 {
 			return nil, s3errs.ErrInvalidPart
 		}
 		lastPart := i == len(parts)-1
@@ -412,28 +410,23 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 	}
 
 	contentMD5 := r.MD5Sum()
+
+	// calculate ETag
+	var etag string
+	if len(completed) == 1 {
+		etag = s3.FormatETag(contentMD5[:])
+	} else {
+		hash := md5.New()
+		for _, part := range completed {
+			hash.Write(part.ContentMD5[:])
+		}
+		etag = s3.FormatMultipartETag(hash.Sum(nil), len(completed))
+	}
+
 	return &s3.CompleteMultipartUploadResult{
-		ETag:       s3.FormatETag(contentMD5[:]),
+		ETag:       etag,
 		ContentMD5: contentMD5,
 	}, nil
-}
-
-// tryParseETag attempts to parse the given ETag string into a 16-byte MD5 sum.
-func tryParseETag(s string) [16]byte {
-	s = strings.TrimSpace(s)
-	s = strings.Trim(s, `"`)
-	if s == "" {
-		return [16]byte{}
-	}
-
-	var etag [16]byte
-	decoded, err := hex.DecodeString(s)
-	if err != nil {
-		return [16]byte{}
-	}
-	copy(etag[:], decoded)
-
-	return etag
 }
 
 // lenWriter counts bytes written while forwarding to the wrapped writer.

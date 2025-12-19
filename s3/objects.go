@@ -595,6 +595,25 @@ func FormatETag(hash []byte) string {
 	return `"` + hex.EncodeToString(hash) + `"`
 }
 
+// ParseETag attempts to parse the given ETag string into a 16-byte MD5 sum.
+// Returns a zero array if the ETag is empty or invalid.
+func ParseETag(s string) [16]byte {
+	s = strings.TrimSpace(s)
+	s = strings.Trim(s, `"`)
+	if s == "" {
+		return [16]byte{}
+	}
+
+	var etag [16]byte
+	decoded, err := hex.DecodeString(s)
+	if err != nil {
+		return [16]byte{}
+	}
+	copy(etag[:], decoded)
+
+	return etag
+}
+
 // parseSource parses an X-Amz-Copy-Source string and returns the bucket and
 // object.
 func parseSource(source string) (bucket, object string, err error) {
