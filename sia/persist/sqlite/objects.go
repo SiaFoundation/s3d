@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"unicode/utf8"
-
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
@@ -125,6 +123,14 @@ func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.
 		return result, nil
 	}
 
+	// adjust marker if it falls inside a common prefix
+	marker := page.Marker
+	if marker != nil && *marker != "" {
+		if adjustedKey, adjusted := adjustMarkerForCommonPrefix(prefix, *marker); adjusted {
+			marker = &adjustedKey
+		}
+	}
+
 	const maxObjsPerQuery = 100
 	err = s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
@@ -171,7 +177,7 @@ WHERE o.bucket_id = ?`
 					return "", "", fmt.Errorf("failed to scan object: %w", err)
 				}
 
-				cp := commonPrefix(obj.Name, prefix)
+				cp := prefix.CommonPrefix(obj.Name)
 				if cp != "" {
 					result.AddPrefix(cp)
 					lastMatchedPart = cp
@@ -191,19 +197,19 @@ WHERE o.bucket_id = ?`
 			return lastMatchedPart, lastObj, nil
 		}
 
-		marker := page.Marker
+		innerMarker := marker
 		for !result.IsTruncated {
-			lastMatchedPart, lastObj, err := list(marker)
+			lastMatchedPart, lastObj, err := list(innerMarker)
 			if err != nil {
 				return err
 			}
 			if lastMatchedPart != "" {
 				// if we get a common prefix, skip over the remainder of it
 				lastMatchedPart += "\xFF"
-				marker = &lastMatchedPart
+				innerMarker = &lastMatchedPart
 			} else if lastObj != "" {
 				// otherwise continue getting the matching objects
-				marker = &lastObj
+				innerMarker = &lastObj
 			} else {
 				break
 			}
@@ -224,21 +230,4 @@ WHERE o.bucket_id = ?`
 	}
 
 	return result, nil
-}
-
-func commonPrefix(key string, prefix s3.Prefix) string {
-	if !prefix.HasDelimiter {
-		return ""
-	}
-
-	after, ok := strings.CutPrefix(key, prefix.Prefix)
-	if !ok {
-		return ""
-	}
-	idx := strings.IndexRune(after, rune(prefix.Delimiter[0]))
-	if idx == -1 {
-		return ""
-	}
-
-	return prefix.Prefix + after[:idx+utf8.RuneCountInString(prefix.Delimiter)]
 }

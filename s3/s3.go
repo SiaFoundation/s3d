@@ -156,7 +156,7 @@ type Backend interface {
 	//   bucket, [ErrAccessDenied] must be returned.
 	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
-	ListMultipartUploads(ctx context.Context, accessKeyID, bucket string, opts ListMultipartUploadsOptions) (*ListMultipartUploadsResult, error)
+	ListMultipartUploads(ctx context.Context, accessKeyID, bucket string, opts ListMultipartUploadsOptions, page ListMultipartUploadsPage) (*ListMultipartUploadsResult, error)
 
 	// AbortMultipartUpload aborts an in-progress multipart upload and
 	// discards any uploaded parts.

@@ -66,6 +66,27 @@ type Prefix struct {
 	Delimiter    string
 }
 
+// CommonPrefix computes the common prefix for the given key based on this
+// prefix's delimiter. Returns an empty string if the key doesn't match the
+// prefix or if no delimiter is set.
+func (p Prefix) CommonPrefix(key string) string {
+	if !p.HasDelimiter {
+		return ""
+	}
+
+	after, ok := strings.CutPrefix(key, p.Prefix)
+	if !ok {
+		return ""
+	}
+
+	idx := strings.Index(after, p.Delimiter)
+	if idx == -1 {
+		return ""
+	}
+
+	return p.Prefix + after[:idx+len(p.Delimiter)]
+}
+
 func prefixFromQuery(query url.Values) Prefix {
 	prefix := Prefix{
 		Prefix:    query.Get("prefix"),

@@ -35,8 +35,7 @@ CREATE TABLE objects (
 ) WITHOUT ROWID;
 
 CREATE TABLE multipart_uploads (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    upload_id BLOB NOT NULL UNIQUE,
+    upload_id BLOB PRIMARY KEY,
     bucket_id INTEGER NOT NULL,
     name TEXT NOT NULL,
     metadata TEXT NOT NULL,
@@ -44,17 +43,18 @@ CREATE TABLE multipart_uploads (
     FOREIGN KEY (bucket_id) REFERENCES buckets(id)
 );
 CREATE INDEX multipart_uploads_bucket_id_name_idx ON multipart_uploads(bucket_id, name);
+CREATE INDEX multipart_uploads_bucket_id_name_upload_id_idx ON multipart_uploads(bucket_id, name, upload_id);
 
 CREATE TABLE multipart_parts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    multipart_upload_id INTEGER NOT NULL,
+    multipart_upload_id BLOB NOT NULL,
     part_number INTEGER NOT NULL,
     filename TEXT NOT NULL,
     content_md5 BLOB NOT NULL,
     content_sha256 BLOB,
     content_length INTEGER NOT NULL,
     created_at INTEGER NOT NULL,
-    FOREIGN KEY (multipart_upload_id) REFERENCES multipart_uploads(id) ON DELETE CASCADE,
+    FOREIGN KEY (multipart_upload_id) REFERENCES multipart_uploads(upload_id) ON DELETE CASCADE,
     UNIQUE(multipart_upload_id, part_number)
 );
 
