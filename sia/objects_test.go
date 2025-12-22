@@ -296,6 +296,173 @@ func TestCopyObject(t *testing.T) {
 	}
 }
 
+func TestListObjects(t *testing.T) {
+	s3Tester := NewTester(t)
+
+	// prepare a bucket
+	bucket := "testbucket"
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// upload a few objects with different prefixes
+	objects := []string{
+		"file1.txt",
+		"file2.txt",
+		"folder1/file1.txt",
+		"folder1/file2.txt",
+		"folder1/subfolder/file1.txt",
+		"folder2/file1.txt",
+	}
+	for _, obj := range objects {
+		_, err := s3Tester.PutObject(t.Context(), bucket, obj, bytes.NewReader([]byte("test")), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	tests := []struct {
+		name            string
+		prefix          *string
+		delimiter       *string
+		maxKeys         int64
+		expectedKeys    []string
+		expectedPrefix  []string
+		expectedTrunc   bool
+		expectedKeysCnt int32
+	}{
+		{
+			name:            "list all objects",
+			prefix:          nil,
+			delimiter:       nil,
+			maxKeys:         100,
+			expectedKeys:    []string{"file1.txt", "file2.txt", "folder1/file1.txt", "folder1/file2.txt", "folder1/subfolder/file1.txt", "folder2/file1.txt"},
+			expectedPrefix:  nil,
+			expectedTrunc:   false,
+			expectedKeysCnt: 6,
+		},
+		{
+			name:            "list with delimiter at root",
+			prefix:          nil,
+			delimiter:       aws.String("/"),
+			maxKeys:         100,
+			expectedKeys:    []string{"file1.txt", "file2.txt"},
+			expectedPrefix:  []string{"folder1/", "folder2/"},
+			expectedTrunc:   false,
+			expectedKeysCnt: 4,
+		},
+		{
+			name:            "list with prefix",
+			prefix:          aws.String("folder1/"),
+			delimiter:       nil,
+			maxKeys:         100,
+			expectedKeys:    []string{"folder1/file1.txt", "folder1/file2.txt", "folder1/subfolder/file1.txt"},
+			expectedPrefix:  nil,
+			expectedTrunc:   false,
+			expectedKeysCnt: 3,
+		},
+		{
+			name:            "list with prefix and delimiter",
+			prefix:          aws.String("folder1/"),
+			delimiter:       aws.String("/"),
+			maxKeys:         100,
+			expectedKeys:    []string{"folder1/file1.txt", "folder1/file2.txt"},
+			expectedPrefix:  []string{"folder1/subfolder/"},
+			expectedTrunc:   false,
+			expectedKeysCnt: 3,
+		},
+		{
+			name:            "list with maxKeys truncation",
+			prefix:          nil,
+			delimiter:       nil,
+			maxKeys:         2,
+			expectedKeys:    []string{"file1.txt", "file2.txt"},
+			expectedPrefix:  nil,
+			expectedTrunc:   true,
+			expectedKeysCnt: 2,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := s3Tester.ListObjectsV2(t.Context(), bucket, tc.prefix, tc.delimiter, s3.ListObjectsPage{
+				MaxKeys: tc.maxKeys,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// check key count
+			if *resp.KeyCount != tc.expectedKeysCnt {
+				t.Fatalf("expected %d keys, got %d", tc.expectedKeysCnt, *resp.KeyCount)
+			}
+
+			// check truncation
+			if resp.IsTruncated == nil || *resp.IsTruncated != tc.expectedTrunc {
+				t.Fatalf("expected IsTruncated=%v, got %v", tc.expectedTrunc, resp.IsTruncated)
+			}
+
+			// check contents
+			if len(resp.Contents) != len(tc.expectedKeys) {
+				t.Fatalf("expected %d objects, got %d", len(tc.expectedKeys), len(resp.Contents))
+			}
+			for i, obj := range resp.Contents {
+				if *obj.Key != tc.expectedKeys[i] {
+					t.Fatalf("expected key %q, got %q", tc.expectedKeys[i], *obj.Key)
+				}
+			}
+
+			// check common prefixes
+			if len(resp.CommonPrefixes) != len(tc.expectedPrefix) {
+				t.Fatalf("expected %d common prefixes, got %d", len(tc.expectedPrefix), len(resp.CommonPrefixes))
+			}
+			for i, prefix := range resp.CommonPrefixes {
+				if *prefix.Prefix != tc.expectedPrefix[i] {
+					t.Fatalf("expected prefix %q, got %q", tc.expectedPrefix[i], *prefix.Prefix)
+				}
+			}
+		})
+	}
+
+	// test pagination with continuation token
+	t.Run("pagination", func(t *testing.T) {
+		// first request
+		resp, err := s3Tester.ListObjectsV2(t.Context(), bucket, nil, nil, s3.ListObjectsPage{
+			MaxKeys: 2,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !*resp.IsTruncated {
+			t.Fatal("expected truncated response")
+		}
+		if len(resp.Contents) != 2 {
+			t.Fatalf("expected 2 objects, got %d", len(resp.Contents))
+		}
+
+		// continue from where we left off
+		resp, err = s3Tester.ListObjectsV2(t.Context(), bucket, nil, nil, s3.ListObjectsPage{
+			Marker:  resp.NextContinuationToken,
+			MaxKeys: 100,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if *resp.IsTruncated {
+			t.Fatal("expected non-truncated response")
+		}
+		if len(resp.Contents) != 4 {
+			t.Fatalf("expected 4 remaining objects, got %d", len(resp.Contents))
+		}
+	})
+
+	// test listing from non-existent bucket
+	t.Run("nonexistent bucket", func(t *testing.T) {
+		_, err := s3Tester.ListObjectsV2(t.Context(), "nonexistent", nil, nil, s3.ListObjectsPage{})
+		testutil.AssertS3Error(t, s3errs.ErrNoSuchBucket, err)
+	})
+}
+
 func TestDeleteObjects(t *testing.T) {
 	s3Tester := NewTester(t)
 

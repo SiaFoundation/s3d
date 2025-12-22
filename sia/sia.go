@@ -59,6 +59,7 @@ type Store interface {
 	GetObject(accessKeyID *string, bucket, object string) (*objects.Object, error)
 	HeadBucket(accessKeyID, bucket string) error
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
+	ListObjects(accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error)
 	PutObject(accessKeyID, bucket, name string, obj *objects.Object) error
 
 	HasMultipartUpload(bucket, name string, uploadID s3.UploadID) error
