@@ -171,7 +171,17 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 // contents of the bucket and sort the results into the Contents and
 // CommonPrefixes fields of the returned ObjectsListResult.
 func (s *Sia) ListObjects(ctx context.Context, accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error) {
-	return nil, s3errs.ErrNotImplemented
+	if accessKeyID == nil {
+		// anonymous access is not supported yet
+		return nil, s3errs.ErrAccessDenied
+	}
+
+	// quick check if the bucket exists
+	if err := s.store.HeadBucket(*accessKeyID, bucket); err != nil {
+		return nil, err
+	}
+
+	return s.store.ListObjects(accessKeyID, bucket, prefix, page)
 }
 
 // PutObject puts an object with the given key into the specified bucket.
