@@ -11,7 +11,10 @@ import (
 )
 
 func TestBuckets(t *testing.T) {
-	const bucket = "bucket"
+	const (
+		bucket = "bucket"
+		key    = "key"
+	)
 
 	run := func(t *testing.T, pathStyle bool) {
 		// prepare a backend with 2 keypairs
@@ -65,7 +68,7 @@ func TestBuckets(t *testing.T) {
 		}
 
 		// add an object to the bucket
-		_, err = s3Tester.PutObject(t.Context(), bucket, "key", bytes.NewReader([]byte("value")), nil)
+		_, err = s3Tester.PutObject(t.Context(), bucket, key, bytes.NewReader([]byte("value")), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -87,7 +90,35 @@ func TestBuckets(t *testing.T) {
 		testutil.AssertS3Error(t, s3errs.ErrBucketNotEmpty, err)
 
 		// delete the object
-		err = s3Tester.DeleteObject(t.Context(), bucket, "key")
+		err = s3Tester.DeleteObject(t.Context(), bucket, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// now deleting the bucket should succeed
+		err = s3Tester.DeleteBucket(t.Context(), bucket)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// recreate the bucket
+		err = s3Tester.CreateBucket(t.Context(), bucket)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// start a multipart upload
+		upload, err := s3Tester.CreateMultipartUpload(t.Context(), bucket, key, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// deleting the bucket should fail since there's a pending multipart upload
+		err = s3Tester.DeleteBucket(t.Context(), bucket)
+		testutil.AssertS3Error(t, s3errs.ErrBucketNotEmpty, err)
+
+		// abort the multipart upload
+		err = s3Tester.AbortMultipartUpload(t.Context(), bucket, key, *upload.UploadId)
 		if err != nil {
 			t.Fatal(err)
 		}
