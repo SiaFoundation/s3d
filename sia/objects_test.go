@@ -208,7 +208,7 @@ func TestPutObject(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		} else if obj.ContentMD5 != emptyMD5 {
-			t.Fatal("empty object hash mismatch", obj.ContentMD5, emptyMD5[:])
+			t.Fatal("empty object hash mismatch", obj.ContentMD5, emptyMD5)
 		} else if obj.Size != 0 {
 			t.Fatalf("empty object size mismatch: expected 0, got %d", obj.Size)
 		} else if !reflect.DeepEqual(obj.Metadata, metadata) {
