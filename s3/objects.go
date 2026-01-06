@@ -481,12 +481,6 @@ func (s *s3) listObjectsV2(w http.ResponseWriter, r *http.Request, accessKeyID *
 		result.NextContinuationToken = base64.URLEncoding.EncodeToString([]byte(objects.NextMarker))
 	}
 
-	// if fetch-owner is not set, redact owner information
-	if fo, set := q["fetch-owner"]; !set || (len(fo) > 0 && fo[0] == "false") {
-		for _, v := range result.Contents {
-			v.Owner = nil
-		}
-	}
 	return writeXMLResponse(w, result)
 }
 
@@ -639,6 +633,11 @@ func metadataHeaders(headers map[string][]string, sizeLimit int) (map[string]str
 
 // ListObjectsPage specifies pagination options for listing objects in a bucket.
 type ListObjectsPage struct {
+	// FetchOwner specifies whether owner information should be included in
+	// the response. If true, the Owner field of returned objects will be set.
+	// If false, the Owner field will be nil.
+	FetchOwner *bool
+
 	// Marker specifies the key in the bucket that represents the last item in
 	// the previous page. The first key in the returned page will be the next
 	// lexicographically (UTF-8 binary) sorted key after Marker. If HasMarker is
@@ -721,7 +720,6 @@ func listObjectsPageFromQuery(query url.Values) (page ListObjectsPage, rerr erro
 	if err != nil {
 		return page, err
 	}
-
 	page.MaxKeys = maxKeys
 
 	if _, hasMarker := query["continuation-token"]; hasMarker {
@@ -740,6 +738,10 @@ func listObjectsPageFromQuery(query url.Values) (page ListObjectsPage, rerr erro
 		page.Marker = aws.String(query.Get("start-after"))
 	}
 
+	if query.Get("fetch-owner") == "true" {
+		page.FetchOwner = aws.Bool(true)
+	}
+
 	return page, nil
 }
 
@@ -751,6 +753,7 @@ func listObjectVersionsPageFromQuery(query url.Values) (page ListObjectsPage, re
 
 	page.MaxKeys = maxKeys
 	page.Marker = aws.String(query.Get("key-marker"))
+	page.FetchOwner = aws.Bool(true) // always fetch owner for versions endpoint
 
 	return page, nil
 }
