@@ -41,7 +41,7 @@ type (
 	}
 
 	bucket struct {
-		owner   string // access key id of the owner
+		owner   string
 		objects map[string]*object
 	}
 
@@ -255,6 +255,13 @@ func (b *MemoryBackend) ListObjects(ctx context.Context, accessKeyID *string, bu
 		return nil, s3errs.ErrAccessDenied
 	}
 
+	var owner *s3.UserInfo
+	if page.FetchOwner != nil && *page.FetchOwner {
+		owner = &s3.UserInfo{
+			ID: bkt.owner,
+		}
+	}
+
 	// flatten the objects into a slice and sort them lexicographically
 	objects := slices.Collect(maps.Values(bkt.objects))
 	slices.SortFunc(objects, func(a, b *object) int {
@@ -289,10 +296,8 @@ func (b *MemoryBackend) ListObjects(ctx context.Context, accessKeyID *string, bu
 				Key:          obj.name,
 				LastModified: s3.NewContentTime(obj.lastModified),
 				ETag:         s3.FormatETag(obj.contentMD5[:]),
-				Owner: &s3.UserInfo{
-					ID: bkt.owner,
-				},
-				Size: int64(len(obj.data)),
+				Owner:        owner,
+				Size:         int64(len(obj.data)),
 			})
 		}
 
