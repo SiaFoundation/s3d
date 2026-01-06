@@ -15,6 +15,7 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia/objects"
+	"go.sia.tech/core/types"
 	"go.uber.org/zap"
 )
 
@@ -132,6 +133,12 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 		return resp, nil
 	}
 
+	// handle empty objects without downloading from Sia
+	if obj.Size == 0 {
+		resp.Body = io.NopCloser(bytes.NewReader(nil))
+		return resp, nil
+	}
+
 	// TODO: once the indexer returns the full metadata we can cache it locally
 	// and avoid fetching it on-demand.
 	pinnedObj, err := s.sdk.Object(ctx, obj.ID)
@@ -196,10 +203,20 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 		inner: r,
 	}
 
-	// upload the data
-	obj, err := s.sdk.Upload(ctx, lr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to upload object: %w", err)
+	// handle empty object case
+	var objectID types.Hash256
+	if opts.ContentLength == 0 {
+		// drain reader
+		if _, err := io.Copy(io.Discard, lr); err != nil {
+			return nil, fmt.Errorf("failed to read object data: %w", err)
+		}
+	} else {
+		// upload the data
+		obj, err := s.sdk.Upload(ctx, lr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to upload object: %w", err)
+		}
+		objectID = obj.ID()
 	}
 
 	// check content length
@@ -219,7 +236,7 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 
 	// store the object in the database
 	if err := s.store.PutObject(accessKeyID, bucket, object, &objects.Object{
-		ID:         obj.ID(),
+		ID:         objectID,
 		ContentMD5: contentMD5,
 		Meta:       opts.Meta,
 		Size:       lr.N,
