@@ -1,7 +1,6 @@
 package sqlite
 
 import (
-	"bytes"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -326,7 +325,7 @@ func TestCompleteMultipartUpload(t *testing.T) {
 func TestListMultipartUploads(t *testing.T) {
 	store := initTestDB(t, zap.NewNop())
 
-	setupBucket := func(keys []string) (string, map[string][]s3.UploadID) {
+	setupBucket := func(keys []string) (string, map[string][]string) {
 		t.Helper()
 
 		entropy := frand.Entropy128()
@@ -335,16 +334,16 @@ func TestListMultipartUploads(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		uids := make(map[string][]s3.UploadID)
+		uids := make(map[string][]string)
 		for _, key := range keys {
 			uid := s3.NewUploadID()
 			err := store.CreateMultipartUpload(bucket, key, uid, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			uids[key] = append(uids[key], uid)
+			uids[key] = append(uids[key], uid.String())
 			sort.Slice(uids[key], func(i, j int) bool {
-				return bytes.Compare(uids[key][i][:], uids[key][j][:]) < 0
+				return uids[key][i] < uids[key][j]
 			})
 		}
 
@@ -395,7 +394,7 @@ func TestListMultipartUploads(t *testing.T) {
 		cases := []struct {
 			prefix         string
 			keyMarker      string
-			uploadIDMarker s3.UploadID
+			uploadIDMarker string
 			expectedKeys   []string
 		}{
 			// no filters
@@ -439,8 +438,7 @@ func TestListMultipartUploads(t *testing.T) {
 		}
 
 		// paginate through results
-		var prevKeyMarker string
-		var prevUploadIDMarker s3.UploadID
+		var prevKeyMarker, prevUploadIDMarker string
 		for i := range orderedKeys {
 			prefix := s3.Prefix{HasDelimiter: false}
 			page := s3.ListMultipartUploadsPage{
@@ -481,7 +479,7 @@ func TestListMultipartUploads(t *testing.T) {
 		cases := []struct {
 			prefix           string
 			keyMarker        string
-			uploadIDMarker   s3.UploadID
+			uploadIDMarker   string
 			maxUploads       int64
 			expectedKeys     []string
 			expectedPrefixes []string
@@ -581,7 +579,7 @@ func TestListMultipartUploads(t *testing.T) {
 		cases := []struct {
 			prefix           string
 			keyMarker        string
-			uploadIDMarker   s3.UploadID
+			uploadIDMarker   string
 			expectedKeys     []string
 			expectedPrefixes []string
 		}{
@@ -646,7 +644,7 @@ func TestListMultipartUploads(t *testing.T) {
 		type page struct {
 			prefix         string
 			keyMarker      string
-			uploadIDMarker s3.UploadID
+			uploadIDMarker string
 		}
 
 		seen := make(map[string]struct{})
@@ -834,8 +832,7 @@ func BenchmarkListMultipartUploads(b *testing.B) {
 	// benchmark / delimiter with random prefix and paging
 	b.Run("slash-delim-paging", func(b *testing.B) {
 		var paged int
-		var prevKeyMarker, prefix string
-		var prevUploadIDMarker s3.UploadID
+		var prevKeyMarker, prevUploadIDMarker, prefix string
 		for b.Loop() {
 			prefixArg := s3.Prefix{
 				HasPrefix:    prefix != "",
@@ -863,7 +860,7 @@ func BenchmarkListMultipartUploads(b *testing.B) {
 
 			prefix = ""
 			prevKeyMarker = ""
-			prevUploadIDMarker = [16]byte{}
+			prevUploadIDMarker = ""
 		}
 		if paged == 0 {
 			b.Fatal("no pagination occurred during benchmark")

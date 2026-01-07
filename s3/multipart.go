@@ -121,7 +121,7 @@ type ListMultipartUploadsPage struct {
 	// UploadIDMarker specifies the upload ID of the last upload in the previous
 	// page when multiple uploads exist for the same key. Only used when KeyMarker
 	// is also specified.
-	UploadIDMarker UploadID
+	UploadIDMarker string
 
 	// MaxUploads sets the maximum number of uploads returned in the response.
 	// The response might contain fewer uploads, but will never contain more.
@@ -142,7 +142,7 @@ type ListMultipartUploadsResult struct {
 	CommonPrefixes     []string
 	IsTruncated        bool
 	NextKeyMarker      string
-	NextUploadIDMarker UploadID
+	NextUploadIDMarker string
 }
 
 // UploadID is a unique identifier for a multipart upload.
@@ -279,7 +279,7 @@ func (s *s3) listMultipartUploads(w http.ResponseWriter, r *http.Request, access
 	}
 	page := ListMultipartUploadsPage{
 		KeyMarker:      query.Get("key-marker"),
-		UploadIDMarker: ParseUploadID(query.Get("upload-id-marker")),
+		UploadIDMarker: query.Get("upload-id-marker"),
 		MaxUploads:     maxUploads,
 	}
 
@@ -294,11 +294,11 @@ func (s *s3) listMultipartUploads(w http.ResponseWriter, r *http.Request, access
 		Prefix:             opts.Prefix,
 		Delimiter:          opts.Delimiter,
 		KeyMarker:          page.KeyMarker,
-		UploadIDMarker:     page.UploadIDMarker.String(),
+		UploadIDMarker:     page.UploadIDMarker,
 		MaxUploads:         maxUploads,
 		IsTruncated:        result.IsTruncated,
 		NextKeyMarker:      result.NextKeyMarker,
-		NextUploadIDMarker: result.NextUploadIDMarker.String(),
+		NextUploadIDMarker: result.NextUploadIDMarker,
 	}
 
 	for _, cp := range result.CommonPrefixes {

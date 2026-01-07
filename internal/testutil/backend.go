@@ -425,7 +425,7 @@ func (b *MemoryBackend) ListMultipartUploads(_ context.Context, accessKeyID, buc
 				i++
 				continue
 			}
-			if cmp == 0 && page.UploadIDMarker.String() != "" && entries[i].uploadID.String() <= page.UploadIDMarker.String() {
+			if cmp == 0 && page.UploadIDMarker != "" && entries[i].uploadID.String() <= page.UploadIDMarker {
 				i++
 				continue
 			}
@@ -455,12 +455,11 @@ func (b *MemoryBackend) ListMultipartUploads(_ context.Context, accessKeyID, buc
 
 	// determine if truncated
 	isTruncated := len(entries) > len(uploads)
-	var nextKeyMarker string
-	var nextUploadIDMarker s3.UploadID
+	var nextKeyMarker, nextUploadIDMarker string
 	if isTruncated && len(uploads) > 0 {
 		last := uploads[len(uploads)-1]
 		nextKeyMarker = last.Key
-		nextUploadIDMarker = last.UploadID
+		nextUploadIDMarker = last.UploadID.String()
 	}
 
 	return &s3.ListMultipartUploadsResult{

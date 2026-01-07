@@ -321,7 +321,7 @@ func (s *Store) ListParts(bucket, name string, uploadID s3.UploadID, partNumberM
 // ListMultipartUploads lists all multipart uploads for the given bucket and
 // filters.
 func (s *Store) ListMultipartUploads(bucket string, prefix s3.Prefix, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error) {
-	uploadIDMarker := page.UploadIDMarker
+	uploadIDMarker := s3.ParseUploadID(page.UploadIDMarker)
 
 	// adjust marker if it falls inside a common prefix
 	keyMarker := page.KeyMarker
@@ -383,7 +383,7 @@ func (s *Store) ListMultipartUploads(bucket string, prefix s3.Prefix, page s3.Li
 					if len(res.Uploads)+len(res.CommonPrefixes) >= int(page.MaxUploads) {
 						res.IsTruncated = true
 						res.NextKeyMarker = currentKeyMarker
-						res.NextUploadIDMarker = currentUploadIDMarker
+						res.NextUploadIDMarker = currentUploadIDMarker.String()
 						break
 					}
 					continue
@@ -395,7 +395,7 @@ func (s *Store) ListMultipartUploads(bucket string, prefix s3.Prefix, page s3.Li
 					if len(res.Uploads)+len(res.CommonPrefixes) >= int(page.MaxUploads) {
 						res.IsTruncated = true
 						res.NextKeyMarker = currentKeyMarker
-						res.NextUploadIDMarker = currentUploadIDMarker
+						res.NextUploadIDMarker = currentUploadIDMarker.String()
 						break
 					}
 				}
