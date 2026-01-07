@@ -34,18 +34,10 @@ func WithLogger(logger *zap.Logger) Option {
 }
 
 // WithKeyPair adds a key pair to the MemoryBackend.
-func WithKeyPair(owner, accessKeyID, secretKey string) func(*Sia) {
+func WithKeyPair(accessKeyID, secretKey string) func(*Sia) {
 	return func(mb *Sia) {
-		mb.accessKeys[accessKeyID] = accessKey{
-			owner:  owner,
-			secret: auth.SecretAccessKey(secretKey),
-		}
+		mb.accessKeys[accessKeyID] = auth.SecretAccessKey(secretKey)
 	}
-}
-
-type accessKey struct {
-	owner  string
-	secret auth.SecretAccessKey
 }
 
 // Sia implements the s3.Backend interface for storing data on Sia.
@@ -55,7 +47,7 @@ type Sia struct {
 	store  Store
 
 	directory  string
-	accessKeys map[string]accessKey
+	accessKeys map[string]auth.SecretAccessKey
 }
 
 // SDK describes the SDK used to interact with Sia.
@@ -97,7 +89,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		store:  store,
 
 		directory:  directory,
-		accessKeys: make(map[string]accessKey),
+		accessKeys: make(map[string]auth.SecretAccessKey),
 	}
 	for _, opt := range opts {
 		opt(sia)
@@ -112,9 +104,9 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 // LoadSecret loads the secret key for the given access key ID. If the access
 // key wasn't found, the error s3errs.ErrInvalidAccessKeyID is returned.
 func (s *Sia) LoadSecret(ctx context.Context, accessKeyID string) (auth.SecretAccessKey, error) {
-	key, ok := s.accessKeys[accessKeyID]
+	secret, ok := s.accessKeys[accessKeyID]
 	if !ok {
 		return nil, s3errs.ErrInvalidAccessKeyId
 	}
-	return slices.Clone(key.secret), nil
+	return slices.Clone(secret), nil
 }
