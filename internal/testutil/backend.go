@@ -665,8 +665,6 @@ func (b *MemoryBackend) ListParts(_ context.Context, accessKeyID, bucket, key, u
 }
 
 // CompleteMultipartUpload assembles the uploaded parts into the final object.
-//
-// NOTE: parts must be non-nil and not exceed MaxParts.
 func (b *MemoryBackend) CompleteMultipartUpload(_ context.Context, accessKeyID, bucket, key, uploadID string, parts []s3.CompleteMultipartPart) (*s3.CompleteMultipartUploadResult, error) {
 	uid, err := s3.UploadIDFromString(uploadID)
 	if err != nil {
@@ -685,14 +683,6 @@ func (b *MemoryBackend) CompleteMultipartUpload(_ context.Context, accessKeyID, 
 	}
 	if upload.bucket != bucket || upload.key != key {
 		return nil, s3errs.ErrNoSuchUpload
-	}
-
-	// deduplicate parts, keeping the last occurrence
-	for i := 1; i < len(parts); i++ {
-		if parts[i].PartNumber == parts[i-1].PartNumber {
-			parts = append(parts[:i-1], parts[i:]...)
-			i--
-		}
 	}
 
 	// validate parts

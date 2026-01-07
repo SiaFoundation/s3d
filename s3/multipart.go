@@ -508,7 +508,16 @@ func (s *s3) completeMultipartUpload(w http.ResponseWriter, r *http.Request, acc
 		return fmt.Errorf("%w: too many parts: %d (maximum is %d)", s3errs.ErrInvalidRequest, len(req.Parts), MaxUploadPartNumber)
 	}
 
-	res, err := s.backend.CompleteMultipartUpload(r.Context(), accessKeyID, bucket, object, uploadID, req.Parts)
+	// deduplicate parts, keeping the last occurrence
+	parts := req.Parts
+	for i := 1; i < len(parts); i++ {
+		if parts[i].PartNumber == parts[i-1].PartNumber {
+			parts = append(parts[:i-1], parts[i:]...)
+			i--
+		}
+	}
+
+	res, err := s.backend.CompleteMultipartUpload(r.Context(), accessKeyID, bucket, object, uploadID, parts)
 	if err != nil {
 		return err
 	}

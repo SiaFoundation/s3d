@@ -322,8 +322,6 @@ func (s *Sia) ListParts(ctx context.Context, accessKeyID, bucket, object, upload
 }
 
 // CompleteMultipartUpload completes a multipart upload.
-//
-// NOTE: parts must be non-nil and not exceed MaxParts.
 func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, object, uploadID string, parts []s3.CompleteMultipartPart) (*s3.CompleteMultipartUploadResult, error) {
 	// parse upload ID
 	uid, err := s3.UploadIDFromString(uploadID)
@@ -341,14 +339,6 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 	lookup := make(map[int]objects.Part)
 	for _, part := range uploaded {
 		lookup[part.PartNumber] = part
-	}
-
-	// deduplicate parts, keeping the last occurrence
-	for i := 1; i < len(parts); i++ {
-		if parts[i].PartNumber == parts[i-1].PartNumber {
-			parts = append(parts[:i-1], parts[i:]...)
-			i--
-		}
 	}
 
 	// validate parts
