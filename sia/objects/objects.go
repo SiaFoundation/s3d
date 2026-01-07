@@ -15,3 +15,11 @@ type Object struct {
 	Size       int64
 	UpdatedAt  time.Time
 }
+
+// Part represents a single part of a multipart upload.
+type Part struct {
+	PartNumber int
+	Filename   string
+	Size       int64
+	ContentMD5 [16]byte
+}
