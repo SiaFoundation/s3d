@@ -72,7 +72,7 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 				MIN(part_number),
 				MAX(part_number),
 				SUM(content_length)
-			FROM parts
+			FROM multipart_parts
 			WHERE multipart_upload_id = $1
 		`, uid).Scan(&partCount, &minPart, &maxPart, &totalSize)
 		if err != nil {
@@ -89,7 +89,7 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 		var smallParts int
 		err = tx.QueryRow(`
 			SELECT COUNT(*)
-			FROM parts
+			FROM multipart_parts
 			WHERE multipart_upload_id = $1
 			  AND part_number < $2
 			  AND content_length < $3
@@ -112,24 +112,14 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 			return err
 		}
 
-		// compute and set offsets
+		// move parts to object_parts
 		_, err = tx.Exec(`
-			UPDATE parts
-			SET offset = (
-				SELECT COALESCE(SUM(p2.content_length), 0)
-				FROM parts p2
-				WHERE p2.multipart_upload_id = $1 AND p2.part_number < parts.part_number
-			)
-			WHERE multipart_upload_id = $1
-		`, uid)
-		if err != nil {
-			return err
-		}
-
-		// transfer parts to object
-		_, err = tx.Exec(`
-			UPDATE parts
-			SET object_bucket_id = $1, object_name = $2, multipart_upload_id = NULL, filename = NULL, created_at = NULL
+			INSERT INTO object_parts (object_bucket_id, object_name, part_number, content_md5, content_length, offset)
+			SELECT $1, $2, part_number, content_md5, content_length, 
+				(SELECT COALESCE(SUM(content_length), 0) 
+				FROM multipart_parts mp 
+				WHERE mp.multipart_upload_id = $3 AND mp.part_number < multipart_parts.part_number)
+			FROM multipart_parts
 			WHERE multipart_upload_id = $3
 		`, bid, name, uid)
 		if err != nil {
@@ -183,13 +173,13 @@ func (s *Store) AddMultipartPart(bucket, name string, uploadID s3.UploadID, file
 			return err
 		}
 
-		err = tx.QueryRow(`SELECT filename FROM parts WHERE multipart_upload_id = $1 AND part_number = $2`, uid, partNumber).Scan(&prevFilename)
+		err = tx.QueryRow(`SELECT filename FROM multipart_parts WHERE multipart_upload_id = $1 AND part_number = $2`, uid, partNumber).Scan(&prevFilename)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
 
 		_, err = tx.Exec(`
-			INSERT INTO parts (multipart_upload_id, part_number, filename, content_md5, content_length, created_at)
+			INSERT INTO multipart_parts (multipart_upload_id, part_number, filename, content_md5, content_length, created_at)
 			VALUES ($1, $2, $3, $4, $5, $6)
 			ON CONFLICT(multipart_upload_id, part_number) DO UPDATE SET
 				filename       = EXCLUDED.filename,
@@ -246,7 +236,7 @@ func (s *Store) MultipartParts(bucket, name string, uploadID s3.UploadID) ([]obj
 
 		rows, err := tx.Query(`
 			SELECT part_number, filename, content_md5, content_length
-			FROM parts
+			FROM multipart_parts
 			WHERE multipart_upload_id = $1
 			ORDER BY part_number ASC`, uid)
 		if err != nil {
@@ -296,7 +286,7 @@ func (s *Store) ListParts(bucket, name string, uploadID s3.UploadID, partNumberM
 
 		rows, err := tx.Query(`
 			SELECT part_number, content_length, content_md5, created_at
-			FROM parts
+			FROM multipart_parts
 			WHERE multipart_upload_id = $1 AND part_number > $2
 			ORDER BY part_number ASC
 			LIMIT $3

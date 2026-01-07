@@ -226,7 +226,7 @@ type Backend interface {
 	// - If the part numbers of the parts are not provided in ascending order,
 	//   [ErrInvalidPartOrder] must be returned.
 	//
-	// - If a part is too small, [ErrEntityTooSmall] must be returned.
+	// - If the last part is below the minimum size, [ErrEntityTooSmall] must be returned.
 	CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, object, uploadID string, parts []CompleteMultipartPart) (*CompleteMultipartUploadResult, error)
 }
 

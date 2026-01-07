@@ -91,7 +91,7 @@ func TestAddMultipartPart(t *testing.T) {
 		t.Fatal("expected previous filename to be returned on part overwrite", prev)
 	}
 
-	store.assertCount(1, "parts")
+	store.assertCount(1, "multipart_parts")
 }
 
 func TestAbortMultipartUpload(t *testing.T) {
@@ -133,7 +133,7 @@ func TestAbortMultipartUpload(t *testing.T) {
 		t.Fatal(err)
 	}
 	store.assertCount(0, "multipart_uploads")
-	store.assertCount(0, "parts")
+	store.assertCount(0, "multipart_parts")
 
 	// assert [s3errs.ErrNoSuchUpload] for aborted upload
 	if err := store.AbortMultipartUpload(bucket, object, uid); !errors.Is(err, s3errs.ErrNoSuchUpload) {
@@ -283,9 +283,9 @@ func TestCompleteMultipartUpload(t *testing.T) {
 	}
 
 	store.assertCount(0, "multipart_uploads")
-	store.assertCount(len(parts), "parts")
+	store.assertCount(len(parts), "object_parts")
 
-	rows, err := store.db.Query(`SELECT part_number, content_md5, offset, content_length FROM parts WHERE object_bucket_id IS NOT NULL ORDER BY part_number`)
+	rows, err := store.db.Query(`SELECT part_number, content_md5, offset, content_length FROM object_parts ORDER BY part_number`)
 	if err != nil {
 		t.Fatal(err)
 	}
