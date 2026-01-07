@@ -634,8 +634,8 @@ func metadataHeaders(headers map[string][]string, sizeLimit int) (map[string]str
 // ListObjectsPage specifies pagination options for listing objects in a bucket.
 type ListObjectsPage struct {
 	// FetchOwner specifies whether owner information should be included in
-	// the response. If true, the Owner field of returned objects will be set.
-	// If false, the Owner field will be nil.
+	// the response. If nil or false, the Owner field of returned objects will
+	// be nil. If true, the Owner field of returned objects will be set.
 	FetchOwner *bool
 
 	// Marker specifies the key in the bucket that represents the last item in
