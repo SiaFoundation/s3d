@@ -590,22 +590,38 @@ func BenchmarkListObjects(b *testing.B) {
 
 	b.Run("root_delimiter", func(b *testing.B) {
 		for b.Loop() {
-			result, err := store.ListObjects(nil, bucket, s3.Prefix{
-				Delimiter:    "/",
-				HasDelimiter: true,
-			}, s3.ListObjectsPage{MaxKeys: maxKeys})
-			if err != nil {
-				b.Fatal(err)
-			} else if (len(result.Contents) + len(result.CommonPrefixes)) == 0 {
-				b.Fatal("no results")
+			var marker *string
+			for {
+				result, err := store.ListObjects(nil, bucket, s3.Prefix{
+					Delimiter:    "/",
+					HasDelimiter: true,
+				}, s3.ListObjectsPage{MaxKeys: maxKeys, Marker: marker})
+				if err != nil {
+					b.Fatal(err)
+				} else if (len(result.Contents) + len(result.CommonPrefixes)) == 0 {
+					b.Fatal("no results")
+				}
+				if !result.IsTruncated {
+					break
+				}
+				marker = &result.NextMarker
 			}
 		}
 	})
 
 	b.Run("random_without_delimiter", func(b *testing.B) {
 		for b.Loop() {
+			var prefix string
+			switch frand.Intn(3) {
+			case 0:
+				prefix = fmt.Sprintf("%d/", frand.Intn(dir1))
+			case 1:
+				prefix = fmt.Sprintf("%d/%d/", frand.Intn(dir1), frand.Intn(dir2))
+			case 2:
+				prefix = fmt.Sprintf("%d/%d/%d/", frand.Intn(dir1), frand.Intn(dir2), frand.Intn(dir3))
+			}
 			result, err := store.ListObjects(nil, bucket, s3.Prefix{
-				Prefix:    fmt.Sprintf("%d/%d/", frand.Intn(dir1), frand.Intn(dir2)),
+				Prefix:    prefix,
 				HasPrefix: true,
 			}, s3.ListObjectsPage{MaxKeys: maxKeys})
 			if err != nil {
@@ -616,7 +632,7 @@ func BenchmarkListObjects(b *testing.B) {
 		}
 	})
 
-	b.Run("random_with_root_delimiter", func(b *testing.B) {
+	b.Run("random_with_delimiter", func(b *testing.B) {
 		for b.Loop() {
 			result, err := store.ListObjects(nil, bucket, s3.Prefix{
 				Prefix:       fmt.Sprintf("%d/%d/", frand.Intn(dir1), frand.Intn(dir2)),

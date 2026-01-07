@@ -192,6 +192,34 @@ func TestPutObject(t *testing.T) {
 		// upload to a bucket that doesn't exist
 		_, err = s3Tester.PutObject(t.Context(), "nonexistent", object, bytes.NewReader(data), metadata)
 		testutil.AssertS3Error(t, s3errs.ErrNoSuchBucket, err)
+
+		// upload an empty object
+		emptyObject := "empty.txt"
+		emptyMD5 := md5.Sum([]byte{})
+		resp, err = s3Tester.PutObject(t.Context(), bucket, emptyObject, bytes.NewReader([]byte{}), metadata)
+		if err != nil {
+			t.Fatal(err)
+		} else if !bytes.Equal(resp, emptyMD5[:]) {
+			t.Fatalf("empty object hash mismatch: expected %x, got %x", emptyMD5, resp)
+		}
+
+		// assert fetching the object works and the body is empty
+		obj, err = s3Tester.GetObject(t.Context(), bucket, emptyObject, nil)
+		if err != nil {
+			t.Fatal(err)
+		} else if obj.ContentMD5 != emptyMD5 {
+			t.Fatal("empty object hash mismatch", obj.ContentMD5, emptyMD5)
+		} else if obj.Size != 0 {
+			t.Fatalf("empty object size mismatch: expected 0, got %d", obj.Size)
+		} else if !reflect.DeepEqual(obj.Metadata, metadata) {
+			t.Fatal("empty object metadata mismatch", obj.Metadata)
+		}
+		body, err := io.ReadAll(obj.Body)
+		if err != nil {
+			t.Fatal(err)
+		} else if len(body) != 0 {
+			t.Fatalf("expected empty body, got %d bytes", len(body))
+		}
 	}
 
 	t.Run("http", func(t *testing.T) {

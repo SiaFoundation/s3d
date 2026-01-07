@@ -172,6 +172,11 @@ func (b *MemoryBackend) DeleteBucket(ctx context.Context, accessKeyID, name stri
 	} else if len(bkt.objects) > 0 {
 		return s3errs.ErrBucketNotEmpty
 	}
+	for _, upload := range b.multipartUploads {
+		if upload.bucket == name {
+			return s3errs.ErrBucketNotEmpty
+		}
+	}
 	delete(b.buckets, name)
 	return nil
 }
