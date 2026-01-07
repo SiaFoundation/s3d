@@ -473,11 +473,7 @@ func (b *MemoryBackend) ListMultipartUploads(_ context.Context, accessKeyID, buc
 
 // AbortMultipartUpload aborts an in-progress multipart upload and discards
 // any uploaded parts.
-func (b *MemoryBackend) AbortMultipartUpload(_ context.Context, accessKeyID, bucket, key, uploadID string) error {
-	uid, err := s3.UploadIDFromString(uploadID)
-	if err != nil {
-		return s3errs.ErrNoSuchUpload
-	}
+func (b *MemoryBackend) AbortMultipartUpload(_ context.Context, accessKeyID, bucket, key string, uploadID s3.UploadID) error {
 	bkt, exists := b.buckets[bucket]
 	if !exists {
 		return s3errs.ErrNoSuchBucket
@@ -485,23 +481,19 @@ func (b *MemoryBackend) AbortMultipartUpload(_ context.Context, accessKeyID, buc
 	if bkt.owner != b.accessKeys[accessKeyID].owner {
 		return s3errs.ErrAccessDenied
 	}
-	upload, exists := b.multipartUploads[uid]
+	upload, exists := b.multipartUploads[uploadID]
 	if !exists {
 		return s3errs.ErrNoSuchUpload
 	}
 	if upload.bucket != bucket || upload.key != key {
 		return s3errs.ErrNoSuchUpload
 	}
-	delete(b.multipartUploads, uid)
+	delete(b.multipartUploads, uploadID)
 	return nil
 }
 
 // UploadPart uploads a single part for a multipart upload.
-func (b *MemoryBackend) UploadPart(_ context.Context, accessKeyID, bucket, key, uploadID string, r io.Reader, opts s3.UploadPartOptions) (*s3.UploadPartResult, error) {
-	uid, err := s3.UploadIDFromString(uploadID)
-	if err != nil {
-		return nil, s3errs.ErrNoSuchUpload
-	}
+func (b *MemoryBackend) UploadPart(_ context.Context, accessKeyID, bucket, key string, uploadID s3.UploadID, r io.Reader, opts s3.UploadPartOptions) (*s3.UploadPartResult, error) {
 	bkt, exists := b.buckets[bucket]
 	if !exists {
 		return nil, s3errs.ErrNoSuchBucket
@@ -509,7 +501,7 @@ func (b *MemoryBackend) UploadPart(_ context.Context, accessKeyID, bucket, key, 
 	if bkt.owner != b.accessKeys[accessKeyID].owner {
 		return nil, s3errs.ErrAccessDenied
 	}
-	upload, exists := b.multipartUploads[uid]
+	upload, exists := b.multipartUploads[uploadID]
 	if !exists {
 		return nil, s3errs.ErrNoSuchUpload
 	}
@@ -547,11 +539,7 @@ func (b *MemoryBackend) UploadPart(_ context.Context, accessKeyID, bucket, key, 
 
 // UploadPartCopy copies a single part from an existing object as part of a
 // multipart upload.
-func (b *MemoryBackend) UploadPartCopy(_ context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject, uploadID string, opts s3.UploadPartCopyOptions) (*s3.UploadPartCopyResult, error) {
-	uid, err := s3.UploadIDFromString(uploadID)
-	if err != nil {
-		return nil, s3errs.ErrNoSuchUpload
-	}
+func (b *MemoryBackend) UploadPartCopy(_ context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, uploadID s3.UploadID, opts s3.UploadPartCopyOptions) (*s3.UploadPartCopyResult, error) {
 	srcBkt, exists := b.buckets[srcBucket]
 	if !exists {
 		return nil, s3errs.ErrNoSuchBucket
@@ -571,7 +559,7 @@ func (b *MemoryBackend) UploadPartCopy(_ context.Context, accessKeyID, srcBucket
 	if dstBkt.owner != b.accessKeys[accessKeyID].owner {
 		return nil, s3errs.ErrAccessDenied
 	}
-	upload, exists := b.multipartUploads[uid]
+	upload, exists := b.multipartUploads[uploadID]
 	if !exists {
 		return nil, s3errs.ErrNoSuchUpload
 	}
@@ -601,11 +589,7 @@ func (b *MemoryBackend) UploadPartCopy(_ context.Context, accessKeyID, srcBucket
 }
 
 // ListParts lists uploaded parts for an in-progress multipart upload.
-func (b *MemoryBackend) ListParts(_ context.Context, accessKeyID, bucket, key, uploadID string, page s3.ListPartsPage) (*s3.ListPartsResult, error) {
-	uid, err := s3.UploadIDFromString(uploadID)
-	if err != nil {
-		return nil, s3errs.ErrNoSuchUpload
-	}
+func (b *MemoryBackend) ListParts(_ context.Context, accessKeyID, bucket, key string, uploadID s3.UploadID, page s3.ListPartsPage) (*s3.ListPartsResult, error) {
 	bkt, exists := b.buckets[bucket]
 	if !exists {
 		return nil, s3errs.ErrNoSuchBucket
@@ -613,7 +597,7 @@ func (b *MemoryBackend) ListParts(_ context.Context, accessKeyID, bucket, key, u
 	if bkt.owner != b.accessKeys[accessKeyID].owner {
 		return nil, s3errs.ErrAccessDenied
 	}
-	upload, exists := b.multipartUploads[uid]
+	upload, exists := b.multipartUploads[uploadID]
 	if !exists {
 		return nil, s3errs.ErrNoSuchUpload
 	}
@@ -665,11 +649,7 @@ func (b *MemoryBackend) ListParts(_ context.Context, accessKeyID, bucket, key, u
 }
 
 // CompleteMultipartUpload assembles the uploaded parts into the final object.
-func (b *MemoryBackend) CompleteMultipartUpload(_ context.Context, accessKeyID, bucket, key, uploadID string, parts []s3.CompleteMultipartPart) (*s3.CompleteMultipartUploadResult, error) {
-	uid, err := s3.UploadIDFromString(uploadID)
-	if err != nil {
-		return nil, s3errs.ErrNoSuchUpload
-	}
+func (b *MemoryBackend) CompleteMultipartUpload(_ context.Context, accessKeyID, bucket, key string, uploadID s3.UploadID, parts []s3.CompleteMultipartPart) (*s3.CompleteMultipartUploadResult, error) {
 	bkt, exists := b.buckets[bucket]
 	if !exists {
 		return nil, s3errs.ErrNoSuchBucket
@@ -677,7 +657,7 @@ func (b *MemoryBackend) CompleteMultipartUpload(_ context.Context, accessKeyID, 
 	if bkt.owner != b.accessKeys[accessKeyID].owner {
 		return nil, s3errs.ErrAccessDenied
 	}
-	upload, exists := b.multipartUploads[uid]
+	upload, exists := b.multipartUploads[uploadID]
 	if !exists {
 		return nil, s3errs.ErrNoSuchUpload
 	}
@@ -744,7 +724,7 @@ func (b *MemoryBackend) CompleteMultipartUpload(_ context.Context, accessKeyID, 
 		contentMD5:   contentMD5,
 		parts:        objParts,
 	}
-	delete(b.multipartUploads, uid)
+	delete(b.multipartUploads, uploadID)
 
 	return &s3.CompleteMultipartUploadResult{
 		ETag:       s3.FormatETag(contentMD5[:], len(parts)),

@@ -154,16 +154,15 @@ func NewUploadID() (uid UploadID) {
 	return
 }
 
-// UploadIDFromString parses an upload ID from its hexadecimal string
-// representation.
-func UploadIDFromString(s string) (UploadID, error) {
-	var uid UploadID
+// ParseUploadID parses an upload ID from its hexadecimal string representation.
+// If the string is not a valid upload ID, an empty UploadID is returned.
+func ParseUploadID(s string) (uid UploadID) {
 	if len(s) != 32 {
-		return UploadID{}, fmt.Errorf("invalid length: got %d, want 32", len(s))
+		return
 	} else if _, err := hex.Decode(uid[:], []byte(s)); err != nil {
-		return UploadID{}, fmt.Errorf("failed to parse upload ID %q: %w", s, err)
+		return
 	}
-	return uid, nil
+	return
 }
 
 // String returns the hexadecimal string representation of the upload ID.
@@ -220,7 +219,7 @@ func (s *s3) abortMultipartUpload(w http.ResponseWriter, r *http.Request, access
 	)
 	log.Debug("abort multipart upload")
 
-	if err := s.backend.AbortMultipartUpload(r.Context(), accessKeyID, bucket, object, uploadID); err != nil {
+	if err := s.backend.AbortMultipartUpload(r.Context(), accessKeyID, bucket, object, ParseUploadID(uploadID)); err != nil {
 		return err
 	}
 
@@ -274,14 +273,13 @@ func (s *s3) listMultipartUploads(w http.ResponseWriter, r *http.Request, access
 		return s3errs.ErrInvalidArgument
 	}
 
-	uploadIDMarker, _ := UploadIDFromString(query.Get("upload-id-marker"))
 	opts := ListMultipartUploadsOptions{
 		Prefix:    query.Get("prefix"),
 		Delimiter: query.Get("delimiter"),
 	}
 	page := ListMultipartUploadsPage{
 		KeyMarker:      query.Get("key-marker"),
-		UploadIDMarker: uploadIDMarker,
+		UploadIDMarker: ParseUploadID(query.Get("upload-id-marker")),
 		MaxUploads:     maxUploads,
 	}
 
@@ -353,7 +351,7 @@ func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, accessKeyID, dstBu
 		return err
 	}
 
-	result, err := s.backend.UploadPartCopy(r.Context(), accessKeyID, srcBucket, srcObject, dstBucket, dstObject, uploadID, UploadPartCopyOptions{
+	result, err := s.backend.UploadPartCopy(r.Context(), accessKeyID, srcBucket, srcObject, dstBucket, dstObject, ParseUploadID(uploadID), UploadPartCopyOptions{
 		PartNumber: partNumber,
 		Range:      objRange,
 	})
@@ -413,7 +411,7 @@ func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, accessKeyID, 
 		return err
 	}
 
-	res, err := s.backend.UploadPart(r.Context(), accessKeyID, bucket, object, uploadID, r.Body, UploadPartOptions{
+	res, err := s.backend.UploadPart(r.Context(), accessKeyID, bucket, object, ParseUploadID(uploadID), r.Body, UploadPartOptions{
 		PartNumber:    int(*partNumber),
 		ContentLength: r.ContentLength,
 		ContentMD5:    contentMD5,
@@ -442,7 +440,7 @@ func (s *s3) listUploadParts(w http.ResponseWriter, r *http.Request, accessKeyID
 	}
 
 	// list parts
-	result, err := s.backend.ListParts(r.Context(), accessKeyID, bucket, object, uploadID, page)
+	result, err := s.backend.ListParts(r.Context(), accessKeyID, bucket, object, ParseUploadID(uploadID), page)
 	if err != nil {
 		return err
 	}
@@ -517,7 +515,7 @@ func (s *s3) completeMultipartUpload(w http.ResponseWriter, r *http.Request, acc
 		}
 	}
 
-	res, err := s.backend.CompleteMultipartUpload(r.Context(), accessKeyID, bucket, object, uploadID, parts)
+	res, err := s.backend.CompleteMultipartUpload(r.Context(), accessKeyID, bucket, object, ParseUploadID(uploadID), parts)
 	if err != nil {
 		return err
 	}
