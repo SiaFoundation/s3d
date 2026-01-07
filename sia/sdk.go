@@ -3,6 +3,7 @@ package sia
 import (
 	"context"
 	"io"
+	"slices"
 
 	"github.com/SiaFoundation/s3d/s3"
 	"go.sia.tech/core/types"
@@ -49,10 +50,11 @@ func NewSDK(sdk *sdk.SDK, opts ...SDKOption) *IndexdSDK {
 
 // Download downloads an object from indexd.
 func (s *IndexdSDK) Download(ctx context.Context, w io.Writer, obj sdk.Object, rnge *s3.ObjectRange) error {
+	opts := slices.Clone(s.dlOpts)
 	if rnge != nil {
-		return s.inner.Download(ctx, w, obj, append(s.dlOpts, sdk.WithDownloadRange(uint64(rnge.Start), uint64(rnge.Length)))...)
+		opts = append(opts, sdk.WithDownloadRange(uint64(rnge.Start), uint64(rnge.Length)))
 	}
-	return s.inner.Download(ctx, w, obj, s.dlOpts...)
+	return s.inner.Download(ctx, w, obj, opts...)
 }
 
 // Upload uploads an object to indexd without pinning it.
