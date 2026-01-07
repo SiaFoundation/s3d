@@ -33,7 +33,7 @@ func WithLogger(logger *zap.Logger) Option {
 	}
 }
 
-// WithKeyPair adds a key pair to the MemoryBackend.
+// WithKeyPair adds a key pair to the Sia backend.
 func WithKeyPair(accessKeyID, secretKey string) func(*Sia) {
 	return func(mb *Sia) {
 		mb.accessKeys[accessKeyID] = auth.SecretAccessKey(secretKey)
