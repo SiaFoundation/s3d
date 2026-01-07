@@ -59,6 +59,9 @@ func (r *MultipartReader) Read(p []byte) (int, error) {
 
 // Close closes the reader and any open part file.
 func (r *MultipartReader) Close() error {
+	if r.curr == nil {
+		return nil
+	}
 	return r.curr.Close()
 }
 
@@ -78,9 +81,11 @@ func (r *MultipartReader) openNext() error {
 
 	stat, err := r.curr.Stat()
 	if err != nil {
+		r.curr.Close()
 		return fmt.Errorf("failed to stat part %d: %w", p.PartNumber, err)
 	}
 	if stat.Size() != p.Size {
+		r.curr.Close()
 		return fmt.Errorf("part %d size mismatch: file is %d bytes, expected %d", p.PartNumber, stat.Size(), p.Size)
 	}
 
@@ -89,13 +94,17 @@ func (r *MultipartReader) openNext() error {
 }
 
 func (r *MultipartReader) finishPart() error {
-	r.curr.Close()
+	if err := r.curr.Close(); err != nil {
+		return fmt.Errorf("failed to close part file: %w", err)
+	}
 	r.curr = nil
 
-	if r.currHash == nil || len(r.remainingParts) == 0 {
-		return nil
+	if len(r.remainingParts) == 0 {
+		return io.EOF
 	}
 	part := r.remainingParts[0]
+	r.remainingParts = r.remainingParts[1:]
+
 	if sum := r.currHash.Sum(nil); !bytes.Equal(sum, part.ContentMD5[:]) {
 		return fmt.Errorf("part %d MD5 mismatch (expected %x, got %x): %w",
 			part.PartNumber,
@@ -104,6 +113,5 @@ func (r *MultipartReader) finishPart() error {
 			s3errs.ErrBadDigest)
 	}
 	r.currHash = nil
-	r.remainingParts = r.remainingParts[1:] // pop the finished part
 	return nil
 }
