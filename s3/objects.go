@@ -179,7 +179,7 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, accessKeyID, dst
 		if err != nil {
 			return err
 		}
-		etag := FormatETag(obj.ContentMD5[:])
+		etag := FormatETag(obj.ContentMD5[:], 0)
 		if ifMatch != "" && ifMatch != etag {
 			return s3errs.ErrPreconditionFailed
 		}
@@ -198,7 +198,7 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, accessKeyID, dst
 		w.Header().Set("x-amz-version-id", string(result.VersionID))
 	}
 
-	etag := FormatETag(result.ContentMD5[:])
+	etag := FormatETag(result.ContentMD5[:], 0)
 	w.Header().Set("ETag", etag)
 	return writeXMLResponse(w, ObjectCopyResult{
 		ETag:         etag,
@@ -586,12 +586,15 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID strin
 		return err
 	}
 
-	w.Header().Set("ETag", FormatETag(res.ContentMD5[:]))
+	w.Header().Set("ETag", FormatETag(res.ContentMD5[:], 0))
 	return nil
 }
 
 // FormatETag formats the given hash as an S3 ETag string.
-func FormatETag(hash []byte) string {
+func FormatETag(hash []byte, partsCount int) string {
+	if partsCount > 1 {
+		return `"` + hex.EncodeToString(hash) + "-" + strconv.Itoa(partsCount) + `"`
+	}
 	return `"` + hex.EncodeToString(hash) + `"`
 }
 
@@ -879,7 +882,7 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	etag := FormatETag(obj.ContentMD5[:])
+	etag := FormatETag(obj.ContentMD5[:], 0)
 	w.Header().Set("ETag", etag)
 
 	if r.Header.Get("If-None-Match") == etag {

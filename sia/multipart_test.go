@@ -140,7 +140,7 @@ func TestMultipartAddPart(t *testing.T) {
 	res2, err := s3Tester.UploadPart(t.Context(), bucket, object, uploadID, 1, part)
 	if err != nil {
 		t.Fatal(err)
-	} else if res2 == nil || res2.ETag == nil || *res2.ETag != s3.FormatETag(md5Sum[:]) {
+	} else if res2 == nil || res2.ETag == nil || *res2.ETag != s3.FormatETag(md5Sum[:], 1) {
 		t.Fatalf("unexpected upload part result: %+v", res2)
 	}
 	// TODO: assert various s3 errors for invalid part uploads
@@ -159,7 +159,7 @@ func TestMultipartAddPart(t *testing.T) {
 	res3, err := s3Tester.UploadPart(t.Context(), bucket, object, uploadID, 1, part)
 	if err != nil {
 		t.Fatal(err)
-	} else if res3 == nil || res3.ETag == nil || *res3.ETag != s3.FormatETag(md5Sum[:]) {
+	} else if res3 == nil || res3.ETag == nil || *res3.ETag != s3.FormatETag(md5Sum[:], 1) {
 		t.Fatalf("unexpected upload part result: %+v", res3)
 	}
 
@@ -235,7 +235,7 @@ func TestMultipartListParts(t *testing.T) {
 		res, err := s3Tester.UploadPart(t.Context(), bucket, object, uploadID, int32(i+1), data)
 		if err != nil {
 			t.Fatal(err)
-		} else if res == nil || res.ETag == nil || *res.ETag != s3.FormatETag(md5Sum[:]) {
+		} else if res == nil || res.ETag == nil || *res.ETag != s3.FormatETag(md5Sum[:], 1) {
 			t.Fatalf("unexpected upload part result: %+v", res)
 		}
 		etags[i] = *res.ETag
@@ -402,8 +402,8 @@ func TestMultipartUploadPartCopy(t *testing.T) {
 	// assert ETag matches the copied data
 	expectedData := srcData[rnge.Start : rnge.Start+rnge.Length]
 	expectedMD5 := md5.Sum(expectedData)
-	if got := *res.CopyPartResult.ETag; got != s3.FormatETag(expectedMD5[:]) {
-		t.Fatalf("expected ETag %q, got %q", s3.FormatETag(expectedMD5[:]), got)
+	if got := *res.CopyPartResult.ETag; got != s3.FormatETag(expectedMD5[:], 1) {
+		t.Fatalf("expected ETag %q, got %q", s3.FormatETag(expectedMD5[:], 1), got)
 	}
 
 	// verify part is written to disk with the expected contents

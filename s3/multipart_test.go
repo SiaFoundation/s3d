@@ -383,7 +383,7 @@ func TestCompleteMultipartUpload(t *testing.T) {
 	copy(combined, p1MD5[:])
 	copy(combined[16:], p2MD5[:])
 	hash := md5.Sum(combined)
-	expectedETag := s3.FormatMultipartETag(hash[:], 2)
+	expectedETag := s3.FormatETag(hash[:], 2)
 	if *completed.ETag != expectedETag {
 		t.Fatalf("expected final ETag %q, got %q", expectedETag, *completed.ETag)
 	}

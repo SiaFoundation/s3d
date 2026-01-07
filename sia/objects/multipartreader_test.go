@@ -15,7 +15,7 @@ import (
 	"lukechampine.com/frand"
 )
 
-func TestReader(t *testing.T) {
+func TestMultipartReader(t *testing.T) {
 	dir := t.TempDir()
 
 	writePart := func(partNumber int, data []byte) string {
@@ -38,10 +38,10 @@ func TestReader(t *testing.T) {
 	// prepare reader
 	p1 := bytes.Repeat([]byte{'a', 'b', 'c'}, 100)
 	p2 := bytes.Repeat([]byte{'d', 'e', 'f'}, 100)
-	r, _ := NewReader([]Part{
+	r, _ := NewReader(dir, []Part{
 		{PartNumber: 1, Filename: writePart(1, p1), Size: int64(len(p1)), ContentMD5: md5.Sum(p1)},
 		{PartNumber: 2, Filename: writePart(2, p2), Size: int64(len(p2)), ContentMD5: md5.Sum(p2)},
-	}, dir)
+	})
 	defer r.Close()
 
 	// read all data
@@ -55,22 +55,11 @@ func TestReader(t *testing.T) {
 		t.Fatalf("unexpected data: %q", got)
 	}
 
-	// assert MD5
-	expected := md5.Sum(append(p1, p2...))
-	if got := r.MD5Sum(); got != expected {
-		t.Fatalf("unexpected MD5: %x, want %x", got, expected)
-	}
-
-	// assert size
-	if gotSize := r.Size(); gotSize != int64(len(p1)+len(p2)) {
-		t.Fatalf("unexpected size: %d, want %d", gotSize, len(p1)+len(p2))
-	}
-
 	// recreate reader
-	r, _ = NewReader([]Part{
+	r, _ = NewReader(dir, []Part{
 		{PartNumber: 1, Filename: writePart(1, p1), Size: int64(len(p1)), ContentMD5: md5.Sum(p1)},
 		{PartNumber: 2, Filename: writePart(2, p2), Size: int64(len(p2)), ContentMD5: md5.Sum(p2)},
-	}, dir)
+	})
 	defer r.Close()
 
 	// read in random chunks
@@ -92,18 +81,18 @@ func TestReader(t *testing.T) {
 	}
 
 	// assert [ErrBadDigest] on part MD5 mismatch
-	r, _ = NewReader([]Part{
+	r, _ = NewReader(dir, []Part{
 		{PartNumber: 3, Filename: writePart(3, []byte("x")), Size: 1, ContentMD5: md5.Sum([]byte("y"))},
-	}, dir)
+	})
 	defer r.Close()
 	if _, err := io.ReadAll(r); !errors.Is(err, s3errs.ErrBadDigest) {
 		t.Fatalf("expected ErrBadDigest, got %v", err)
 	}
 
 	// test empty buffer guard
-	r, _ = NewReader([]Part{
+	r, _ = NewReader(dir, []Part{
 		{PartNumber: 4, Filename: writePart(4, []byte("test")), Size: 4, ContentMD5: md5.Sum([]byte("test"))},
-	}, dir)
+	})
 	defer r.Close()
 	n, err := r.Read(make([]byte, 0))
 	if n != 0 || err != nil {
@@ -112,16 +101,16 @@ func TestReader(t *testing.T) {
 
 	// test file size mismatch detection
 	wrongSizeFile := writePart(5, []byte("actual data"))
-	r, _ = NewReader([]Part{
+	r, _ = NewReader(dir, []Part{
 		{PartNumber: 5, Filename: wrongSizeFile, Size: 999, ContentMD5: md5.Sum([]byte("actual data"))},
-	}, dir)
+	})
 	defer r.Close()
 	if _, err := io.ReadAll(r); err == nil || !bytes.Contains([]byte(err.Error()), []byte("size mismatch")) {
 		t.Fatalf("expected size mismatch error, got %v", err)
 	}
 
 	// test missing file detection
-	r, err = NewReader([]Part{{PartNumber: 6, Filename: "nonexistent.file", Size: 10, ContentMD5: md5.Sum([]byte("irrelevant"))}}, dir)
+	r, err = NewReader(dir, []Part{{PartNumber: 6, Filename: "nonexistent.file", Size: 10, ContentMD5: md5.Sum([]byte("irrelevant"))}})
 	if err == nil || !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected file open error, got %v", err)
 	}

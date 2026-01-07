@@ -133,7 +133,7 @@ func TestListObjects(t *testing.T) {
 	// upload a few objects
 	obj := sdk.Object{}
 	contentMD5 := [16]byte(frand.Bytes(16))
-	etag := s3.FormatETag(contentMD5[:])
+	etag := s3.FormatETag(contentMD5[:], 0)
 
 	var largeDirectoryKeys []string
 	for i := 0; i < 200; i++ {
@@ -322,7 +322,7 @@ func TestListObjectsMatch(t *testing.T) {
 	keys := []string{"a//b", "foo/baz", "foo/bar", "😊/д"}
 	obj := sdk.Object{}
 	contentMD5 := [16]byte(frand.Bytes(16))
-	etag := s3.FormatETag(contentMD5[:])
+	etag := s3.FormatETag(contentMD5[:], 0)
 
 	for _, key := range keys {
 		err := store.PutObject("", bucket, key, obj.ID(), nil, contentMD5, int64(frand.Intn(1000))+1)

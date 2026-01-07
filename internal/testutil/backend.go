@@ -293,7 +293,7 @@ func (b *MemoryBackend) ListObjects(ctx context.Context, accessKeyID *string, bu
 			result.Add(&s3.Content{
 				Key:          obj.name,
 				LastModified: s3.NewContentTime(obj.lastModified),
-				ETag:         s3.FormatETag(obj.contentMD5[:]),
+				ETag:         s3.FormatETag(obj.contentMD5[:], 0),
 				Owner: &s3.UserInfo{
 					ID: bkt.owner,
 				},
@@ -721,14 +721,14 @@ func (b *MemoryBackend) CompleteMultipartUpload(_ context.Context, accessKeyID, 
 	}
 
 	// collect object data and parts info
+	objHash := md5.New()
 	objData := make([]byte, 0, totalSize)
-	objHash := make([]byte, 0, len(parts)*ETagSize)
 	objParts := make(map[int]objectMultipartPart, len(parts))
 	var offset int64
 	for _, part := range parts {
 		uploaded := upload.parts[part.PartNumber]
 		objData = append(objData, uploaded.data...)
-		objHash = append(objHash, uploaded.contentMD5[:]...)
+		objHash.Write(uploaded.contentMD5[:])
 		objParts[part.PartNumber] = objectMultipartPart{
 			offset:     offset,
 			length:     int64(len(uploaded.data)),
@@ -736,16 +736,11 @@ func (b *MemoryBackend) CompleteMultipartUpload(_ context.Context, accessKeyID, 
 		}
 		offset += int64(len(uploaded.data))
 	}
-	objMD5 := md5.Sum(objData)
 
-	// calculate final ETag
-	var etag string
-	if len(parts) == 1 {
-		etag = s3.FormatETag(objMD5[:])
-	} else {
-		multipartMD5 := md5.Sum(objHash)
-		etag = s3.FormatMultipartETag(multipartMD5[:], len(parts))
-	}
+	// compute final content MD5
+	var contentMD5 [16]byte
+	objMD5 := objHash.Sum(nil)
+	copy(contentMD5[:], objMD5)
 
 	// store the object
 	if bkt.objects == nil {
@@ -756,14 +751,14 @@ func (b *MemoryBackend) CompleteMultipartUpload(_ context.Context, accessKeyID, 
 		data:         objData,
 		lastModified: nowUTC(),
 		metadata:     upload.metadata,
-		contentMD5:   objMD5,
+		contentMD5:   contentMD5,
 		parts:        objParts,
 	}
 	delete(b.multipartUploads, uid)
 
 	return &s3.CompleteMultipartUploadResult{
-		ETag:       etag,
-		ContentMD5: objMD5,
+		ETag:       s3.FormatETag(contentMD5[:], len(parts)),
+		ContentMD5: contentMD5,
 	}, nil
 }
 
@@ -862,7 +857,7 @@ func (b *MemoryBackend) headOrGetObject(_ context.Context, accessKeyID *string, 
 // is transmitted in http.TimeFormat which is truncated to seconds as well.
 func (o object) matches(oid s3.ObjectID) bool {
 	return o.name == oid.Key &&
-		(oid.ETag == nil || s3.FormatETag(o.contentMD5[:]) == *oid.ETag) &&
+		(oid.ETag == nil || s3.FormatETag(o.contentMD5[:], 0) == *oid.ETag) &&
 		(oid.Size == nil || int64(len(o.data)) == *oid.Size) &&
 		(oid.LastModifiedTime == nil || o.lastModified.Equal(oid.LastModifiedTime.StdTime()))
 }

@@ -385,7 +385,7 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 	}
 
 	// create reader for the completed object
-	r, err := objects.NewReader(completed, uploadDir)
+	r, err := objects.NewReader(uploadDir, completed)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create multipart reader: %w", err)
 	}
@@ -397,8 +397,22 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 		return nil, fmt.Errorf("failed to upload object to Sia: %w", err)
 	}
 
+	// compute final content MD5
+	hash := md5.New()
+	for _, part := range completed {
+		hash.Write(part.ContentMD5[:])
+	}
+	var contentMD5 [16]byte
+	copy(contentMD5[:], hash.Sum(nil))
+
+	// compute final content length
+	var contentLength int64
+	for _, part := range completed {
+		contentLength += int64(part.Size)
+	}
+
 	// complete the multipart upload in the database
-	if err := s.store.CompleteMultipartUpload(bucket, object, uid, obj.ID(), r.MD5Sum(), r.Size()); err != nil {
+	if err := s.store.CompleteMultipartUpload(bucket, object, uid, obj.ID(), contentMD5, contentLength); err != nil {
 		return nil, fmt.Errorf("failed to complete multipart upload in store: %w", err)
 	}
 
@@ -409,19 +423,8 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 			zap.Error(err))
 	}
 
-	contentMD5 := r.MD5Sum()
-
 	// calculate ETag
-	var etag string
-	if len(completed) == 1 {
-		etag = s3.FormatETag(contentMD5[:])
-	} else {
-		hash := md5.New()
-		for _, part := range completed {
-			hash.Write(part.ContentMD5[:])
-		}
-		etag = s3.FormatMultipartETag(hash.Sum(nil), len(completed))
-	}
+	etag := s3.FormatETag(contentMD5[:], len(completed))
 
 	return &s3.CompleteMultipartUploadResult{
 		ETag:       etag,

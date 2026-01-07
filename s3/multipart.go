@@ -361,7 +361,7 @@ func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, accessKeyID, dstBu
 		return err
 	}
 
-	etag := FormatETag(result.ContentMD5[:])
+	etag := FormatETag(result.ContentMD5[:], 0)
 	w.Header().Set("ETag", etag)
 	return writeXMLResponse(w, PartCopyResult{
 		ETag:         etag,
@@ -423,7 +423,7 @@ func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, accessKeyID, 
 		return err
 	}
 
-	w.Header().Set("ETag", FormatETag(res.ContentMD5[:]))
+	w.Header().Set("ETag", FormatETag(res.ContentMD5[:], 0))
 	return nil
 }
 
@@ -483,7 +483,7 @@ func (s *s3) listUploadParts(w http.ResponseWriter, r *http.Request, accessKeyID
 		resp.Parts = append(resp.Parts, ListedPartResponse{
 			PartNumber:   part.PartNumber,
 			LastModified: NewContentTime(part.LastModified),
-			ETag:         FormatETag(part.ContentMD5[:]),
+			ETag:         FormatETag(part.ContentMD5[:], 0),
 			Size:         part.Size,
 		})
 	}
@@ -549,12 +549,6 @@ func parsePartNumber(s string) (*int32, error) {
 	}
 	val := int32(partNumber)
 	return &val, nil
-}
-
-// FormatMultipartETag formats the MD5 checksum of concatenated part hashes
-// along with the part count to match AWS multipart ETag semantics.
-func FormatMultipartETag(hash []byte, partCount int) string {
-	return `"` + hex.EncodeToString(hash) + "-" + strconv.Itoa(partCount) + `"`
 }
 
 // parseRange validates the X-Amz-Copy-Source-Range header. It only allows a

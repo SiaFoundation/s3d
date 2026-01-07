@@ -63,7 +63,7 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 			return err
 		}
 
-		// validate parts exist and are continuous
+		// validate parts exist and are contiguous
 		var partCount, minPart, maxPart int
 		var totalSize int64
 		err = tx.QueryRow(`
@@ -80,7 +80,7 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 		} else if partCount == 0 {
 			return errors.New("cannot complete multipart upload with no parts")
 		} else if minPart != 1 || maxPart != partCount {
-			return fmt.Errorf("part numbers must be continuous from 1 to %d, got range %d to %d", partCount, minPart, maxPart)
+			return fmt.Errorf("part numbers must be contiguous from 1 to %d, got range %d to %d", partCount, minPart, maxPart)
 		} else if totalSize != contentLength {
 			return fmt.Errorf("total part size (%d) does not match content length (%d)", totalSize, contentLength)
 		}

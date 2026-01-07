@@ -34,7 +34,7 @@ func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) e
 				return err
 			}
 
-			if objectID.ETag != nil && *objectID.ETag != s3.FormatETag(contentMD5[:]) {
+			if objectID.ETag != nil && *objectID.ETag != s3.FormatETag(contentMD5[:], 0) {
 				return s3errs.ErrPreconditionFailed
 			}
 			if objectID.Size != nil && *objectID.Size != size {
@@ -199,7 +199,7 @@ WHERE o.bucket_id = ?`
 					result.Add(&s3.Content{
 						Key:          obj.Name,
 						LastModified: s3.NewContentTime(obj.LastModified),
-						ETag:         s3.FormatETag(obj.ContentMD5[:]),
+						ETag:         s3.FormatETag(obj.ContentMD5[:], 0),
 						Size:         int64(obj.Length),
 					})
 					lastObj = obj.Name

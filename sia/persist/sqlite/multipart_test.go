@@ -268,7 +268,7 @@ func TestCompleteMultipartUpload(t *testing.T) {
 		{PartNumber: 2, Filename: "part-2", Size: 5, ContentMD5: partMD5B}, // Last part can be any size
 	}
 
-	// Add parts to the upload
+	// add parts to the upload
 	for _, part := range parts {
 		if _, err := store.AddMultipartPart(bucket, object, uid, part.Filename, part.PartNumber, part.ContentMD5, part.Size); err != nil {
 			t.Fatal(err)
