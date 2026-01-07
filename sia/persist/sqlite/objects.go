@@ -63,7 +63,7 @@ func (s *Store) GetObject(accessKeyID *string, bucket, name string, partNumber *
 		err = tx.QueryRow(`
 			SELECT COUNT(*)
 			FROM object_parts
-			WHERE object_bucket_id = $1 AND object_name = $2
+			WHERE bucket_id = $1 AND name = $2
 		`, bid, name).Scan(&obj.PartsCount)
 		if err != nil {
 			return err
@@ -88,7 +88,7 @@ func (s *Store) GetObject(accessKeyID *string, bucket, name string, partNumber *
 		return tx.QueryRow(`
 			SELECT o.object_id, o.metadata, o.updated_at, p.offset, p.content_length, p.content_md5
 			FROM object_parts p
-			JOIN objects o ON o.bucket_id = p.object_bucket_id AND o.name = p.object_name
+			JOIN objects o ON o.bucket_id = p.bucket_id AND o.name = p.name
 			WHERE o.bucket_id = $1 AND o.name = $2 AND p.part_number = $3
 		`, bid, name, *partNumber).Scan((*sqlHash256)(&obj.ID), (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Offset, &obj.Length, (*sqlMD5)(&obj.ContentMD5))
 	}); errors.Is(err, sql.ErrNoRows) {

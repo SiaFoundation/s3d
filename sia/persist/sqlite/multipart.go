@@ -55,14 +55,6 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 			return s3errs.ErrNoSuchUpload
 		}
 
-		// get multipart upload id
-		var uid int64
-		err = tx.QueryRow(`SELECT id FROM multipart_uploads WHERE upload_id = $1 AND bucket_id = $2 AND name = $3`,
-			sqlUploadID(uploadID), bid, name).Scan(&uid)
-		if err != nil {
-			return err
-		}
-
 		// validate parts exist and are contiguous
 		var partCount, minPart, maxPart int
 		var totalSize int64
@@ -73,8 +65,8 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 				MAX(part_number),
 				SUM(content_length)
 			FROM multipart_parts
-			WHERE multipart_upload_id = $1
-		`, uid).Scan(&partCount, &minPart, &maxPart, &totalSize)
+			WHERE upload_id = $1
+		`, sqlUploadID(uploadID)).Scan(&partCount, &minPart, &maxPart, &totalSize)
 		if err != nil {
 			return err
 		} else if partCount == 0 {
@@ -90,10 +82,10 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 		err = tx.QueryRow(`
 			SELECT COUNT(*)
 			FROM multipart_parts
-			WHERE multipart_upload_id = $1
+			WHERE upload_id = $1
 			  AND part_number < $2
 			  AND content_length < $3
-		`, uid, partCount, s3.MinUploadPartSize).Scan(&smallParts)
+		`, sqlUploadID(uploadID), partCount, s3.MinUploadPartSize).Scan(&smallParts)
 		if err != nil {
 			return err
 		}
@@ -106,28 +98,28 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 			INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at)
 			SELECT bucket_id, name, $1, $2, metadata, $3, $4
 			FROM multipart_uploads
-			WHERE id = $5
-		`, sqlHash256(objectID), sqlMD5(contentMD5), contentLength, sqlTime(time.Now()), uid)
+			WHERE upload_id = $5
+		`, sqlHash256(objectID), sqlMD5(contentMD5), contentLength, sqlTime(time.Now()), sqlUploadID(uploadID))
 		if err != nil {
 			return err
 		}
 
 		// move parts to object_parts
 		_, err = tx.Exec(`
-			INSERT INTO object_parts (object_bucket_id, object_name, part_number, content_md5, content_length, offset)
-			SELECT $1, $2, part_number, content_md5, content_length, 
-				(SELECT COALESCE(SUM(content_length), 0) 
-				FROM multipart_parts mp 
-				WHERE mp.multipart_upload_id = $3 AND mp.part_number < multipart_parts.part_number)
+			INSERT INTO object_parts (bucket_id, name, part_number, content_md5, content_length, offset)
+			SELECT $1, $2, part_number, content_md5, content_length,
+				(SELECT COALESCE(SUM(content_length), 0)
+				FROM multipart_parts mp
+				WHERE mp.upload_id = $3 AND mp.part_number < multipart_parts.part_number)
 			FROM multipart_parts
-			WHERE multipart_upload_id = $3
-		`, bid, name, uid)
+			WHERE upload_id = $3
+		`, bid, name, sqlUploadID(uploadID))
 		if err != nil {
 			return err
 		}
 
 		// delete the multipart upload
-		_, err = tx.Exec(`DELETE FROM multipart_uploads WHERE id = $1`, uid)
+		_, err = tx.Exec(`DELETE FROM multipart_uploads WHERE upload_id = $1`, sqlUploadID(uploadID))
 		return err
 	})
 }
@@ -163,30 +155,31 @@ func (s *Store) AddMultipartPart(bucket, name string, uploadID s3.UploadID, file
 			return err
 		}
 
-		// get multipart upload id
-		var uid int64
-		err = tx.QueryRow(`SELECT id FROM multipart_uploads WHERE upload_id = $1 AND bucket_id = $2 AND name = $3`,
-			sqlUploadID(uploadID), bid, name).Scan(&uid)
-		if errors.Is(err, sql.ErrNoRows) {
-			return s3errs.ErrNoSuchUpload
-		} else if err != nil {
+		var exists bool
+		err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM multipart_uploads WHERE upload_id = $1 AND bucket_id = $2 AND name = $3)`,
+			sqlUploadID(uploadID), bid, name).Scan(&exists)
+		if err != nil {
 			return err
 		}
+		if !exists {
+			return s3errs.ErrNoSuchUpload
+		}
 
-		err = tx.QueryRow(`SELECT filename FROM multipart_parts WHERE multipart_upload_id = $1 AND part_number = $2`, uid, partNumber).Scan(&prevFilename)
+		err = tx.QueryRow(`SELECT filename FROM multipart_parts WHERE upload_id = $1 AND part_number = $2`,
+			sqlUploadID(uploadID), partNumber).Scan(&prevFilename)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
 
 		_, err = tx.Exec(`
-			INSERT INTO multipart_parts (multipart_upload_id, part_number, filename, content_md5, content_length, created_at)
+			INSERT INTO multipart_parts (upload_id, part_number, filename, content_md5, content_length, created_at)
 			VALUES ($1, $2, $3, $4, $5, $6)
-			ON CONFLICT(multipart_upload_id, part_number) DO UPDATE SET
+			ON CONFLICT(upload_id, part_number) DO UPDATE SET
 				filename       = EXCLUDED.filename,
 				content_md5    = EXCLUDED.content_md5,
 				content_length = EXCLUDED.content_length,
 				created_at     = EXCLUDED.created_at
-		`, uid, partNumber, filename, sqlMD5(contentMD5), contentLength, sqlTime(time.Now()))
+		`, sqlUploadID(uploadID), partNumber, filename, sqlMD5(contentMD5), contentLength, sqlTime(time.Now()))
 		return err
 	}); err != nil {
 		return "", err
@@ -224,21 +217,21 @@ func (s *Store) MultipartParts(bucket, name string, uploadID s3.UploadID) ([]obj
 			return err
 		}
 
-		// get multipart upload id
-		var uid int64
-		err = tx.QueryRow(`SELECT id FROM multipart_uploads WHERE upload_id = $1 AND bucket_id = $2 AND name = $3`,
-			sqlUploadID(uploadID), bid, name).Scan(&uid)
-		if errors.Is(err, sql.ErrNoRows) {
-			return s3errs.ErrNoSuchUpload
-		} else if err != nil {
+		var exists bool
+		err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM multipart_uploads WHERE upload_id = $1 AND bucket_id = $2 AND name = $3)`,
+			sqlUploadID(uploadID), bid, name).Scan(&exists)
+		if err != nil {
 			return err
+		}
+		if !exists {
+			return s3errs.ErrNoSuchUpload
 		}
 
 		rows, err := tx.Query(`
 			SELECT part_number, filename, content_md5, content_length
 			FROM multipart_parts
-			WHERE multipart_upload_id = $1
-			ORDER BY part_number ASC`, uid)
+			WHERE upload_id = $1
+			ORDER BY part_number ASC`, sqlUploadID(uploadID))
 		if err != nil {
 			return err
 		}
@@ -274,23 +267,23 @@ func (s *Store) ListParts(bucket, name string, uploadID s3.UploadID, partNumberM
 			return err
 		}
 
-		// get multipart upload id
-		var uid int64
-		err = tx.QueryRow(`SELECT id FROM multipart_uploads WHERE upload_id = $1 AND bucket_id = $2 AND name = $3`,
-			sqlUploadID(uploadID), bid, name).Scan(&uid)
-		if errors.Is(err, sql.ErrNoRows) {
-			return s3errs.ErrNoSuchUpload
-		} else if err != nil {
+		var exists bool
+		err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM multipart_uploads WHERE upload_id = $1 AND bucket_id = $2 AND name = $3)`,
+			sqlUploadID(uploadID), bid, name).Scan(&exists)
+		if err != nil {
 			return err
+		}
+		if !exists {
+			return s3errs.ErrNoSuchUpload
 		}
 
 		rows, err := tx.Query(`
 			SELECT part_number, content_length, content_md5, created_at
 			FROM multipart_parts
-			WHERE multipart_upload_id = $1 AND part_number > $2
+			WHERE upload_id = $1 AND part_number > $2
 			ORDER BY part_number ASC
 			LIMIT $3
-		`, uid, partNumberMarker, maxParts+1)
+		`, sqlUploadID(uploadID), partNumberMarker, maxParts+1)
 		if err != nil {
 			return err
 		}
