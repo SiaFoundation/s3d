@@ -456,7 +456,7 @@ func TestListObjects(t *testing.T) {
 		}
 	})
 
-	// test list objects with an without owner
+	// test list objects with and without owner
 	t.Run("owner", func(t *testing.T) {
 		resp, err := s3Tester.ListObjectsV2(t.Context(), bucket, nil, nil, s3.ListObjectsPage{
 			MaxKeys:    1,
