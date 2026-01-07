@@ -512,6 +512,8 @@ func (s *s3) completeMultipartUpload(w http.ResponseWriter, r *http.Request, acc
 		if parts[i].PartNumber == parts[i-1].PartNumber {
 			parts = append(parts[:i-1], parts[i:]...)
 			i--
+		} else if parts[i].PartNumber < parts[i-1].PartNumber {
+			return s3errs.ErrInvalidPartOrder
 		}
 	}
 

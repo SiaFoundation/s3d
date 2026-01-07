@@ -93,12 +93,24 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 			return fmt.Errorf("found %d parts smaller than minimum size (%d bytes)", smallParts, s3.MinUploadPartSize)
 		}
 
-		// create object with metadata from multipart upload
+		// delete any existing parts for the object
+		_, err = tx.Exec(`DELETE FROM object_parts WHERE bucket_id = $1 AND name = $2`, bid, name)
+		if err != nil {
+			return err
+		}
+
+		// upsert object with metadata from multipart upload
 		_, err = tx.Exec(`
 			INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at)
 			SELECT bucket_id, name, $1, $2, metadata, $3, $4
 			FROM multipart_uploads
 			WHERE upload_id = $5
+			ON CONFLICT(bucket_id, name) DO UPDATE SET
+				object_id = excluded.object_id,
+				content_md5 = excluded.content_md5,
+				metadata = excluded.metadata,
+				size = excluded.size,
+				updated_at = excluded.updated_at
 		`, sqlHash256(objectID), sqlMD5(contentMD5), contentLength, sqlTime(time.Now()), sqlUploadID(uploadID))
 		if err != nil {
 			return err

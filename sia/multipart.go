@@ -312,14 +312,12 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 	}
 
 	// validate parts
-	var totalSize int
 	completed := make([]objects.Part, len(parts))
 	for i, p := range parts {
 		part, ok := lookup[p.PartNumber]
 		if !ok {
 			return nil, s3errs.ErrInvalidPart
 		}
-		totalSize += int(part.Size)
 		if s3.ParseETag(p.ETag) != part.ContentMD5 {
 			return nil, s3errs.ErrInvalidPart
 		}
