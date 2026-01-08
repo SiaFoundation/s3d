@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"errors"
 	"testing"
 
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
+	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/sdk"
@@ -112,6 +114,12 @@ func TestGetObject(t *testing.T) {
 		t.Fatalf("expected object MD5 %v, got %v", part2MD5, multipartPart2.ContentMD5)
 	} else if len(multipartPart2.Meta) != len(multipartMeta) || multipartPart2.Meta["baz"] != "qux" {
 		t.Fatalf("expected object metadata %v, got %v", multipartMeta, multipartPart2.Meta)
+	}
+
+	// get object with invalid part number
+	_, err = store.GetObject(aws.String(accessKeyID), bucket, object, aws.Int32(3))
+	if !errors.Is(err, s3errs.ErrInvalidPart) {
+		t.Fatal("unexpected error", err)
 	}
 }
 

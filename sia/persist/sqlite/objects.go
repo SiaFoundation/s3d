@@ -84,6 +84,11 @@ func (s *Store) GetObject(accessKeyID *string, bucket, name string, partNumber *
 			`, bid, name).Scan((*sqlHash256)(&obj.ID), (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Length, (*sqlMD5)(&obj.ContentMD5))
 		}
 
+		// return error if part number is invalid
+		if partNumber != nil && obj.PartsCount > 0 && *partNumber > int32(obj.PartsCount) {
+			return s3errs.ErrInvalidPart
+		}
+
 		// part specified, return part info
 		return tx.QueryRow(`
 			SELECT o.object_id, o.metadata, o.updated_at, p.offset, p.content_length, p.content_md5
