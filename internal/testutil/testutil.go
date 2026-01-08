@@ -309,6 +309,7 @@ func (t *S3Tester) ListObjectsV2(ctx context.Context, bucket string, prefix, del
 	}
 	resp, err := t.client.ListObjectsV2(ctx, &service.ListObjectsV2Input{
 		Bucket:            aws.String(bucket),
+		FetchOwner:        page.FetchOwner,
 		ContinuationToken: page.Marker,
 		Delimiter:         delimiter,
 		MaxKeys:           maxKeys,

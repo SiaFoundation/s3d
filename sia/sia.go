@@ -33,15 +33,21 @@ func WithLogger(logger *zap.Logger) Option {
 	}
 }
 
+// WithKeyPair adds a key pair to the Sia backend.
+func WithKeyPair(accessKeyID, secretKey string) func(*Sia) {
+	return func(mb *Sia) {
+		mb.accessKeys[accessKeyID] = auth.SecretAccessKey(secretKey)
+	}
+}
+
 // Sia implements the s3.Backend interface for storing data on Sia.
 type Sia struct {
 	sdk    SDK
 	logger *zap.Logger
 	store  Store
 
-	directory string
-	accessKey string
-	secretKey auth.SecretAccessKey
+	directory  string
+	accessKeys map[string]auth.SecretAccessKey
 }
 
 // SDK describes the SDK used to interact with Sia.
@@ -72,11 +78,7 @@ type Store interface {
 }
 
 // New creates a new Sia backend instance.
-func New(ctx context.Context, sdk SDK, store Store, directory, accessKey, secretKey string, opts ...Option) (*Sia, error) {
-	if accessKey == "" || secretKey == "" {
-		return nil, fmt.Errorf("sia backend requires both access key and secret key")
-	}
-
+func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Option) (*Sia, error) {
 	directory = filepath.Join(directory, MultipartDirectory)
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create multipart upload directory: %w", err)
@@ -87,12 +89,14 @@ func New(ctx context.Context, sdk SDK, store Store, directory, accessKey, secret
 		sdk:    sdk,
 		store:  store,
 
-		directory: directory,
-		accessKey: accessKey,
-		secretKey: auth.SecretAccessKey(secretKey),
+		directory:  directory,
+		accessKeys: make(map[string]auth.SecretAccessKey),
 	}
 	for _, opt := range opts {
 		opt(sia)
+	}
+	if len(sia.accessKeys) == 0 {
+		return nil, fmt.Errorf("sia backend requires both access key and secret key")
 	}
 
 	return sia, nil
@@ -101,8 +105,9 @@ func New(ctx context.Context, sdk SDK, store Store, directory, accessKey, secret
 // LoadSecret loads the secret key for the given access key ID. If the access
 // key wasn't found, the error s3errs.ErrInvalidAccessKeyID is returned.
 func (s *Sia) LoadSecret(ctx context.Context, accessKeyID string) (auth.SecretAccessKey, error) {
-	if accessKeyID != s.accessKey {
+	secret, ok := s.accessKeys[accessKeyID]
+	if !ok {
 		return nil, s3errs.ErrInvalidAccessKeyId
 	}
-	return slices.Clone(s.secretKey), nil
+	return slices.Clone(secret), nil
 }

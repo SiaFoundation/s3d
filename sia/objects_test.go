@@ -484,6 +484,43 @@ func TestListObjects(t *testing.T) {
 		}
 	})
 
+	// test list objects with and without owner
+	t.Run("owner", func(t *testing.T) {
+		resp, err := s3Tester.ListObjectsV2(t.Context(), bucket, nil, nil, s3.ListObjectsPage{
+			MaxKeys:    1,
+			FetchOwner: aws.Bool(true),
+		})
+		if err != nil {
+			t.Fatal(err)
+		} else if len(resp.Contents) == 0 {
+			t.Fatal("expected at least one object")
+		}
+
+		obj := resp.Contents[0]
+		if obj.Owner == nil {
+			t.Fatal("expected owner to be set")
+		} else if obj.Owner.ID == nil || *obj.Owner.ID == "" {
+			t.Fatal("expected owner ID to be set")
+		} else if obj.Owner.DisplayName == nil || *obj.Owner.DisplayName == "" {
+			t.Fatal("expected owner DisplayName to be set")
+		}
+
+		resp, err = s3Tester.ListObjectsV2(t.Context(), bucket, nil, nil, s3.ListObjectsPage{
+			MaxKeys:    1,
+			FetchOwner: aws.Bool(false),
+		})
+		if err != nil {
+			t.Fatal(err)
+		} else if len(resp.Contents) == 0 {
+			t.Fatal("expected at least one object")
+		}
+
+		obj = resp.Contents[0]
+		if obj.Owner != nil {
+			t.Fatal("expected owner to be nil")
+		}
+	})
+
 	// test listing from non-existent bucket
 	t.Run("nonexistent bucket", func(t *testing.T) {
 		_, err := s3Tester.ListObjectsV2(t.Context(), "nonexistent", nil, nil, s3.ListObjectsPage{})

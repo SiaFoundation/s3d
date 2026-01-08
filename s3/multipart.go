@@ -309,8 +309,8 @@ func (s *s3) listMultipartUploads(w http.ResponseWriter, r *http.Request, access
 		resp.Uploads = append(resp.Uploads, ListedMultipartUpload{
 			Key:          upload.Key,
 			UploadID:     upload.UploadID.String(),
-			Initiator:    globalUserInfo,
-			Owner:        globalUserInfo,
+			Initiator:    GlobalUserInfo,
+			Owner:        GlobalUserInfo,
 			StorageClass: StorageClass("STANDARD"),
 			Initiated:    NewContentTime(upload.Initiated),
 		})
@@ -462,14 +462,14 @@ func (s *s3) listUploadParts(w http.ResponseWriter, r *http.Request, accessKeyID
 		}
 	}
 
-	resp.Owner = globalUserInfo
+	resp.Owner = GlobalUserInfo
 	if result.OwnerID != "" || result.OwnerDisplayName != "" {
 		resp.Owner = &UserInfo{
 			ID:          result.OwnerID,
 			DisplayName: result.OwnerDisplayName,
 		}
 	}
-	resp.Initiator = globalUserInfo
+	resp.Initiator = GlobalUserInfo
 	if result.InitiatorID != "" || result.InitiatorDisplayName != "" {
 		resp.Initiator = &UserInfo{
 			ID:          result.InitiatorID,

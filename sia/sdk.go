@@ -3,41 +3,63 @@ package sia
 import (
 	"context"
 	"io"
+	"slices"
 
 	"github.com/SiaFoundation/s3d/s3"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/sdk"
 )
 
-// IndexdSDK is a wrapper around the indexd SDK to implement the SDK interface.
-type IndexdSDK struct {
-	inner *sdk.SDK
+type (
+	// IndexdSDK is a wrapper around the indexd SDK to implement the SDK interface.
+	IndexdSDK struct {
+		inner *sdk.SDK
 
-	perDownloadInflight int
-	perUploadInflight   int
+		dlOpts []sdk.DownloadOption
+		ulOpts []sdk.UploadOption
+	}
+
+	// SDKOption is a configuration option for the IndexdSDK.
+	SDKOption func(*IndexdSDK)
+)
+
+// WithDownloadOptions sets the download options for the IndexdSDK.
+func WithDownloadOptions(opts ...sdk.DownloadOption) SDKOption {
+	return func(s *IndexdSDK) {
+		s.dlOpts = opts
+	}
+}
+
+// WithUploadOptions sets the upload options for the IndexdSDK.
+func WithUploadOptions(opts ...sdk.UploadOption) SDKOption {
+	return func(s *IndexdSDK) {
+		s.ulOpts = opts
+	}
 }
 
 // NewSDK wraps an indexd SDK for use in s3d.
-func NewSDK(sdk *sdk.SDK) *IndexdSDK {
-	return &IndexdSDK{
+func NewSDK(sdk *sdk.SDK, opts ...SDKOption) *IndexdSDK {
+	indexd := &IndexdSDK{
 		inner: sdk,
 	}
+	for _, opt := range opts {
+		opt(indexd)
+	}
+	return indexd
 }
 
 // Download downloads an object from indexd.
 func (s *IndexdSDK) Download(ctx context.Context, w io.Writer, obj sdk.Object, rnge *s3.ObjectRange) error {
-	var opts []sdk.DownloadOption
+	opts := slices.Clone(s.dlOpts)
 	if rnge != nil {
 		opts = append(opts, sdk.WithDownloadRange(uint64(rnge.Start), uint64(rnge.Length)))
 	}
-	opts = append(opts, sdk.WithDownloadInflight(s.perDownloadInflight))
 	return s.inner.Download(ctx, w, obj, opts...)
 }
 
 // Upload uploads an object to indexd without pinning it.
 func (s *IndexdSDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error) {
-	return s.inner.Upload(ctx, r,
-		sdk.WithUploadInflight(s.perUploadInflight))
+	return s.inner.Upload(ctx, r, s.ulOpts...)
 }
 
 // Object retrieves the object with the given key.

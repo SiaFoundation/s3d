@@ -92,7 +92,7 @@ func NewTester(t testing.TB, opts ...testutil.TesterOption) *testutil.S3Tester {
 }
 
 func NewCustomTester(t testing.TB, dir string, store sia.Store, sdk sia.SDK, log *zap.Logger, opts ...testutil.TesterOption) *testutil.S3Tester {
-	backend, err := sia.New(context.Background(), sdk, store, dir, testutil.AccessKeyID, testutil.SecretAccessKey,
+	backend, err := sia.New(context.Background(), sdk, store, dir, sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
 		sia.WithLogger(log))
 	if err != nil {
 		t.Fatal(err)

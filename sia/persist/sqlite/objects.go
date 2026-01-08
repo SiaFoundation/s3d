@@ -150,6 +150,12 @@ func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.
 		}
 	}
 
+	// prepare owner info if requested
+	var owner *s3.UserInfo
+	if page.FetchOwner != nil && *page.FetchOwner {
+		owner = s3.GlobalUserInfo
+	}
+
 	const maxObjsPerQuery = 100
 	err = s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
@@ -206,6 +212,7 @@ WHERE o.bucket_id = ?`
 						LastModified: s3.NewContentTime(obj.LastModified),
 						ETag:         s3.FormatETag(obj.ContentMD5[:], 0),
 						Size:         int64(obj.Length),
+						Owner:        owner,
 					})
 					lastObj = obj.Name
 				}
