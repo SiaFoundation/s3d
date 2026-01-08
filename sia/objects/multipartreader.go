@@ -22,6 +22,7 @@ type MultipartReader struct {
 
 	curr     *os.File
 	currHash hash.Hash
+	currPart Part
 }
 
 // NewReader creates a new Reader for the given multipart upload.
@@ -70,10 +71,11 @@ func (r *MultipartReader) openNext() error {
 		return io.EOF
 	}
 
-	p := r.remainingParts[0]
-	path := filepath.Join(r.partsDir, strconv.Itoa(p.PartNumber), p.Filename)
+	part := r.remainingParts[0]
+	r.remainingParts = r.remainingParts[1:]
 
 	var err error
+	path := filepath.Join(r.partsDir, strconv.Itoa(part.PartNumber), part.Filename)
 	r.curr, err = os.Open(path)
 	if err != nil {
 		return fmt.Errorf("failed to open part at %s: %w", path, err)
@@ -82,14 +84,15 @@ func (r *MultipartReader) openNext() error {
 	stat, err := r.curr.Stat()
 	if err != nil {
 		r.curr.Close()
-		return fmt.Errorf("failed to stat part %d: %w", p.PartNumber, err)
+		return fmt.Errorf("failed to stat part %d: %w", part.PartNumber, err)
 	}
-	if stat.Size() != p.Size {
+	if stat.Size() != part.Size {
 		r.curr.Close()
-		return fmt.Errorf("part %d size mismatch: file is %d bytes, expected %d", p.PartNumber, stat.Size(), p.Size)
+		return fmt.Errorf("part %d size mismatch: file is %d bytes, expected %d", part.PartNumber, stat.Size(), part.Size)
 	}
 
 	r.currHash = md5.New()
+	r.currPart = part
 	return nil
 }
 
@@ -99,19 +102,15 @@ func (r *MultipartReader) finishPart() error {
 	}
 	r.curr = nil
 
-	if len(r.remainingParts) == 0 {
-		return io.EOF
-	}
-	part := r.remainingParts[0]
-	r.remainingParts = r.remainingParts[1:]
-
-	if sum := r.currHash.Sum(nil); !bytes.Equal(sum, part.ContentMD5[:]) {
+	if sum := r.currHash.Sum(nil); !bytes.Equal(sum, r.currPart.ContentMD5[:]) {
 		return fmt.Errorf("part %d MD5 mismatch (expected %x, got %x): %w",
-			part.PartNumber,
-			part.ContentMD5,
+			r.currPart.PartNumber,
+			r.currPart.ContentMD5,
 			sum,
 			s3errs.ErrBadDigest)
 	}
+
 	r.currHash = nil
+	r.currPart = Part{}
 	return nil
 }
