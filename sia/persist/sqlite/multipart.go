@@ -326,7 +326,10 @@ func (s *Store) ListParts(bucket, name string, uploadID s3.UploadID, partNumberM
 // ListMultipartUploads lists all multipart uploads for the given bucket and
 // filters.
 func (s *Store) ListMultipartUploads(bucket string, prefix s3.Prefix, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error) {
-	uploadIDMarker := s3.ParseUploadID(page.UploadIDMarker)
+	uploadIDMarker, err := s3.ParseUploadID(page.UploadIDMarker)
+	if err != nil {
+		return nil, s3errs.ErrInvalidArgument
+	}
 
 	// adjust marker if it falls inside a common prefix
 	keyMarker := page.KeyMarker
@@ -352,7 +355,7 @@ func (s *Store) ListMultipartUploads(bucket string, prefix s3.Prefix, page s3.Li
 		CommonPrefixes: make([]string, 0, page.MaxUploads),
 	}
 
-	err := s.transaction(func(tx *txn) error {
+	err = s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err

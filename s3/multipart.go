@@ -155,14 +155,14 @@ func NewUploadID() (uid UploadID) {
 }
 
 // ParseUploadID parses an upload ID from its hexadecimal string representation.
-// If the string is not a valid upload ID, an empty UploadID is returned.
-func ParseUploadID(s string) (uid UploadID) {
+func ParseUploadID(s string) (UploadID, error) {
+	var uid UploadID
 	if len(s) != 32 {
-		return
+		return UploadID{}, fmt.Errorf("invalid length: got %d, want 32", len(s))
 	} else if _, err := hex.Decode(uid[:], []byte(s)); err != nil {
-		return
+		return UploadID{}, fmt.Errorf("failed to parse upload ID %q: %w", s, err)
 	}
-	return
+	return uid, nil
 }
 
 // String returns the hexadecimal string representation of the upload ID.
@@ -178,15 +178,20 @@ func (s *s3) routeMultipartUpload(w http.ResponseWriter, r *http.Request, access
 		return err
 	}
 
+	validatedID, err := ParseUploadID(uploadID)
+	if err != nil {
+		return s3errs.ErrNoSuchUpload
+	}
+
 	switch r.Method {
 	case http.MethodPut:
-		return s.addUploadPart(w, r, validatedKey, bucket, object, uploadID)
+		return s.addUploadPart(w, r, validatedKey, bucket, object, validatedID)
 	case http.MethodGet:
-		return s.listUploadParts(w, r, validatedKey, bucket, object, uploadID)
+		return s.listUploadParts(w, r, validatedKey, bucket, object, validatedID)
 	case http.MethodPost:
-		return s.completeMultipartUpload(w, r, validatedKey, bucket, object, uploadID)
+		return s.completeMultipartUpload(w, r, validatedKey, bucket, object, validatedID)
 	case http.MethodDelete:
-		return s.abortMultipartUpload(w, r, validatedKey, bucket, object, uploadID)
+		return s.abortMultipartUpload(w, r, validatedKey, bucket, object, validatedID)
 	default:
 		return s3errs.ErrMethodNotAllowed
 	}
@@ -211,15 +216,15 @@ func (s *s3) routeMultipartUploadBase(w http.ResponseWriter, r *http.Request, ac
 	}
 }
 
-func (s *s3) abortMultipartUpload(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object, uploadID string) error {
+func (s *s3) abortMultipartUpload(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object string, uploadID UploadID) error {
 	log := s.logger.With(
 		zap.String("bucket", bucket),
 		zap.String("object", object),
-		zap.String("uploadID", uploadID),
+		zap.Stringer("uploadID", uploadID),
 	)
 	log.Debug("abort multipart upload")
 
-	if err := s.backend.AbortMultipartUpload(r.Context(), accessKeyID, bucket, object, ParseUploadID(uploadID)); err != nil {
+	if err := s.backend.AbortMultipartUpload(r.Context(), accessKeyID, bucket, object, uploadID); err != nil {
 		return err
 	}
 
@@ -319,12 +324,12 @@ func (s *s3) listMultipartUploads(w http.ResponseWriter, r *http.Request, access
 	return writeXMLResponse(w, resp)
 }
 
-func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, accessKeyID, dstBucket, dstObject, uploadID string, partNumber int) error {
+func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, accessKeyID, dstBucket, dstObject string, uploadID UploadID, partNumber int) error {
 	source := r.Header.Get("X-Amz-Copy-Source")
 	rnge := r.Header.Get("X-Amz-Copy-Source-Range")
 	log := s.logger.With(zap.String("dstBucket", dstBucket),
 		zap.String("dstObject", dstObject),
-		zap.String("uploadID", uploadID),
+		zap.Stringer("uploadID", uploadID),
 		zap.String("source", source),
 		zap.String("range", rnge),
 		zap.Int("partNumber", partNumber),
@@ -351,7 +356,7 @@ func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, accessKeyID, dstBu
 		return err
 	}
 
-	result, err := s.backend.UploadPartCopy(r.Context(), accessKeyID, srcBucket, srcObject, dstBucket, dstObject, ParseUploadID(uploadID), UploadPartCopyOptions{
+	result, err := s.backend.UploadPartCopy(r.Context(), accessKeyID, srcBucket, srcObject, dstBucket, dstObject, uploadID, UploadPartCopyOptions{
 		PartNumber: partNumber,
 		Range:      objRange,
 	})
@@ -367,11 +372,11 @@ func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, accessKeyID, dstBu
 	})
 }
 
-func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object, uploadID string) error {
+func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object string, uploadID UploadID) error {
 	log := s.logger.With(
 		zap.String("bucket", bucket),
 		zap.String("object", object),
-		zap.String("uploadID", uploadID),
+		zap.Stringer("uploadID", uploadID),
 		zap.String("partNumber", r.URL.Query().Get("partNumber")),
 	)
 	log.Debug("upload multipart part")
@@ -411,7 +416,7 @@ func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, accessKeyID, 
 		return err
 	}
 
-	res, err := s.backend.UploadPart(r.Context(), accessKeyID, bucket, object, ParseUploadID(uploadID), r.Body, UploadPartOptions{
+	res, err := s.backend.UploadPart(r.Context(), accessKeyID, bucket, object, uploadID, r.Body, UploadPartOptions{
 		PartNumber:    int(*partNumber),
 		ContentLength: r.ContentLength,
 		ContentMD5:    contentMD5,
@@ -425,11 +430,11 @@ func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, accessKeyID, 
 	return nil
 }
 
-func (s *s3) listUploadParts(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object, uploadID string) error {
+func (s *s3) listUploadParts(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object string, uploadID UploadID) error {
 	log := s.logger.With(
 		zap.String("bucket", bucket),
 		zap.String("object", object),
-		zap.String("uploadID", uploadID),
+		zap.Stringer("uploadID", uploadID),
 	)
 	log.Debug("list multipart parts")
 
@@ -440,7 +445,7 @@ func (s *s3) listUploadParts(w http.ResponseWriter, r *http.Request, accessKeyID
 	}
 
 	// list parts
-	result, err := s.backend.ListParts(r.Context(), accessKeyID, bucket, object, ParseUploadID(uploadID), page)
+	result, err := s.backend.ListParts(r.Context(), accessKeyID, bucket, object, uploadID, page)
 	if err != nil {
 		return err
 	}
@@ -450,7 +455,7 @@ func (s *s3) listUploadParts(w http.ResponseWriter, r *http.Request, accessKeyID
 		Xmlns:            "http://s3.amazonaws.com/doc/2006-03-01/",
 		Bucket:           bucket,
 		Key:              object,
-		UploadID:         uploadID,
+		UploadID:         uploadID.String(),
 		PartNumberMarker: page.PartNumberMarker,
 		MaxParts:         page.MaxParts,
 		IsTruncated:      result.IsTruncated,
@@ -489,11 +494,11 @@ func (s *s3) listUploadParts(w http.ResponseWriter, r *http.Request, accessKeyID
 	return writeXMLResponse(w, resp)
 }
 
-func (s *s3) completeMultipartUpload(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object, uploadID string) error {
+func (s *s3) completeMultipartUpload(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object string, uploadID UploadID) error {
 	log := s.logger.With(
 		zap.String("bucket", bucket),
 		zap.String("object", object),
-		zap.String("uploadID", uploadID),
+		zap.Stringer("uploadID", uploadID),
 	)
 	log.Debug("complete multipart upload")
 
@@ -517,7 +522,7 @@ func (s *s3) completeMultipartUpload(w http.ResponseWriter, r *http.Request, acc
 		}
 	}
 
-	res, err := s.backend.CompleteMultipartUpload(r.Context(), accessKeyID, bucket, object, ParseUploadID(uploadID), parts)
+	res, err := s.backend.CompleteMultipartUpload(r.Context(), accessKeyID, bucket, object, uploadID, parts)
 	if err != nil {
 		return err
 	}
