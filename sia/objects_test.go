@@ -5,6 +5,7 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"io"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -12,8 +13,10 @@ import (
 	"github.com/SiaFoundation/s3d/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"go.uber.org/zap/zaptest"
 	"lukechampine.com/frand"
 )
 
@@ -647,4 +650,141 @@ func TestDeleteObjects(t *testing.T) {
 	// } else if objs.KeyCount != nil {
 	// 	t.Fatalf("expected 0 remaining objects, got %d", *objs.KeyCount)
 	// }
+}
+
+func TestObjectMetadataCache(t *testing.T) {
+	memSDK := NewMemorySDK()
+	log := zaptest.NewLogger(t)
+	dir := t.TempDir()
+	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	s3Tester := NewCustomTester(t, dir, store, memSDK, log)
+
+	// prepare a bucket
+	const bucket = "bucket"
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// upload a non-empty object via PutObject - metadata will be cached from upload
+	data := frand.Bytes(64)
+	hash := md5.Sum(data)
+
+	const object = "object"
+	_, err = s3Tester.PutObject(t.Context(), bucket, object, bytes.NewReader(data), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	memSDK.objectCallCount = 0
+	t.Run("uses cached metadata", func(t *testing.T) {
+		// first GET should use cached metadata from upload
+		obj, err := s3Tester.GetObject(t.Context(), bucket, object, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if obj.ContentMD5 != hash {
+			t.Fatal("hash mismatch", obj.ContentMD5, hash[:])
+		}
+		if memSDK.objectCallCount != 0 {
+			t.Fatalf("expected 0 calls to SDK.Object when using fresh cache, got %d", memSDK.objectCallCount)
+		}
+
+		// second GET should still use cached metadata without calling indexer
+		obj, err = s3Tester.GetObject(t.Context(), bucket, object, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if obj.ContentMD5 != hash {
+			t.Fatal("hash mismatch on second GET", obj.ContentMD5, hash[:])
+		}
+		if memSDK.objectCallCount != 0 {
+			t.Fatalf("expected 0 calls to SDK.Object on second GET, got %d", memSDK.objectCallCount)
+		}
+	})
+
+	t.Run("expired cache triggers refresh", func(t *testing.T) {
+		accessKeyID := testutil.AccessKeyID
+		storedObj, err := store.GetObject(&accessKeyID, bucket, object)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// set retrieval time to 25 hours ago (past the 24-hour cache lifetime)
+		storedObj.ObjectRetrieved = time.Now().Add(-25 * time.Hour)
+		if err := store.PutObject(accessKeyID, bucket, object, storedObj); err != nil {
+			t.Fatal(err)
+		}
+
+		// reset counter
+		memSDK.objectCallCount = 0
+
+		// GET with expired cache should call SDK.Object to refresh
+		obj, err := s3Tester.GetObject(t.Context(), bucket, object, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if obj.ContentMD5 != hash {
+			t.Fatal("hash mismatch after cache expiration", obj.ContentMD5, hash[:])
+		}
+		if memSDK.objectCallCount != 1 {
+			t.Fatalf("expected 1 call to SDK.Object when cache expired, got %d", memSDK.objectCallCount)
+		}
+
+		// subsequent GET should use refreshed cache without calling indexer
+		memSDK.objectCallCount = 0
+		obj, err = s3Tester.GetObject(t.Context(), bucket, object, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if obj.ContentMD5 != hash {
+			t.Fatal("hash mismatch after cache refresh", obj.ContentMD5, hash[:])
+		}
+		if memSDK.objectCallCount != 0 {
+			t.Fatalf("expected 0 calls to SDK.Object when using refreshed cache, got %d", memSDK.objectCallCount)
+		}
+	})
+
+	t.Run("falls back to stale cache on indexer failure", func(t *testing.T) {
+		// expire the cache again
+		accessKeyID := testutil.AccessKeyID
+		storedObj, err := store.GetObject(&accessKeyID, bucket, object)
+		if err != nil {
+			t.Fatal(err)
+		}
+		storedObj.ObjectRetrieved = time.Now().Add(-25 * time.Hour)
+		if err := store.PutObject(accessKeyID, bucket, object, storedObj); err != nil {
+			t.Fatal(err)
+		}
+
+		// make SDK.Object return an error to simulate indexer failure
+		memSDK.fail = true
+		memSDK.objectCallCount = 0
+
+		// GET with expired cache and indexer failure should fall back to stale cache
+		obj, err := s3Tester.GetObject(t.Context(), bucket, object, nil)
+		if err != nil {
+			t.Fatal("expected download to succeed with stale cache, got error:", err)
+		}
+		if obj.ContentMD5 != hash {
+			t.Fatal("hash mismatch when using stale cache", obj.ContentMD5, hash[:])
+		}
+		if memSDK.objectCallCount != 1 {
+			t.Fatalf("expected 1 failed call to SDK.Object, got %d", memSDK.objectCallCount)
+		}
+
+		// verify body can still be read from stale cache
+		body, err := io.ReadAll(obj.Body)
+		if err != nil {
+			t.Fatal("failed to read body with stale cache:", err)
+		}
+		if !bytes.Equal(body, data) {
+			t.Fatal("body mismatch when using stale cache")
+		}
+
+		memSDK.fail = false
+	})
 }
