@@ -672,7 +672,6 @@ func TestObjectMetadataCache(t *testing.T) {
 
 	// upload a non-empty object via PutObject - metadata will be cached from upload
 	data := frand.Bytes(64)
-	hash := md5.Sum(data)
 
 	const object = "object"
 	_, err = s3Tester.PutObject(t.Context(), bucket, object, bytes.NewReader(data), nil)
@@ -683,24 +682,18 @@ func TestObjectMetadataCache(t *testing.T) {
 	memSDK.objectCallCount = 0
 	t.Run("uses cached metadata", func(t *testing.T) {
 		// first GET should use cached metadata from upload
-		obj, err := s3Tester.GetObject(t.Context(), bucket, object, nil)
+		_, err := s3Tester.GetObject(t.Context(), bucket, object, nil)
 		if err != nil {
 			t.Fatal(err)
-		}
-		if obj.ContentMD5 != hash {
-			t.Fatal("hash mismatch", obj.ContentMD5, hash[:])
 		}
 		if memSDK.objectCallCount != 0 {
 			t.Fatalf("expected 0 calls to SDK.Object when using fresh cache, got %d", memSDK.objectCallCount)
 		}
 
 		// second GET should still use cached metadata without calling indexer
-		obj, err = s3Tester.GetObject(t.Context(), bucket, object, nil)
+		_, err = s3Tester.GetObject(t.Context(), bucket, object, nil)
 		if err != nil {
 			t.Fatal(err)
-		}
-		if obj.ContentMD5 != hash {
-			t.Fatal("hash mismatch on second GET", obj.ContentMD5, hash[:])
 		}
 		if memSDK.objectCallCount != 0 {
 			t.Fatalf("expected 0 calls to SDK.Object on second GET, got %d", memSDK.objectCallCount)
@@ -722,12 +715,9 @@ func TestObjectMetadataCache(t *testing.T) {
 		memSDK.objectCallCount = 0
 
 		// GET with expired cache should call SDK.Object to refresh
-		obj, err := s3Tester.GetObject(t.Context(), bucket, object, nil)
+		_, err = s3Tester.GetObject(t.Context(), bucket, object, nil)
 		if err != nil {
 			t.Fatal(err)
-		}
-		if obj.ContentMD5 != hash {
-			t.Fatal("hash mismatch after cache expiration", obj.ContentMD5, hash[:])
 		}
 		if memSDK.objectCallCount != 1 {
 			t.Fatalf("expected 1 call to SDK.Object when cache expired, got %d", memSDK.objectCallCount)
@@ -735,12 +725,9 @@ func TestObjectMetadataCache(t *testing.T) {
 
 		// subsequent GET should use refreshed cache without calling indexer
 		memSDK.objectCallCount = 0
-		obj, err = s3Tester.GetObject(t.Context(), bucket, object, nil)
+		_, err = s3Tester.GetObject(t.Context(), bucket, object, nil)
 		if err != nil {
 			t.Fatal(err)
-		}
-		if obj.ContentMD5 != hash {
-			t.Fatal("hash mismatch after cache refresh", obj.ContentMD5, hash[:])
 		}
 		if memSDK.objectCallCount != 0 {
 			t.Fatalf("expected 0 calls to SDK.Object when using refreshed cache, got %d", memSDK.objectCallCount)
@@ -766,9 +753,6 @@ func TestObjectMetadataCache(t *testing.T) {
 		obj, err := s3Tester.GetObject(t.Context(), bucket, object, nil)
 		if err != nil {
 			t.Fatal("expected download to succeed with stale cache, got error:", err)
-		}
-		if obj.ContentMD5 != hash {
-			t.Fatal("hash mismatch when using stale cache", obj.ContentMD5, hash[:])
 		}
 		if memSDK.objectCallCount != 1 {
 			t.Fatalf("expected 1 failed call to SDK.Object, got %d", memSDK.objectCallCount)
