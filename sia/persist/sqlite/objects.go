@@ -135,9 +135,9 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, obj *objects.Object)
 	})
 }
 
-// UpdateObjectCache updates only the cached object metadata fields without
+// UpdateCachedObject updates only the cached object metadata fields without
 // modifying the object's updated_at timestamp or other fields.
-func (s *Store) UpdateObjectCache(accessKeyID, bucket, name string, object []byte, objectRetrieved time.Time) error {
+func (s *Store) UpdateCachedObject(accessKeyID, bucket, name string, object []byte, objectRetrieved time.Time) error {
 	return s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {

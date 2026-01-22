@@ -68,7 +68,7 @@ type Store interface {
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
 	ListObjects(accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error)
 	PutObject(accessKeyID, bucket, name string, obj *objects.Object) error
-	UpdateObjectCache(accessKeyID, bucket, name string, object []byte, objectRetrieved time.Time) error
+	UpdateCachedObject(accessKeyID, bucket, name string, object []byte, objectRetrieved time.Time) error
 	GetCachedObject(accessKeyID, bucket, name string) (types.Hash256, []byte, time.Time, error)
 
 	HasMultipartUpload(bucket, name string, uploadID s3.UploadID) error

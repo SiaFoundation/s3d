@@ -197,7 +197,7 @@ func (s *Sia) getCachedObject(ctx context.Context, accessKeyID, bucket, object s
 			pinnedObj = fetched
 			// update cache
 			if data, err := json.Marshal(pinnedObj); err == nil {
-				if err := s.store.UpdateObjectCache(accessKeyID, bucket, object, data, time.Now()); err != nil {
+				if err := s.store.UpdateCachedObject(accessKeyID, bucket, object, data, time.Now()); err != nil {
 					s.logger.Warn("failed to update object metadata cache", zap.Error(err))
 				}
 			}
@@ -293,7 +293,7 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	}); err != nil {
 		return nil, fmt.Errorf("failed to store object metadata: %w", err)
 	}
-	if err := s.store.UpdateObjectCache(accessKeyID, bucket, object, encoded, time.Now()); err != nil {
+	if err := s.store.UpdateCachedObject(accessKeyID, bucket, object, encoded, time.Now()); err != nil {
 		return nil, fmt.Errorf("failed to update object cache: %w", err)
 	}
 
