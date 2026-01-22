@@ -709,13 +709,12 @@ func TestObjectMetadataCache(t *testing.T) {
 
 	t.Run("expired cache triggers refresh", func(t *testing.T) {
 		accessKeyID := testutil.AccessKeyID
-		storedObj, err := store.GetObject(&accessKeyID, bucket, object)
+		_, cachedData, _, err := store.GetCachedObject(accessKeyID, bucket, object)
 		if err != nil {
 			t.Fatal(err)
 		}
 		// set retrieval time to 25 hours ago (past the 24-hour cache lifetime)
-		storedObj.ObjectRetrieved = time.Now().Add(-25 * time.Hour)
-		if err := store.PutObject(accessKeyID, bucket, object, storedObj); err != nil {
+		if err := store.UpdateObjectCache(accessKeyID, bucket, object, cachedData, time.Now().Add(-25*time.Hour)); err != nil {
 			t.Fatal(err)
 		}
 
@@ -751,12 +750,11 @@ func TestObjectMetadataCache(t *testing.T) {
 	t.Run("falls back to stale cache on indexer failure", func(t *testing.T) {
 		// expire the cache again
 		accessKeyID := testutil.AccessKeyID
-		storedObj, err := store.GetObject(&accessKeyID, bucket, object)
+		_, cachedData, _, err := store.GetCachedObject(accessKeyID, bucket, object)
 		if err != nil {
 			t.Fatal(err)
 		}
-		storedObj.ObjectRetrieved = time.Now().Add(-25 * time.Hour)
-		if err := store.PutObject(accessKeyID, bucket, object, storedObj); err != nil {
+		if err := store.UpdateObjectCache(accessKeyID, bucket, object, cachedData, time.Now().Add(-25*time.Hour)); err != nil {
 			t.Fatal(err)
 		}
 
