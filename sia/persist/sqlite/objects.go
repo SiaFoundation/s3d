@@ -61,12 +61,12 @@ func (s *Store) GetObject(accessKeyID *string, bucket, name string) (*objects.Ob
 
 		var meta string
 		err = tx.QueryRow(`
-			SELECT name, object_id, content_md5, metadata, size, updated_at
+			SELECT name, object_id, content_md5, metadata, size, updated_at, object, object_retrieved
 			FROM objects
 			WHERE bucket_id = $1 AND name = $2
 		`, bid, name).
 			Scan(&obj.Name, (*sqlHash256)(&obj.ID), (*sqlMD5)(&obj.ContentMD5), &meta,
-				&obj.Size, (*sqlTime)(&obj.UpdatedAt))
+				&obj.Size, (*sqlTime)(&obj.UpdatedAt), &obj.Object, (*sqlTime)(&obj.ObjectRetrieved))
 		if errors.Is(err, sql.ErrNoRows) {
 			return s3errs.ErrNoSuchKey
 		} else if err != nil {
@@ -99,16 +99,18 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, obj *objects.Object)
 		}
 
 		_, err = tx.Exec(`
-			INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7)
+			INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at, object, object_retrieved)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 			ON CONFLICT(bucket_id, name) DO UPDATE SET
 				object_id = excluded.object_id,
 				content_md5 = excluded.content_md5,
 				metadata = excluded.metadata,
 				size = excluded.size,
-				updated_at = excluded.updated_at
+				updated_at = excluded.updated_at,
+				object = excluded.object,
+				object_retrieved = excluded.object_retrieved
 		`, bid, name, sqlHash256(obj.ID), sqlMD5(obj.ContentMD5),
-			string(metaJson), obj.Size, sqlTime(obj.UpdatedAt))
+			string(metaJson), obj.Size, sqlTime(obj.UpdatedAt), string(obj.Object), sqlTime(obj.ObjectRetrieved))
 		return err
 	})
 }

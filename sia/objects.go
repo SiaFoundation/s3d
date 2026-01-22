@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/md5"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash"
@@ -16,8 +17,11 @@ import (
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.sia.tech/core/types"
+	"go.sia.tech/indexd/sdk"
 	"go.uber.org/zap"
 )
+
+const metadataCacheLifetime = 24 * time.Hour
 
 // CopyObject copies an object from the source bucket and object key to the
 // destination bucket and object key. The provided metadata map contains any
@@ -139,11 +143,37 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 		return resp, nil
 	}
 
-	// TODO: once the indexer returns the full metadata we can cache it locally
-	// and avoid fetching it on-demand.
-	pinnedObj, err := s.sdk.Object(ctx, obj.ID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch object from indexer: %w", err)
+	var cached bool
+	var pinnedObj sdk.Object
+	if len(obj.Object) > 0 {
+		// try to load from cache
+		if err := json.Unmarshal(obj.Object, &pinnedObj); err != nil {
+			s.logger.Warn("failed to unmarshal cached object metadata", zap.Error(err))
+		} else {
+			cached = true
+		}
+	}
+
+	// fetch from indexer if cache is missing or expired
+	if !cached || time.Since(obj.ObjectRetrieved) >= metadataCacheLifetime {
+		fetched, err := s.sdk.Object(ctx, obj.ID)
+		if err != nil {
+			if cached {
+				s.logger.Warn("failed to fetch object from indexer, using stale metadata", zap.Error(err))
+			} else {
+				return nil, fmt.Errorf("failed to fetch object from indexer: %w", err)
+			}
+		} else {
+			pinnedObj = fetched
+			// update cache
+			if data, err := json.Marshal(pinnedObj); err == nil {
+				obj.Object = data
+				obj.ObjectRetrieved = time.Now()
+				if err := s.store.PutObject(*accessKeyID, bucket, object, obj); err != nil {
+					s.logger.Warn("failed to update object metadata cache", zap.Error(err))
+				}
+			}
+		}
 	}
 
 	// otherwise, we download the body
@@ -205,6 +235,7 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 
 	// handle empty object case
 	var objectID types.Hash256
+	var encoded []byte
 	if opts.ContentLength == 0 {
 		// drain reader
 		if _, err := io.Copy(io.Discard, lr); err != nil {
@@ -217,6 +248,9 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 			return nil, fmt.Errorf("failed to upload object: %w", err)
 		}
 		objectID = obj.ID()
+		if encoded, err = json.Marshal(obj); err != nil {
+			return nil, fmt.Errorf("failed to marshal object metadata: %w", err)
+		}
 	}
 
 	// check content length
@@ -236,11 +270,13 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 
 	// store the object in the database
 	if err := s.store.PutObject(accessKeyID, bucket, object, &objects.Object{
-		ID:         objectID,
-		ContentMD5: contentMD5,
-		Meta:       opts.Meta,
-		Size:       lr.N,
-		UpdatedAt:  time.Now(),
+		ID:              objectID,
+		ContentMD5:      contentMD5,
+		Meta:            opts.Meta,
+		Size:            lr.N,
+		UpdatedAt:       time.Now(),
+		Object:          encoded,
+		ObjectRetrieved: time.Now(),
 	}); err != nil {
 		return nil, fmt.Errorf("failed to store object metadata: %w", err)
 	}
