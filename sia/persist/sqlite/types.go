@@ -3,11 +3,13 @@ package sqlite
 import (
 	"database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
 	"go.sia.tech/core/types"
+	"go.sia.tech/indexd/sdk"
 )
 
 var (
@@ -15,6 +17,7 @@ var (
 	_ scannerValuer = (*sqlMD5)(nil)
 	_ scannerValuer = (*sqlTime)(nil)
 	_ scannerValuer = (*sqlUploadID)(nil)
+	_ scannerValuer = (*sqlCachedMetadata)(nil)
 )
 
 type scannerValuer interface {
@@ -93,4 +96,27 @@ func (uid *sqlUploadID) Scan(src any) error {
 
 func (uid sqlUploadID) Value() (driver.Value, error) {
 	return uid[:], nil
+}
+
+type sqlCachedMetadata sdk.Object
+
+func (m *sqlCachedMetadata) Scan(src any) error {
+	switch src := src.(type) {
+	case string:
+		if src == "" {
+			*m = sqlCachedMetadata{}
+			return nil
+		}
+		return json.Unmarshal([]byte(src), (*sdk.Object)(m))
+	default:
+		return fmt.Errorf("cannot scan %T to CachedMetadata", src)
+	}
+}
+
+func (m sqlCachedMetadata) Value() (driver.Value, error) {
+	data, err := json.Marshal((sdk.Object)(m))
+	if err != nil {
+		return nil, err
+	}
+	return string(data), nil
 }

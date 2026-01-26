@@ -59,14 +59,14 @@ func (s *Store) GetObject(accessKeyID *string, bucket, name string) (*objects.Ob
 			return err
 		}
 
-		var meta, cachedMeta string
+		var meta string
 		err = tx.QueryRow(`
 			SELECT name, object_id, content_md5, metadata, size, updated_at, cached_metadata, cached_at
 			FROM objects
 			WHERE bucket_id = $1 AND name = $2
 		`, bid, name).
 			Scan(&obj.Name, (*sqlHash256)(&obj.ID), (*sqlMD5)(&obj.ContentMD5), &meta,
-				&obj.Size, (*sqlTime)(&obj.UpdatedAt), &cachedMeta, (*sqlTime)(&obj.CachedAt))
+				&obj.Size, (*sqlTime)(&obj.UpdatedAt), (*sqlCachedMetadata)(&obj.CachedMetadata), (*sqlTime)(&obj.CachedAt))
 		if errors.Is(err, sql.ErrNoRows) {
 			return s3errs.ErrNoSuchKey
 		} else if err != nil {
@@ -75,11 +75,6 @@ func (s *Store) GetObject(accessKeyID *string, bucket, name string) (*objects.Ob
 
 		if err = json.Unmarshal([]byte(meta), &obj.Meta); err != nil {
 			return errors.New("failed to unmarshal object metadata: " + err.Error())
-		}
-		if cachedMeta != "" {
-			if err = json.Unmarshal([]byte(cachedMeta), &obj.CachedMetadata); err != nil {
-				return errors.New("failed to unmarshal cached metadata: " + err.Error())
-			}
 		}
 		return nil
 	})
@@ -102,15 +97,6 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, obj *objects.Object)
 			return err
 		}
 
-		var cachedMeta string
-		if !obj.CachedAt.IsZero() {
-			data, err := json.Marshal(obj.CachedMetadata)
-			if err != nil {
-				return err
-			}
-			cachedMeta = string(data)
-		}
-
 		_, err = tx.Exec(`
 			INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at, cached_metadata, cached_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -123,7 +109,7 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, obj *objects.Object)
 				cached_metadata = excluded.cached_metadata,
 				cached_at = excluded.cached_at
 		`, bid, name, sqlHash256(obj.ID), sqlMD5(obj.ContentMD5), string(metaJson), obj.Size, sqlTime(obj.UpdatedAt),
-			cachedMeta, sqlTime(obj.CachedAt))
+			sqlCachedMetadata(obj.CachedMetadata), sqlTime(obj.CachedAt))
 		return err
 	})
 }
