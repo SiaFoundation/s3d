@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"go.sia.tech/core/types"
+	"go.sia.tech/indexd/sdk"
 )
 
 // Object represents a stored object with its metadata.
@@ -14,6 +15,9 @@ type Object struct {
 	Meta       map[string]string
 	Size       int64
 	UpdatedAt  time.Time
+
+	CachedMetadata sdk.Object // zero value if uncached (check CachedAt)
+	CachedAt       time.Time  // zero if not cached
 }
 
 // Part represents a single part of a multipart upload.

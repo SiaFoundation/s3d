@@ -18,8 +18,8 @@ CREATE TABLE objects (
     metadata TEXT NOT NULL,
     size INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
-    object TEXT NOT NULL,
-    object_retrieved INTEGER NOT NULL,
+    cached_metadata TEXT NOT NULL,
+    cached_at INTEGER NOT NULL,
     PRIMARY KEY(bucket_id, name)
 ) WITHOUT ROWID;
 

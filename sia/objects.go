@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/md5"
 	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"hash"
@@ -168,25 +167,16 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 // getCachedObject retrieves the object metadata from cache if available and
 // fresh, otherwise fetches it from the indexer and updates the cache.
 func (s *Sia) getCachedObject(ctx context.Context, accessKeyID, bucket, object string) (sdk.Object, error) {
-	objectID, cachedData, objectRetrieved, err := s.store.GetCachedObject(accessKeyID, bucket, object)
+	obj, err := s.store.GetObject(&accessKeyID, bucket, object)
 	if err != nil {
 		return sdk.Object{}, err
 	}
 
-	var cached bool
-	var pinnedObj sdk.Object
-	if len(cachedData) > 0 {
-		// try to load from cache
-		if err := json.Unmarshal(cachedData, &pinnedObj); err != nil {
-			s.logger.Warn("failed to unmarshal cached object metadata", zap.Error(err))
-		} else {
-			cached = true
-		}
-	}
+	cached := !obj.CachedAt.IsZero()
 
 	// fetch from indexer if cache is missing or expired
-	if !cached || time.Since(objectRetrieved) >= metadataCacheLifetime {
-		fetched, err := s.sdk.Object(ctx, objectID)
+	if !cached || time.Since(obj.CachedAt) >= metadataCacheLifetime {
+		fetched, err := s.sdk.Object(ctx, obj.ID)
 		if err != nil {
 			if cached {
 				s.logger.Warn("failed to fetch object from indexer, using stale metadata", zap.Error(err))
@@ -194,17 +184,15 @@ func (s *Sia) getCachedObject(ctx context.Context, accessKeyID, bucket, object s
 				return sdk.Object{}, fmt.Errorf("failed to fetch object from indexer: %w", err)
 			}
 		} else {
-			pinnedObj = fetched
-			// update cache
-			if data, err := json.Marshal(pinnedObj); err == nil {
-				if err := s.store.UpdateCachedObject(accessKeyID, bucket, object, data, time.Now()); err != nil {
-					s.logger.Warn("failed to update object metadata cache", zap.Error(err))
-				}
+			obj.CachedMetadata = fetched
+			obj.CachedAt = time.Now()
+			if err := s.store.PutObject(accessKeyID, bucket, object, obj); err != nil {
+				s.logger.Warn("failed to update object metadata cache", zap.Error(err))
 			}
 		}
 	}
 
-	return pinnedObj, nil
+	return obj.CachedMetadata, nil
 }
 
 // ListObjects lists objects in the specified bucket for the user identified
@@ -250,7 +238,8 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 
 	// handle empty object case
 	var objectID types.Hash256
-	var encoded []byte
+	var cachedMetadata sdk.Object
+	var cachedAt time.Time
 	if opts.ContentLength == 0 {
 		// drain reader
 		if _, err := io.Copy(io.Discard, lr); err != nil {
@@ -263,9 +252,8 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 			return nil, fmt.Errorf("failed to upload object: %w", err)
 		}
 		objectID = obj.ID()
-		if encoded, err = json.Marshal(obj); err != nil {
-			return nil, fmt.Errorf("failed to marshal object metadata: %w", err)
-		}
+		cachedMetadata = obj
+		cachedAt = time.Now()
 	}
 
 	// check content length
@@ -285,16 +273,15 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 
 	// store the object in the database
 	if err := s.store.PutObject(accessKeyID, bucket, object, &objects.Object{
-		ID:         objectID,
-		ContentMD5: contentMD5,
-		Meta:       opts.Meta,
-		Size:       lr.N,
-		UpdatedAt:  time.Now(),
+		ID:             objectID,
+		ContentMD5:     contentMD5,
+		Meta:           opts.Meta,
+		Size:           lr.N,
+		UpdatedAt:      time.Now(),
+		CachedMetadata: cachedMetadata,
+		CachedAt:       cachedAt,
 	}); err != nil {
 		return nil, fmt.Errorf("failed to store object metadata: %w", err)
-	}
-	if err := s.store.UpdateCachedObject(accessKeyID, bucket, object, encoded, time.Now()); err != nil {
-		return nil, fmt.Errorf("failed to update object cache: %w", err)
 	}
 
 	return &s3.PutObjectResult{

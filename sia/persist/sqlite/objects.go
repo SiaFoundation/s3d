@@ -11,7 +11,6 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia/objects"
-	"go.sia.tech/core/types"
 )
 
 // DeleteObject deletes the object with the given bucket and name if it exists
@@ -51,28 +50,6 @@ func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) e
 	})
 }
 
-// GetCachedObject retrieves only the cache-related fields for an object.
-func (s *Store) GetCachedObject(accessKeyID, bucket, name string) (objectID types.Hash256, object []byte, objectRetrieved time.Time, err error) {
-	err = s.transaction(func(tx *txn) error {
-		bid, err := bucketID(tx, bucket)
-		if err != nil {
-			return err
-		}
-
-		err = tx.QueryRow(`
-			SELECT object_id, object, object_retrieved
-			FROM objects
-			WHERE bucket_id = $1 AND name = $2
-		`, bid, name).
-			Scan((*sqlHash256)(&objectID), &object, (*sqlTime)(&objectRetrieved))
-		if errors.Is(err, sql.ErrNoRows) {
-			return s3errs.ErrNoSuchKey
-		}
-		return err
-	})
-	return
-}
-
 // GetObject retrieves the object with the given bucket and name.
 func (s *Store) GetObject(accessKeyID *string, bucket, name string) (*objects.Object, error) {
 	var obj objects.Object
@@ -82,23 +59,27 @@ func (s *Store) GetObject(accessKeyID *string, bucket, name string) (*objects.Ob
 			return err
 		}
 
-		var meta string
+		var meta, cachedMeta string
 		err = tx.QueryRow(`
-			SELECT name, object_id, content_md5, metadata, size, updated_at
+			SELECT name, object_id, content_md5, metadata, size, updated_at, cached_metadata, cached_at
 			FROM objects
 			WHERE bucket_id = $1 AND name = $2
 		`, bid, name).
 			Scan(&obj.Name, (*sqlHash256)(&obj.ID), (*sqlMD5)(&obj.ContentMD5), &meta,
-				&obj.Size, (*sqlTime)(&obj.UpdatedAt))
+				&obj.Size, (*sqlTime)(&obj.UpdatedAt), &cachedMeta, (*sqlTime)(&obj.CachedAt))
 		if errors.Is(err, sql.ErrNoRows) {
 			return s3errs.ErrNoSuchKey
 		} else if err != nil {
 			return err
 		}
 
-		err = json.Unmarshal([]byte(meta), &obj.Meta)
-		if err != nil {
+		if err = json.Unmarshal([]byte(meta), &obj.Meta); err != nil {
 			return errors.New("failed to unmarshal object metadata: " + err.Error())
+		}
+		if cachedMeta != "" {
+			if err = json.Unmarshal([]byte(cachedMeta), &obj.CachedMetadata); err != nil {
+				return errors.New("failed to unmarshal cached metadata: " + err.Error())
+			}
 		}
 		return nil
 	})
@@ -121,43 +102,29 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, obj *objects.Object)
 			return err
 		}
 
+		var cachedMeta string
+		if !obj.CachedAt.IsZero() {
+			data, err := json.Marshal(obj.CachedMetadata)
+			if err != nil {
+				return err
+			}
+			cachedMeta = string(data)
+		}
+
 		_, err = tx.Exec(`
-			INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at, object, object_retrieved)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, "", 0)
+			INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at, cached_metadata, cached_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 			ON CONFLICT(bucket_id, name) DO UPDATE SET
 				object_id = excluded.object_id,
 				content_md5 = excluded.content_md5,
 				metadata = excluded.metadata,
 				size = excluded.size,
-				updated_at = excluded.updated_at
-		`, bid, name, sqlHash256(obj.ID), sqlMD5(obj.ContentMD5), string(metaJson), obj.Size, sqlTime(obj.UpdatedAt))
+				updated_at = excluded.updated_at,
+				cached_metadata = excluded.cached_metadata,
+				cached_at = excluded.cached_at
+		`, bid, name, sqlHash256(obj.ID), sqlMD5(obj.ContentMD5), string(metaJson), obj.Size, sqlTime(obj.UpdatedAt),
+			cachedMeta, sqlTime(obj.CachedAt))
 		return err
-	})
-}
-
-// UpdateCachedObject updates only the cached object metadata fields without
-// modifying the object's updated_at timestamp or other fields.
-func (s *Store) UpdateCachedObject(accessKeyID, bucket, name string, object []byte, objectRetrieved time.Time) error {
-	return s.transaction(func(tx *txn) error {
-		bid, err := bucketID(tx, bucket)
-		if err != nil {
-			return err
-		}
-
-		result, err := tx.Exec(`
-			UPDATE objects
-			SET object = $1, object_retrieved = $2
-			WHERE bucket_id = $3 AND name = $4
-		`, string(object), sqlTime(objectRetrieved), bid, name)
-		if err != nil {
-			return fmt.Errorf("failed to update cache: %w", err)
-		} else if rows, err := result.RowsAffected(); err != nil {
-			return fmt.Errorf("failed to get rows affected: %w", err)
-		} else if rows == 0 {
-			return s3errs.ErrNoSuchKey
-		}
-
-		return nil
 	})
 }
 

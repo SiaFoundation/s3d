@@ -702,12 +702,13 @@ func TestObjectMetadataCache(t *testing.T) {
 
 	t.Run("expired cache triggers refresh", func(t *testing.T) {
 		accessKeyID := testutil.AccessKeyID
-		_, cachedData, _, err := store.GetCachedObject(accessKeyID, bucket, object)
+		obj, err := store.GetObject(&accessKeyID, bucket, object)
 		if err != nil {
 			t.Fatal(err)
 		}
 		// set retrieval time to 25 hours ago (past the 24-hour cache lifetime)
-		if err := store.UpdateCachedObject(accessKeyID, bucket, object, cachedData, time.Now().Add(-25*time.Hour)); err != nil {
+		obj.CachedAt = time.Now().Add(-25 * time.Hour)
+		if err := store.PutObject(accessKeyID, bucket, object, obj); err != nil {
 			t.Fatal(err)
 		}
 
@@ -737,11 +738,12 @@ func TestObjectMetadataCache(t *testing.T) {
 	t.Run("falls back to stale cache on indexer failure", func(t *testing.T) {
 		// expire the cache again
 		accessKeyID := testutil.AccessKeyID
-		_, cachedData, _, err := store.GetCachedObject(accessKeyID, bucket, object)
+		storedObj, err := store.GetObject(&accessKeyID, bucket, object)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := store.UpdateCachedObject(accessKeyID, bucket, object, cachedData, time.Now().Add(-25*time.Hour)); err != nil {
+		storedObj.CachedAt = time.Now().Add(-25 * time.Hour)
+		if err := store.PutObject(accessKeyID, bucket, object, storedObj); err != nil {
 			t.Fatal(err)
 		}
 
@@ -768,5 +770,45 @@ func TestObjectMetadataCache(t *testing.T) {
 		}
 
 		memSDK.fail = false
+	})
+
+	t.Run("empty objects skip cache", func(t *testing.T) {
+		memSDK.objectCallCount = 0
+
+		// upload an empty object
+		const emptyObject = "empty"
+		_, err = s3Tester.PutObject(t.Context(), bucket, emptyObject, bytes.NewReader(nil), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// verify empty object has no cached metadata
+		accessKeyID := testutil.AccessKeyID
+		obj, err := store.GetObject(&accessKeyID, bucket, emptyObject)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !obj.CachedAt.IsZero() {
+			t.Fatal("expected zero CachedAt for empty object")
+		}
+
+		// GET empty object should succeed without calling SDK.Object
+		memSDK.objectCallCount = 0
+		resp, err := s3Tester.GetObject(t.Context(), bucket, emptyObject, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if memSDK.objectCallCount != 0 {
+			t.Fatalf("expected 0 calls to SDK.Object for empty object GET, got %d", memSDK.objectCallCount)
+		}
+
+		// verify empty body
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(body) != 0 {
+			t.Fatalf("expected empty body, got %d bytes", len(body))
+		}
 	})
 }
