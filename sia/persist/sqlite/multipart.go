@@ -327,7 +327,7 @@ func (s *Store) ListParts(bucket, name string, uploadID s3.UploadID, partNumberM
 // filters.
 func (s *Store) ListMultipartUploads(bucket string, prefix s3.Prefix, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error) {
 	uploadIDMarker, err := s3.ParseUploadID(page.UploadIDMarker)
-	if err != nil {
+	if err != nil && page.UploadIDMarker != "" {
 		return nil, s3errs.ErrInvalidArgument
 	}
 
