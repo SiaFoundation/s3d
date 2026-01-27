@@ -142,9 +142,8 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 		return resp, nil
 	}
 
-	// get cached object metadata
-	pinnedObj, err := s.getCachedObject(ctx, *accessKeyID, bucket, object)
-	if err != nil {
+	// refresh cached object metadata if needed
+	if err := s.refreshCachedMetadata(ctx, *accessKeyID, bucket, object, obj); err != nil {
 		return nil, err
 	}
 
@@ -152,7 +151,7 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 	pr, pw := io.Pipe()
 	go func() {
 		defer pw.Close()
-		err = s.sdk.Download(ctx, pw, pinnedObj, rnge)
+		err = s.sdk.Download(ctx, pw, obj.CachedMetadata, rnge)
 		if err != nil {
 			s.logger.Error("download failed", zap.Error(err), zap.String("bucket", bucket), zap.String("object", object))
 			pw.CloseWithError(err)
@@ -164,35 +163,32 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 	return resp, nil
 }
 
-// getCachedObject retrieves the object metadata from cache if available and
-// fresh, otherwise fetches it from the indexer and updates the cache.
-func (s *Sia) getCachedObject(ctx context.Context, accessKeyID, bucket, object string) (sdk.Object, error) {
-	obj, err := s.store.GetObject(&accessKeyID, bucket, object)
-	if err != nil {
-		return sdk.Object{}, err
-	}
-
+// refreshCachedMetadata refreshes the object's cached metadata if it is missing
+// or stale. The object is updated in place and persisted to the store.
+func (s *Sia) refreshCachedMetadata(ctx context.Context, accessKeyID, bucket, objectKey string, obj *objects.Object) error {
 	cached := !obj.CachedAt.IsZero()
 
-	// fetch from indexer if cache is missing or expired
-	if !cached || time.Since(obj.CachedAt) >= metadataCacheLifetime {
-		fetched, err := s.sdk.Object(ctx, obj.ID)
-		if err != nil {
-			if cached {
-				s.logger.Warn("failed to fetch object from indexer, using stale metadata", zap.Error(err))
-			} else {
-				return sdk.Object{}, fmt.Errorf("failed to fetch object from indexer: %w", err)
-			}
-		} else {
-			obj.CachedMetadata = fetched
-			obj.CachedAt = time.Now()
-			if err := s.store.PutObject(accessKeyID, bucket, object, obj); err != nil {
-				s.logger.Warn("failed to update object metadata cache", zap.Error(err))
-			}
-		}
+	// return early if cache is fresh
+	if cached && time.Since(obj.CachedAt) < metadataCacheLifetime {
+		return nil
 	}
 
-	return obj.CachedMetadata, nil
+	// fetch from indexer
+	fetched, err := s.sdk.Object(ctx, obj.ID)
+	if err != nil {
+		if cached {
+			s.logger.Warn("failed to fetch object from indexer, using stale metadata", zap.Error(err))
+			return nil
+		}
+		return fmt.Errorf("failed to fetch object from indexer: %w", err)
+	}
+
+	obj.CachedMetadata = fetched
+	obj.CachedAt = time.Now()
+	if err := s.store.PutObject(accessKeyID, bucket, objectKey, obj); err != nil {
+		s.logger.Warn("failed to update object metadata cache", zap.Error(err))
+	}
+	return nil
 }
 
 // ListObjects lists objects in the specified bucket for the user identified

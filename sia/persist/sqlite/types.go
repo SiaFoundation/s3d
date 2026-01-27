@@ -108,6 +108,12 @@ func (m *sqlCachedMetadata) Scan(src any) error {
 			return nil
 		}
 		return json.Unmarshal([]byte(src), (*sdk.Object)(m))
+	case []byte:
+		if len(src) == 0 {
+			*m = sqlCachedMetadata{}
+			return nil
+		}
+		return json.Unmarshal(src, (*sdk.Object)(m))
 	default:
 		return fmt.Errorf("cannot scan %T to CachedMetadata", src)
 	}
