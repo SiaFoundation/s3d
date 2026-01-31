@@ -56,13 +56,13 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 		}
 
 		// validate parts exist
-		var partCount int
+		var partCount, maxPartNumber int
 		var totalSize int64
 		err = tx.QueryRow(`
-			SELECT COUNT(*), SUM(content_length)
+			SELECT COUNT(*), MAX(part_number), SUM(content_length)
 			FROM multipart_parts
 			WHERE upload_id = $1
-		`, sqlUploadID(uploadID)).Scan(&partCount, &totalSize)
+		`, sqlUploadID(uploadID)).Scan(&partCount, &maxPartNumber, &totalSize)
 		if err != nil {
 			return err
 		} else if partCount == 0 {
@@ -79,7 +79,7 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 			WHERE upload_id = $1
 			  AND part_number < $2
 			  AND content_length < $3
-		`, sqlUploadID(uploadID), partCount, s3.MinUploadPartSize).Scan(&smallParts)
+		`, sqlUploadID(uploadID), maxPartNumber, s3.MinUploadPartSize).Scan(&smallParts)
 		if err != nil {
 			return err
 		}
