@@ -55,24 +55,18 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 			return s3errs.ErrNoSuchUpload
 		}
 
-		// validate parts exist and are contiguous
-		var partCount, minPart, maxPart int
+		// validate parts exist
+		var partCount int
 		var totalSize int64
 		err = tx.QueryRow(`
-			SELECT
-				COUNT(*),
-				MIN(part_number),
-				MAX(part_number),
-				SUM(content_length)
+			SELECT COUNT(*), SUM(content_length)
 			FROM multipart_parts
 			WHERE upload_id = $1
-		`, sqlUploadID(uploadID)).Scan(&partCount, &minPart, &maxPart, &totalSize)
+		`, sqlUploadID(uploadID)).Scan(&partCount, &totalSize)
 		if err != nil {
 			return err
 		} else if partCount == 0 {
 			return errors.New("cannot complete multipart upload with no parts")
-		} else if minPart != 1 || maxPart != partCount {
-			return fmt.Errorf("part numbers must be contiguous from 1 to %d, got range %d to %d", partCount, minPart, maxPart)
 		} else if totalSize != contentLength {
 			return fmt.Errorf("total part size (%d) does not match content length (%d)", totalSize, contentLength)
 		}
@@ -325,10 +319,14 @@ func (s *Store) ListParts(bucket, name string, uploadID s3.UploadID, partNumberM
 
 // ListMultipartUploads lists all multipart uploads for the given bucket and
 // filters.
-func (s *Store) ListMultipartUploads(bucket string, prefix s3.Prefix, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error) {
-	uploadIDMarker, err := s3.ParseUploadID(page.UploadIDMarker)
-	if err != nil {
-		return nil, s3errs.ErrInvalidArgument
+func (s *Store) ListMultipartUploads(bucket string, prefix s3.Prefix, page s3.ListMultipartUploadsPage) (_ *s3.ListMultipartUploadsResult, err error) {
+	// parse upload ID marker
+	var uploadIDMarker s3.UploadID
+	if page.UploadIDMarker != "" {
+		uploadIDMarker, err = s3.ParseUploadID(page.UploadIDMarker)
+		if err != nil {
+			return nil, s3errs.ErrInvalidArgument
+		}
 	}
 
 	// adjust marker if it falls inside a common prefix

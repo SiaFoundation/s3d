@@ -328,10 +328,9 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 		completed[i] = part
 	}
 
-	// validate part numbers
-	for i, part := range parts {
-		expectedPartNumber := i + 1
-		if part.PartNumber != expectedPartNumber {
+	// validate part numbers are in ascending order
+	for i := 1; i < len(parts); i++ {
+		if parts[i].PartNumber <= parts[i-1].PartNumber {
 			return nil, s3errs.ErrInvalidPartOrder
 		}
 	}

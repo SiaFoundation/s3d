@@ -601,6 +601,11 @@ func ParseETag(s string) [16]byte {
 		return [16]byte{}
 	}
 
+	// strip multipart suffix
+	if idx := strings.LastIndex(s, "-"); idx != -1 {
+		s = s[:idx]
+	}
+
 	var etag [16]byte
 	decoded, err := hex.DecodeString(s)
 	if err != nil {
