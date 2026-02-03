@@ -14,6 +14,7 @@ import (
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/sdk"
+	"go.sia.tech/indexd/slabs"
 	"go.uber.org/zap"
 )
 
@@ -55,6 +56,8 @@ type SDK interface {
 	Download(ctx context.Context, w io.Writer, obj sdk.Object, rnge *s3.ObjectRange) error
 	Object(ctx context.Context, id types.Hash256) (sdk.Object, error)
 	Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
+	SealObject(obj sdk.Object) slabs.SealedObject
+	UnsealObject(sealed slabs.SealedObject) (sdk.Object, error)
 }
 
 // Store represents the storage backend used by the Sia backend.

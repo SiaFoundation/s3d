@@ -18,7 +18,7 @@ CREATE TABLE objects (
     metadata TEXT NOT NULL,
     size INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
-    cached_metadata TEXT NOT NULL,
+    sia_object BLOB NOT NULL,
     cached_at INTEGER NOT NULL,
     PRIMARY KEY (bucket_id, name)
 ) WITHOUT ROWID;

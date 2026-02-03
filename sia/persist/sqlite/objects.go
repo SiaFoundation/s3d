@@ -10,6 +10,7 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia/objects"
+	"go.sia.tech/indexd/slabs"
 )
 
 // DeleteObject deletes the object with the given bucket and name if it exists
@@ -76,11 +77,14 @@ func (s *Store) GetObject(accessKeyID *string, bucket, name string, partNumber *
 				}
 				obj.PartsCount = *partNumber
 			}
-			return tx.QueryRow(`
-				SELECT object_id, metadata, updated_at, size, content_md5, cached_metadata, cached_at
+			var siaObj sqlSiaObject
+			err := tx.QueryRow(`
+				SELECT object_id, metadata, updated_at, size, content_md5, sia_object, cached_at
 				FROM objects
 				WHERE bucket_id = $1 AND name = $2
-			`, bid, name).Scan((*sqlHash256)(&obj.ID), (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Length, (*sqlMD5)(&obj.ContentMD5), (*sqlCachedMetadata)(&obj.CachedMetadata), (*sqlTime)(&obj.CachedAt))
+			`, bid, name).Scan((*sqlHash256)(&obj.ID), (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Length, (*sqlMD5)(&obj.ContentMD5), &siaObj, (*sqlTime)(&obj.CachedAt))
+			obj.SiaObject = slabs.SealedObject(siaObj)
+			return err
 		}
 
 		// return error if part number is invalid
@@ -117,7 +121,7 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, obj *objects.Object)
 		}
 
 		_, err = tx.Exec(`
-			INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at, cached_metadata, cached_at)
+			INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at, sia_object, cached_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 			ON CONFLICT(bucket_id, name) DO UPDATE SET
 				object_id = excluded.object_id,
@@ -125,11 +129,11 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, obj *objects.Object)
 				metadata = excluded.metadata,
 				size = excluded.size,
 				updated_at = excluded.updated_at,
-				cached_metadata = excluded.cached_metadata,
+				sia_object = excluded.sia_object,
 				cached_at = excluded.cached_at
 		`, bid, name, sqlHash256(obj.ID), sqlMD5(obj.ContentMD5),
 			sqlMetaJSON(obj.Meta), obj.Length, sqlTime(time.Now()),
-			sqlCachedMetadata(obj.CachedMetadata), sqlTime(obj.CachedAt))
+			sqlSiaObject(obj.SiaObject), sqlTime(obj.CachedAt))
 		return err
 	})
 }

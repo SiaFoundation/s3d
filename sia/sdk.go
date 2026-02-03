@@ -8,6 +8,7 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/sdk"
+	"go.sia.tech/indexd/slabs"
 )
 
 type (
@@ -65,4 +66,16 @@ func (s *IndexdSDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
 // Object retrieves the object with the given key.
 func (s *IndexdSDK) Object(ctx context.Context, objectKey types.Hash256) (sdk.Object, error) {
 	return s.inner.Object(ctx, objectKey)
+}
+
+// SealObject seals the object using the app key.
+func (s *IndexdSDK) SealObject(obj sdk.Object) slabs.SealedObject {
+	return obj.Seal(s.inner.AppKey())
+}
+
+// UnsealObject unseals a sealed object using the app key.
+// PLACEHOLDER: We need something like `objectFromSealedObject` from indexd/sdk
+// to be expored because none of the fields on sdk.Object are exported.
+func (s *IndexdSDK) UnsealObject(sealed slabs.SealedObject) (sdk.Object, error) {
+	return s.inner.Object(context.Background(), sealed.ID())
 }

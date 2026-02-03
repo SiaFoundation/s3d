@@ -14,6 +14,7 @@ import (
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/sdk"
+	"go.sia.tech/indexd/slabs"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
 )
@@ -79,6 +80,18 @@ func (s *MemorySDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
 		meta: obj,
 	}
 	return obj, nil
+}
+
+func (s *MemorySDK) SealObject(obj sdk.Object) slabs.SealedObject {
+	return obj.Seal(s.appKey)
+}
+
+func (s *MemorySDK) UnsealObject(sealed slabs.SealedObject) (sdk.Object, error) {
+	obj, exists := s.objects[sealed.ID()]
+	if !exists {
+		return sdk.Object{}, errors.New("object not found")
+	}
+	return obj.meta, nil
 }
 
 func NewTester(t testing.TB, opts ...testutil.TesterOption) *testutil.S3Tester {

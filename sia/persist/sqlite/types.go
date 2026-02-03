@@ -9,7 +9,7 @@ import (
 
 	"github.com/SiaFoundation/s3d/s3"
 	"go.sia.tech/core/types"
-	"go.sia.tech/indexd/sdk"
+	"go.sia.tech/indexd/slabs"
 )
 
 var (
@@ -17,7 +17,7 @@ var (
 	_ scannerValuer = (*sqlMD5)(nil)
 	_ scannerValuer = (*sqlTime)(nil)
 	_ scannerValuer = (*sqlUploadID)(nil)
-	_ scannerValuer = (*sqlCachedMetadata)(nil)
+	_ scannerValuer = (*sqlSiaObject)(nil)
 	_ scannerValuer = (*sqlMetaJSON)(nil)
 )
 
@@ -99,33 +99,24 @@ func (uid sqlUploadID) Value() (driver.Value, error) {
 	return uid[:], nil
 }
 
-type sqlCachedMetadata sdk.Object
+type sqlSiaObject slabs.SealedObject
 
-func (m *sqlCachedMetadata) Scan(src any) error {
+func (m *sqlSiaObject) Scan(src any) error {
 	switch src := src.(type) {
-	case string:
-		if src == "" {
-			*m = sqlCachedMetadata{}
-			return nil
-		}
-		return json.Unmarshal([]byte(src), (*sdk.Object)(m))
 	case []byte:
 		if len(src) == 0 {
-			*m = sqlCachedMetadata{}
+			*m = sqlSiaObject{}
 			return nil
 		}
-		return json.Unmarshal(src, (*sdk.Object)(m))
+		return (*slabs.SealedObject)(m).UnmarshalSia(src)
 	default:
-		return fmt.Errorf("cannot scan %T to CachedMetadata", src)
+		return fmt.Errorf("cannot scan %T to SiaObject", src)
 	}
 }
 
-func (m sqlCachedMetadata) Value() (driver.Value, error) {
-	data, err := json.Marshal((sdk.Object)(m))
-	if err != nil {
-		return nil, err
-	}
-	return string(data), nil
+func (m sqlSiaObject) Value() (driver.Value, error) {
+	so := slabs.SealedObject(m)
+	return so.MarshalSia()
 }
 
 type sqlMetaJSON map[string]string
