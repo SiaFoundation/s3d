@@ -184,7 +184,8 @@ func (s *Sia) refreshSiaObject(ctx context.Context, accessKeyID, bucket, objectK
 	cached := !obj.CachedAt.IsZero()
 
 	// if cache is fresh, unseal and return
-	if cached && time.Since(obj.CachedAt) < metadataCacheLifetime {
+	cachedUntil := obj.CachedAt.Add(metadataCacheLifetime)
+	if time.Now().Before(cachedUntil) {
 		siaObj, err = s.sdk.UnsealObject(obj.SiaObject)
 		if err != nil {
 			s.logger.Warn("failed to unseal cached object, will fetch from indexer", zap.Error(err))
