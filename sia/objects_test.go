@@ -702,7 +702,7 @@ func TestObjectMetadataCache(t *testing.T) {
 
 	t.Run("expired cache triggers refresh", func(t *testing.T) {
 		accessKeyID := testutil.AccessKeyID
-		obj, err := store.GetObject(&accessKeyID, bucket, object)
+		obj, err := store.GetObject(&accessKeyID, bucket, object, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -738,7 +738,7 @@ func TestObjectMetadataCache(t *testing.T) {
 	t.Run("falls back to stale cache on indexer failure", func(t *testing.T) {
 		// expire the cache again
 		accessKeyID := testutil.AccessKeyID
-		storedObj, err := store.GetObject(&accessKeyID, bucket, object)
+		storedObj, err := store.GetObject(&accessKeyID, bucket, object, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -784,7 +784,7 @@ func TestObjectMetadataCache(t *testing.T) {
 
 		// verify empty object has no cached metadata
 		accessKeyID := testutil.AccessKeyID
-		obj, err := store.GetObject(&accessKeyID, bucket, emptyObject)
+		obj, err := store.GetObject(&accessKeyID, bucket, emptyObject, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

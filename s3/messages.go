@@ -351,13 +351,13 @@ type (
 	// CompleteMultipartUploadRequest matches the XML request body sent when
 	// completing a multipart upload.
 	CompleteMultipartUploadRequest struct {
-		XMLName xml.Name                   `xml:"CompleteMultipartUpload"`
-		Parts   []CompleteMultipartPartXML `xml:"Part"`
+		XMLName xml.Name                `xml:"CompleteMultipartUpload"`
+		Parts   []CompleteMultipartPart `xml:"Part"`
 	}
 
-	// CompleteMultipartPartXML represents a single part in a
+	// CompleteMultipartPart represents a single part in a
 	// CompleteMultipartUploadRequest.
-	CompleteMultipartPartXML struct {
+	CompleteMultipartPart struct {
 		PartNumber int    `xml:"PartNumber"`
 		ETag       string `xml:"ETag"`
 	}

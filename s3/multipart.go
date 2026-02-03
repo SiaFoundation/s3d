@@ -121,7 +121,7 @@ type ListMultipartUploadsPage struct {
 	// UploadIDMarker specifies the upload ID of the last upload in the previous
 	// page when multiple uploads exist for the same key. Only used when KeyMarker
 	// is also specified.
-	UploadIDMarker UploadID
+	UploadIDMarker string
 
 	// MaxUploads sets the maximum number of uploads returned in the response.
 	// The response might contain fewer uploads, but will never contain more.
@@ -142,7 +142,7 @@ type ListMultipartUploadsResult struct {
 	CommonPrefixes     []string
 	IsTruncated        bool
 	NextKeyMarker      string
-	NextUploadIDMarker UploadID
+	NextUploadIDMarker string
 }
 
 // UploadID is a unique identifier for a multipart upload.
@@ -154,9 +154,8 @@ func NewUploadID() (uid UploadID) {
 	return
 }
 
-// UploadIDFromString parses an upload ID from its hexadecimal string
-// representation.
-func UploadIDFromString(s string) (UploadID, error) {
+// ParseUploadID parses an upload ID from its hexadecimal string representation.
+func ParseUploadID(s string) (UploadID, error) {
 	var uid UploadID
 	if len(s) != 32 {
 		return UploadID{}, fmt.Errorf("invalid length: got %d, want 32", len(s))
@@ -179,15 +178,20 @@ func (s *s3) routeMultipartUpload(w http.ResponseWriter, r *http.Request, access
 		return err
 	}
 
+	validatedID, err := ParseUploadID(uploadID)
+	if err != nil {
+		return s3errs.ErrNoSuchUpload
+	}
+
 	switch r.Method {
 	case http.MethodPut:
-		return s.addUploadPart(w, r, validatedKey, bucket, object, uploadID)
+		return s.addUploadPart(w, r, validatedKey, bucket, object, validatedID)
 	case http.MethodGet:
-		return s.listUploadParts(w, r, validatedKey, bucket, object, uploadID)
+		return s.listUploadParts(w, r, validatedKey, bucket, object, validatedID)
 	case http.MethodPost:
-		return s.completeMultipartUpload(w, r, validatedKey, bucket, object, uploadID)
+		return s.completeMultipartUpload(w, r, validatedKey, bucket, object, validatedID)
 	case http.MethodDelete:
-		return s.abortMultipartUpload(w, r, validatedKey, bucket, object, uploadID)
+		return s.abortMultipartUpload(w, r, validatedKey, bucket, object, validatedID)
 	default:
 		return s3errs.ErrMethodNotAllowed
 	}
@@ -212,11 +216,11 @@ func (s *s3) routeMultipartUploadBase(w http.ResponseWriter, r *http.Request, ac
 	}
 }
 
-func (s *s3) abortMultipartUpload(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object, uploadID string) error {
+func (s *s3) abortMultipartUpload(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object string, uploadID UploadID) error {
 	log := s.logger.With(
 		zap.String("bucket", bucket),
 		zap.String("object", object),
-		zap.String("uploadID", uploadID),
+		zap.Stringer("uploadID", uploadID),
 	)
 	log.Debug("abort multipart upload")
 
@@ -274,14 +278,13 @@ func (s *s3) listMultipartUploads(w http.ResponseWriter, r *http.Request, access
 		return s3errs.ErrInvalidArgument
 	}
 
-	uploadIDMarker, _ := UploadIDFromString(query.Get("upload-id-marker"))
 	opts := ListMultipartUploadsOptions{
 		Prefix:    query.Get("prefix"),
 		Delimiter: query.Get("delimiter"),
 	}
 	page := ListMultipartUploadsPage{
 		KeyMarker:      query.Get("key-marker"),
-		UploadIDMarker: uploadIDMarker,
+		UploadIDMarker: query.Get("upload-id-marker"),
 		MaxUploads:     maxUploads,
 	}
 
@@ -296,11 +299,11 @@ func (s *s3) listMultipartUploads(w http.ResponseWriter, r *http.Request, access
 		Prefix:             opts.Prefix,
 		Delimiter:          opts.Delimiter,
 		KeyMarker:          page.KeyMarker,
-		UploadIDMarker:     page.UploadIDMarker.String(),
+		UploadIDMarker:     page.UploadIDMarker,
 		MaxUploads:         maxUploads,
 		IsTruncated:        result.IsTruncated,
 		NextKeyMarker:      result.NextKeyMarker,
-		NextUploadIDMarker: result.NextUploadIDMarker.String(),
+		NextUploadIDMarker: result.NextUploadIDMarker,
 	}
 
 	for _, cp := range result.CommonPrefixes {
@@ -321,12 +324,12 @@ func (s *s3) listMultipartUploads(w http.ResponseWriter, r *http.Request, access
 	return writeXMLResponse(w, resp)
 }
 
-func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, accessKeyID, dstBucket, dstObject, uploadID string, partNumber int) error {
+func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, accessKeyID, dstBucket, dstObject string, uploadID UploadID, partNumber int) error {
 	source := r.Header.Get("X-Amz-Copy-Source")
 	rnge := r.Header.Get("X-Amz-Copy-Source-Range")
 	log := s.logger.With(zap.String("dstBucket", dstBucket),
 		zap.String("dstObject", dstObject),
-		zap.String("uploadID", uploadID),
+		zap.Stringer("uploadID", uploadID),
 		zap.String("source", source),
 		zap.String("range", rnge),
 		zap.Int("partNumber", partNumber),
@@ -361,7 +364,7 @@ func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, accessKeyID, dstBu
 		return err
 	}
 
-	etag := FormatETag(result.ContentMD5[:])
+	etag := FormatETag(result.ContentMD5[:], 0)
 	w.Header().Set("ETag", etag)
 	return writeXMLResponse(w, PartCopyResult{
 		ETag:         etag,
@@ -369,11 +372,11 @@ func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, accessKeyID, dstBu
 	})
 }
 
-func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object, uploadID string) error {
+func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object string, uploadID UploadID) error {
 	log := s.logger.With(
 		zap.String("bucket", bucket),
 		zap.String("object", object),
-		zap.String("uploadID", uploadID),
+		zap.Stringer("uploadID", uploadID),
 		zap.String("partNumber", r.URL.Query().Get("partNumber")),
 	)
 	log.Debug("upload multipart part")
@@ -423,15 +426,15 @@ func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, accessKeyID, 
 		return err
 	}
 
-	w.Header().Set("ETag", FormatETag(res.ContentMD5[:]))
+	w.Header().Set("ETag", FormatETag(res.ContentMD5[:], 0))
 	return nil
 }
 
-func (s *s3) listUploadParts(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object, uploadID string) error {
+func (s *s3) listUploadParts(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object string, uploadID UploadID) error {
 	log := s.logger.With(
 		zap.String("bucket", bucket),
 		zap.String("object", object),
-		zap.String("uploadID", uploadID),
+		zap.Stringer("uploadID", uploadID),
 	)
 	log.Debug("list multipart parts")
 
@@ -452,7 +455,7 @@ func (s *s3) listUploadParts(w http.ResponseWriter, r *http.Request, accessKeyID
 		Xmlns:            "http://s3.amazonaws.com/doc/2006-03-01/",
 		Bucket:           bucket,
 		Key:              object,
-		UploadID:         uploadID,
+		UploadID:         uploadID.String(),
 		PartNumberMarker: page.PartNumberMarker,
 		MaxParts:         page.MaxParts,
 		IsTruncated:      result.IsTruncated,
@@ -483,7 +486,7 @@ func (s *s3) listUploadParts(w http.ResponseWriter, r *http.Request, accessKeyID
 		resp.Parts = append(resp.Parts, ListedPartResponse{
 			PartNumber:   part.PartNumber,
 			LastModified: NewContentTime(part.LastModified),
-			ETag:         FormatETag(part.ContentMD5[:]),
+			ETag:         FormatETag(part.ContentMD5[:], 0),
 			Size:         part.Size,
 		})
 	}
@@ -491,25 +494,35 @@ func (s *s3) listUploadParts(w http.ResponseWriter, r *http.Request, accessKeyID
 	return writeXMLResponse(w, resp)
 }
 
-func (s *s3) completeMultipartUpload(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object, uploadID string) error {
+func (s *s3) completeMultipartUpload(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object string, uploadID UploadID) error {
 	log := s.logger.With(
 		zap.String("bucket", bucket),
 		zap.String("object", object),
-		zap.String("uploadID", uploadID),
+		zap.Stringer("uploadID", uploadID),
 	)
 	log.Debug("complete multipart upload")
 
 	var req CompleteMultipartUploadRequest
 	if err := decodeXMLBody(r.Body, &req); err != nil {
 		return err
+	} else if len(req.Parts) == 0 {
+		return fmt.Errorf("%w: no parts provided", s3errs.ErrInvalidRequest)
+	} else if len(req.Parts) > MaxUploadPartNumber {
+		return fmt.Errorf("%w: too many parts: %d (maximum is %d)", s3errs.ErrInvalidRequest, len(req.Parts), MaxUploadPartNumber)
 	}
 
-	completedParts, err := parseCompletedParts(req.Parts)
-	if err != nil {
-		return err
+	// deduplicate parts, keeping the last occurrence
+	parts := req.Parts
+	for i := 1; i < len(parts); i++ {
+		if parts[i].PartNumber == parts[i-1].PartNumber {
+			parts = append(parts[:i-1], parts[i:]...)
+			i--
+		} else if parts[i].PartNumber < parts[i-1].PartNumber {
+			return s3errs.ErrInvalidPartOrder
+		}
 	}
 
-	res, err := s.backend.CompleteMultipartUpload(r.Context(), accessKeyID, bucket, object, uploadID, completedParts)
+	res, err := s.backend.CompleteMultipartUpload(r.Context(), accessKeyID, bucket, object, uploadID, parts)
 	if err != nil {
 		return err
 	}
@@ -536,58 +549,6 @@ func (s *s3) completeMultipartUpload(w http.ResponseWriter, r *http.Request, acc
 	})
 }
 
-func parseCompletedParts(parts []CompleteMultipartPartXML) ([]CompletedPart, error) {
-	if len(parts) == 0 {
-		return nil, s3errs.ErrInvalidRequest
-	}
-
-	completed := make([]CompletedPart, 0, len(parts))
-	prev := 0
-	for i, part := range parts {
-		if part.PartNumber < 1 || part.PartNumber > MaxUploadPartNumber {
-			return nil, s3errs.ErrInvalidArgument // invalid part number
-		}
-		if i > 0 && part.PartNumber < prev {
-			return nil, s3errs.ErrInvalidPartOrder // invalid part order
-		}
-		prev = part.PartNumber
-
-		etag, err := parseCompletedPartETag(part.ETag)
-		if err != nil {
-			return nil, err
-		}
-
-		if len(completed) > 0 && completed[len(completed)-1].PartNumber == part.PartNumber {
-			completed[len(completed)-1] = CompletedPart{ // overwrite duplicate part number
-				PartNumber: part.PartNumber,
-				ETag:       etag,
-			}
-		} else {
-			completed = append(completed, CompletedPart{
-				PartNumber: part.PartNumber,
-				ETag:       etag,
-			})
-		}
-	}
-
-	return completed, nil
-}
-
-func parseCompletedPartETag(etagStr string) (etag [16]byte, _ error) {
-	etagStr = strings.TrimSpace(etagStr)
-	etagStr = strings.Trim(etagStr, `"`)
-	if etagStr == "" {
-		return etag, s3errs.ErrInvalidArgument
-	}
-
-	decoded, err := hex.DecodeString(etagStr)
-	if err != nil || len(decoded) != len(etag) {
-		return etag, s3errs.ErrInvalidDigest
-	}
-	copy(etag[:], decoded)
-	return etag, nil
-}
-
 func parsePartNumber(s string) (*int32, error) {
 	if s == "" {
 		return nil, nil
@@ -602,12 +563,6 @@ func parsePartNumber(s string) (*int32, error) {
 	}
 	val := int32(partNumber)
 	return &val, nil
-}
-
-// FormatMultipartETag formats the MD5 checksum of concatenated part hashes
-// along with the part count to match AWS multipart ETag semantics.
-func FormatMultipartETag(hash []byte, partCount int) string {
-	return `"` + hex.EncodeToString(hash) + "-" + strconv.Itoa(partCount) + `"`
 }
 
 // parseRange validates the X-Amz-Copy-Source-Range header. It only allows a

@@ -7,7 +7,7 @@ on:
 jobs:
   test:
     name: Tox
-    runs-on: tenki-standard-autoscale
+    runs-on: ubuntu-latest
     permissions:
       contents: read
 
@@ -43,9 +43,12 @@ jobs:
           S3TEST_CONF: ${{ github.workspace }}/s3tests.conf
         run: tox run -vv --notest -c ./s3-tests
 
+      - name: Build s3d-tox
+        run: go build -o s3d-tox ./cmd/s3d-tox
+
       - name: Launch s3d and save pid
         run: |
-          nohup go run ./cmd/s3d-tox/main.go > s3d.log 2>&1 &
+          nohup ./s3d-tox > s3d.log 2>&1 &
           echo $! > s3d.pid
 
           # wait a bit to let s3d start

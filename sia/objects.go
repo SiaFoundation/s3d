@@ -15,6 +15,7 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia/objects"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/sdk"
 	"go.uber.org/zap"
@@ -27,7 +28,7 @@ const metadataCacheLifetime = 24 * time.Hour
 // metadata that should be merged into the copied object except for the
 // x-amz-acl header.
 func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, replace bool, meta map[string]string) (*s3.CopyObjectResult, error) {
-	obj, err := s.store.GetObject(&accessKeyID, srcBucket, srcObject)
+	obj, err := s.store.GetObject(&accessKeyID, srcBucket, srcObject, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -37,14 +38,13 @@ func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject,
 	} else {
 		maps.Copy(obj.Meta, meta)
 	}
-	obj.UpdatedAt = time.Now()
 
 	if err := s.store.PutObject(accessKeyID, dstBucket, dstObject, obj); err != nil {
 		return nil, err
 	}
 	return &s3.CopyObjectResult{
 		ContentMD5:   obj.ContentMD5,
-		LastModified: obj.UpdatedAt,
+		LastModified: obj.LastModified,
 		VersionID:    "", // versioning isn't supported
 	}, nil
 }
@@ -96,39 +96,52 @@ func (s *Sia) DeleteObjects(ctx context.Context, accessKeyID, bucket string, obj
 // bucket for the user identified by the given access key. The provided
 // range is either nil if no range was requested, or contains the requested,
 // byte range.
-func (s *Sia) GetObject(ctx context.Context, accessKeyID *string, bucket, object string, rnge *s3.ObjectRangeRequest, _ *int32) (*s3.Object, error) {
-	return s.headOrGetObject(ctx, accessKeyID, bucket, object, rnge, false)
+func (s *Sia) GetObject(ctx context.Context, accessKeyID *string, bucket, object string, rnge *s3.ObjectRangeRequest, partNumber *int32) (*s3.Object, error) {
+	return s.headOrGetObject(ctx, accessKeyID, bucket, object, rnge, partNumber, false)
 }
 
 // HeadObject is like GetObject but only retrieves the metadata of the
 // object and returns an empty body.
-func (s *Sia) HeadObject(ctx context.Context, accessKeyID *string, bucket, object string, rnge *s3.ObjectRangeRequest, _ *int32) (*s3.Object, error) {
-	return s.headOrGetObject(ctx, accessKeyID, bucket, object, rnge, true)
+func (s *Sia) HeadObject(ctx context.Context, accessKeyID *string, bucket, object string, rnge *s3.ObjectRangeRequest, partNumber *int32) (*s3.Object, error) {
+	return s.headOrGetObject(ctx, accessKeyID, bucket, object, rnge, partNumber, true)
 }
 
-func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, object string, requestedRange *s3.ObjectRangeRequest, head bool) (*s3.Object, error) {
+func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, object string, requestedRange *s3.ObjectRangeRequest, partNumber *int32, head bool) (*s3.Object, error) {
 	if accessKeyID == nil {
 		// anonymous access is not supported yet
 		return nil, s3errs.ErrAccessDenied
 	}
 
-	obj, err := s.store.GetObject(accessKeyID, bucket, object)
+	obj, err := s.store.GetObject(accessKeyID, bucket, object, partNumber)
 	if err != nil {
 		return nil, err
 	}
 
-	rnge, err := requestedRange.Range(obj.Size)
-	if err != nil {
-		return nil, err
-	}
-
-	resp := &s3.Object{
-		Body:         nil,
-		ContentMD5:   obj.ContentMD5,
-		LastModified: obj.UpdatedAt,
-		Metadata:     obj.Meta,
-		Range:        rnge,
-		Size:         obj.Size,
+	var resp *s3.Object
+	if partNumber != nil {
+		resp = &s3.Object{
+			Body:         nil,
+			ContentMD5:   obj.ContentMD5,
+			LastModified: obj.LastModified,
+			Metadata:     obj.Meta,
+			Range:        &s3.ObjectRange{Start: obj.Offset, Length: obj.Length},
+			Size:         obj.Length,
+			PartsCount:   aws.Int32(obj.PartsCount),
+		}
+	} else {
+		rnge, err := requestedRange.Range(obj.Length)
+		if err != nil {
+			return nil, err
+		}
+		resp = &s3.Object{
+			Body:         nil,
+			ContentMD5:   obj.ContentMD5,
+			LastModified: obj.LastModified,
+			Metadata:     obj.Meta,
+			Range:        rnge,
+			Size:         obj.Length,
+			PartsCount:   nil,
+		}
 	}
 
 	// if this is a head request, we are done
@@ -137,7 +150,7 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 	}
 
 	// handle empty objects without downloading from Sia
-	if obj.Size == 0 {
+	if obj.Length == 0 {
 		resp.Body = io.NopCloser(bytes.NewReader(nil))
 		return resp, nil
 	}
@@ -151,7 +164,7 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 	pr, pw := io.Pipe()
 	go func() {
 		defer pw.Close()
-		err = s.sdk.Download(ctx, pw, obj.CachedMetadata, rnge)
+		err = s.sdk.Download(ctx, pw, obj.CachedMetadata, resp.Range)
 		if err != nil {
 			s.logger.Error("download failed", zap.Error(err), zap.String("bucket", bucket), zap.String("object", object))
 			pw.CloseWithError(err)
@@ -272,8 +285,7 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 		ID:             objectID,
 		ContentMD5:     contentMD5,
 		Meta:           opts.Meta,
-		Size:           lr.N,
-		UpdatedAt:      time.Now(),
+		Length:         lr.N,
 		CachedMetadata: cachedMetadata,
 		CachedAt:       cachedAt,
 	}); err != nil {

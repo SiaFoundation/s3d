@@ -2,7 +2,6 @@ package sqlite
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -11,6 +10,8 @@ import (
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"github.com/SiaFoundation/s3d/sia/objects"
+	"go.sia.tech/core/types"
 )
 
 // CreateMultipartUpload persists metadata for a new multipart upload.
@@ -25,18 +26,109 @@ func (s *Store) CreateMultipartUpload(bucket, name string, uploadID s3.UploadID,
 			return err
 		}
 
-		metaJson, err := json.Marshal(meta)
+		if _, err := tx.Exec(`
+				INSERT INTO multipart_uploads (upload_id, bucket_id, name, metadata, created_at)
+				VALUES ($1, $2, $3, $4, $5)
+			`, sqlUploadID(uploadID), bid, name, sqlMetaJSON(meta), sqlTime(time.Now())); err != nil {
+			return fmt.Errorf("failed to insert multipart upload: %w", err)
+		}
+		return nil
+	})
+}
+
+// CompleteMultipartUpload finalizes a multipart upload by creating the object
+// and transferring parts from the upload to the object.
+func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, objectID types.Hash256, contentMD5 [16]byte, contentLength int64) error {
+	return s.transaction(func(tx *txn) error {
+		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
 
-		if _, err := tx.Exec(`
-				INSERT INTO multipart_uploads (upload_id, bucket_id, name, metadata, created_at)
-				VALUES ($1, $2, $3, $4, $5)
-			`, sqlUploadID(uploadID), bid, name, string(metaJson), sqlTime(time.Now())); err != nil {
-			return fmt.Errorf("failed to insert multipart upload: %w", err)
+		var exists bool
+		err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM multipart_uploads WHERE upload_id = $1 AND bucket_id = $2 AND name = $3)`,
+			sqlUploadID(uploadID), bid, name).Scan(&exists)
+		if err != nil {
+			return err
 		}
-		return nil
+		if !exists {
+			return s3errs.ErrNoSuchUpload
+		}
+
+		// validate parts exist
+		var partCount, maxPartNumber int
+		var totalSize int64
+		err = tx.QueryRow(`
+			SELECT COUNT(*), MAX(part_number), SUM(content_length)
+			FROM multipart_parts
+			WHERE upload_id = $1
+		`, sqlUploadID(uploadID)).Scan(&partCount, &maxPartNumber, &totalSize)
+		if err != nil {
+			return err
+		} else if partCount == 0 {
+			return errors.New("cannot complete multipart upload with no parts")
+		} else if totalSize != contentLength {
+			return fmt.Errorf("total part size (%d) does not match content length (%d)", totalSize, contentLength)
+		}
+
+		// verify all parts except last meet minimum size
+		var smallParts int
+		err = tx.QueryRow(`
+			SELECT COUNT(*)
+			FROM multipart_parts
+			WHERE upload_id = $1
+			  AND part_number < $2
+			  AND content_length < $3
+		`, sqlUploadID(uploadID), maxPartNumber, s3.MinUploadPartSize).Scan(&smallParts)
+		if err != nil {
+			return err
+		}
+		if smallParts > 0 {
+			return fmt.Errorf("found %d parts smaller than minimum size (%d bytes)", smallParts, s3.MinUploadPartSize)
+		}
+
+		// delete any existing parts for the object
+		_, err = tx.Exec(`DELETE FROM object_parts WHERE bucket_id = $1 AND name = $2`, bid, name)
+		if err != nil {
+			return err
+		}
+
+		// upsert object with metadata from multipart upload
+		_, err = tx.Exec(`
+			INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at, cached_metadata, cached_at)
+			SELECT bucket_id, name, $1, $2, metadata, $3, $4, '{}', 0
+			FROM multipart_uploads
+			WHERE upload_id = $5
+			ON CONFLICT(bucket_id, name) DO UPDATE SET
+				object_id = excluded.object_id,
+				content_md5 = excluded.content_md5,
+				metadata = excluded.metadata,
+				size = excluded.size,
+				updated_at = excluded.updated_at,
+				cached_metadata = excluded.cached_metadata,
+				cached_at = excluded.cached_at
+		`, sqlHash256(objectID), sqlMD5(contentMD5), contentLength, sqlTime(time.Now()), sqlUploadID(uploadID))
+		if err != nil {
+			return err
+		}
+
+		// move parts to object_parts
+		_, err = tx.Exec(`
+			INSERT INTO object_parts (bucket_id, name, part_number, content_md5, content_length, offset)
+			SELECT $1, $2, part_number, content_md5, content_length,
+				(SELECT COALESCE(SUM(content_length), 0)
+				FROM multipart_parts mp
+				WHERE mp.upload_id = $3 AND mp.part_number < multipart_parts.part_number)
+			FROM multipart_parts
+			WHERE upload_id = $3
+		`, bid, name, sqlUploadID(uploadID))
+		if err != nil {
+			return err
+		}
+
+		// delete the multipart upload
+		_, err = tx.Exec(`DELETE FROM multipart_uploads WHERE upload_id = $1`, sqlUploadID(uploadID))
+		return err
 	})
 }
 
@@ -63,7 +155,7 @@ func (s *Store) AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) 
 }
 
 // AddMultipartPart adds metadata for a multipart part to the store.
-func (s *Store) AddMultipartPart(bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentSHA256 *[32]byte, contentLength int64) (string, error) {
+func (s *Store) AddMultipartPart(bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (string, error) {
 	var prevFilename string
 	if err := s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
@@ -71,7 +163,6 @@ func (s *Store) AddMultipartPart(bucket, name string, uploadID s3.UploadID, file
 			return err
 		}
 
-		// Verify the multipart upload exists
 		var exists bool
 		err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM multipart_uploads WHERE upload_id = $1 AND bucket_id = $2 AND name = $3)`,
 			sqlUploadID(uploadID), bid, name).Scan(&exists)
@@ -82,27 +173,21 @@ func (s *Store) AddMultipartPart(bucket, name string, uploadID s3.UploadID, file
 			return s3errs.ErrNoSuchUpload
 		}
 
-		var sha256Value any
-		if contentSHA256 != nil {
-			sha256Value = sqlHash256(*contentSHA256)
-		}
-
-		err = tx.QueryRow(`SELECT filename FROM multipart_parts WHERE multipart_upload_id = $1 AND part_number = $2`,
+		err = tx.QueryRow(`SELECT filename FROM multipart_parts WHERE upload_id = $1 AND part_number = $2`,
 			sqlUploadID(uploadID), partNumber).Scan(&prevFilename)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
 
 		_, err = tx.Exec(`
-			INSERT INTO multipart_parts (multipart_upload_id, part_number, filename, content_md5, content_sha256, content_length, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7)
-			ON CONFLICT(multipart_upload_id, part_number) DO UPDATE SET
+			INSERT INTO multipart_parts (upload_id, part_number, filename, content_md5, content_length, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6)
+			ON CONFLICT(upload_id, part_number) DO UPDATE SET
 				filename       = EXCLUDED.filename,
 				content_md5    = EXCLUDED.content_md5,
-				content_sha256 = EXCLUDED.content_sha256,
 				content_length = EXCLUDED.content_length,
 				created_at     = EXCLUDED.created_at
-		`, sqlUploadID(uploadID), partNumber, filename, sqlMD5(contentMD5), sha256Value, contentLength, sqlTime(time.Now()))
+		`, sqlUploadID(uploadID), partNumber, filename, sqlMD5(contentMD5), contentLength, sqlTime(time.Now()))
 		return err
 	}); err != nil {
 		return "", err
@@ -129,6 +214,49 @@ func (s *Store) HasMultipartUpload(bucket, name string, uploadID s3.UploadID) er
 		}
 		return nil
 	})
+}
+
+// MultipartParts returns the parts belonging to the specified multipart upload.
+func (s *Store) MultipartParts(bucket, name string, uploadID s3.UploadID) ([]objects.Part, error) {
+	var parts []objects.Part
+	if err := s.transaction(func(tx *txn) error {
+		bid, err := bucketID(tx, bucket)
+		if err != nil {
+			return err
+		}
+
+		var exists bool
+		err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM multipart_uploads WHERE upload_id = $1 AND bucket_id = $2 AND name = $3)`,
+			sqlUploadID(uploadID), bid, name).Scan(&exists)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return s3errs.ErrNoSuchUpload
+		}
+
+		rows, err := tx.Query(`
+			SELECT part_number, filename, content_md5, content_length
+			FROM multipart_parts
+			WHERE upload_id = $1
+			ORDER BY part_number ASC`, sqlUploadID(uploadID))
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var part objects.Part
+			if err := rows.Scan(&part.PartNumber, &part.Filename, (*sqlMD5)(&part.ContentMD5), &part.Size); err != nil {
+				return err
+			}
+			parts = append(parts, part)
+		}
+		return rows.Err()
+	}); err != nil {
+		return nil, err
+	}
+	return parts, nil
 }
 
 // ListParts lists uploaded parts for a multipart upload.
@@ -160,7 +288,7 @@ func (s *Store) ListParts(bucket, name string, uploadID s3.UploadID, partNumberM
 		rows, err := tx.Query(`
 			SELECT part_number, content_length, content_md5, created_at
 			FROM multipart_parts
-			WHERE multipart_upload_id = $1 AND part_number > $2
+			WHERE upload_id = $1 AND part_number > $2
 			ORDER BY part_number ASC
 			LIMIT $3
 		`, sqlUploadID(uploadID), partNumberMarker, maxParts+1)
@@ -193,8 +321,15 @@ func (s *Store) ListParts(bucket, name string, uploadID s3.UploadID, partNumberM
 
 // ListMultipartUploads lists all multipart uploads for the given bucket and
 // filters.
-func (s *Store) ListMultipartUploads(bucket string, prefix s3.Prefix, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error) {
-	uploadIDMarker := page.UploadIDMarker
+func (s *Store) ListMultipartUploads(bucket string, prefix s3.Prefix, page s3.ListMultipartUploadsPage) (_ *s3.ListMultipartUploadsResult, err error) {
+	// parse upload ID marker
+	var uploadIDMarker s3.UploadID
+	if page.UploadIDMarker != "" {
+		uploadIDMarker, err = s3.ParseUploadID(page.UploadIDMarker)
+		if err != nil {
+			return nil, s3errs.ErrInvalidArgument
+		}
+	}
 
 	// adjust marker if it falls inside a common prefix
 	keyMarker := page.KeyMarker
@@ -220,7 +355,7 @@ func (s *Store) ListMultipartUploads(bucket string, prefix s3.Prefix, page s3.Li
 		CommonPrefixes: make([]string, 0, page.MaxUploads),
 	}
 
-	err := s.transaction(func(tx *txn) error {
+	err = s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
@@ -256,7 +391,7 @@ func (s *Store) ListMultipartUploads(bucket string, prefix s3.Prefix, page s3.Li
 					if len(res.Uploads)+len(res.CommonPrefixes) >= int(page.MaxUploads) {
 						res.IsTruncated = true
 						res.NextKeyMarker = currentKeyMarker
-						res.NextUploadIDMarker = currentUploadIDMarker
+						res.NextUploadIDMarker = currentUploadIDMarker.String()
 						break
 					}
 					continue
@@ -268,7 +403,7 @@ func (s *Store) ListMultipartUploads(bucket string, prefix s3.Prefix, page s3.Li
 					if len(res.Uploads)+len(res.CommonPrefixes) >= int(page.MaxUploads) {
 						res.IsTruncated = true
 						res.NextKeyMarker = currentKeyMarker
-						res.NextUploadIDMarker = currentUploadIDMarker
+						res.NextUploadIDMarker = currentUploadIDMarker.String()
 						break
 					}
 				}
