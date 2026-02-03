@@ -168,7 +168,7 @@ type Backend interface {
 	//
 	// - If the multipart upload ID is not known or no longer active,
 	//   [ErrNoSuchUpload] must be returned.
-	AbortMultipartUpload(ctx context.Context, accessKeyID, bucket, object, uploadID string) error
+	AbortMultipartUpload(ctx context.Context, accessKeyID, bucket, object string, uploadID UploadID) error
 
 	// UploadPart uploads a single part for a previously initiated multipart
 	// upload.
@@ -186,7 +186,7 @@ type Backend interface {
 	//
 	// - If ContentMD5 or ContentSHA256 are set in opts, and the checksums of
 	//   the data read from 'r' do not match, [ErrBadDigest] must be returned.
-	UploadPart(ctx context.Context, accessKeyID, bucket, object, uploadID string, r io.Reader, opts UploadPartOptions) (*UploadPartResult, error)
+	UploadPart(ctx context.Context, accessKeyID, bucket, object string, uploadID UploadID, r io.Reader, opts UploadPartOptions) (*UploadPartResult, error)
 
 	// UploadPartCopy copies a part from an existing object as part of a
 	// multipart upload.
@@ -201,7 +201,7 @@ type Backend interface {
 	//
 	// - If the multipart upload ID is not known or no longer active,
 	//   [ErrNoSuchUpload] must be returned.
-	UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject, uploadID string, opts UploadPartCopyOptions) (*UploadPartCopyResult, error)
+	UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, uploadID UploadID, opts UploadPartCopyOptions) (*UploadPartCopyResult, error)
 
 	// ListParts lists uploaded parts for the specified multipart upload.
 	//
@@ -212,7 +212,7 @@ type Backend interface {
 	//
 	// - If the multipart upload ID is not known or no longer active,
 	//   [ErrNoSuchUpload] must be returned.
-	ListParts(ctx context.Context, accessKeyID, bucket, object, uploadID string, page ListPartsPage) (*ListPartsResult, error)
+	ListParts(ctx context.Context, accessKeyID, bucket, object string, uploadID UploadID, page ListPartsPage) (*ListPartsResult, error)
 
 	// CompleteMultipartUpload completes a multipart upload by assembling the
 	// previously uploaded parts into the final object.
@@ -223,9 +223,11 @@ type Backend interface {
 	// - If any referenced part is missing or its ETag does not match,
 	//   [ErrInvalidPart] must be returned.
 	//
-	// NOTE: the parts slice is expected to be sorted by part number and contain
-	// no duplicates.
-	CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, object, uploadID string, parts []CompletedPart) (*CompleteMultipartUploadResult, error)
+	// - If the part numbers of the parts are not provided in ascending order,
+	//   [ErrInvalidPartOrder] must be returned.
+	//
+	// - If the last part is below the minimum size, [ErrEntityTooSmall] must be returned.
+	CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, object string, uploadID UploadID, parts []CompleteMultipartPart) (*CompleteMultipartUploadResult, error)
 }
 
 type s3 struct {

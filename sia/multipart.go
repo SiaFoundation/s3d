@@ -13,6 +13,7 @@ import (
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.uber.org/zap"
 	"lukechampine.com/frand"
 )
@@ -63,25 +64,19 @@ func (s *Sia) ListMultipartUploads(ctx context.Context, accessKeyID, bucket stri
 }
 
 // AbortMultipartUpload aborts a multipart upload.
-func (s *Sia) AbortMultipartUpload(ctx context.Context, accessKeyID, bucket, object, uploadID string) error {
+func (s *Sia) AbortMultipartUpload(ctx context.Context, accessKeyID, bucket, object string, uploadID s3.UploadID) error {
 	// quick check if the bucket exists
 	if err := s.store.HeadBucket(accessKeyID, bucket); err != nil {
 		return err
 	}
 
-	// parse upload ID
-	uid, err := s3.UploadIDFromString(uploadID)
-	if err != nil {
-		return s3errs.ErrNoSuchUpload
-	}
-
 	// abort the multipart upload in the database
-	if err := s.store.AbortMultipartUpload(bucket, object, uid); err != nil {
+	if err := s.store.AbortMultipartUpload(bucket, object, uploadID); err != nil {
 		return fmt.Errorf("failed to abort multipart upload: %w", err)
 	}
 
 	// remove multipart upload directory
-	uploadDir := filepath.Join(s.directory, uploadID)
+	uploadDir := filepath.Join(s.directory, uploadID.String())
 	if err := os.RemoveAll(uploadDir); err != nil && !errors.Is(err, os.ErrNotExist) {
 		s.logger.Error("failed to remove multipart upload directory",
 			zap.String("path", uploadDir),
@@ -92,20 +87,14 @@ func (s *Sia) AbortMultipartUpload(ctx context.Context, accessKeyID, bucket, obj
 }
 
 // UploadPart uploads a single multipart part.
-func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object, uploadID string, r io.Reader, opts s3.UploadPartOptions) (_ *s3.UploadPartResult, err error) {
-	// parse upload ID
-	uid, err := s3.UploadIDFromString(uploadID)
-	if err != nil {
-		return nil, s3errs.ErrNoSuchUpload
-	}
-
+func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object string, uploadID s3.UploadID, r io.Reader, opts s3.UploadPartOptions) (_ *s3.UploadPartResult, err error) {
 	// check if the multipart upload exists
-	if err := s.store.HasMultipartUpload(bucket, object, uid); err != nil {
+	if err := s.store.HasMultipartUpload(bucket, object, uploadID); err != nil {
 		return nil, err
 	}
 
 	// create part directory
-	partDir := filepath.Join(s.directory, uploadID, fmt.Sprintf("%d", opts.PartNumber))
+	partDir := filepath.Join(s.directory, uploadID.String(), fmt.Sprintf("%d", opts.PartNumber))
 	if err := os.Mkdir(partDir, 0700); errors.Is(err, os.ErrNotExist) {
 		return nil, s3errs.ErrNoSuchUpload
 	} else if err != nil && !errors.Is(err, os.ErrExist) {
@@ -182,7 +171,7 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object, uploa
 	}
 
 	// add multipart part to the database
-	previous, err := s.store.AddMultipartPart(bucket, object, uid, filepath.Base(partPath), opts.PartNumber, contentMD5, contentSHA256, contentLength)
+	previous, err := s.store.AddMultipartPart(bucket, object, uploadID, filepath.Base(partPath), opts.PartNumber, contentMD5, contentLength)
 	if err != nil {
 		return nil, fmt.Errorf("failed to add part: %w", err)
 	} else if previous != "" {
@@ -198,26 +187,20 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object, uploa
 }
 
 // UploadPartCopy uploads a part by copying data from an existing object.
-func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject, uploadID string, opts s3.UploadPartCopyOptions) (*s3.UploadPartCopyResult, error) {
-	// parse upload ID
-	uid, err := s3.UploadIDFromString(uploadID)
-	if err != nil {
-		return nil, s3errs.ErrNoSuchUpload
-	}
-
+func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, uploadID s3.UploadID, opts s3.UploadPartCopyOptions) (*s3.UploadPartCopyResult, error) {
 	// check if the multipart upload exists
-	if err := s.store.HasMultipartUpload(dstBucket, dstObject, uid); err != nil {
+	if err := s.store.HasMultipartUpload(dstBucket, dstObject, uploadID); err != nil {
 		return nil, err
 	}
 
 	// fetch source object metadata
-	obj, err := s.store.GetObject(&accessKeyID, srcBucket, srcObject)
+	obj, err := s.store.GetObject(&accessKeyID, srcBucket, srcObject, nil)
 	if err != nil {
 		return nil, err
 	}
 
 	// validate range
-	if opts.Range.Length <= 0 || opts.Range.Start < 0 || opts.Range.Start >= obj.Size || opts.Range.Length > obj.Size-opts.Range.Start {
+	if opts.Range.Length <= 0 || opts.Range.Start < 0 || opts.Range.Start >= obj.Length || opts.Range.Length > obj.Length-opts.Range.Start {
 		return nil, s3errs.ErrInvalidRange
 	} else if opts.Range.Length > s3.MaxUploadPartSize {
 		return nil, s3errs.ErrEntityTooLarge
@@ -230,7 +213,7 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 	}
 
 	// create part directory
-	partDir := filepath.Join(s.directory, uploadID, fmt.Sprintf("%d", opts.PartNumber))
+	partDir := filepath.Join(s.directory, uploadID.String(), fmt.Sprintf("%d", opts.PartNumber))
 	if err := os.Mkdir(partDir, 0700); errors.Is(err, os.ErrNotExist) {
 		return nil, s3errs.ErrNoSuchUpload
 	} else if err != nil && !errors.Is(err, os.ErrExist) {
@@ -291,7 +274,7 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 	}
 
 	// add multipart part to the database
-	previous, err := s.store.AddMultipartPart(dstBucket, dstObject, uid, filepath.Base(partPath), opts.PartNumber, contentMD5, nil, contentLength)
+	previous, err := s.store.AddMultipartPart(dstBucket, dstObject, uploadID, filepath.Base(partPath), opts.PartNumber, contentMD5, contentLength)
 	if err != nil {
 		return nil, fmt.Errorf("failed to add part: %w", err)
 	} else if previous != "" {
@@ -305,24 +288,105 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 
 	return &s3.UploadPartCopyResult{
 		ContentMD5:   contentMD5,
-		LastModified: obj.UpdatedAt,
+		LastModified: obj.LastModified,
 	}, nil
 }
 
 // ListParts lists uploaded parts for a multipart upload.
-func (s *Sia) ListParts(ctx context.Context, accessKeyID, bucket, object, uploadID string, page s3.ListPartsPage) (*s3.ListPartsResult, error) {
-	// parse upload ID
-	uid, err := s3.UploadIDFromString(uploadID)
-	if err != nil {
-		return nil, s3errs.ErrNoSuchUpload
-	}
-
-	return s.store.ListParts(bucket, object, uid, page.PartNumberMarker, page.MaxParts)
+func (s *Sia) ListParts(ctx context.Context, accessKeyID, bucket, object string, uploadID s3.UploadID, page s3.ListPartsPage) (*s3.ListPartsResult, error) {
+	return s.store.ListParts(bucket, object, uploadID, page.PartNumberMarker, page.MaxParts)
 }
 
 // CompleteMultipartUpload completes a multipart upload.
-func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, object, uploadID string, parts []s3.CompletedPart) (*s3.CompleteMultipartUploadResult, error) {
-	return nil, s3errs.ErrNotImplemented
+func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, object string, uploadID s3.UploadID, parts []s3.CompleteMultipartPart) (*s3.CompleteMultipartUploadResult, error) {
+	// get multipart upload
+	uploaded, err := s.store.MultipartParts(bucket, object, uploadID)
+	if err != nil {
+		return nil, err
+	}
+
+	// build map of uploaded parts
+	lookup := make(map[int]objects.Part)
+	for _, part := range uploaded {
+		lookup[part.PartNumber] = part
+	}
+
+	// validate parts
+	completed := make([]objects.Part, len(parts))
+	for i, p := range parts {
+		part, ok := lookup[p.PartNumber]
+		if !ok {
+			return nil, s3errs.ErrInvalidPart
+		}
+		if s3.ParseETag(p.ETag) != part.ContentMD5 {
+			return nil, s3errs.ErrInvalidPart
+		}
+		lastPart := i == len(parts)-1
+		if !lastPart && part.Size < s3.MinUploadPartSize {
+			return nil, s3errs.ErrEntityTooSmall
+		}
+		completed[i] = part
+	}
+
+	// validate part numbers are in ascending order
+	for i := 1; i < len(parts); i++ {
+		if parts[i].PartNumber <= parts[i-1].PartNumber {
+			return nil, s3errs.ErrInvalidPartOrder
+		}
+	}
+
+	// assert the upload directory exists
+	uploadDir := filepath.Join(s.directory, uploadID.String())
+	if _, err := os.Stat(uploadDir); err != nil {
+		return nil, fmt.Errorf("failed to stat upload directory: %w", err)
+	}
+
+	// create reader for the completed object
+	r, err := objects.NewReader(uploadDir, completed)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create multipart reader: %w", err)
+	}
+	defer r.Close()
+
+	// upload the combined object to Sia
+	obj, err := s.sdk.Upload(ctx, r)
+	if err != nil {
+		return nil, fmt.Errorf("failed to upload object to Sia: %w", err)
+	}
+
+	// compute final content MD5
+	hash := md5.New()
+	for _, part := range completed {
+		hash.Write(part.ContentMD5[:])
+	}
+	var contentMD5 [16]byte
+	copy(contentMD5[:], hash.Sum(nil))
+
+	// compute final content length
+	var contentLength int64
+	for _, part := range completed {
+		contentLength += int64(part.Size)
+	}
+
+	// complete the multipart upload in the database
+	if err := s.store.CompleteMultipartUpload(bucket, object, uploadID, obj.ID(), contentMD5, contentLength); err != nil {
+		return nil, fmt.Errorf("failed to complete multipart upload in store: %w", err)
+	}
+
+	// remove multipart upload directory
+	if err := os.RemoveAll(uploadDir); err != nil {
+		s.logger.Error("failed to remove multipart upload directory after completion",
+			zap.String("path", uploadDir),
+			zap.Error(err))
+	}
+
+	// calculate ETag
+	etag := s3.FormatETag(contentMD5[:], len(completed))
+
+	return &s3.CompleteMultipartUploadResult{
+		ETag:       etag,
+		ContentMD5: contentMD5,
+	}, nil
 }
 
 // lenWriter counts bytes written while forwarding to the wrapped writer.

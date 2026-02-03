@@ -8,12 +8,14 @@ import (
 
 // Object represents a stored object with its metadata.
 type Object struct {
-	Name       string
-	ID         types.Hash256
-	ContentMD5 [16]byte
-	Meta       map[string]string
-	Size       int64
-	UpdatedAt  time.Time
+	ID           types.Hash256
+	Name         string
+	PartsCount   int32
+	Meta         map[string]string
+	Offset       int64
+	Length       int64
+	ContentMD5   [16]byte
+	LastModified time.Time
 }
 
 // Part represents a single part of a multipart upload.

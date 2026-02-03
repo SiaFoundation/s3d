@@ -179,7 +179,7 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, accessKeyID, dst
 		if err != nil {
 			return err
 		}
-		etag := FormatETag(obj.ContentMD5[:])
+		etag := FormatETag(obj.ContentMD5[:], 0)
 		if ifMatch != "" && ifMatch != etag {
 			return s3errs.ErrPreconditionFailed
 		}
@@ -198,7 +198,7 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, accessKeyID, dst
 		w.Header().Set("x-amz-version-id", string(result.VersionID))
 	}
 
-	etag := FormatETag(result.ContentMD5[:])
+	etag := FormatETag(result.ContentMD5[:], 0)
 	w.Header().Set("ETag", etag)
 	return writeXMLResponse(w, ObjectCopyResult{
 		ETag:         etag,
@@ -580,13 +580,40 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID strin
 		return err
 	}
 
-	w.Header().Set("ETag", FormatETag(res.ContentMD5[:]))
+	w.Header().Set("ETag", FormatETag(res.ContentMD5[:], 0))
 	return nil
 }
 
 // FormatETag formats the given hash as an S3 ETag string.
-func FormatETag(hash []byte) string {
+func FormatETag(hash []byte, partsCount int) string {
+	if partsCount > 1 {
+		return `"` + hex.EncodeToString(hash) + "-" + strconv.Itoa(partsCount) + `"`
+	}
 	return `"` + hex.EncodeToString(hash) + `"`
+}
+
+// ParseETag attempts to parse the given ETag string into a 16-byte MD5 sum.
+// Returns a zero array if the ETag is empty or invalid.
+func ParseETag(s string) [16]byte {
+	s = strings.TrimSpace(s)
+	s = strings.Trim(s, `"`)
+	if s == "" {
+		return [16]byte{}
+	}
+
+	// strip multipart suffix
+	if idx := strings.LastIndex(s, "-"); idx != -1 {
+		s = s[:idx]
+	}
+
+	var etag [16]byte
+	decoded, err := hex.DecodeString(s)
+	if err != nil {
+		return [16]byte{}
+	}
+	copy(etag[:], decoded)
+
+	return etag
 }
 
 // parseSource parses an X-Amz-Copy-Source string and returns the bucket and
@@ -863,7 +890,7 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	etag := FormatETag(obj.ContentMD5[:])
+	etag := FormatETag(obj.ContentMD5[:], 0)
 	w.Header().Set("ETag", etag)
 
 	if r.Header.Get("If-None-Match") == etag {

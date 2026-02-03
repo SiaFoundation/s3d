@@ -18,7 +18,7 @@ CREATE TABLE objects (
     metadata TEXT NOT NULL,
     size INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
-    PRIMARY KEY(bucket_id, name)
+    PRIMARY KEY (bucket_id, name)
 ) WITHOUT ROWID;
 
 CREATE TABLE multipart_uploads (
@@ -33,16 +33,25 @@ CREATE INDEX multipart_uploads_bucket_id_name_idx ON multipart_uploads(bucket_id
 CREATE INDEX multipart_uploads_bucket_id_name_upload_id_idx ON multipart_uploads(bucket_id, name, upload_id);
 
 CREATE TABLE multipart_parts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    multipart_upload_id BLOB NOT NULL,
+    upload_id BLOB NOT NULL,
     part_number INTEGER NOT NULL,
     filename TEXT NOT NULL,
     content_md5 BLOB NOT NULL,
-    content_sha256 BLOB,
     content_length INTEGER NOT NULL,
     created_at INTEGER NOT NULL,
-    FOREIGN KEY (multipart_upload_id) REFERENCES multipart_uploads(upload_id) ON DELETE CASCADE,
-    UNIQUE(multipart_upload_id, part_number)
+    FOREIGN KEY (upload_id) REFERENCES multipart_uploads(upload_id) ON DELETE CASCADE,
+    PRIMARY KEY (upload_id, part_number)
+);
+
+CREATE TABLE object_parts (
+    bucket_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    part_number INTEGER NOT NULL,
+    content_md5 BLOB NOT NULL,
+    content_length INTEGER NOT NULL,
+    offset INTEGER NOT NULL,
+    FOREIGN KEY (bucket_id, name) REFERENCES objects(bucket_id, name) ON DELETE CASCADE,
+    PRIMARY KEY (bucket_id, name, part_number)
 );
 
 CREATE TABLE global_settings (

@@ -2,7 +2,6 @@ package sqlite
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -11,6 +10,7 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia/objects"
+	"go.sia.tech/core/types"
 )
 
 // DeleteObject deletes the object with the given bucket and name if it exists
@@ -34,7 +34,7 @@ func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) e
 				return err
 			}
 
-			if objectID.ETag != nil && *objectID.ETag != s3.FormatETag(contentMD5[:]) {
+			if objectID.ETag != nil && *objectID.ETag != s3.FormatETag(contentMD5[:], 0) {
 				return s3errs.ErrPreconditionFailed
 			}
 			if objectID.Size != nil && *objectID.Size != size {
@@ -51,51 +51,70 @@ func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) e
 }
 
 // GetObject retrieves the object with the given bucket and name.
-func (s *Store) GetObject(accessKeyID *string, bucket, name string) (*objects.Object, error) {
+func (s *Store) GetObject(accessKeyID *string, bucket, name string, partNumber *int32) (*objects.Object, error) {
 	var obj objects.Object
-	err := s.transaction(func(tx *txn) error {
+	if err := s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
 
-		var meta string
+		// get parts count
 		err = tx.QueryRow(`
-			SELECT name, object_id, content_md5, metadata, size, updated_at
-			FROM objects
+			SELECT COUNT(*)
+			FROM object_parts
 			WHERE bucket_id = $1 AND name = $2
-		`, bid, name).
-			Scan(&obj.Name, (*sqlHash256)(&obj.ID), (*sqlMD5)(&obj.ContentMD5), &meta,
-				&obj.Size, (*sqlTime)(&obj.UpdatedAt))
-		if errors.Is(err, sql.ErrNoRows) {
-			return s3errs.ErrNoSuchKey
-		} else if err != nil {
+		`, bid, name).Scan(&obj.PartsCount)
+		if err != nil {
 			return err
 		}
 
-		err = json.Unmarshal([]byte(meta), &obj.Meta)
-		if err != nil {
-			return errors.New("failed to unmarshal object metadata: " + err.Error())
+		// return full object if no part specified
+		if partNumber == nil || obj.PartsCount == 0 {
+			if obj.PartsCount == 0 && partNumber != nil {
+				if *partNumber != 1 {
+					return s3errs.ErrInvalidPart
+				}
+				obj.PartsCount = *partNumber
+			}
+			return tx.QueryRow(`
+				SELECT object_id, metadata, updated_at, size, content_md5
+				FROM objects
+				WHERE bucket_id = $1 AND name = $2
+			`, bid, name).Scan((*sqlHash256)(&obj.ID), (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Length, (*sqlMD5)(&obj.ContentMD5))
 		}
-		return nil
-	})
-	return &obj, err
+
+		// return error if part number is invalid
+		if partNumber != nil && obj.PartsCount > 0 && *partNumber > int32(obj.PartsCount) {
+			return s3errs.ErrInvalidPart
+		}
+
+		// part specified, return part info
+		return tx.QueryRow(`
+			SELECT o.object_id, o.metadata, o.updated_at, p.offset, p.content_length, p.content_md5
+			FROM object_parts p
+			JOIN objects o ON o.bucket_id = p.bucket_id AND o.name = p.name
+			WHERE o.bucket_id = $1 AND o.name = $2 AND p.part_number = $3
+		`, bid, name, *partNumber).Scan((*sqlHash256)(&obj.ID), (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Offset, &obj.Length, (*sqlMD5)(&obj.ContentMD5))
+	}); errors.Is(err, sql.ErrNoRows) {
+		return nil, s3errs.ErrNoSuchKey
+	} else if err != nil {
+		return nil, err
+	}
+
+	return &obj, nil
 }
 
 // PutObject stores the given object in the given bucket with the given name or
 // overwrites it if it already exists.
-func (s *Store) PutObject(accessKeyID, bucket, name string, obj *objects.Object) error {
+func (s *Store) PutObject(accessKeyID, bucket, name string, objectID types.Hash256, metadata map[string]string, contentMD5 [16]byte, contentLength int64) error {
 	return s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
-		if obj.Meta == nil {
-			obj.Meta = make(map[string]string) // force '{}' instead of 'null' in JSON
-		}
-		metaJson, err := json.Marshal(obj.Meta)
-		if err != nil {
-			return err
+		if metadata == nil {
+			metadata = make(map[string]string) // force '{}' instead of 'null' in JSON
 		}
 
 		_, err = tx.Exec(`
@@ -107,8 +126,8 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, obj *objects.Object)
 				metadata = excluded.metadata,
 				size = excluded.size,
 				updated_at = excluded.updated_at
-		`, bid, name, sqlHash256(obj.ID), sqlMD5(obj.ContentMD5),
-			string(metaJson), obj.Size, sqlTime(obj.UpdatedAt))
+		`, bid, name, sqlHash256(objectID), sqlMD5(contentMD5),
+			sqlMetaJSON(metadata), contentLength, sqlTime(time.Now()))
 		return err
 	})
 }
@@ -176,8 +195,8 @@ WHERE o.bucket_id = ?`
 				err = rows.Scan(
 					&obj.Name,
 					(*sqlMD5)(&obj.ContentMD5),
-					&obj.Size,
-					(*sqlTime)(&obj.UpdatedAt),
+					&obj.Length,
+					(*sqlTime)(&obj.LastModified),
 				)
 				if err != nil {
 					return "", "", fmt.Errorf("failed to scan object: %w", err)
@@ -190,9 +209,9 @@ WHERE o.bucket_id = ?`
 				} else {
 					result.Add(&s3.Content{
 						Key:          obj.Name,
-						LastModified: s3.NewContentTime(obj.UpdatedAt),
-						ETag:         s3.FormatETag(obj.ContentMD5[:]),
-						Size:         int64(obj.Size),
+						LastModified: s3.NewContentTime(obj.LastModified),
+						ETag:         s3.FormatETag(obj.ContentMD5[:], 0),
+						Size:         int64(obj.Length),
 						Owner:        owner,
 					})
 					lastObj = obj.Name

@@ -383,7 +383,7 @@ func TestCompleteMultipartUpload(t *testing.T) {
 	copy(combined, p1MD5[:])
 	copy(combined[16:], p2MD5[:])
 	hash := md5.Sum(combined)
-	expectedETag := s3.FormatMultipartETag(hash[:], 2)
+	expectedETag := s3.FormatETag(hash[:], 2)
 	if *completed.ETag != expectedETag {
 		t.Fatalf("expected final ETag %q, got %q", expectedETag, *completed.ETag)
 	}
@@ -425,8 +425,9 @@ func TestCompleteMultipartUpload(t *testing.T) {
 	testutil.AssertS3Error(t, s3errs.ErrInvalidPart, err)
 
 	// assert [s3errs.ErrInvalidPartOrder] is returned for parts out of order
-	uploadID, outOfOrderParts := newTestMultipartUpload(t, s3Tester, bucket, object, [][]byte{p1Data, p2Data})
-	outOfOrderParts[0], outOfOrderParts[1] = outOfOrderParts[1], outOfOrderParts[0]
+	p3Data := []byte("additional part")
+	uploadID, parts = newTestMultipartUpload(t, s3Tester, bucket, object, [][]byte{p1Data, p1Data, p3Data})
+	outOfOrderParts := []types.CompletedPart{parts[1], parts[0], parts[2]}
 	_, err = s3Tester.CompleteMultipartUpload(t.Context(), bucket, object, uploadID, outOfOrderParts)
 	testutil.AssertS3Error(t, s3errs.ErrInvalidPartOrder, err)
 
