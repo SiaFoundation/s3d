@@ -83,7 +83,7 @@ func (s *MemorySDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
 }
 
 func (s *MemorySDK) SealObject(obj sdk.Object) slabs.SealedObject {
-	return obj.Seal(s.appKey)
+	return obj.Seal(s.appKey).SealedObject
 }
 
 func (s *MemorySDK) UnsealObject(sealed slabs.SealedObject) (sdk.Object, error) {
