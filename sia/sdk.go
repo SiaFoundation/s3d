@@ -82,5 +82,5 @@ func (s *IndexdSDK) SealObject(obj sdk.Object) slabs.SealedObject {
 
 // UnsealObject unseals a sealed object using the app key.
 func (s *IndexdSDK) UnsealObject(sealed slabs.SealedObject) (sdk.Object, error) {
-	return s.inner.Object(context.Background(), sealed.ID())
+	return (&sdk.SealedObject{SealedObject: sealed}).Open(s.inner.AppKey())
 }
