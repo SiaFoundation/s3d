@@ -109,8 +109,9 @@ func (s *Store) GetObject(accessKeyID *string, bucket, name string, partNumber *
 }
 
 // PutObject stores the given object in the given bucket with the given name or
-// overwrites it if it already exists.
-func (s *Store) PutObject(accessKeyID, bucket, name string, obj *objects.Object) error {
+// overwrites it if it already exists.  If updatedModTime is true, the
+// `updated_at` time that represents the S3 last modified time will be updated.
+func (s *Store) PutObject(accessKeyID, bucket, name string, obj *objects.Object, updateModTime bool) error {
 	return s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
@@ -118,6 +119,11 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, obj *objects.Object)
 		}
 		if obj.Meta == nil {
 			obj.Meta = make(map[string]string) // force '{}' instead of 'null' in JSON
+		}
+
+		updatedAt := "excluded.updated_at"
+		if !updateModTime {
+			updatedAt = "objects.updated_at"
 		}
 
 		_, err = tx.Exec(`
@@ -128,7 +134,7 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, obj *objects.Object)
 				content_md5 = excluded.content_md5,
 				metadata = excluded.metadata,
 				size = excluded.size,
-				updated_at = excluded.updated_at,
+				updated_at = `+updatedAt+`,
 				sia_object = excluded.sia_object,
 				cached_at = excluded.cached_at
 		`, bid, name, sqlHash256(obj.ID), sqlMD5(obj.ContentMD5),

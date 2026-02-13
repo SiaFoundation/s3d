@@ -562,7 +562,7 @@ func TestMultipartUploadPartCopy(t *testing.T) {
 	if err := store.PutObject(testutil.AccessKeyID, bucketSrc, objectSrc, &objects.Object{
 		ID:     types.Hash256{},
 		Length: s3.MaxUploadPartSize + 1,
-	}); err != nil {
+	}, true); err != nil {
 		t.Fatal(err)
 	}
 	mu, err = s3Tester.CreateMultipartUpload(t.Context(), bucketDst, objectDst, nil)

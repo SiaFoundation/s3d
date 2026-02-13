@@ -53,7 +53,7 @@ func TestGetObject(t *testing.T) {
 		Meta:       objMeta,
 		ContentMD5: objMD5,
 		Length:     int64(objLength),
-	})
+	}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +274,7 @@ func TestListObjects(t *testing.T) {
 				ID:         obj.ID(),
 				ContentMD5: contentMD5,
 				Length:     int64(frand.Intn(1000)) + 1,
-			})
+			}, true)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -350,7 +350,7 @@ func TestListObjectsMatch(t *testing.T) {
 			ID:         obj.ID(),
 			ContentMD5: contentMD5,
 			Length:     int64(frand.Intn(1000)) + 1,
-		})
+		}, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -463,7 +463,7 @@ func TestListObjectsWalk(t *testing.T) {
 			ID:         obj.ID(),
 			ContentMD5: contentMD5,
 			Length:     int64(frand.Intn(1000)) + 1,
-		})
+		}, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -587,8 +587,8 @@ func BenchmarkListObjects(b *testing.B) {
 						layer4 := filepath.Join(layer3, name)
 
 						_, err = tx.Exec(`
-			INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7)`, bid, layer4, sqlHash256(objID), sqlMD5(contentMD5), []byte{}, size, sqlTime(now))
+			INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at, sia_object, cached_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, bid, layer4, sqlHash256(objID), sqlMD5(contentMD5), []byte{}, size, sqlTime(now), sqlSiaObject(sealed.SealedObject), sqlTime(now))
 					}
 				}
 			}

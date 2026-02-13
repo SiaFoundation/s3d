@@ -40,7 +40,7 @@ func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject,
 		maps.Copy(obj.Meta, meta)
 	}
 
-	if err := s.store.PutObject(accessKeyID, dstBucket, dstObject, obj); err != nil {
+	if err := s.store.PutObject(accessKeyID, dstBucket, dstObject, obj, true); err != nil {
 		return nil, err
 	}
 	return &s3.CopyObjectResult{
@@ -209,7 +209,7 @@ func (s *Sia) refreshSiaObject(ctx context.Context, accessKeyID, bucket, objectK
 	// seal the fetched object for storage
 	obj.SiaObject = s.sdk.SealObject(fetched)
 	obj.CachedAt = time.Now()
-	if err := s.store.PutObject(accessKeyID, bucket, objectKey, obj); err != nil {
+	if err := s.store.PutObject(accessKeyID, bucket, objectKey, obj, false); err != nil {
 		s.logger.Warn("failed to update object metadata cache", zap.Error(err))
 	}
 	return fetched, nil
@@ -299,7 +299,7 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 		Length:     lr.N,
 		SiaObject:  siaObject,
 		CachedAt:   cachedAt,
-	}); err != nil {
+	}, true); err != nil {
 		return nil, fmt.Errorf("failed to store object metadata: %w", err)
 	}
 
