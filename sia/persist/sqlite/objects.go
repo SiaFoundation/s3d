@@ -121,11 +121,6 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, obj *objects.Object,
 			obj.Meta = make(map[string]string) // force '{}' instead of 'null' in JSON
 		}
 
-		updatedAt := "excluded.updated_at"
-		if !updateModTime {
-			updatedAt = "objects.updated_at"
-		}
-
 		_, err = tx.Exec(`
 			INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at, sia_object, cached_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -134,12 +129,12 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, obj *objects.Object,
 				content_md5 = excluded.content_md5,
 				metadata = excluded.metadata,
 				size = excluded.size,
-				updated_at = `+updatedAt+`,
+				updated_at = CASE WHEN $10 THEN excluded.updated_at ELSE objects.updated_at END,
 				sia_object = excluded.sia_object,
 				cached_at = excluded.cached_at
 		`, bid, name, sqlHash256(obj.ID), sqlMD5(obj.ContentMD5),
 			sqlMetaJSON(obj.Meta), obj.Length, sqlTime(time.Now()),
-			sqlSiaObject(obj.SiaObject), sqlTime(obj.CachedAt))
+			sqlSiaObject(obj.SiaObject), sqlTime(obj.CachedAt), updateModTime)
 		return err
 	})
 }
