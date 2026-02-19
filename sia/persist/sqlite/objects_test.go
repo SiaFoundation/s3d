@@ -12,6 +12,7 @@ import (
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"github.com/SiaFoundation/s3d/sia/objects"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/sdk"
@@ -47,7 +48,15 @@ func TestGetObject(t *testing.T) {
 	}
 
 	// create object
-	err := store.PutObject(accessKeyID, bucket, object, objID, objMeta, objMD5, int64(objLength))
+	err := store.PutObject(accessKeyID, bucket, object, &objects.Object{
+		ID:         objID,
+		Meta:       objMeta,
+		ContentMD5: objMD5,
+		Length:     int64(objLength),
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// create multipart object
 	err = store.CreateMultipartUpload(bucket, multipart, multipartUploadID, multipartMeta)
@@ -261,7 +270,11 @@ func TestListObjects(t *testing.T) {
 		}
 
 		for _, key := range tt.keys {
-			err := store.PutObject("", bucket, key, obj.ID(), nil, contentMD5, int64(frand.Intn(1000))+1)
+			err := store.PutObject("", bucket, key, &objects.Object{
+				ID:         obj.ID(),
+				ContentMD5: contentMD5,
+				Length:     int64(frand.Intn(1000)) + 1,
+			}, true)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -333,7 +346,11 @@ func TestListObjectsMatch(t *testing.T) {
 	etag := s3.FormatETag(contentMD5[:], 0)
 
 	for _, key := range keys {
-		err := store.PutObject("", bucket, key, obj.ID(), nil, contentMD5, int64(frand.Intn(1000))+1)
+		err := store.PutObject("", bucket, key, &objects.Object{
+			ID:         obj.ID(),
+			ContentMD5: contentMD5,
+			Length:     int64(frand.Intn(1000)) + 1,
+		}, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -442,7 +459,11 @@ func TestListObjectsWalk(t *testing.T) {
 	keysAll := make(map[string]struct{})
 	for range numKeys {
 		key := randomPath(minLength, maxLength, maxDepth, alphabet, delimiter)
-		err := store.PutObject("", bucket, key, obj.ID(), nil, contentMD5, int64(frand.Intn(1000))+1)
+		err := store.PutObject("", bucket, key, &objects.Object{
+			ID:         obj.ID(),
+			ContentMD5: contentMD5,
+			Length:     int64(frand.Intn(1000)) + 1,
+		}, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -566,8 +587,8 @@ func BenchmarkListObjects(b *testing.B) {
 						layer4 := filepath.Join(layer3, name)
 
 						_, err = tx.Exec(`
-			INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7)`, bid, layer4, sqlHash256(objID), sqlMD5(contentMD5), []byte{}, size, sqlTime(now))
+			INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at, sia_object, cached_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, bid, layer4, sqlHash256(objID), sqlMD5(contentMD5), []byte{}, size, sqlTime(now), sqlSiaObject(sealed.SealedObject), sqlTime(now))
 					}
 				}
 			}

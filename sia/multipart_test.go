@@ -14,6 +14,7 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia"
+	"github.com/SiaFoundation/s3d/sia/objects"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	s3Types "github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -558,7 +559,10 @@ func TestMultipartUploadPartCopy(t *testing.T) {
 	testutil.AssertS3Error(t, s3errs.ErrInvalidRange, err)
 
 	// assert [s3errs.ErrEntityTooLarge] is returned for oversized range
-	if err := store.PutObject(testutil.AccessKeyID, bucketSrc, objectSrc, types.Hash256{}, nil, [16]byte{}, s3.MaxUploadPartSize+1); err != nil {
+	if err := store.PutObject(testutil.AccessKeyID, bucketSrc, objectSrc, &objects.Object{
+		ID:     types.Hash256{},
+		Length: s3.MaxUploadPartSize + 1,
+	}, true); err != nil {
 		t.Fatal(err)
 	}
 	mu, err = s3Tester.CreateMultipartUpload(t.Context(), bucketDst, objectDst, nil)

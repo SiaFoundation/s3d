@@ -9,6 +9,7 @@ import (
 
 	"github.com/SiaFoundation/s3d/s3"
 	"go.sia.tech/core/types"
+	"go.sia.tech/indexd/slabs"
 )
 
 var (
@@ -16,6 +17,7 @@ var (
 	_ scannerValuer = (*sqlMD5)(nil)
 	_ scannerValuer = (*sqlTime)(nil)
 	_ scannerValuer = (*sqlUploadID)(nil)
+	_ scannerValuer = (*sqlSiaObject)(nil)
 	_ scannerValuer = (*sqlMetaJSON)(nil)
 )
 
@@ -95,6 +97,26 @@ func (uid *sqlUploadID) Scan(src any) error {
 
 func (uid sqlUploadID) Value() (driver.Value, error) {
 	return uid[:], nil
+}
+
+type sqlSiaObject slabs.SealedObject
+
+func (m *sqlSiaObject) Scan(src any) error {
+	switch src := src.(type) {
+	case []byte:
+		if len(src) == 0 {
+			*m = sqlSiaObject{}
+			return nil
+		}
+		return (*slabs.SealedObject)(m).UnmarshalSia(src)
+	default:
+		return fmt.Errorf("cannot scan %T to SiaObject", src)
+	}
+}
+
+func (m sqlSiaObject) Value() (driver.Value, error) {
+	so := slabs.SealedObject(m)
+	return so.MarshalSia()
 }
 
 type sqlMetaJSON map[string]string

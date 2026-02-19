@@ -14,6 +14,7 @@ import (
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/sdk"
+	"go.sia.tech/indexd/slabs"
 	"go.uber.org/zap"
 )
 
@@ -55,6 +56,8 @@ type SDK interface {
 	Download(ctx context.Context, w io.Writer, obj sdk.Object, rnge *s3.ObjectRange) error
 	Object(ctx context.Context, id types.Hash256) (sdk.Object, error)
 	Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
+	SealObject(obj sdk.Object) slabs.SealedObject
+	UnsealObject(sealed slabs.SealedObject) (sdk.Object, error)
 }
 
 // Store represents the storage backend used by the Sia backend.
@@ -66,7 +69,7 @@ type Store interface {
 	HeadBucket(accessKeyID, bucket string) error
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
 	ListObjects(accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error)
-	PutObject(accessKeyID, bucket, name string, objectID types.Hash256, metadata map[string]string, contentMD5 [16]byte, contentLength int64) error
+	PutObject(accessKeyID, bucket, name string, obj *objects.Object, updateModTime bool) error
 	AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) error
 	AddMultipartPart(bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (string, error)
 	CreateMultipartUpload(bucket, name string, uploadID s3.UploadID, meta map[string]string) error

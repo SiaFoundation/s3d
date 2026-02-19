@@ -10,7 +10,7 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia/objects"
-	"go.sia.tech/core/types"
+	"go.sia.tech/indexd/slabs"
 )
 
 // DeleteObject deletes the object with the given bucket and name if it exists
@@ -77,11 +77,14 @@ func (s *Store) GetObject(accessKeyID *string, bucket, name string, partNumber *
 				}
 				obj.PartsCount = *partNumber
 			}
-			return tx.QueryRow(`
-				SELECT object_id, metadata, updated_at, size, content_md5
+			var siaObj sqlSiaObject
+			err := tx.QueryRow(`
+				SELECT object_id, metadata, updated_at, size, content_md5, sia_object, cached_at
 				FROM objects
 				WHERE bucket_id = $1 AND name = $2
-			`, bid, name).Scan((*sqlHash256)(&obj.ID), (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Length, (*sqlMD5)(&obj.ContentMD5))
+			`, bid, name).Scan((*sqlHash256)(&obj.ID), (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Length, (*sqlMD5)(&obj.ContentMD5), &siaObj, (*sqlTime)(&obj.CachedAt))
+			obj.SiaObject = slabs.SealedObject(siaObj)
+			return err
 		}
 
 		// return error if part number is invalid
@@ -106,28 +109,32 @@ func (s *Store) GetObject(accessKeyID *string, bucket, name string, partNumber *
 }
 
 // PutObject stores the given object in the given bucket with the given name or
-// overwrites it if it already exists.
-func (s *Store) PutObject(accessKeyID, bucket, name string, objectID types.Hash256, metadata map[string]string, contentMD5 [16]byte, contentLength int64) error {
+// overwrites it if it already exists.  If updatedModTime is true, the
+// `updated_at` time that represents the S3 last modified time will be updated.
+func (s *Store) PutObject(accessKeyID, bucket, name string, obj *objects.Object, updateModTime bool) error {
 	return s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
-		if metadata == nil {
-			metadata = make(map[string]string) // force '{}' instead of 'null' in JSON
+		if obj.Meta == nil {
+			obj.Meta = make(map[string]string) // force '{}' instead of 'null' in JSON
 		}
 
 		_, err = tx.Exec(`
-			INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7)
+			INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at, sia_object, cached_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 			ON CONFLICT(bucket_id, name) DO UPDATE SET
 				object_id = excluded.object_id,
 				content_md5 = excluded.content_md5,
 				metadata = excluded.metadata,
 				size = excluded.size,
-				updated_at = excluded.updated_at
-		`, bid, name, sqlHash256(objectID), sqlMD5(contentMD5),
-			sqlMetaJSON(metadata), contentLength, sqlTime(time.Now()))
+				updated_at = CASE WHEN $10 THEN excluded.updated_at ELSE objects.updated_at END,
+				sia_object = excluded.sia_object,
+				cached_at = excluded.cached_at
+		`, bid, name, sqlHash256(obj.ID), sqlMD5(obj.ContentMD5),
+			sqlMetaJSON(obj.Meta), obj.Length, sqlTime(time.Now()),
+			sqlSiaObject(obj.SiaObject), sqlTime(obj.CachedAt), updateModTime)
 		return err
 	})
 }

@@ -8,6 +8,7 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/sdk"
+	"go.sia.tech/indexd/slabs"
 )
 
 type (
@@ -57,12 +58,29 @@ func (s *IndexdSDK) Download(ctx context.Context, w io.Writer, obj sdk.Object, r
 	return s.inner.Download(ctx, w, obj, opts...)
 }
 
-// Upload uploads an object to indexd without pinning it.
+// Upload uploads an object to indexd and saves it.
 func (s *IndexdSDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error) {
-	return s.inner.Upload(ctx, r, s.ulOpts...)
+	obj := sdk.NewEmptyObject()
+	if err := s.inner.Upload(ctx, &obj, r, s.ulOpts...); err != nil {
+		return sdk.Object{}, err
+	}
+	if err := s.inner.SaveObject(ctx, obj); err != nil {
+		return sdk.Object{}, err
+	}
+	return obj, nil
 }
 
 // Object retrieves the object with the given key.
 func (s *IndexdSDK) Object(ctx context.Context, objectKey types.Hash256) (sdk.Object, error) {
 	return s.inner.Object(ctx, objectKey)
+}
+
+// SealObject seals the object using the app key.
+func (s *IndexdSDK) SealObject(obj sdk.Object) slabs.SealedObject {
+	return obj.Seal(s.inner.AppKey()).SealedObject
+}
+
+// UnsealObject unseals a sealed object using the app key.
+func (s *IndexdSDK) UnsealObject(sealed slabs.SealedObject) (sdk.Object, error) {
+	return (&sdk.SealedObject{SealedObject: sealed}).Open(s.inner.AppKey())
 }

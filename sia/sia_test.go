@@ -14,6 +14,7 @@ import (
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/sdk"
+	"go.sia.tech/indexd/slabs"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
 )
@@ -26,6 +27,9 @@ type uploadedObject struct {
 type MemorySDK struct {
 	appKey  types.PrivateKey
 	objects map[types.Hash256]uploadedObject
+
+	objectCallCount int
+	fail            bool // when true, Object() will return an error
 }
 
 func NewMemorySDK() *MemorySDK {
@@ -54,6 +58,10 @@ func (s *MemorySDK) Download(ctx context.Context, w io.Writer, obj sdk.Object, r
 // TODO: Right now, all objects have the same ID. We'll need to expose something from
 // the SDK to be able to mock objects with different IDs.
 func (s *MemorySDK) Object(ctx context.Context, objectID types.Hash256) (sdk.Object, error) {
+	s.objectCallCount++
+	if s.fail {
+		return sdk.Object{}, errors.New("indexer error")
+	}
 	obj, exists := s.objects[objectID]
 	if !exists {
 		return sdk.Object{}, errors.New("object not found")
@@ -72,6 +80,18 @@ func (s *MemorySDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
 		meta: obj,
 	}
 	return obj, nil
+}
+
+func (s *MemorySDK) SealObject(obj sdk.Object) slabs.SealedObject {
+	return obj.Seal(s.appKey).SealedObject
+}
+
+func (s *MemorySDK) UnsealObject(sealed slabs.SealedObject) (sdk.Object, error) {
+	obj, exists := s.objects[sealed.ID()]
+	if !exists {
+		return sdk.Object{}, errors.New("object not found")
+	}
+	return obj.meta, nil
 }
 
 func NewTester(t testing.TB, opts ...testutil.TesterOption) *testutil.S3Tester {

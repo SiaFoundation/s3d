@@ -10,13 +10,19 @@ import (
 	"hash"
 	"io"
 	"maps"
+	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"github.com/SiaFoundation/s3d/sia/objects"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"go.sia.tech/core/types"
+	"go.sia.tech/indexd/sdk"
+	"go.sia.tech/indexd/slabs"
 	"go.uber.org/zap"
 )
+
+const metadataCacheLifetime = 24 * time.Hour
 
 // CopyObject copies an object from the source bucket and object key to the
 // destination bucket and object key. The provided metadata map contains any
@@ -34,7 +40,7 @@ func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject,
 		maps.Copy(obj.Meta, meta)
 	}
 
-	if err := s.store.PutObject(accessKeyID, dstBucket, dstObject, obj.ID, obj.Meta, obj.ContentMD5, obj.Length); err != nil {
+	if err := s.store.PutObject(accessKeyID, dstBucket, dstObject, obj, true); err != nil {
 		return nil, err
 	}
 	return &s3.CopyObjectResult{
@@ -150,18 +156,17 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 		return resp, nil
 	}
 
-	// TODO: once the indexer returns the full metadata we can cache it locally
-	// and avoid fetching it on-demand.
-	pinnedObj, err := s.sdk.Object(ctx, obj.ID)
+	// refresh cached object metadata if needed
+	siaObj, err := s.refreshSiaObject(ctx, *accessKeyID, bucket, object, obj)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch object from indexer: %w", err)
+		return nil, err
 	}
 
 	// otherwise, we download the body
 	pr, pw := io.Pipe()
 	go func() {
 		defer pw.Close()
-		err = s.sdk.Download(ctx, pw, pinnedObj, resp.Range)
+		err = s.sdk.Download(ctx, pw, siaObj, resp.Range)
 		if err != nil {
 			s.logger.Error("download failed", zap.Error(err), zap.String("bucket", bucket), zap.String("object", object))
 			pw.CloseWithError(err)
@@ -171,6 +176,43 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 
 	resp.Body = pr
 	return resp, nil
+}
+
+// refreshSiaObject refreshes the object's cached Sia object if it is missing
+// or stale. Returns the unsealed sdk.Object for use in downloads.
+func (s *Sia) refreshSiaObject(ctx context.Context, accessKeyID, bucket, objectKey string, obj *objects.Object) (siaObj sdk.Object, err error) {
+	cached := !obj.CachedAt.IsZero()
+
+	// if cache is fresh, unseal and return
+	cachedUntil := obj.CachedAt.Add(metadataCacheLifetime)
+	if time.Now().Before(cachedUntil) {
+		siaObj, err = s.sdk.UnsealObject(obj.SiaObject)
+		if err != nil {
+			s.logger.Warn("failed to unseal cached object, will fetch from indexer", zap.Error(err))
+			cached = false
+		} else {
+			return siaObj, nil
+		}
+	}
+
+	// fetch from indexer
+	fetched, err := s.sdk.Object(ctx, obj.ID)
+	if err != nil {
+		if cached {
+			s.logger.Warn("failed to fetch object from indexer, using stale metadata", zap.Error(err))
+			// try to unseal the stale cached object
+			return s.sdk.UnsealObject(obj.SiaObject)
+		}
+		return sdk.Object{}, fmt.Errorf("failed to fetch object from indexer: %w", err)
+	}
+
+	// seal the fetched object for storage
+	obj.SiaObject = s.sdk.SealObject(fetched)
+	obj.CachedAt = time.Now()
+	if err := s.store.PutObject(accessKeyID, bucket, objectKey, obj, false); err != nil {
+		s.logger.Warn("failed to update object metadata cache", zap.Error(err))
+	}
+	return fetched, nil
 }
 
 // ListObjects lists objects in the specified bucket for the user identified
@@ -216,6 +258,8 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 
 	// handle empty object case
 	var objectID types.Hash256
+	var siaObject slabs.SealedObject
+	var cachedAt time.Time
 	if opts.ContentLength == 0 {
 		// drain reader
 		if _, err := io.Copy(io.Discard, lr); err != nil {
@@ -228,6 +272,8 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 			return nil, fmt.Errorf("failed to upload object: %w", err)
 		}
 		objectID = obj.ID()
+		siaObject = s.sdk.SealObject(obj)
+		cachedAt = time.Now()
 	}
 
 	// check content length
@@ -246,7 +292,14 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	}
 
 	// store the object in the database
-	if err := s.store.PutObject(accessKeyID, bucket, object, objectID, opts.Meta, contentMD5, lr.N); err != nil {
+	if err := s.store.PutObject(accessKeyID, bucket, object, &objects.Object{
+		ID:         objectID,
+		ContentMD5: contentMD5,
+		Meta:       opts.Meta,
+		Length:     lr.N,
+		SiaObject:  siaObject,
+		CachedAt:   cachedAt,
+	}, true); err != nil {
 		return nil, fmt.Errorf("failed to store object metadata: %w", err)
 	}
 
