@@ -2,6 +2,7 @@ package sia
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -67,17 +68,17 @@ type SDK interface {
 type Store interface {
 	CreateBucket(accessKeyID, bucket string) error
 	DeleteBucket(accessKeyID, bucket string) error
-	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (types.Hash256, bool, error)
+	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (*types.Hash256, error)
 	GetObject(accessKeyID *string, bucket, object string, partNumber *int32) (*objects.Object, error)
 	HeadBucket(accessKeyID, bucket string) error
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
 	ListObjects(accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error)
-	ObjectRefCount(objectID types.Hash256) (int64, error)
-	PutObject(accessKeyID, bucket, name string, obj *objects.Object, updateModTime bool) (types.Hash256, bool, error)
+	ObjectReferenced(objectID types.Hash256) (bool, error)
+	PutObject(accessKeyID, bucket, name string, obj *objects.Object, updateModTime bool) (*types.Hash256, error)
 	AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) error
 	AddMultipartPart(bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (string, error)
 	CreateMultipartUpload(bucket, name string, uploadID s3.UploadID, meta map[string]string) error
-	CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, objectID types.Hash256, contentMD5 [16]byte, contentLength int64) (types.Hash256, bool, error)
+	CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, objectID types.Hash256, contentMD5 [16]byte, contentLength int64) (*types.Hash256, error)
 	HasMultipartUpload(bucket, name string, uploadID s3.UploadID) error
 	ListMultipartUploads(bucket string, prefix s3.Prefix, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error)
 	ListParts(bucket, name string, uploadID s3.UploadID, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error)
@@ -111,26 +112,23 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 
 // tryUnpinObject re-checks the reference count for the given object ID under
 // the unpin mutex and deletes it from the indexer if no references remain.
-// It skips the zero hash (empty objects are never pinned).
-func (s *Sia) tryUnpinObject(ctx context.Context, objectID types.Hash256) {
-	if objectID == (types.Hash256{}) {
-		return // empty objects are never pinned
+func (s *Sia) tryUnpinObject(ctx context.Context, objectID *types.Hash256) {
+	if objectID == nil {
+		return
 	}
 
 	s.unpinMu.Lock()
-	count, err := s.store.ObjectRefCount(objectID)
-	if err != nil {
-		s.unpinMu.Unlock()
-		s.logger.Error("failed to check object ref count", zap.Error(err), zap.Stringer("objectID", objectID))
-		return
-	}
-	if count > 0 {
-		s.unpinMu.Unlock()
-		return
-	}
+	referenced, err := s.store.ObjectReferenced(*objectID)
 	s.unpinMu.Unlock()
+	if err != nil {
+		s.logger.Error("failed to check object references", zap.Error(err), zap.Stringer("objectID", objectID))
+		return
+	}
+	if referenced {
+		return
+	}
 
-	if err := s.sdk.DeleteObject(ctx, objectID); err != nil {
+	if err := s.sdk.DeleteObject(ctx, *objectID); err != nil && !errors.Is(err, slabs.ErrObjectNotFound) {
 		s.logger.Error("failed to unpin object from indexer", zap.Error(err), zap.Stringer("objectID", objectID))
 	}
 }

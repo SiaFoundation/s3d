@@ -22,6 +22,7 @@ CREATE TABLE objects (
     cached_at INTEGER NOT NULL,
     PRIMARY KEY (bucket_id, name)
 ) WITHOUT ROWID;
+CREATE INDEX objects_object_id_idx ON objects(object_id);
 
 CREATE TABLE multipart_uploads (
     upload_id BLOB PRIMARY KEY,

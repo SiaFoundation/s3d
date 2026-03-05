@@ -708,7 +708,7 @@ func TestObjectMetadataCache(t *testing.T) {
 		}
 		// set retrieval time to 25 hours ago (past the 24-hour cache lifetime)
 		obj.CachedAt = time.Now().Add(-25 * time.Hour)
-		if _, _, err := store.PutObject(accessKeyID, bucket, object, obj, true); err != nil {
+		if _, err := store.PutObject(accessKeyID, bucket, object, obj, true); err != nil {
 			t.Fatal(err)
 		}
 
@@ -743,7 +743,7 @@ func TestObjectMetadataCache(t *testing.T) {
 			t.Fatal(err)
 		}
 		storedObj.CachedAt = time.Now().Add(-25 * time.Hour)
-		if _, _, err := store.PutObject(accessKeyID, bucket, object, storedObj, true); err != nil {
+		if _, err := store.PutObject(accessKeyID, bucket, object, storedObj, true); err != nil {
 			t.Fatal(err)
 		}
 

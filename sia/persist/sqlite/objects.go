@@ -15,60 +15,43 @@ import (
 )
 
 // DeleteObject deletes the object with the given bucket and name if it exists
-// and all provided preconditions match. Returns the deleted object's ID and
-// whether that ID is orphaned (no other rows reference it).
-func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (deletedID types.Hash256, orphaned bool, err error) {
+// and all provided preconditions match. Returns the orphaned object ID if the
+// deleted object's ID has no remaining references, or nil otherwise.
+func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (orphaned *types.Hash256, err error) {
 	err = s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
 
-		// fetch the object_id before deleting
-		err = tx.QueryRow("SELECT object_id FROM objects WHERE bucket_id = $1 AND name = $2", bid, objectID.Key).
-			Scan((*sqlHash256)(&deletedID))
+		// delete the row and return its values for precondition checks and
+		// orphan detection; the transaction rolls back if preconditions fail
+		var deletedID types.Hash256
+		var contentMD5 [16]byte
+		var size int64
+		var updatedAt time.Time
+		err = tx.QueryRow(`
+			DELETE FROM objects WHERE bucket_id = $1 AND name = $2
+			RETURNING object_id, content_md5, size, updated_at
+		`, bid, objectID.Key).Scan((*sqlHash256)(&deletedID), (*sqlMD5)(&contentMD5), &size, (*sqlTime)(&updatedAt))
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil // object doesn't exist, nothing to delete
 		} else if err != nil {
 			return err
 		}
 
-		if objectID.ETag != nil || objectID.LastModifiedTime != nil || objectID.Size != nil {
-			var contentMD5 [16]byte
-			var size int64
-			var updatedAt time.Time
-			err = tx.QueryRow("SELECT content_md5, size, updated_at FROM objects WHERE bucket_id = $1 AND name = $2", bid, objectID.Key).
-				Scan((*sqlMD5)(&contentMD5), &size, (*sqlTime)(&updatedAt))
-			if errors.Is(err, sql.ErrNoRows) {
-				return nil
-			} else if err != nil {
-				return err
-			}
-
-			if objectID.ETag != nil && *objectID.ETag != s3.FormatETag(contentMD5[:], 0) {
-				return s3errs.ErrPreconditionFailed
-			}
-			if objectID.Size != nil && *objectID.Size != size {
-				return s3errs.ErrPreconditionFailed
-			}
-			if objectID.LastModifiedTime != nil && !updatedAt.Truncate(time.Second).Equal(objectID.LastModifiedTime.StdTime()) {
-				return s3errs.ErrPreconditionFailed
-			}
+		if objectID.ETag != nil && *objectID.ETag != s3.FormatETag(contentMD5[:], 0) {
+			return s3errs.ErrPreconditionFailed
+		}
+		if objectID.Size != nil && *objectID.Size != size {
+			return s3errs.ErrPreconditionFailed
+		}
+		if objectID.LastModifiedTime != nil && !updatedAt.Truncate(time.Second).Equal(objectID.LastModifiedTime.StdTime()) {
+			return s3errs.ErrPreconditionFailed
 		}
 
-		_, err = tx.Exec("DELETE FROM objects WHERE bucket_id = $1 AND name = $2", bid, objectID.Key)
-		if err != nil {
-			return err
-		}
-
-		// check if the deleted object_id is now orphaned
-		var count int64
-		err = tx.QueryRow("SELECT COUNT(*) FROM objects WHERE object_id = $1", sqlHash256(deletedID)).Scan(&count)
-		if err != nil {
-			return err
-		}
-		orphaned = count == 0
-		return nil
+		orphaned, err = checkOrphaned(tx, deletedID)
+		return err
 	})
 	return
 }
@@ -132,11 +115,11 @@ func (s *Store) GetObject(accessKeyID *string, bucket, name string, partNumber *
 }
 
 // PutObject stores the given object in the given bucket with the given name or
-// overwrites it if it already exists. If updatedModTime is true, the
+// overwrites it if it already exists.  If updatedModTime is true, the
 // `updated_at` time that represents the S3 last modified time will be updated.
-// Returns the old object's ID and whether it is orphaned (no other rows
-// reference it). The old ID is zero if there was no previous object.
-func (s *Store) PutObject(accessKeyID, bucket, name string, obj *objects.Object, updateModTime bool) (oldID types.Hash256, orphaned bool, err error) {
+// Returns the orphaned object ID if the overwritten object's ID has no
+// remaining references, or nil otherwise.
+func (s *Store) PutObject(accessKeyID, bucket, name string, obj *objects.Object, updateModTime bool) (orphaned *types.Hash256, err error) {
 	err = s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
@@ -146,10 +129,8 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, obj *objects.Object,
 			obj.Meta = make(map[string]string) // force '{}' instead of 'null' in JSON
 		}
 
-		// fetch old object_id before upsert
-		err = tx.QueryRow("SELECT object_id FROM objects WHERE bucket_id = $1 AND name = $2", bid, name).
-			Scan((*sqlHash256)(&oldID))
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		oldID, err := previousObjectID(tx, bid, name)
+		if err != nil {
 			return err
 		}
 
@@ -171,26 +152,53 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, obj *objects.Object,
 			return err
 		}
 
-		// check if old object_id is orphaned (different from new and no remaining refs)
-		if oldID != (types.Hash256{}) && oldID != obj.ID {
-			var count int64
-			if err := tx.QueryRow("SELECT COUNT(*) FROM objects WHERE object_id = $1", sqlHash256(oldID)).Scan(&count); err != nil {
+		if oldID != nil && *oldID != obj.ID {
+			orphaned, err = checkOrphaned(tx, *oldID)
+			if err != nil {
 				return err
 			}
-			orphaned = count == 0
 		}
 		return nil
 	})
 	return
 }
 
-// ObjectRefCount returns the number of rows in the objects table that reference
-// the given object ID.
-func (s *Store) ObjectRefCount(objectID types.Hash256) (count int64, err error) {
+// ObjectReferenced returns true if at least one row in the objects table
+// references the given object ID.
+func (s *Store) ObjectReferenced(objectID types.Hash256) (referenced bool, err error) {
 	err = s.transaction(func(tx *txn) error {
-		return tx.QueryRow("SELECT COUNT(*) FROM objects WHERE object_id = $1", sqlHash256(objectID)).Scan(&count)
+		orphaned, err := checkOrphaned(tx, objectID)
+		referenced = orphaned == nil
+		return err
 	})
 	return
+}
+
+// previousObjectID returns the object_id currently stored for the given bucket
+// and name, or nil if no row exists.
+func previousObjectID(tx *txn, bid int64, name string) (*types.Hash256, error) {
+	var id types.Hash256
+	err := tx.QueryRow("SELECT object_id FROM objects WHERE bucket_id = $1 AND name = $2", bid, name).
+		Scan((*sqlHash256)(&id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	return &id, nil
+}
+
+// checkOrphaned returns a pointer to objectID if no rows in the objects table
+// reference it, or nil otherwise.
+func checkOrphaned(tx *txn, objectID types.Hash256) (*types.Hash256, error) {
+	var exists bool
+	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM objects WHERE object_id = $1)", sqlHash256(objectID)).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if !exists {
+		return &objectID, nil
+	}
+	return nil, nil
 }
 
 // ListObjects lists objects in the specified bucket for the user identified

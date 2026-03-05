@@ -48,7 +48,7 @@ func TestGetObject(t *testing.T) {
 	}
 
 	// create object
-	_, _, err := store.PutObject(accessKeyID, bucket, object, &objects.Object{
+	_, err := store.PutObject(accessKeyID, bucket, object, &objects.Object{
 		ID:         objID,
 		Meta:       objMeta,
 		ContentMD5: objMD5,
@@ -74,7 +74,7 @@ func TestGetObject(t *testing.T) {
 	}
 	// complete
 	totalSize := int64(s3.MinUploadPartSize + 2)
-	_, _, err = store.CompleteMultipartUpload(bucket, multipart, multipartUploadID, multipartID, multipartMD5, totalSize)
+	_, err = store.CompleteMultipartUpload(bucket, multipart, multipartUploadID, multipartID, multipartMD5, totalSize)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +270,7 @@ func TestListObjects(t *testing.T) {
 		}
 
 		for _, key := range tt.keys {
-			_, _, err := store.PutObject("", bucket, key, &objects.Object{
+			_, err := store.PutObject("", bucket, key, &objects.Object{
 				ID:         obj.ID(),
 				ContentMD5: contentMD5,
 				Length:     int64(frand.Intn(1000)) + 1,
@@ -346,7 +346,7 @@ func TestListObjectsMatch(t *testing.T) {
 	etag := s3.FormatETag(contentMD5[:], 0)
 
 	for _, key := range keys {
-		_, _, err := store.PutObject("", bucket, key, &objects.Object{
+		_, err := store.PutObject("", bucket, key, &objects.Object{
 			ID:         obj.ID(),
 			ContentMD5: contentMD5,
 			Length:     int64(frand.Intn(1000)) + 1,
@@ -459,7 +459,7 @@ func TestListObjectsWalk(t *testing.T) {
 	keysAll := make(map[string]struct{})
 	for range numKeys {
 		key := randomPath(minLength, maxLength, maxDepth, alphabet, delimiter)
-		_, _, err := store.PutObject("", bucket, key, &objects.Object{
+		_, err := store.PutObject("", bucket, key, &objects.Object{
 			ID:         obj.ID(),
 			ContentMD5: contentMD5,
 			Length:     int64(frand.Intn(1000)) + 1,
@@ -710,7 +710,7 @@ func BenchmarkListObjects(b *testing.B) {
 	})
 }
 
-func TestObjectRefCount(t *testing.T) {
+func TestObjectReferenced(t *testing.T) {
 	const (
 		accessKeyID = "test-accesskey"
 		bucket      = "test-bucket"
@@ -724,15 +724,15 @@ func TestObjectRefCount(t *testing.T) {
 	objID := frand.Entropy256()
 
 	// no references yet
-	count, err := store.ObjectRefCount(objID)
+	referenced, err := store.ObjectReferenced(objID)
 	if err != nil {
 		t.Fatal(err)
-	} else if count != 0 {
-		t.Fatalf("expected 0 refs, got %d", count)
+	} else if referenced {
+		t.Fatal("expected no references")
 	}
 
 	// put first object
-	if _, _, err := store.PutObject(accessKeyID, bucket, "a", &objects.Object{
+	if _, err := store.PutObject(accessKeyID, bucket, "a", &objects.Object{
 		ID:         objID,
 		ContentMD5: frand.Entropy128(),
 		Length:     1,
@@ -740,15 +740,15 @@ func TestObjectRefCount(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	count, err = store.ObjectRefCount(objID)
+	referenced, err = store.ObjectReferenced(objID)
 	if err != nil {
 		t.Fatal(err)
-	} else if count != 1 {
-		t.Fatalf("expected 1 ref, got %d", count)
+	} else if !referenced {
+		t.Fatal("expected referenced after first put")
 	}
 
 	// put second object with same ID (simulates CopyObject)
-	if _, _, err := store.PutObject(accessKeyID, bucket, "b", &objects.Object{
+	if _, err := store.PutObject(accessKeyID, bucket, "b", &objects.Object{
 		ID:         objID,
 		ContentMD5: frand.Entropy128(),
 		Length:     1,
@@ -756,41 +756,41 @@ func TestObjectRefCount(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	count, err = store.ObjectRefCount(objID)
+	referenced, err = store.ObjectReferenced(objID)
 	if err != nil {
 		t.Fatal(err)
-	} else if count != 2 {
-		t.Fatalf("expected 2 refs, got %d", count)
+	} else if !referenced {
+		t.Fatal("expected referenced after second put")
 	}
 
 	// delete first object
-	_, orphaned, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "a"})
+	orphaned, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "a"})
 	if err != nil {
 		t.Fatal(err)
-	} else if orphaned {
+	} else if orphaned != nil {
 		t.Fatal("should not be orphaned with remaining reference")
 	}
 
-	count, err = store.ObjectRefCount(objID)
+	referenced, err = store.ObjectReferenced(objID)
 	if err != nil {
 		t.Fatal(err)
-	} else if count != 1 {
-		t.Fatalf("expected 1 ref after delete, got %d", count)
+	} else if !referenced {
+		t.Fatal("expected still referenced after deleting one of two")
 	}
 
 	// delete second object
-	_, orphaned, err = store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "b"})
+	orphaned, err = store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "b"})
 	if err != nil {
 		t.Fatal(err)
-	} else if !orphaned {
-		t.Fatal("should be orphaned with no remaining references")
+	} else if orphaned == nil || *orphaned != objID {
+		t.Fatalf("expected orphaned ID %v, got %v", objID, orphaned)
 	}
 
-	count, err = store.ObjectRefCount(objID)
+	referenced, err = store.ObjectReferenced(objID)
 	if err != nil {
 		t.Fatal(err)
-	} else if count != 0 {
-		t.Fatalf("expected 0 refs after both deleted, got %d", count)
+	} else if referenced {
+		t.Fatal("expected no references after both deleted")
 	}
 }
 
@@ -809,40 +809,38 @@ func TestPutObjectOrphan(t *testing.T) {
 	newID := frand.Entropy256()
 
 	// put initial object
-	_, orphaned, err := store.PutObject(accessKeyID, bucket, "obj", &objects.Object{
+	orphaned, err := store.PutObject(accessKeyID, bucket, "obj", &objects.Object{
 		ID:         oldID,
 		ContentMD5: frand.Entropy128(),
 		Length:     1,
 	}, true)
 	if err != nil {
 		t.Fatal(err)
-	} else if orphaned {
+	} else if orphaned != nil {
 		t.Fatal("first put should not orphan anything")
 	}
 
 	// overwrite with a different object_id
-	returnedOldID, orphaned, err := store.PutObject(accessKeyID, bucket, "obj", &objects.Object{
+	orphaned, err = store.PutObject(accessKeyID, bucket, "obj", &objects.Object{
 		ID:         newID,
 		ContentMD5: frand.Entropy128(),
 		Length:     1,
 	}, true)
 	if err != nil {
 		t.Fatal(err)
-	} else if returnedOldID != oldID {
-		t.Fatalf("expected old ID %v, got %v", oldID, returnedOldID)
-	} else if !orphaned {
-		t.Fatal("overwrite should orphan old object_id")
+	} else if orphaned == nil || *orphaned != oldID {
+		t.Fatalf("expected orphaned ID %v, got %v", oldID, orphaned)
 	}
 
 	// overwrite with same object_id should not orphan
-	returnedOldID, orphaned, err = store.PutObject(accessKeyID, bucket, "obj", &objects.Object{
+	orphaned, err = store.PutObject(accessKeyID, bucket, "obj", &objects.Object{
 		ID:         newID,
 		ContentMD5: frand.Entropy128(),
 		Length:     2,
 	}, true)
 	if err != nil {
 		t.Fatal(err)
-	} else if orphaned {
+	} else if orphaned != nil {
 		t.Fatal("overwrite with same ID should not orphan")
 	}
 }

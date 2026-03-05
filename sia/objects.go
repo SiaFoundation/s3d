@@ -29,6 +29,7 @@ const metadataCacheLifetime = 24 * time.Hour
 // metadata that should be merged into the copied object except for the
 // x-amz-acl header.
 func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, replace bool, meta map[string]string) (*s3.CopyObjectResult, error) {
+	s.unpinMu.Lock()
 	obj, err := s.store.GetObject(&accessKeyID, srcBucket, srcObject, nil)
 	if err != nil {
 		return nil, err
@@ -40,27 +41,13 @@ func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject,
 		maps.Copy(obj.Meta, meta)
 	}
 
-	// lock the unpin mutex to prevent a concurrent delete from unpinning the
-	// source object between our GetObject and PutObject calls
-	s.unpinMu.Lock()
-	count, err := s.store.ObjectRefCount(obj.ID)
-	if err != nil {
-		s.unpinMu.Unlock()
-		return nil, err
-	}
-	if count == 0 {
-		s.unpinMu.Unlock()
-		return nil, s3errs.ErrNoSuchKey
-	}
-	oldID, orphaned, err := s.store.PutObject(accessKeyID, dstBucket, dstObject, obj, true)
+	orphaned, err := s.store.PutObject(accessKeyID, dstBucket, dstObject, obj, true)
 	s.unpinMu.Unlock()
 	if err != nil {
 		return nil, err
 	}
 
-	if orphaned {
-		s.tryUnpinObject(ctx, oldID)
-	}
+	s.tryUnpinObject(ctx, orphaned)
 
 	return &s3.CopyObjectResult{
 		ContentMD5:   obj.ContentMD5,
@@ -72,14 +59,12 @@ func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject,
 // DeleteObject deletes the object with the given key from the specified
 // bucket for the user identified by the given access key.
 func (s *Sia) DeleteObject(ctx context.Context, accessKeyID, bucket string, object s3.ObjectID) (*s3.DeleteObjectResult, error) {
-	deletedID, orphaned, err := s.store.DeleteObject(accessKeyID, bucket, object)
+	orphaned, err := s.store.DeleteObject(accessKeyID, bucket, object)
 	if err != nil {
 		return nil, err
 	}
 
-	if orphaned {
-		s.tryUnpinObject(ctx, deletedID)
-	}
+	s.tryUnpinObject(ctx, orphaned)
 
 	return &s3.DeleteObjectResult{
 		IsDeleteMarker: false,
@@ -230,7 +215,7 @@ func (s *Sia) refreshSiaObject(ctx context.Context, accessKeyID, bucket, objectK
 	// seal the fetched object for storage
 	obj.SiaObject = s.sdk.SealObject(fetched)
 	obj.CachedAt = time.Now()
-	if _, _, err := s.store.PutObject(accessKeyID, bucket, objectKey, obj, false); err != nil {
+	if _, err := s.store.PutObject(accessKeyID, bucket, objectKey, obj, false); err != nil {
 		s.logger.Warn("failed to update object metadata cache", zap.Error(err))
 	}
 	return fetched, nil
@@ -313,7 +298,7 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	}
 
 	// store the object in the database
-	oldID, orphaned, err := s.store.PutObject(accessKeyID, bucket, object, &objects.Object{
+	orphaned, err := s.store.PutObject(accessKeyID, bucket, object, &objects.Object{
 		ID:         objectID,
 		ContentMD5: contentMD5,
 		Meta:       opts.Meta,
@@ -325,9 +310,7 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 		return nil, fmt.Errorf("failed to store object metadata: %w", err)
 	}
 
-	if orphaned {
-		s.tryUnpinObject(ctx, oldID)
-	}
+	s.tryUnpinObject(ctx, orphaned)
 
 	return &s3.PutObjectResult{
 		ContentMD5: contentMD5,

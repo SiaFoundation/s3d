@@ -9,7 +9,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.96.0
 	github.com/mattn/go-sqlite3 v1.14.33
 	go.sia.tech/core v0.19.0
-	go.sia.tech/indexd v0.0.7-0.20260212193306-af7b3ba0af56
+	go.sia.tech/indexd v0.1.1-0.20260305105839-6a7900289225
 	go.uber.org/zap v1.27.1
 	golang.org/x/term v0.40.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -53,5 +53,3 @@ require (
 	golang.org/x/time v0.14.0 // indirect
 	golang.org/x/tools v0.41.0 // indirect
 )
-
-replace go.sia.tech/indexd => ../indexd
