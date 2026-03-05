@@ -10,15 +10,26 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia/objects"
+	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/slabs"
 )
 
 // DeleteObject deletes the object with the given bucket and name if it exists
-// and all provided preconditions match.
-func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) error {
-	return s.transaction(func(tx *txn) error {
+// and all provided preconditions match. Returns the deleted object's ID and
+// whether that ID is orphaned (no other rows reference it).
+func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (deletedID types.Hash256, orphaned bool, err error) {
+	err = s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
+			return err
+		}
+
+		// fetch the object_id before deleting
+		err = tx.QueryRow("SELECT object_id FROM objects WHERE bucket_id = $1 AND name = $2", bid, objectID.Key).
+			Scan((*sqlHash256)(&deletedID))
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil // object doesn't exist, nothing to delete
+		} else if err != nil {
 			return err
 		}
 
@@ -29,7 +40,7 @@ func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) e
 			err = tx.QueryRow("SELECT content_md5, size, updated_at FROM objects WHERE bucket_id = $1 AND name = $2", bid, objectID.Key).
 				Scan((*sqlMD5)(&contentMD5), &size, (*sqlTime)(&updatedAt))
 			if errors.Is(err, sql.ErrNoRows) {
-				return nil // object doesn't exist, nothing to delete
+				return nil
 			} else if err != nil {
 				return err
 			}
@@ -46,8 +57,20 @@ func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) e
 		}
 
 		_, err = tx.Exec("DELETE FROM objects WHERE bucket_id = $1 AND name = $2", bid, objectID.Key)
-		return err
+		if err != nil {
+			return err
+		}
+
+		// check if the deleted object_id is now orphaned
+		var count int64
+		err = tx.QueryRow("SELECT COUNT(*) FROM objects WHERE object_id = $1", sqlHash256(deletedID)).Scan(&count)
+		if err != nil {
+			return err
+		}
+		orphaned = count == 0
+		return nil
 	})
+	return
 }
 
 // GetObject retrieves the object with the given bucket and name.
@@ -109,16 +132,25 @@ func (s *Store) GetObject(accessKeyID *string, bucket, name string, partNumber *
 }
 
 // PutObject stores the given object in the given bucket with the given name or
-// overwrites it if it already exists.  If updatedModTime is true, the
+// overwrites it if it already exists. If updatedModTime is true, the
 // `updated_at` time that represents the S3 last modified time will be updated.
-func (s *Store) PutObject(accessKeyID, bucket, name string, obj *objects.Object, updateModTime bool) error {
-	return s.transaction(func(tx *txn) error {
+// Returns the old object's ID and whether it is orphaned (no other rows
+// reference it). The old ID is zero if there was no previous object.
+func (s *Store) PutObject(accessKeyID, bucket, name string, obj *objects.Object, updateModTime bool) (oldID types.Hash256, orphaned bool, err error) {
+	err = s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
 		if obj.Meta == nil {
 			obj.Meta = make(map[string]string) // force '{}' instead of 'null' in JSON
+		}
+
+		// fetch old object_id before upsert
+		err = tx.QueryRow("SELECT object_id FROM objects WHERE bucket_id = $1 AND name = $2", bid, name).
+			Scan((*sqlHash256)(&oldID))
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
 		}
 
 		_, err = tx.Exec(`
@@ -135,8 +167,30 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, obj *objects.Object,
 		`, bid, name, sqlHash256(obj.ID), sqlMD5(obj.ContentMD5),
 			sqlMetaJSON(obj.Meta), obj.Length, sqlTime(time.Now()),
 			sqlSiaObject(obj.SiaObject), sqlTime(obj.CachedAt), updateModTime)
-		return err
+		if err != nil {
+			return err
+		}
+
+		// check if old object_id is orphaned (different from new and no remaining refs)
+		if oldID != (types.Hash256{}) && oldID != obj.ID {
+			var count int64
+			if err := tx.QueryRow("SELECT COUNT(*) FROM objects WHERE object_id = $1", sqlHash256(oldID)).Scan(&count); err != nil {
+				return err
+			}
+			orphaned = count == 0
+		}
+		return nil
 	})
+	return
+}
+
+// ObjectRefCount returns the number of rows in the objects table that reference
+// the given object ID.
+func (s *Store) ObjectRefCount(objectID types.Hash256) (count int64, err error) {
+	err = s.transaction(func(tx *txn) error {
+		return tx.QueryRow("SELECT COUNT(*) FROM objects WHERE object_id = $1", sqlHash256(objectID)).Scan(&count)
+	})
+	return
 }
 
 // ListObjects lists objects in the specified bucket for the user identified

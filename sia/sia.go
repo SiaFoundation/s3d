@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/auth"
@@ -47,12 +48,14 @@ type Sia struct {
 	logger *zap.Logger
 	store  Store
 
+	unpinMu    sync.Mutex
 	directory  string
 	accessKeys map[string]auth.SecretAccessKey
 }
 
 // SDK describes the SDK used to interact with Sia.
 type SDK interface {
+	DeleteObject(ctx context.Context, id types.Hash256) error
 	Download(ctx context.Context, w io.Writer, obj sdk.Object, rnge *s3.ObjectRange) error
 	Object(ctx context.Context, id types.Hash256) (sdk.Object, error)
 	Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
@@ -64,16 +67,17 @@ type SDK interface {
 type Store interface {
 	CreateBucket(accessKeyID, bucket string) error
 	DeleteBucket(accessKeyID, bucket string) error
-	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) error
+	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (types.Hash256, bool, error)
 	GetObject(accessKeyID *string, bucket, object string, partNumber *int32) (*objects.Object, error)
 	HeadBucket(accessKeyID, bucket string) error
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
 	ListObjects(accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error)
-	PutObject(accessKeyID, bucket, name string, obj *objects.Object, updateModTime bool) error
+	ObjectRefCount(objectID types.Hash256) (int64, error)
+	PutObject(accessKeyID, bucket, name string, obj *objects.Object, updateModTime bool) (types.Hash256, bool, error)
 	AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) error
 	AddMultipartPart(bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (string, error)
 	CreateMultipartUpload(bucket, name string, uploadID s3.UploadID, meta map[string]string) error
-	CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, objectID types.Hash256, contentMD5 [16]byte, contentLength int64) error
+	CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, objectID types.Hash256, contentMD5 [16]byte, contentLength int64) (types.Hash256, bool, error)
 	HasMultipartUpload(bucket, name string, uploadID s3.UploadID) error
 	ListMultipartUploads(bucket string, prefix s3.Prefix, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error)
 	ListParts(bucket, name string, uploadID s3.UploadID, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error)
@@ -103,6 +107,32 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 	}
 
 	return sia, nil
+}
+
+// tryUnpinObject re-checks the reference count for the given object ID under
+// the unpin mutex and deletes it from the indexer if no references remain.
+// It skips the zero hash (empty objects are never pinned).
+func (s *Sia) tryUnpinObject(ctx context.Context, objectID types.Hash256) {
+	if objectID == (types.Hash256{}) {
+		return // empty objects are never pinned
+	}
+
+	s.unpinMu.Lock()
+	count, err := s.store.ObjectRefCount(objectID)
+	if err != nil {
+		s.unpinMu.Unlock()
+		s.logger.Error("failed to check object ref count", zap.Error(err), zap.Stringer("objectID", objectID))
+		return
+	}
+	if count > 0 {
+		s.unpinMu.Unlock()
+		return
+	}
+	s.unpinMu.Unlock()
+
+	if err := s.sdk.DeleteObject(ctx, objectID); err != nil {
+		s.logger.Error("failed to unpin object from indexer", zap.Error(err), zap.Stringer("objectID", objectID))
+	}
 }
 
 // LoadSecret loads the secret key for the given access key ID. If the access

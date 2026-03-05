@@ -1,8 +1,6 @@
 module github.com/SiaFoundation/s3d
 
-go 1.25
-
-toolchain go1.25.5
+go 1.26.0
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.1
@@ -44,7 +42,7 @@ require (
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.59.0 // indirect
 	github.com/quic-go/webtransport-go v0.10.0 // indirect
-	go.sia.tech/coreutils v0.21.0 // indirect
+	go.sia.tech/coreutils v0.21.1 // indirect
 	go.sia.tech/jape v0.14.1 // indirect
 	go.sia.tech/mux v1.4.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
@@ -52,5 +50,8 @@ require (
 	golang.org/x/net v0.49.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
+	golang.org/x/time v0.14.0 // indirect
 	golang.org/x/tools v0.41.0 // indirect
 )
+
+replace go.sia.tech/indexd => ../indexd

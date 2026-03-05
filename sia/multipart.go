@@ -369,8 +369,13 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 	}
 
 	// complete the multipart upload in the database
-	if err := s.store.CompleteMultipartUpload(bucket, object, uploadID, obj.ID(), contentMD5, contentLength); err != nil {
+	oldID, orphaned, err := s.store.CompleteMultipartUpload(bucket, object, uploadID, obj.ID(), contentMD5, contentLength)
+	if err != nil {
 		return nil, fmt.Errorf("failed to complete multipart upload in store: %w", err)
+	}
+
+	if orphaned {
+		s.tryUnpinObject(ctx, oldID)
 	}
 
 	// remove multipart upload directory

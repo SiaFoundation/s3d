@@ -559,7 +559,7 @@ func TestMultipartUploadPartCopy(t *testing.T) {
 	testutil.AssertS3Error(t, s3errs.ErrInvalidRange, err)
 
 	// assert [s3errs.ErrEntityTooLarge] is returned for oversized range
-	if err := store.PutObject(testutil.AccessKeyID, bucketSrc, objectSrc, &objects.Object{
+	if _, _, err := store.PutObject(testutil.AccessKeyID, bucketSrc, objectSrc, &objects.Object{
 		ID:     types.Hash256{},
 		Length: s3.MaxUploadPartSize + 1,
 	}, true); err != nil {

@@ -708,7 +708,7 @@ func TestObjectMetadataCache(t *testing.T) {
 		}
 		// set retrieval time to 25 hours ago (past the 24-hour cache lifetime)
 		obj.CachedAt = time.Now().Add(-25 * time.Hour)
-		if err := store.PutObject(accessKeyID, bucket, object, obj, true); err != nil {
+		if _, _, err := store.PutObject(accessKeyID, bucket, object, obj, true); err != nil {
 			t.Fatal(err)
 		}
 
@@ -743,7 +743,7 @@ func TestObjectMetadataCache(t *testing.T) {
 			t.Fatal(err)
 		}
 		storedObj.CachedAt = time.Now().Add(-25 * time.Hour)
-		if err := store.PutObject(accessKeyID, bucket, object, storedObj, true); err != nil {
+		if _, _, err := store.PutObject(accessKeyID, bucket, object, storedObj, true); err != nil {
 			t.Fatal(err)
 		}
 
@@ -811,4 +811,90 @@ func TestObjectMetadataCache(t *testing.T) {
 			t.Fatalf("expected empty body, got %d bytes", len(body))
 		}
 	})
+}
+
+func TestDeleteObjectUnpin(t *testing.T) {
+	memSDK := NewMemorySDK()
+	log := zaptest.NewLogger(t)
+	dir := t.TempDir()
+	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	s3Tester := NewCustomTester(t, dir, store, memSDK, log)
+
+	const bucket = "bucket"
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// upload object A
+	data := frand.Bytes(64)
+	_, err = s3Tester.PutObject(t.Context(), bucket, "A", bytes.NewReader(data), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// verify SDK has the object pinned
+	if len(memSDK.objects) != 1 {
+		t.Fatalf("expected 1 pinned object, got %d", len(memSDK.objects))
+	}
+
+	// copy A to B (shares same object_id)
+	_, err = s3Tester.CopyObject(t.Context(), bucket, "A", bucket, "B", types.MetadataDirectiveCopy, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// delete A - should NOT unpin since B still references the same object_id
+	if err := s3Tester.DeleteObject(t.Context(), bucket, "A"); err != nil {
+		t.Fatal(err)
+	}
+	if len(memSDK.objects) != 1 {
+		t.Fatalf("expected 1 pinned object after deleting A (B still references it), got %d", len(memSDK.objects))
+	}
+
+	// delete B - should unpin since no references remain
+	if err := s3Tester.DeleteObject(t.Context(), bucket, "B"); err != nil {
+		t.Fatal(err)
+	}
+	if len(memSDK.objects) != 0 {
+		t.Fatalf("expected 0 pinned objects after deleting B, got %d", len(memSDK.objects))
+	}
+
+	// test empty object deletion does not attempt to unpin
+	_, err = s3Tester.PutObject(t.Context(), bucket, "empty", bytes.NewReader(nil), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(memSDK.objects) != 0 {
+		t.Fatalf("expected 0 pinned objects for empty object, got %d", len(memSDK.objects))
+	}
+	if err := s3Tester.DeleteObject(t.Context(), bucket, "empty"); err != nil {
+		t.Fatal(err)
+	}
+	if len(memSDK.objects) != 0 {
+		t.Fatalf("expected 0 pinned objects after deleting empty object, got %d", len(memSDK.objects))
+	}
+
+	// test PutObject overwrite unpins old object
+	data2 := frand.Bytes(64)
+	_, err = s3Tester.PutObject(t.Context(), bucket, "C", bytes.NewReader(data), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(memSDK.objects) != 1 {
+		t.Fatalf("expected 1 pinned object, got %d", len(memSDK.objects))
+	}
+	// overwrite with different data (different object_id)
+	_, err = s3Tester.PutObject(t.Context(), bucket, "C", bytes.NewReader(data2), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// old object should be unpinned, new one pinned
+	if len(memSDK.objects) != 1 {
+		t.Fatalf("expected 1 pinned object after overwrite, got %d", len(memSDK.objects))
+	}
 }
