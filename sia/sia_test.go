@@ -39,6 +39,11 @@ func NewMemorySDK() *MemorySDK {
 	}
 }
 
+func (s *MemorySDK) DeleteObject(ctx context.Context, id types.Hash256) error {
+	delete(s.objects, id)
+	return nil
+}
+
 func (s *MemorySDK) Download(ctx context.Context, w io.Writer, obj sdk.Object, rnge *s3.ObjectRange) error {
 	uploaded, exists := s.objects[obj.ID()]
 	if !exists {

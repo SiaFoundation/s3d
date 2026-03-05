@@ -37,9 +37,10 @@ func (s *Store) CreateMultipartUpload(bucket, name string, uploadID s3.UploadID,
 }
 
 // CompleteMultipartUpload finalizes a multipart upload by creating the object
-// and transferring parts from the upload to the object.
-func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, objectID types.Hash256, contentMD5 [16]byte, contentLength int64) error {
-	return s.transaction(func(tx *txn) error {
+// and transferring parts from the upload to the object. Returns the old
+// object's ID and whether it is orphaned (no other rows reference it).
+func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, objectID types.Hash256, contentMD5 [16]byte, contentLength int64) (oldID types.Hash256, orphaned bool, err error) {
+	err = s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
@@ -87,6 +88,13 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 			return fmt.Errorf("found %d parts smaller than minimum size (%d bytes)", smallParts, s3.MinUploadPartSize)
 		}
 
+		// fetch old object_id before upsert
+		err = tx.QueryRow("SELECT object_id FROM objects WHERE bucket_id = $1 AND name = $2", bid, name).
+			Scan((*sqlHash256)(&oldID))
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+
 		// delete any existing parts for the object
 		_, err = tx.Exec(`DELETE FROM object_parts WHERE bucket_id = $1 AND name = $2`, bid, name)
 		if err != nil {
@@ -112,6 +120,15 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 			return err
 		}
 
+		// check if old object_id is orphaned
+		if oldID != (types.Hash256{}) && oldID != objectID {
+			var count int64
+			if err := tx.QueryRow("SELECT COUNT(*) FROM objects WHERE object_id = $1", sqlHash256(oldID)).Scan(&count); err != nil {
+				return err
+			}
+			orphaned = count == 0
+		}
+
 		// move parts to object_parts
 		_, err = tx.Exec(`
 			INSERT INTO object_parts (bucket_id, name, part_number, content_md5, content_length, offset)
@@ -130,6 +147,7 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 		_, err = tx.Exec(`DELETE FROM multipart_uploads WHERE upload_id = $1`, sqlUploadID(uploadID))
 		return err
 	})
+	return
 }
 
 // AbortMultipartUpload removes a multipart upload from the store.

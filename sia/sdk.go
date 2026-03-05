@@ -70,6 +70,11 @@ func (s *IndexdSDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
 	return obj, nil
 }
 
+// DeleteObject deletes the object with the given key from the indexer.
+func (s *IndexdSDK) DeleteObject(ctx context.Context, id types.Hash256) error {
+	return s.inner.DeleteObject(ctx, id)
+}
+
 // Object retrieves the object with the given key.
 func (s *IndexdSDK) Object(ctx context.Context, objectKey types.Hash256) (sdk.Object, error) {
 	return s.inner.Object(ctx, objectKey)
