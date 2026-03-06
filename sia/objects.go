@@ -32,6 +32,7 @@ func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject,
 	s.unpinMu.Lock()
 	obj, err := s.store.GetObject(&accessKeyID, srcBucket, srcObject, nil)
 	if err != nil {
+		s.unpinMu.Unlock()
 		return nil, err
 	}
 
@@ -42,10 +43,11 @@ func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject,
 	}
 
 	orphaned, err := s.store.PutObject(accessKeyID, dstBucket, dstObject, obj, true)
-	s.unpinMu.Unlock()
 	if err != nil {
+		s.unpinMu.Unlock()
 		return nil, err
 	}
+	s.unpinMu.Unlock()
 
 	s.tryUnpinObject(ctx, orphaned)
 
