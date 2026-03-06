@@ -113,7 +113,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 // tryUnpinObject re-checks the reference count for the given object ID under
 // the unpin mutex and deletes it from the indexer if no references remain.
 func (s *Sia) tryUnpinObject(ctx context.Context, objectID *types.Hash256) {
-	if objectID == nil {
+	if objectID == nil || *objectID == (types.Hash256{}) {
 		return
 	}
 
