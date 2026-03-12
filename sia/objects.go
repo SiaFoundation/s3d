@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"hash"
 	"io"
-	"maps"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
@@ -29,25 +28,10 @@ const metadataCacheLifetime = 24 * time.Hour
 // metadata that should be merged into the copied object except for the
 // x-amz-acl header.
 func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, replace bool, meta map[string]string) (*s3.CopyObjectResult, error) {
-	s.unpinMu.Lock()
-	obj, err := s.store.GetObject(&accessKeyID, srcBucket, srcObject, nil)
+	obj, orphaned, err := s.store.CopyObject(srcBucket, srcObject, dstBucket, dstObject, meta, replace)
 	if err != nil {
-		s.unpinMu.Unlock()
 		return nil, err
 	}
-
-	if replace {
-		obj.Meta = meta
-	} else {
-		maps.Copy(obj.Meta, meta)
-	}
-
-	orphaned, err := s.store.PutObject(accessKeyID, dstBucket, dstObject, obj, true)
-	if err != nil {
-		s.unpinMu.Unlock()
-		return nil, err
-	}
-	s.unpinMu.Unlock()
 
 	s.tryUnpinObject(ctx, orphaned)
 
