@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sync"
+	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/auth"
@@ -49,7 +49,6 @@ type Sia struct {
 	logger *zap.Logger
 	store  Store
 
-	unpinMu    sync.Mutex
 	directory  string
 	accessKeys map[string]auth.SecretAccessKey
 }
@@ -66,20 +65,21 @@ type SDK interface {
 
 // Store represents the storage backend used by the Sia backend.
 type Store interface {
-	CopyObject(srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool) (*objects.Object, *types.Hash256, error)
+	CopyObject(srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool) (*objects.Object, error)
 	CreateBucket(accessKeyID, bucket string) error
 	DeleteBucket(accessKeyID, bucket string) error
-	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (*types.Hash256, error)
+	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) error
 	GetObject(accessKeyID *string, bucket, object string, partNumber *int32) (*objects.Object, error)
 	HeadBucket(accessKeyID, bucket string) error
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
 	ListObjects(accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error)
-	ObjectReferenced(objectID types.Hash256) (bool, error)
-	PutObject(accessKeyID, bucket, name string, obj *objects.Object, updateModTime bool) (*types.Hash256, error)
+	OrphanedObjects() ([]types.Hash256, error)
+	PutObject(accessKeyID, bucket, name string, obj *objects.Object, updateModTime bool) error
+	RemoveOrphanedObject(objectID types.Hash256) error
 	AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) error
 	AddMultipartPart(bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (string, error)
 	CreateMultipartUpload(bucket, name string, uploadID s3.UploadID, meta map[string]string) error
-	CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, objectID types.Hash256, contentMD5 [16]byte, contentLength int64) (*types.Hash256, error)
+	CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, objectID types.Hash256, contentMD5 [16]byte, contentLength int64) error
 	HasMultipartUpload(bucket, name string, uploadID s3.UploadID) error
 	ListMultipartUploads(bucket string, prefix s3.Prefix, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error)
 	ListParts(bucket, name string, uploadID s3.UploadID, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error)
@@ -108,29 +108,44 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		return nil, fmt.Errorf("sia backend requires both access key and secret key")
 	}
 
+	go sia.processOrphans(ctx)
+
 	return sia, nil
 }
 
-// tryUnpinObject re-checks the reference count for the given object ID under
-// the unpin mutex and deletes it from the indexer if no references remain.
-func (s *Sia) tryUnpinObject(ctx context.Context, objectID *types.Hash256) {
-	if objectID == nil || *objectID == (types.Hash256{}) {
-		return
-	}
+// processOrphans periodically processes orphaned objects.
+func (s *Sia) processOrphans(ctx context.Context) {
+	t := time.NewTicker(time.Minute)
+	defer t.Stop()
 
-	s.unpinMu.Lock()
-	referenced, err := s.store.ObjectReferenced(*objectID)
-	s.unpinMu.Unlock()
+	// process once immediately at startup
+	s.ProcessOrphans(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.ProcessOrphans(ctx)
+		}
+	}
+}
+
+// ProcessOrphans unpins orphaned objects from the indexer and removes them
+// from the orphaned_objects table.
+func (s *Sia) ProcessOrphans(ctx context.Context) {
+	orphans, err := s.store.OrphanedObjects()
 	if err != nil {
-		s.logger.Error("failed to check object references", zap.Error(err), zap.Stringer("objectID", objectID))
+		s.logger.Error("failed to fetch orphaned objects", zap.Error(err))
 		return
 	}
-	if referenced {
-		return
-	}
-
-	if err := s.sdk.DeleteObject(ctx, *objectID); err != nil && !errors.Is(err, slabs.ErrObjectNotFound) {
-		s.logger.Error("failed to unpin object from indexer", zap.Error(err), zap.Stringer("objectID", objectID))
+	for _, id := range orphans {
+		if err := s.sdk.DeleteObject(ctx, id); err != nil && !errors.Is(err, slabs.ErrObjectNotFound) {
+			s.logger.Error("failed to unpin object from indexer", zap.Error(err), zap.Stringer("objectID", &id))
+			continue
+		}
+		if err := s.store.RemoveOrphanedObject(id); err != nil {
+			s.logger.Error("failed to remove orphaned object", zap.Error(err), zap.Stringer("objectID", &id))
+		}
 	}
 }
 

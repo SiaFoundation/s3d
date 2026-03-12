@@ -57,6 +57,10 @@ CREATE TABLE object_parts (
     PRIMARY KEY (bucket_id, name, part_number)
 );
 
+CREATE TABLE orphaned_objects (
+    object_id BLOB PRIMARY KEY
+);
+
 CREATE TABLE global_settings (
 	id INTEGER PRIMARY KEY NOT NULL DEFAULT 0 CHECK (id = 0), -- enforce a single row
 	db_version INTEGER NOT NULL, -- used for migrations
