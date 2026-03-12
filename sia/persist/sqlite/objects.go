@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -64,47 +65,7 @@ func (s *Store) GetObject(accessKeyID *string, bucket, name string, partNumber *
 		if err != nil {
 			return err
 		}
-
-		// get parts count
-		err = tx.QueryRow(`
-			SELECT COUNT(*)
-			FROM object_parts
-			WHERE bucket_id = $1 AND name = $2
-		`, bid, name).Scan(&obj.PartsCount)
-		if err != nil {
-			return err
-		}
-
-		// return full object if no part specified
-		if partNumber == nil || obj.PartsCount == 0 {
-			if obj.PartsCount == 0 && partNumber != nil {
-				if *partNumber != 1 {
-					return s3errs.ErrInvalidPart
-				}
-				obj.PartsCount = *partNumber
-			}
-			var siaObj sqlSiaObject
-			err := tx.QueryRow(`
-				SELECT object_id, metadata, updated_at, size, content_md5, sia_object, cached_at
-				FROM objects
-				WHERE bucket_id = $1 AND name = $2
-			`, bid, name).Scan((*sqlHash256)(&obj.ID), (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Length, (*sqlMD5)(&obj.ContentMD5), &siaObj, (*sqlTime)(&obj.CachedAt))
-			obj.SiaObject = slabs.SealedObject(siaObj)
-			return err
-		}
-
-		// return error if part number is invalid
-		if partNumber != nil && obj.PartsCount > 0 && *partNumber > int32(obj.PartsCount) {
-			return s3errs.ErrInvalidPart
-		}
-
-		// part specified, return part info
-		return tx.QueryRow(`
-			SELECT o.object_id, o.metadata, o.updated_at, p.offset, p.content_length, p.content_md5
-			FROM object_parts p
-			JOIN objects o ON o.bucket_id = p.bucket_id AND o.name = p.name
-			WHERE o.bucket_id = $1 AND o.name = $2 AND p.part_number = $3
-		`, bid, name, *partNumber).Scan((*sqlHash256)(&obj.ID), (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Offset, &obj.Length, (*sqlMD5)(&obj.ContentMD5))
+		return getObject(tx, &obj, bid, name, partNumber)
 	}); errors.Is(err, sql.ErrNoRows) {
 		return nil, s3errs.ErrNoSuchKey
 	} else if err != nil {
@@ -112,6 +73,49 @@ func (s *Store) GetObject(accessKeyID *string, bucket, name string, partNumber *
 	}
 
 	return &obj, nil
+}
+
+func getObject(tx *txn, obj *objects.Object, bid int64, name string, partNumber *int32) error {
+	// get parts count
+	err := tx.QueryRow(`
+		SELECT COUNT(*)
+		FROM object_parts
+		WHERE bucket_id = $1 AND name = $2
+	`, bid, name).Scan(&obj.PartsCount)
+	if err != nil {
+		return err
+	}
+
+	// return full object if no part specified
+	if partNumber == nil || obj.PartsCount == 0 {
+		if obj.PartsCount == 0 && partNumber != nil {
+			if *partNumber != 1 {
+				return s3errs.ErrInvalidPart
+			}
+			obj.PartsCount = *partNumber
+		}
+		var siaObj sqlSiaObject
+		err := tx.QueryRow(`
+			SELECT object_id, metadata, updated_at, size, content_md5, sia_object, cached_at
+			FROM objects
+			WHERE bucket_id = $1 AND name = $2
+		`, bid, name).Scan((*sqlHash256)(&obj.ID), (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Length, (*sqlMD5)(&obj.ContentMD5), &siaObj, (*sqlTime)(&obj.CachedAt))
+		obj.SiaObject = slabs.SealedObject(siaObj)
+		return err
+	}
+
+	// return error if part number is invalid
+	if partNumber != nil && obj.PartsCount > 0 && *partNumber > int32(obj.PartsCount) {
+		return s3errs.ErrInvalidPart
+	}
+
+	// part specified, return part info
+	return tx.QueryRow(`
+		SELECT o.object_id, o.metadata, o.updated_at, p.offset, p.content_length, p.content_md5
+		FROM object_parts p
+		JOIN objects o ON o.bucket_id = p.bucket_id AND o.name = p.name
+		WHERE o.bucket_id = $1 AND o.name = $2 AND p.part_number = $3
+	`, bid, name, *partNumber).Scan((*sqlHash256)(&obj.ID), (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Offset, &obj.Length, (*sqlMD5)(&obj.ContentMD5))
 }
 
 // PutObject stores the given object in the given bucket with the given name or
@@ -125,42 +129,86 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, obj *objects.Object,
 		if err != nil {
 			return err
 		}
-		if obj.Meta == nil {
-			obj.Meta = make(map[string]string) // force '{}' instead of 'null' in JSON
-		}
+		orphaned, err = putObject(tx, bid, name, obj, updateModTime)
+		return err
+	})
+	return
+}
 
-		oldID, err := previousObjectID(tx, bid, name)
+// CopyObject atomically reads the source object and writes it to the
+// destination within a single transaction, applying metadata according to the
+// replace flag. Returns the copied object metadata and the orphaned object ID
+// (if any) from the overwritten destination.
+func (s *Store) CopyObject(srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool) (result *objects.Object, orphaned *types.Hash256, err error) {
+	var obj objects.Object
+	err = s.transaction(func(tx *txn) error {
+		srcBid, err := bucketID(tx, srcBucket)
 		if err != nil {
 			return err
 		}
 
-		_, err = tx.Exec(`
-			INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at, sia_object, cached_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-			ON CONFLICT(bucket_id, name) DO UPDATE SET
-				object_id = excluded.object_id,
-				content_md5 = excluded.content_md5,
-				metadata = excluded.metadata,
-				size = excluded.size,
-				updated_at = CASE WHEN $10 THEN excluded.updated_at ELSE objects.updated_at END,
-				sia_object = excluded.sia_object,
-				cached_at = excluded.cached_at
-		`, bid, name, sqlHash256(obj.ID), sqlMD5(obj.ContentMD5),
-			sqlMetaJSON(obj.Meta), obj.Length, sqlTime(time.Now()),
-			sqlSiaObject(obj.SiaObject), sqlTime(obj.CachedAt), updateModTime)
-		if err != nil {
+		if err := getObject(tx, &obj, srcBid, srcName, nil); err != nil {
 			return err
 		}
 
-		if oldID != nil && *oldID != obj.ID {
-			orphaned, err = checkOrphaned(tx, *oldID)
+		if replace {
+			obj.Meta = meta
+		} else {
+			maps.Copy(obj.Meta, meta)
+		}
+
+		dstBid := srcBid
+		if dstBucket != srcBucket {
+			dstBid, err = bucketID(tx, dstBucket)
 			if err != nil {
 				return err
 			}
 		}
-		return nil
+
+		orphaned, err = putObject(tx, dstBid, dstName, &obj, true)
+		return err
 	})
-	return
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil, s3errs.ErrNoSuchKey
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	return &obj, orphaned, nil
+}
+
+func putObject(tx *txn, bid int64, name string, obj *objects.Object, updateModTime bool) (*types.Hash256, error) {
+	if obj.Meta == nil {
+		obj.Meta = make(map[string]string) // force '{}' instead of 'null' in JSON
+	}
+
+	oldID, err := previousObjectID(tx, bid, name)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = tx.Exec(`
+		INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at, sia_object, cached_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		ON CONFLICT(bucket_id, name) DO UPDATE SET
+			object_id = excluded.object_id,
+			content_md5 = excluded.content_md5,
+			metadata = excluded.metadata,
+			size = excluded.size,
+			updated_at = CASE WHEN $10 THEN excluded.updated_at ELSE objects.updated_at END,
+			sia_object = excluded.sia_object,
+			cached_at = excluded.cached_at
+	`, bid, name, sqlHash256(obj.ID), sqlMD5(obj.ContentMD5),
+		sqlMetaJSON(obj.Meta), obj.Length, sqlTime(time.Now()),
+		sqlSiaObject(obj.SiaObject), sqlTime(obj.CachedAt), updateModTime)
+	if err != nil {
+		return nil, err
+	}
+
+	if oldID != nil && *oldID != obj.ID {
+		return checkOrphaned(tx, *oldID)
+	}
+	return nil, nil
 }
 
 // ObjectReferenced returns true if at least one row in the objects table

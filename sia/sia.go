@@ -66,6 +66,7 @@ type SDK interface {
 
 // Store represents the storage backend used by the Sia backend.
 type Store interface {
+	CopyObject(srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool) (*objects.Object, *types.Hash256, error)
 	CreateBucket(accessKeyID, bucket string) error
 	DeleteBucket(accessKeyID, bucket string) error
 	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (*types.Hash256, error)
