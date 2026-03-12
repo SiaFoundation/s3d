@@ -108,13 +108,13 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		return nil, fmt.Errorf("sia backend requires both access key and secret key")
 	}
 
-	go sia.processOrphans(ctx)
+	go sia.processOrphansLoop(ctx)
 
 	return sia, nil
 }
 
-// processOrphans periodically processes orphaned objects.
-func (s *Sia) processOrphans(ctx context.Context) {
+// processOrphansLoop periodically processes orphaned objects.
+func (s *Sia) processOrphansLoop(ctx context.Context) {
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
 
