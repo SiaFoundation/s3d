@@ -191,12 +191,33 @@ func (s *Store) OrphanedObjects() (ids []types.Hash256, err error) {
 	return
 }
 
-// RemoveOrphanedObject removes an object ID from the orphaned_objects table.
-func (s *Store) RemoveOrphanedObject(objectID types.Hash256) error {
-	return s.transaction(func(tx *txn) error {
-		_, err := tx.Exec("DELETE FROM orphaned_objects WHERE object_id = $1", sqlHash256(objectID))
-		return err
+// RemoveOrphanedObject atomically removes an object ID from the
+// orphaned_objects table and checks whether the object is still unreferenced.
+// It returns true if the orphan row was deleted AND no row in the objects table
+// references the same ID, meaning the caller should proceed to unpin.
+func (s *Store) RemoveOrphanedObject(objectID types.Hash256) (bool, error) {
+	var shouldUnpin bool
+	err := s.transaction(func(tx *txn) error {
+		res, err := tx.Exec("DELETE FROM orphaned_objects WHERE object_id = $1", sqlHash256(objectID))
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			// already removed (e.g. cleared by a concurrent putObject)
+			return nil
+		}
+		var referenced bool
+		if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM objects WHERE object_id = $1)", sqlHash256(objectID)).Scan(&referenced); err != nil {
+			return err
+		}
+		shouldUnpin = !referenced
+		return nil
 	})
+	return shouldUnpin, err
 }
 
 func putObject(tx *txn, bid int64, name string, obj *objects.Object, updateModTime bool) error {
@@ -224,6 +245,12 @@ func putObject(tx *txn, bid int64, name string, obj *objects.Object, updateModTi
 		sqlMetaJSON(obj.Meta), obj.Length, sqlTime(time.Now()),
 		sqlSiaObject(obj.SiaObject), sqlTime(obj.CachedAt), updateModTime)
 	if err != nil {
+		return err
+	}
+
+	// clear any stale orphan entry for the new object ID, in case it was
+	// previously orphaned and is now referenced again
+	if _, err := tx.Exec("DELETE FROM orphaned_objects WHERE object_id = $1", sqlHash256(obj.ID)); err != nil {
 		return err
 	}
 
