@@ -16,10 +16,10 @@ import (
 )
 
 // DeleteObject deletes the object with the given bucket and name if it exists
-// and all provided preconditions match. Returns the orphaned object ID if the
-// deleted object's ID has no remaining references, or nil otherwise.
-func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (orphaned *types.Hash256, err error) {
-	err = s.transaction(func(tx *txn) error {
+// and all provided preconditions match. If the deleted object's ID has no
+// remaining references, it is inserted into the orphaned_objects table.
+func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) error {
+	return s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
@@ -51,10 +51,8 @@ func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (
 			return s3errs.ErrPreconditionFailed
 		}
 
-		orphaned, err = checkOrphaned(tx, deletedID)
-		return err
+		return insertOrphan(tx, deletedID)
 	})
-	return
 }
 
 // GetObject retrieves the object with the given bucket and name.
@@ -121,25 +119,22 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, partNumber 
 // PutObject stores the given object in the given bucket with the given name or
 // overwrites it if it already exists.  If updatedModTime is true, the
 // `updated_at` time that represents the S3 last modified time will be updated.
-// Returns the orphaned object ID if the overwritten object's ID has no
-// remaining references, or nil otherwise.
-func (s *Store) PutObject(accessKeyID, bucket, name string, obj *objects.Object, updateModTime bool) (orphaned *types.Hash256, err error) {
-	err = s.transaction(func(tx *txn) error {
+// If the overwritten object's ID has no remaining references, it is inserted
+// into the orphaned_objects table.
+func (s *Store) PutObject(accessKeyID, bucket, name string, obj *objects.Object, updateModTime bool) error {
+	return s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
-		orphaned, err = putObject(tx, bid, name, obj, updateModTime)
-		return err
+		return putObject(tx, bid, name, obj, updateModTime)
 	})
-	return
 }
 
 // CopyObject atomically reads the source object and writes it to the
 // destination within a single transaction, applying metadata according to the
-// replace flag. Returns the copied object metadata and the orphaned object ID
-// (if any) from the overwritten destination.
-func (s *Store) CopyObject(srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool) (result *objects.Object, orphaned *types.Hash256, err error) {
+// replace flag. Returns the copied object metadata.
+func (s *Store) CopyObject(srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool) (result *objects.Object, err error) {
 	var obj objects.Object
 	err = s.transaction(func(tx *txn) error {
 		srcBid, err := bucketID(tx, srcBucket)
@@ -165,26 +160,53 @@ func (s *Store) CopyObject(srcBucket, srcName, dstBucket, dstName string, meta m
 			}
 		}
 
-		orphaned, err = putObject(tx, dstBid, dstName, &obj, true)
-		return err
+		return putObject(tx, dstBid, dstName, &obj, true)
 	})
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil, s3errs.ErrNoSuchKey
+		return nil, s3errs.ErrNoSuchKey
 	}
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return &obj, orphaned, nil
+	return &obj, nil
 }
 
-func putObject(tx *txn, bid int64, name string, obj *objects.Object, updateModTime bool) (*types.Hash256, error) {
+// OrphanedObjects returns all object IDs in the orphaned_objects table.
+func (s *Store) OrphanedObjects() (ids []types.Hash256, err error) {
+	err = s.transaction(func(tx *txn) error {
+		rows, err := tx.Query("SELECT object_id FROM orphaned_objects")
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id types.Hash256
+			if err := rows.Scan((*sqlHash256)(&id)); err != nil {
+				return err
+			}
+			ids = append(ids, id)
+		}
+		return rows.Err()
+	})
+	return
+}
+
+// RemoveOrphanedObject removes an object ID from the orphaned_objects table.
+func (s *Store) RemoveOrphanedObject(objectID types.Hash256) error {
+	return s.transaction(func(tx *txn) error {
+		_, err := tx.Exec("DELETE FROM orphaned_objects WHERE object_id = $1", sqlHash256(objectID))
+		return err
+	})
+}
+
+func putObject(tx *txn, bid int64, name string, obj *objects.Object, updateModTime bool) error {
 	if obj.Meta == nil {
 		obj.Meta = make(map[string]string) // force '{}' instead of 'null' in JSON
 	}
 
 	oldID, err := previousObjectID(tx, bid, name)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	_, err = tx.Exec(`
@@ -202,24 +224,13 @@ func putObject(tx *txn, bid int64, name string, obj *objects.Object, updateModTi
 		sqlMetaJSON(obj.Meta), obj.Length, sqlTime(time.Now()),
 		sqlSiaObject(obj.SiaObject), sqlTime(obj.CachedAt), updateModTime)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	if oldID != nil && *oldID != obj.ID {
-		return checkOrphaned(tx, *oldID)
+		return insertOrphan(tx, *oldID)
 	}
-	return nil, nil
-}
-
-// ObjectReferenced returns true if at least one row in the objects table
-// references the given object ID.
-func (s *Store) ObjectReferenced(objectID types.Hash256) (referenced bool, err error) {
-	err = s.transaction(func(tx *txn) error {
-		orphaned, err := checkOrphaned(tx, objectID)
-		referenced = orphaned == nil
-		return err
-	})
-	return
+	return nil
 }
 
 // previousObjectID returns the object_id currently stored for the given bucket
@@ -236,17 +247,21 @@ func previousObjectID(tx *txn, bid int64, name string) (*types.Hash256, error) {
 	return &id, nil
 }
 
-// checkOrphaned returns a pointer to objectID if no rows in the objects table
-// reference it, or nil otherwise.
-func checkOrphaned(tx *txn, objectID types.Hash256) (*types.Hash256, error) {
-	var exists bool
-	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM objects WHERE object_id = $1)", sqlHash256(objectID)).Scan(&exists); err != nil {
-		return nil, err
+// insertOrphan adds objectID to the orphaned_objects table if no rows in the
+// objects table reference it.
+func insertOrphan(tx *txn, objectID types.Hash256) error {
+	if objectID == (types.Hash256{}) {
+		return nil // skip zero-value (empty objects)
 	}
-	if !exists {
-		return &objectID, nil
+	var referenced bool
+	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM objects WHERE object_id = $1)", sqlHash256(objectID)).Scan(&referenced); err != nil {
+		return err
 	}
-	return nil, nil
+	if referenced {
+		return nil
+	}
+	_, err := tx.Exec("INSERT OR IGNORE INTO orphaned_objects (object_id) VALUES ($1)", sqlHash256(objectID))
+	return err
 }
 
 // ListObjects lists objects in the specified bucket for the user identified

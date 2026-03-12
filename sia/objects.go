@@ -28,12 +28,10 @@ const metadataCacheLifetime = 24 * time.Hour
 // metadata that should be merged into the copied object except for the
 // x-amz-acl header.
 func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, replace bool, meta map[string]string) (*s3.CopyObjectResult, error) {
-	obj, orphaned, err := s.store.CopyObject(srcBucket, srcObject, dstBucket, dstObject, meta, replace)
+	obj, err := s.store.CopyObject(srcBucket, srcObject, dstBucket, dstObject, meta, replace)
 	if err != nil {
 		return nil, err
 	}
-
-	s.tryUnpinObject(ctx, orphaned)
 
 	return &s3.CopyObjectResult{
 		ContentMD5:   obj.ContentMD5,
@@ -45,12 +43,10 @@ func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject,
 // DeleteObject deletes the object with the given key from the specified
 // bucket for the user identified by the given access key.
 func (s *Sia) DeleteObject(ctx context.Context, accessKeyID, bucket string, object s3.ObjectID) (*s3.DeleteObjectResult, error) {
-	orphaned, err := s.store.DeleteObject(accessKeyID, bucket, object)
+	err := s.store.DeleteObject(accessKeyID, bucket, object)
 	if err != nil {
 		return nil, err
 	}
-
-	s.tryUnpinObject(ctx, orphaned)
 
 	return &s3.DeleteObjectResult{
 		IsDeleteMarker: false,
@@ -201,7 +197,7 @@ func (s *Sia) refreshSiaObject(ctx context.Context, accessKeyID, bucket, objectK
 	// seal the fetched object for storage
 	obj.SiaObject = s.sdk.SealObject(fetched)
 	obj.CachedAt = time.Now()
-	if _, err := s.store.PutObject(accessKeyID, bucket, objectKey, obj, false); err != nil {
+	if err := s.store.PutObject(accessKeyID, bucket, objectKey, obj, false); err != nil {
 		s.logger.Warn("failed to update object metadata cache", zap.Error(err))
 	}
 	return fetched, nil
@@ -284,19 +280,16 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	}
 
 	// store the object in the database
-	orphaned, err := s.store.PutObject(accessKeyID, bucket, object, &objects.Object{
+	if err := s.store.PutObject(accessKeyID, bucket, object, &objects.Object{
 		ID:         objectID,
 		ContentMD5: contentMD5,
 		Meta:       opts.Meta,
 		Length:     lr.N,
 		SiaObject:  siaObject,
 		CachedAt:   cachedAt,
-	}, true)
-	if err != nil {
+	}, true); err != nil {
 		return nil, fmt.Errorf("failed to store object metadata: %w", err)
 	}
-
-	s.tryUnpinObject(ctx, orphaned)
 
 	return &s3.PutObjectResult{
 		ContentMD5: contentMD5,

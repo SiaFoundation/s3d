@@ -37,11 +37,11 @@ func (s *Store) CreateMultipartUpload(bucket, name string, uploadID s3.UploadID,
 }
 
 // CompleteMultipartUpload finalizes a multipart upload by creating the object
-// and transferring parts from the upload to the object. Returns the orphaned
-// object ID if the overwritten object's ID has no remaining references, or
-// nil otherwise.
-func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, objectID types.Hash256, contentMD5 [16]byte, contentLength int64) (orphaned *types.Hash256, err error) {
-	err = s.transaction(func(tx *txn) error {
+// and transferring parts from the upload to the object. If the overwritten
+// object's ID has no remaining references, it is inserted into the
+// orphaned_objects table.
+func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, objectID types.Hash256, contentMD5 [16]byte, contentLength int64) error {
+	return s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
@@ -120,8 +120,7 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 		}
 
 		if oldID != nil && *oldID != objectID {
-			orphaned, err = checkOrphaned(tx, *oldID)
-			if err != nil {
+			if err := insertOrphan(tx, *oldID); err != nil {
 				return err
 			}
 		}
@@ -144,7 +143,6 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 		_, err = tx.Exec(`DELETE FROM multipart_uploads WHERE upload_id = $1`, sqlUploadID(uploadID))
 		return err
 	})
-	return
 }
 
 // AbortMultipartUpload removes a multipart upload from the store.

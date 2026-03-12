@@ -2,6 +2,7 @@ package sia_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/md5"
 	"encoding/hex"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"github.com/SiaFoundation/s3d/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"github.com/SiaFoundation/s3d/sia"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -708,7 +710,7 @@ func TestObjectMetadataCache(t *testing.T) {
 		}
 		// set retrieval time to 25 hours ago (past the 24-hour cache lifetime)
 		obj.CachedAt = time.Now().Add(-25 * time.Hour)
-		if _, err := store.PutObject(accessKeyID, bucket, object, obj, true); err != nil {
+		if err := store.PutObject(accessKeyID, bucket, object, obj, true); err != nil {
 			t.Fatal(err)
 		}
 
@@ -743,7 +745,7 @@ func TestObjectMetadataCache(t *testing.T) {
 			t.Fatal(err)
 		}
 		storedObj.CachedAt = time.Now().Add(-25 * time.Hour)
-		if _, err := store.PutObject(accessKeyID, bucket, object, storedObj, true); err != nil {
+		if err := store.PutObject(accessKeyID, bucket, object, storedObj, true); err != nil {
 			t.Fatal(err)
 		}
 
@@ -823,7 +825,11 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	}
 	t.Cleanup(func() { store.Close() })
 
-	s3Tester := NewCustomTester(t, dir, store, memSDK, log)
+	siaBackend, err := sia.New(context.Background(), memSDK, store, dir, sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey), sia.WithLogger(log))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s3Tester := testutil.NewTester(t, testutil.WithBackend(siaBackend))
 
 	const bucket = "bucket"
 	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
@@ -852,6 +858,7 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	if err := s3Tester.DeleteObject(t.Context(), bucket, "A"); err != nil {
 		t.Fatal(err)
 	}
+	siaBackend.ProcessOrphans(t.Context())
 	if len(memSDK.objects) != 1 {
 		t.Fatalf("expected 1 pinned object after deleting A (B still references it), got %d", len(memSDK.objects))
 	}
@@ -860,6 +867,7 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	if err := s3Tester.DeleteObject(t.Context(), bucket, "B"); err != nil {
 		t.Fatal(err)
 	}
+	siaBackend.ProcessOrphans(t.Context())
 	if len(memSDK.objects) != 0 {
 		t.Fatalf("expected 0 pinned objects after deleting B, got %d", len(memSDK.objects))
 	}
@@ -869,12 +877,14 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	siaBackend.ProcessOrphans(t.Context())
 	if len(memSDK.objects) != 0 {
 		t.Fatalf("expected 0 pinned objects for empty object, got %d", len(memSDK.objects))
 	}
 	if err := s3Tester.DeleteObject(t.Context(), bucket, "empty"); err != nil {
 		t.Fatal(err)
 	}
+	siaBackend.ProcessOrphans(t.Context())
 	if len(memSDK.objects) != 0 {
 		t.Fatalf("expected 0 pinned objects after deleting empty object, got %d", len(memSDK.objects))
 	}
@@ -885,6 +895,7 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	siaBackend.ProcessOrphans(t.Context())
 	if len(memSDK.objects) != 1 {
 		t.Fatalf("expected 1 pinned object, got %d", len(memSDK.objects))
 	}
@@ -893,6 +904,7 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	siaBackend.ProcessOrphans(t.Context())
 	// old object should be unpinned, new one pinned
 	if len(memSDK.objects) != 1 {
 		t.Fatalf("expected 1 pinned object after overwrite, got %d", len(memSDK.objects))
