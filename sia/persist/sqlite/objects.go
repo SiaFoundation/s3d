@@ -191,23 +191,17 @@ func (s *Store) OrphanedObjects(limit int) (ids []types.Hash256, err error) {
 	return
 }
 
-// RemoveOrphanedObject atomically removes an object ID from the
-// orphaned_objects table and checks whether the object is still unreferenced.
-// It returns true if the orphan row was deleted AND no row in the objects table
-// references the same ID, meaning the caller should proceed to unpin.
-func (s *Store) RemoveOrphanedObject(objectID types.Hash256) (bool, error) {
+// OrphanUnreferenced atomically checks whether the given object ID is present
+// in the orphaned_objects table and not referenced by any row in the objects
+// table. It returns true if the caller should proceed to unpin the object.
+func (s *Store) OrphanUnreferenced(objectID types.Hash256) (bool, error) {
 	var shouldUnpin bool
 	err := s.transaction(func(tx *txn) error {
-		res, err := tx.Exec("DELETE FROM orphaned_objects WHERE object_id = $1", sqlHash256(objectID))
-		if err != nil {
+		var exists bool
+		if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM orphaned_objects WHERE object_id = $1)", sqlHash256(objectID)).Scan(&exists); err != nil {
 			return err
 		}
-		n, err := res.RowsAffected()
-		if err != nil {
-			return err
-		}
-		if n == 0 {
-			// already removed (e.g. cleared by a concurrent putObject)
+		if !exists {
 			return nil
 		}
 		var referenced bool
@@ -218,6 +212,14 @@ func (s *Store) RemoveOrphanedObject(objectID types.Hash256) (bool, error) {
 		return nil
 	})
 	return shouldUnpin, err
+}
+
+// RemoveOrphanedObject removes an object ID from the orphaned_objects table.
+func (s *Store) RemoveOrphanedObject(objectID types.Hash256) error {
+	return s.transaction(func(tx *txn) error {
+		_, err := tx.Exec("DELETE FROM orphaned_objects WHERE object_id = $1", sqlHash256(objectID))
+		return err
+	})
 }
 
 func putObject(tx *txn, bid int64, name string, obj *objects.Object, updateModTime bool) error {
