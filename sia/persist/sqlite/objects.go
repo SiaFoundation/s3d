@@ -191,29 +191,6 @@ func (s *Store) OrphanedObjects(limit int) (ids []types.Hash256, err error) {
 	return
 }
 
-// OrphanUnreferenced atomically checks whether the given object ID is present
-// in the orphaned_objects table and not referenced by any row in the objects
-// table. It returns true if the caller should proceed to unpin the object.
-func (s *Store) OrphanUnreferenced(objectID types.Hash256) (bool, error) {
-	var shouldUnpin bool
-	err := s.transaction(func(tx *txn) error {
-		var exists bool
-		if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM orphaned_objects WHERE object_id = $1)", sqlHash256(objectID)).Scan(&exists); err != nil {
-			return err
-		}
-		if !exists {
-			return nil
-		}
-		var referenced bool
-		if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM objects WHERE object_id = $1)", sqlHash256(objectID)).Scan(&referenced); err != nil {
-			return err
-		}
-		shouldUnpin = !referenced
-		return nil
-	})
-	return shouldUnpin, err
-}
-
 // RemoveOrphanedObject removes an object ID from the orphaned_objects table.
 func (s *Store) RemoveOrphanedObject(objectID types.Hash256) error {
 	return s.transaction(func(tx *txn) error {

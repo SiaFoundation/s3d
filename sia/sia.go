@@ -74,7 +74,6 @@ type Store interface {
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
 	ListObjects(accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error)
 	OrphanedObjects(limit int) ([]types.Hash256, error)
-	OrphanUnreferenced(objectID types.Hash256) (bool, error)
 	PutObject(accessKeyID, bucket, name string, obj *objects.Object, updateModTime bool) error
 	RemoveOrphanedObject(objectID types.Hash256) error
 	AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) error
@@ -130,37 +129,34 @@ func (s *Sia) processOrphansLoop(ctx context.Context) {
 }
 
 // ProcessOrphans unpins orphaned objects from the indexer and removes them
-// from the orphaned_objects table. It processes up to 100 orphans per call.
+// from the orphaned_objects table in batches.
 func (s *Sia) ProcessOrphans(ctx context.Context) {
 	const batchSize = 100
-	orphans, err := s.store.OrphanedObjects(batchSize)
-	if err != nil {
-		s.logger.Error("failed to fetch orphaned objects", zap.Error(err))
-		return
-	}
-	if len(orphans) == 0 {
-		return
-	}
-	var unpinned int
-	for _, id := range orphans {
-		shouldUnpin, err := s.store.OrphanUnreferenced(id)
+	var totalUnpinned int
+	for {
+		orphans, err := s.store.OrphanedObjects(batchSize)
 		if err != nil {
-			s.logger.Error("failed to check orphan references", zap.Error(err), zap.Stringer("objectID", &id))
-			continue
-		} else if !shouldUnpin {
-			continue
+			s.logger.Error("failed to fetch orphaned objects", zap.Error(err))
+			return
 		}
-		if err := s.sdk.DeleteObject(ctx, id); err != nil && !errors.Is(err, slabs.ErrObjectNotFound) {
-			s.logger.Error("failed to unpin object from indexer", zap.Error(err), zap.Stringer("objectID", &id))
-			continue // retry in the future
+		if len(orphans) == 0 {
+			break
 		}
-		if err := s.store.RemoveOrphanedObject(id); err != nil {
-			s.logger.Error("failed to remove orphaned object", zap.Error(err), zap.Stringer("objectID", &id))
-			continue
+		for _, id := range orphans {
+			if err := s.sdk.DeleteObject(ctx, id); err != nil && !errors.Is(err, slabs.ErrObjectNotFound) {
+				s.logger.Error("failed to unpin object from indexer", zap.Error(err), zap.Stringer("objectID", &id))
+				continue // leave in table for retry
+			}
+			if err := s.store.RemoveOrphanedObject(id); err != nil {
+				s.logger.Error("failed to remove orphaned object", zap.Error(err), zap.Stringer("objectID", &id))
+				continue
+			}
+			totalUnpinned++
 		}
-		unpinned++
 	}
-	s.logger.Info("processed orphaned objects", zap.Int("fetched", len(orphans)), zap.Int("unpinned", unpinned))
+	if totalUnpinned > 0 {
+		s.logger.Info("processed orphaned objects", zap.Int("unpinned", totalUnpinned))
+	}
 }
 
 // LoadSecret loads the secret key for the given access key ID. If the access
