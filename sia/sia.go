@@ -74,8 +74,9 @@ type Store interface {
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
 	ListObjects(accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error)
 	OrphanedObjects(limit int) ([]types.Hash256, error)
+	OrphanUnreferenced(objectID types.Hash256) (bool, error)
 	PutObject(accessKeyID, bucket, name string, obj *objects.Object, updateModTime bool) error
-	RemoveOrphanedObject(objectID types.Hash256) (bool, error)
+	RemoveOrphanedObject(objectID types.Hash256) error
 	AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) error
 	AddMultipartPart(bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (string, error)
 	CreateMultipartUpload(bucket, name string, uploadID s3.UploadID, meta map[string]string) error
@@ -142,16 +143,19 @@ func (s *Sia) ProcessOrphans(ctx context.Context) {
 	}
 	var unpinned int
 	for _, id := range orphans {
-		shouldUnpin, err := s.store.RemoveOrphanedObject(id)
+		shouldUnpin, err := s.store.OrphanUnreferenced(id)
 		if err != nil {
-			s.logger.Error("failed to remove orphaned object", zap.Error(err), zap.Stringer("objectID", &id))
+			s.logger.Error("failed to check orphan references", zap.Error(err), zap.Stringer("objectID", &id))
 			continue
-		}
-		if !shouldUnpin {
+		} else if !shouldUnpin {
 			continue
 		}
 		if err := s.sdk.DeleteObject(ctx, id); err != nil && !errors.Is(err, slabs.ErrObjectNotFound) {
 			s.logger.Error("failed to unpin object from indexer", zap.Error(err), zap.Stringer("objectID", &id))
+			continue // retry in the future
+		}
+		if err := s.store.RemoveOrphanedObject(id); err != nil {
+			s.logger.Error("failed to remove orphaned object", zap.Error(err), zap.Stringer("objectID", &id))
 			continue
 		}
 		unpinned++

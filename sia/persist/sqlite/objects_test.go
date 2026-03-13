@@ -773,12 +773,17 @@ func TestOrphanedObjects(t *testing.T) {
 		t.Fatalf("expected orphan %v, got %v", objID, orphans)
 	}
 
-	// remove orphan — should return true since no references remain
-	shouldUnpin, err := store.RemoveOrphanedObject(objID)
+	// check orphan — should return true since no references remain
+	shouldUnpin, err := store.OrphanUnreferenced(objID)
 	if err != nil {
 		t.Fatal(err)
 	} else if !shouldUnpin {
 		t.Fatal("expected shouldUnpin=true for unreferenced orphan")
+	}
+
+	// remove orphan
+	if err := store.RemoveOrphanedObject(objID); err != nil {
+		t.Fatal(err)
 	}
 
 	orphans, err = store.OrphanedObjects(100)
@@ -788,8 +793,8 @@ func TestOrphanedObjects(t *testing.T) {
 		t.Fatalf("expected no orphans after removal, got %d", len(orphans))
 	}
 
-	// calling RemoveOrphanedObject again should return false (already removed)
-	shouldUnpin, err = store.RemoveOrphanedObject(objID)
+	// calling OrphanUnreferenced again should return false (already removed)
+	shouldUnpin, err = store.OrphanUnreferenced(objID)
 	if err != nil {
 		t.Fatal(err)
 	} else if shouldUnpin {
@@ -844,7 +849,7 @@ func TestPutObjectOrphan(t *testing.T) {
 	}
 
 	// clean up orphan
-	if _, err := store.RemoveOrphanedObject(oldID); err != nil {
+	if err := store.RemoveOrphanedObject(oldID); err != nil {
 		t.Fatal(err)
 	}
 
