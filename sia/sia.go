@@ -139,9 +139,6 @@ func (s *Sia) ProcessOrphans(ctx context.Context) {
 			s.logger.Error("failed to fetch orphaned objects", zap.Error(err))
 			return
 		}
-		if len(orphans) == 0 {
-			break
-		}
 		for _, id := range orphans {
 			if err := s.sdk.DeleteObject(ctx, id); err != nil && !errors.Is(err, slabs.ErrObjectNotFound) {
 				s.logger.Error("failed to unpin object from indexer", zap.Error(err), zap.Stringer("objectID", &id))
@@ -152,6 +149,9 @@ func (s *Sia) ProcessOrphans(ctx context.Context) {
 				continue
 			}
 			totalUnpinned++
+		}
+		if len(orphans) < batchSize {
+			break
 		}
 	}
 	if totalUnpinned > 0 {
