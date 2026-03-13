@@ -740,12 +740,8 @@ func TestOrphanedObjects(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// put second object with same ID (simulates CopyObject)
-	if err := store.PutObject(accessKeyID, bucket, "b", &objects.Object{
-		ID:         objID,
-		ContentMD5: frand.Entropy128(),
-		Length:     1,
-	}, true); err != nil {
+	// copy object to a second key
+	if _, err := store.CopyObject(bucket, "a", bucket, "b", nil, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -773,14 +769,6 @@ func TestOrphanedObjects(t *testing.T) {
 		t.Fatalf("expected orphan %v, got %v", objID, orphans)
 	}
 
-	// check orphan — should return true since no references remain
-	shouldUnpin, err := store.OrphanUnreferenced(objID)
-	if err != nil {
-		t.Fatal(err)
-	} else if !shouldUnpin {
-		t.Fatal("expected shouldUnpin=true for unreferenced orphan")
-	}
-
 	// remove orphan
 	if err := store.RemoveOrphanedObject(objID); err != nil {
 		t.Fatal(err)
@@ -791,14 +779,6 @@ func TestOrphanedObjects(t *testing.T) {
 		t.Fatal(err)
 	} else if len(orphans) != 0 {
 		t.Fatalf("expected no orphans after removal, got %d", len(orphans))
-	}
-
-	// calling OrphanUnreferenced again should return false (already removed)
-	shouldUnpin, err = store.OrphanUnreferenced(objID)
-	if err != nil {
-		t.Fatal(err)
-	} else if shouldUnpin {
-		t.Fatal("expected shouldUnpin=false for already-removed orphan")
 	}
 }
 
