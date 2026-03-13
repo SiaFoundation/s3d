@@ -724,7 +724,7 @@ func TestOrphanedObjects(t *testing.T) {
 	objID := frand.Entropy256()
 
 	// no orphans initially
-	orphans, err := store.OrphanedObjects()
+	orphans, err := store.OrphanedObjects(100)
 	if err != nil {
 		t.Fatal(err)
 	} else if len(orphans) != 0 {
@@ -754,7 +754,7 @@ func TestOrphanedObjects(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	orphans, err = store.OrphanedObjects()
+	orphans, err = store.OrphanedObjects(100)
 	if err != nil {
 		t.Fatal(err)
 	} else if len(orphans) != 0 {
@@ -766,7 +766,7 @@ func TestOrphanedObjects(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	orphans, err = store.OrphanedObjects()
+	orphans, err = store.OrphanedObjects(100)
 	if err != nil {
 		t.Fatal(err)
 	} else if len(orphans) != 1 || orphans[0] != objID {
@@ -781,7 +781,7 @@ func TestOrphanedObjects(t *testing.T) {
 		t.Fatal("expected shouldUnpin=true for unreferenced orphan")
 	}
 
-	orphans, err = store.OrphanedObjects()
+	orphans, err = store.OrphanedObjects(100)
 	if err != nil {
 		t.Fatal(err)
 	} else if len(orphans) != 0 {
@@ -820,7 +820,7 @@ func TestPutObjectOrphan(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	orphans, err := store.OrphanedObjects()
+	orphans, err := store.OrphanedObjects(100)
 	if err != nil {
 		t.Fatal(err)
 	} else if len(orphans) != 0 {
@@ -836,7 +836,7 @@ func TestPutObjectOrphan(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	orphans, err = store.OrphanedObjects()
+	orphans, err = store.OrphanedObjects(100)
 	if err != nil {
 		t.Fatal(err)
 	} else if len(orphans) != 1 || orphans[0] != oldID {
@@ -857,7 +857,7 @@ func TestPutObjectOrphan(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	orphans, err = store.OrphanedObjects()
+	orphans, err = store.OrphanedObjects(100)
 	if err != nil {
 		t.Fatal(err)
 	} else if len(orphans) != 0 {

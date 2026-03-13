@@ -171,10 +171,10 @@ func (s *Store) CopyObject(srcBucket, srcName, dstBucket, dstName string, meta m
 	return &obj, nil
 }
 
-// OrphanedObjects returns all object IDs in the orphaned_objects table.
-func (s *Store) OrphanedObjects() (ids []types.Hash256, err error) {
+// OrphanedObjects returns up to limit object IDs from the orphaned_objects table.
+func (s *Store) OrphanedObjects(limit int) (ids []types.Hash256, err error) {
 	err = s.transaction(func(tx *txn) error {
-		rows, err := tx.Query("SELECT object_id FROM orphaned_objects")
+		rows, err := tx.Query("SELECT object_id FROM orphaned_objects LIMIT $1", limit)
 		if err != nil {
 			return err
 		}
