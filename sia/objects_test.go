@@ -916,7 +916,7 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	if err := s3Tester.DeleteObject(t.Context(), bucket, "C"); err != nil {
 		t.Fatal(err)
 	}
-	orphans, err := store.OrphanedObjects()
+	orphans, err := store.OrphanedObjects(100)
 	if err != nil {
 		t.Fatal(err)
 	}

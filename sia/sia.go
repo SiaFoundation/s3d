@@ -73,7 +73,7 @@ type Store interface {
 	HeadBucket(accessKeyID, bucket string) error
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
 	ListObjects(accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error)
-	OrphanedObjects() ([]types.Hash256, error)
+	OrphanedObjects(limit int) ([]types.Hash256, error)
 	PutObject(accessKeyID, bucket, name string, obj *objects.Object, updateModTime bool) error
 	RemoveOrphanedObject(objectID types.Hash256) (bool, error)
 	AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) error
@@ -115,11 +115,9 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 
 // processOrphansLoop periodically processes orphaned objects.
 func (s *Sia) processOrphansLoop(ctx context.Context) {
-	t := time.NewTicker(time.Minute)
+	t := time.NewTicker(time.Hour)
 	defer t.Stop()
 
-	// process once immediately at startup
-	s.ProcessOrphans(ctx)
 	for {
 		select {
 		case <-ctx.Done():
@@ -131,13 +129,18 @@ func (s *Sia) processOrphansLoop(ctx context.Context) {
 }
 
 // ProcessOrphans unpins orphaned objects from the indexer and removes them
-// from the orphaned_objects table.
+// from the orphaned_objects table. It processes up to 100 orphans per call.
 func (s *Sia) ProcessOrphans(ctx context.Context) {
-	orphans, err := s.store.OrphanedObjects()
+	const batchSize = 100
+	orphans, err := s.store.OrphanedObjects(batchSize)
 	if err != nil {
 		s.logger.Error("failed to fetch orphaned objects", zap.Error(err))
 		return
 	}
+	if len(orphans) == 0 {
+		return
+	}
+	var unpinned int
 	for _, id := range orphans {
 		shouldUnpin, err := s.store.RemoveOrphanedObject(id)
 		if err != nil {
@@ -149,8 +152,11 @@ func (s *Sia) ProcessOrphans(ctx context.Context) {
 		}
 		if err := s.sdk.DeleteObject(ctx, id); err != nil && !errors.Is(err, slabs.ErrObjectNotFound) {
 			s.logger.Error("failed to unpin object from indexer", zap.Error(err), zap.Stringer("objectID", &id))
+			continue
 		}
+		unpinned++
 	}
+	s.logger.Info("processed orphaned objects", zap.Int("fetched", len(orphans)), zap.Int("unpinned", unpinned))
 }
 
 // LoadSecret loads the secret key for the given access key ID. If the access
