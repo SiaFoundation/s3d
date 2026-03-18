@@ -130,23 +130,40 @@ func (s *Sia) processOrphansLoop(ctx context.Context) {
 
 // ProcessOrphans unpins orphaned objects from the indexer and removes them
 // from the orphaned_objects table in batches.
+//
+// NOTE: there is no race condition with re-uploaded objects here because
+// re-uploading an object always creates a new ID. The only way to create
+// duplicate IDs is via copying, and once an object is orphaned it can no
+// longer be copied.
 func (s *Sia) ProcessOrphans(ctx context.Context) {
 	const batchSize = 100
 	var totalUnpinned int
 	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
 		orphans, err := s.store.OrphanedObjects(batchSize)
 		if err != nil {
 			s.logger.Error("failed to fetch orphaned objects", zap.Error(err))
 			return
 		}
 		for _, id := range orphans {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
 			if err := s.sdk.DeleteObject(ctx, id); err != nil && !errors.Is(err, slabs.ErrObjectNotFound) {
 				s.logger.Error("failed to unpin object from indexer", zap.Error(err), zap.Stringer("objectID", &id))
-				continue // leave in table for retry
+				return
 			}
 			if err := s.store.RemoveOrphanedObject(id); err != nil {
 				s.logger.Error("failed to remove orphaned object", zap.Error(err), zap.Stringer("objectID", &id))
-				continue
+				return
 			}
 			totalUnpinned++
 		}
