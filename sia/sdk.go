@@ -64,7 +64,7 @@ func (s *IndexdSDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
 	if err := s.inner.Upload(ctx, &obj, r, s.ulOpts...); err != nil {
 		return sdk.Object{}, err
 	}
-	if err := s.inner.SaveObject(ctx, obj); err != nil {
+	if err := s.inner.PinObject(ctx, obj); err != nil {
 		return sdk.Object{}, err
 	}
 	return obj, nil
