@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
@@ -15,6 +16,7 @@ import (
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.sia.tech/core/types"
+	"go.sia.tech/coreutils/threadgroup"
 	"go.sia.tech/indexd/sdk"
 	"go.sia.tech/indexd/slabs"
 	"go.uber.org/zap"
@@ -24,12 +26,17 @@ const (
 	// MultipartDirectory is the directory name used for storing multipart
 	// uploads.
 	MultipartDirectory = "multipart"
+
+	// PackingDirectory is the directory name used for storing small objects
+	// on disk before they are packed and uploaded to Sia together to minimize
+	// waste.
+	PackingDirectory = "packing"
 )
 
-// Option is a configuration option for the S3 API handler.
+// Option is a configuration option for the Sia backend.
 type Option func(*Sia)
 
-// WithLogger sets the logger for the S3 API handler.
+// WithLogger sets the logger for the Sia backend.
 func WithLogger(logger *zap.Logger) Option {
 	return func(s *Sia) {
 		s.logger = logger.Named("sia")
@@ -37,9 +44,18 @@ func WithLogger(logger *zap.Logger) Option {
 }
 
 // WithKeyPair adds a key pair to the Sia backend.
-func WithKeyPair(accessKeyID, secretKey string) func(*Sia) {
-	return func(mb *Sia) {
-		mb.accessKeys[accessKeyID] = auth.SecretAccessKey(secretKey)
+func WithKeyPair(accessKeyID, secretKey string) Option {
+	return func(s *Sia) {
+		s.accessKeys[accessKeyID] = auth.SecretAccessKey(secretKey)
+	}
+}
+
+// WithPackingThreshold sets the packing threshold. Objects smaller than
+// this are stored on disk until enough data has accumulated to upload
+// efficiently. Pass 0 to disable packing.
+func WithPackingThreshold(threshold int64) Option {
+	return func(s *Sia) {
+		s.packingThreshold = threshold
 	}
 }
 
@@ -48,9 +64,15 @@ type Sia struct {
 	sdk    SDK
 	logger *zap.Logger
 	store  Store
+	tg     *threadgroup.ThreadGroup
 
-	directory  string
-	accessKeys map[string]auth.SecretAccessKey
+	multipartDir     string
+	packingDir       string
+	packingThreshold int64
+	accessKeys       map[string]auth.SecretAccessKey
+
+	packingMu      sync.Mutex
+	packingRunning bool
 }
 
 // SDK describes the SDK used to interact with Sia.
@@ -59,27 +81,31 @@ type SDK interface {
 	Download(ctx context.Context, w io.Writer, obj sdk.Object, rnge *s3.ObjectRange) error
 	Object(ctx context.Context, id types.Hash256) (sdk.Object, error)
 	Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
+	UploadPacked() (PackedUpload, error)
+	PinObject(ctx context.Context, obj sdk.Object) error
 	SealObject(obj sdk.Object) slabs.SealedObject
 	UnsealObject(sealed slabs.SealedObject) (sdk.Object, error)
 }
 
 // Store represents the storage backend used by the Sia backend.
 type Store interface {
-	CopyObject(srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool) (*objects.Object, error)
+	CopyObject(srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool, dstFilename *string) (*objects.Object, error)
 	CreateBucket(accessKeyID, bucket string) error
 	DeleteBucket(accessKeyID, bucket string) error
-	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) error
+	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (*string, error)
+	FinalizeObject(bucket, name, expectedFilename string, objectID types.Hash256, siaObject slabs.SealedObject) error
 	GetObject(accessKeyID *string, bucket, object string, partNumber *int32) (*objects.Object, error)
 	HeadBucket(accessKeyID, bucket string) error
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
 	ListObjects(accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error)
+	ObjectsForPacking() ([]objects.PackedObject, error)
 	OrphanedObjects(limit int) ([]types.Hash256, error)
-	PutObject(accessKeyID, bucket, name string, obj *objects.Object, updateModTime bool) error
+	PutObject(bucket, name string, obj *objects.Object, updateModTime bool) (*string, error)
 	RemoveOrphanedObject(objectID types.Hash256) error
 	AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) error
 	AddMultipartPart(bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (string, error)
 	CreateMultipartUpload(bucket, name string, uploadID s3.UploadID, meta map[string]string) error
-	CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, objectID types.Hash256, contentMD5 [16]byte, contentLength int64) error
+	CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, objectID types.Hash256, contentMD5 [16]byte, contentLength int64, filename *string) error
 	HasMultipartUpload(bucket, name string, uploadID s3.UploadID) error
 	ListMultipartUploads(bucket string, prefix s3.Prefix, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error)
 	ListParts(bucket, name string, uploadID s3.UploadID, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error)
@@ -88,29 +114,43 @@ type Store interface {
 
 // New creates a new Sia backend instance.
 func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Option) (*Sia, error) {
-	directory = filepath.Join(directory, MultipartDirectory)
-	if err := os.MkdirAll(directory, 0700); err != nil {
+	multipartDir := filepath.Join(directory, MultipartDirectory)
+	if err := os.MkdirAll(multipartDir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create multipart upload directory: %w", err)
 	}
 
-	sia := &Sia{
-		logger: zap.NewNop(),
-		sdk:    sdk,
-		store:  store,
+	packingDir := filepath.Join(directory, PackingDirectory)
+	if err := os.MkdirAll(packingDir, 0700); err != nil {
+		return nil, fmt.Errorf("failed to create packing directory: %w", err)
+	}
 
-		directory:  directory,
-		accessKeys: make(map[string]auth.SecretAccessKey),
+	s := &Sia{
+		logger:           zap.NewNop(),
+		sdk:              sdk,
+		store:            store,
+		tg:               threadgroup.New(),
+		multipartDir:     multipartDir,
+		packingDir:       packingDir,
+		packingThreshold: DefaultPackingThreshold,
+		accessKeys:       make(map[string]auth.SecretAccessKey),
 	}
 	for _, opt := range opts {
-		opt(sia)
+		opt(s)
 	}
-	if len(sia.accessKeys) == 0 {
+
+	if len(s.accessKeys) == 0 {
 		return nil, fmt.Errorf("sia backend requires both access key and secret key")
 	}
 
-	go sia.processOrphansLoop(ctx)
+	go s.processOrphansLoop(ctx)
 
-	return sia, nil
+	return s, nil
+}
+
+// Close shuts down the Sia backend and waits for background goroutines.
+func (s *Sia) Close() error {
+	s.tg.Stop()
+	return nil
 }
 
 // processOrphansLoop periodically processes orphaned objects.

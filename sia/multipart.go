@@ -14,15 +14,9 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia/objects"
+	"go.sia.tech/core/types"
 	"go.uber.org/zap"
-	"lukechampine.com/frand"
 )
-
-func randPartName() string {
-	var uuid [8]byte
-	frand.Read(uuid[:])
-	return fmt.Sprintf("%x.part", uuid[:])
-}
 
 // CreateMultipartUpload creates a new multipart upload.
 func (s *Sia) CreateMultipartUpload(ctx context.Context, accessKeyID, bucket, object string, opts s3.CreateMultipartUploadOptions) (*s3.CreateMultipartUploadResult, error) {
@@ -33,7 +27,7 @@ func (s *Sia) CreateMultipartUpload(ctx context.Context, accessKeyID, bucket, ob
 
 	// create multipart upload directory
 	uploadID := s3.NewUploadID()
-	if err := os.Mkdir(filepath.Join(s.directory, uploadID.String()), 0700); err != nil {
+	if err := os.Mkdir(filepath.Join(s.multipartDir, uploadID.String()), 0700); err != nil {
 		return nil, fmt.Errorf("failed to create upload directory: %w", err)
 	}
 
@@ -76,7 +70,7 @@ func (s *Sia) AbortMultipartUpload(ctx context.Context, accessKeyID, bucket, obj
 	}
 
 	// remove multipart upload directory
-	uploadDir := filepath.Join(s.directory, uploadID.String())
+	uploadDir := filepath.Join(s.multipartDir, uploadID.String())
 	if err := os.RemoveAll(uploadDir); err != nil && !errors.Is(err, os.ErrNotExist) {
 		s.logger.Error("failed to remove multipart upload directory",
 			zap.String("path", uploadDir),
@@ -94,7 +88,7 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object string
 	}
 
 	// create part directory
-	partDir := filepath.Join(s.directory, uploadID.String(), fmt.Sprintf("%d", opts.PartNumber))
+	partDir := filepath.Join(s.multipartDir, uploadID.String(), fmt.Sprintf("%d", opts.PartNumber))
 	if err := os.Mkdir(partDir, 0700); errors.Is(err, os.ErrNotExist) {
 		return nil, s3errs.ErrNoSuchUpload
 	} else if err != nil && !errors.Is(err, os.ErrExist) {
@@ -102,7 +96,7 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object string
 	}
 
 	// create part file
-	partPath := filepath.Join(partDir, randPartName())
+	partPath := filepath.Join(partDir, randFilename(extMultipartPart))
 	partFile, err := os.Create(partPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create part file: %w", err)
@@ -206,14 +200,8 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 		return nil, s3errs.ErrEntityTooLarge
 	}
 
-	// fetch pinned object from the indexer
-	pinnedObj, err := s.sdk.Object(ctx, obj.ID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch object from indexer: %w", err)
-	}
-
 	// create part directory
-	partDir := filepath.Join(s.directory, uploadID.String(), fmt.Sprintf("%d", opts.PartNumber))
+	partDir := filepath.Join(s.multipartDir, uploadID.String(), fmt.Sprintf("%d", opts.PartNumber))
 	if err := os.Mkdir(partDir, 0700); errors.Is(err, os.ErrNotExist) {
 		return nil, s3errs.ErrNoSuchUpload
 	} else if err != nil && !errors.Is(err, os.ErrExist) {
@@ -221,7 +209,7 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 	}
 
 	// create part file
-	partPath := filepath.Join(partDir, randPartName())
+	partPath := filepath.Join(partDir, randFilename(extMultipartPart))
 	partFile, err := os.Create(partPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create part file: %w", err)
@@ -239,17 +227,37 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 		}
 	}()
 
-	// prepare writer and download the requested range
+	// write the requested range to the part file
 	md5Hash := md5.New()
 	writer := &lenWriter{
 		w: io.MultiWriter(partFile, md5Hash),
 	}
-	if err := s.sdk.Download(ctx, writer, pinnedObj, &opts.Range); err != nil {
-		s.logger.Error("download failed",
-			zap.Error(err),
-			zap.String("bucket", srcBucket),
-			zap.String("object", srcObject))
-		return nil, err
+	if obj.Filename != nil {
+		// source is on disk, read directly
+		f, err := os.Open(filepath.Join(s.packingDir, *obj.Filename))
+		if err != nil {
+			return nil, fmt.Errorf("failed to open source file on disk: %w", err)
+		}
+		defer f.Close()
+		if _, err := f.Seek(opts.Range.Start, io.SeekStart); err != nil {
+			return nil, fmt.Errorf("failed to seek source file on disk: %w", err)
+		}
+		if _, err := io.CopyN(writer, f, opts.Range.Length); err != nil {
+			return nil, fmt.Errorf("failed to copy from source file on disk: %w", err)
+		}
+	} else {
+		// source is on Sia, fetch and download
+		pinnedObj, err := s.sdk.Object(ctx, obj.ID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch object from indexer: %w", err)
+		}
+		if err := s.sdk.Download(ctx, writer, pinnedObj, &opts.Range); err != nil {
+			s.logger.Error("download failed",
+				zap.Error(err),
+				zap.String("bucket", srcBucket),
+				zap.String("object", srcObject))
+			return nil, err
+		}
 	}
 	contentLength := writer.n
 	if contentLength != opts.Range.Length {
@@ -336,7 +344,7 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 	}
 
 	// assert the upload directory exists
-	uploadDir := filepath.Join(s.directory, uploadID.String())
+	uploadDir := filepath.Join(s.multipartDir, uploadID.String())
 	if _, err := os.Stat(uploadDir); err != nil {
 		return nil, fmt.Errorf("failed to stat upload directory: %w", err)
 	}
@@ -347,12 +355,6 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 		return nil, fmt.Errorf("failed to create multipart reader: %w", err)
 	}
 	defer r.Close()
-
-	// upload the combined object to Sia
-	obj, err := s.sdk.Upload(ctx, r)
-	if err != nil {
-		return nil, fmt.Errorf("failed to upload object to Sia: %w", err)
-	}
 
 	// compute final content MD5
 	hash := md5.New()
@@ -368,8 +370,31 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 		contentLength += int64(part.Size)
 	}
 
+	var objectID types.Hash256
+	var filename *string
+	if s.needsPacking(contentLength) {
+		// small result, write to disk
+		fn, err := s.writeToDisk(r)
+		if err != nil {
+			return nil, fmt.Errorf("failed to write completed object to disk: %w", err)
+		}
+		filename = &fn
+	} else {
+		// upload the combined object to Sia
+		obj, err := s.sdk.Upload(ctx, r)
+		if err != nil {
+			return nil, fmt.Errorf("failed to upload object to Sia: %w", err)
+		}
+		err = s.sdk.PinObject(ctx, obj)
+		if err != nil {
+			return nil, fmt.Errorf("failed to pin object in indexer: %w", err)
+		}
+		objectID = obj.ID()
+	}
+
 	// complete the multipart upload in the database
-	if err := s.store.CompleteMultipartUpload(bucket, object, uploadID, obj.ID(), contentMD5, contentLength); err != nil {
+	if err := s.store.CompleteMultipartUpload(bucket, object, uploadID, objectID, contentMD5, contentLength, filename); err != nil {
+		s.tryRemove(filename)
 		return nil, fmt.Errorf("failed to complete multipart upload in store: %w", err)
 	}
 
@@ -379,6 +404,9 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 			zap.String("path", uploadDir),
 			zap.Error(err))
 	}
+
+	// trigger packing if needed
+	s.tryPack(filename)
 
 	// calculate ETag
 	etag := s3.FormatETag(contentMD5[:], len(completed))

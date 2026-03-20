@@ -20,6 +20,15 @@ type Object struct {
 
 	SiaObject slabs.SealedObject // sealed Sia object for downloads (must be unsealed before use)
 	CachedAt  time.Time          // zero if not cached
+	Filename  *string            // set if stored on disk
+}
+
+// PackedObject contains the fields needed to pack an object.
+type PackedObject struct {
+	Bucket   string
+	Name     string
+	Filename string
+	Length   int64
 }
 
 // Part represents a single part of a multipart upload.

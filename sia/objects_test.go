@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"crypto/md5"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -144,6 +147,164 @@ func TestGetAndHeadObject(t *testing.T) {
 			}
 			assertObject(t, obj, false, tc.rnge)
 		})
+	}
+}
+
+func TestObjectPacking(t *testing.T) {
+	log := zaptest.NewLogger(t)
+	dir := t.TempDir()
+
+	// create store
+	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	// create a backend with custom packing threshold
+	backend, err := sia.New(t.Context(), NewMemorySDK(), store, dir,
+		sia.WithPackingThreshold(256),
+		sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
+		sia.WithLogger(log))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { backend.Close() })
+	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
+
+	bucket := "testbucket"
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// upload a small object
+	data := frand.Bytes(100)
+	_, err = s3Tester.PutObject(t.Context(), bucket, "small", bytes.NewReader(data), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// verify the object is stored on disk (filename should be set)
+	accessKeyID := testutil.AccessKeyID
+	obj, err := store.GetObject(&accessKeyID, bucket, "small", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obj.Filename == nil {
+		t.Fatal("expected filename to be set for small object")
+	}
+
+	// verify the file exists on disk
+	packingDir := filepath.Join(dir, sia.PackingDirectory)
+	diskPath := filepath.Join(packingDir, *obj.Filename)
+	if _, err := os.Stat(diskPath); err != nil {
+		t.Fatal("expected file to exist on disk:", err)
+	}
+
+	// verify GetObject serves the full object from disk
+	getObj, err := s3Tester.GetObject(t.Context(), bucket, "small", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(getObj.Body)
+	if err != nil {
+		t.Fatal(err)
+	} else if !bytes.Equal(body, data) {
+		t.Fatal("data mismatch when serving from disk")
+	}
+
+	// verify GetObject with range serves the correct slice
+	rnge := &s3.ObjectRangeRequest{Start: 10, End: 49}
+	getObj, err = s3Tester.GetObject(t.Context(), bucket, "small", rnge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err = io.ReadAll(getObj.Body)
+	if err != nil {
+		t.Fatal(err)
+	} else if !bytes.Equal(body, data[10:50]) {
+		t.Fatalf("range data mismatch: expected %d bytes, got %d", 40, len(body))
+	}
+
+	// copy the object
+	_, err = s3Tester.CopyObject(t.Context(), bucket, "small", bucket, "copied", types.MetadataDirectiveCopy, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// verify the copy is also on disk with its own file
+	copyObj, err := store.GetObject(&accessKeyID, bucket, "copied", nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if copyObj.Filename == nil {
+		t.Fatal("expected copied object to have a filename")
+	} else if *copyObj.Filename == *obj.Filename {
+		t.Fatal("expected copied object to have a different filename than the source")
+	}
+	copyDiskPath := filepath.Join(packingDir, *copyObj.Filename)
+	if _, err := os.Stat(copyDiskPath); err != nil {
+		t.Fatal("expected copied file to exist on disk:", err)
+	}
+
+	// verify the copy serves the correct data
+	getObj, err = s3Tester.GetObject(t.Context(), bucket, "copied", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err = io.ReadAll(getObj.Body)
+	if err != nil {
+		t.Fatal(err)
+	} else if !bytes.Equal(body, data) {
+		t.Fatal("copied object data mismatch")
+	}
+
+	// delete the source and verify the copy's file is unaffected
+	if err := s3Tester.DeleteObject(t.Context(), bucket, "small"); err != nil {
+		t.Fatal(err)
+	} else if _, err := os.Stat(diskPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("expected source file to be removed from disk after delete")
+	} else if _, err := os.Stat(copyDiskPath); err != nil {
+		t.Fatal("expected copied file to still exist on disk after source delete:", err)
+	}
+
+	// clean up the copy
+	if err := s3Tester.DeleteObject(t.Context(), bucket, "copied"); err != nil {
+		t.Fatal(err)
+	} else if _, err := os.Stat(copyDiskPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("expected copied file to be removed from disk after delete")
+	}
+
+	// upload enough data to exceed the packing threshold and trigger a
+	// background pack. the threshold is 256 bytes so 3x100 byte objects
+	// will exceed it.
+	for i := range 3 {
+		name := fmt.Sprintf("pack%d", i)
+		_, err = s3Tester.PutObject(t.Context(), bucket, name, bytes.NewReader(frand.Bytes(100)), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// close the backend to wait for the pack loop to finish
+	backend.Close()
+
+	// verify the objects have been packed: filename should be nil
+	for i := range 3 {
+		name := fmt.Sprintf("pack%d", i)
+		obj, err := store.GetObject(&accessKeyID, bucket, name, nil)
+		if err != nil {
+			t.Fatal(err)
+		} else if obj.Filename != nil {
+			t.Fatalf("expected %s to be packed (filename nil), got %q", name, *obj.Filename)
+		}
+	}
+
+	// verify the packing directory is empty
+	entries, err := os.ReadDir(packingDir)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(entries) != 0 {
+		t.Fatalf("expected packing directory to be empty, got %d files", len(entries))
 	}
 }
 
@@ -710,7 +871,7 @@ func TestObjectMetadataCache(t *testing.T) {
 		}
 		// set retrieval time to 25 hours ago (past the 24-hour cache lifetime)
 		obj.CachedAt = time.Now().Add(-25 * time.Hour)
-		if err := store.PutObject(accessKeyID, bucket, object, obj, true); err != nil {
+		if _, err := store.PutObject(bucket, object, obj, true); err != nil {
 			t.Fatal(err)
 		}
 
@@ -745,7 +906,7 @@ func TestObjectMetadataCache(t *testing.T) {
 			t.Fatal(err)
 		}
 		storedObj.CachedAt = time.Now().Add(-25 * time.Hour)
-		if err := store.PutObject(accessKeyID, bucket, object, storedObj, true); err != nil {
+		if _, err := store.PutObject(bucket, object, storedObj, true); err != nil {
 			t.Fatal(err)
 		}
 
@@ -825,7 +986,7 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	}
 	t.Cleanup(func() { store.Close() })
 
-	siaBackend, err := sia.New(t.Context(), memSDK, store, dir, sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey), sia.WithLogger(log))
+	siaBackend, err := sia.New(t.Context(), memSDK, store, dir, sia.WithPackingThreshold(0), sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey), sia.WithLogger(log))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -925,7 +1086,7 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	}
 	orphanID := orphans[0]
 	// re-reference the orphaned object_id by inserting a new object row
-	if err := store.PutObject(testutil.AccessKeyID, bucket, "D", &objects.Object{
+	if _, err := store.PutObject(bucket, "D", &objects.Object{
 		ID:     orphanID,
 		Length: 1,
 	}, true); err != nil {

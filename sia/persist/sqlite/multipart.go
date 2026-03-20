@@ -40,7 +40,7 @@ func (s *Store) CreateMultipartUpload(bucket, name string, uploadID s3.UploadID,
 // and transferring parts from the upload to the object. If the overwritten
 // object's ID has no remaining references, it is inserted into the
 // orphaned_objects table.
-func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, objectID types.Hash256, contentMD5 [16]byte, contentLength int64) error {
+func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, objectID types.Hash256, contentMD5 [16]byte, contentLength int64, filename *string) error {
 	return s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
@@ -102,10 +102,10 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 
 		// upsert object with metadata from multipart upload
 		_, err = tx.Exec(`
-			INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at, sia_object, cached_at)
-			SELECT bucket_id, name, $1, $2, metadata, $3, $4, x'', $5
+			INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at, sia_object, cached_at, filename)
+			SELECT bucket_id, name, $1, $2, metadata, $3, $4, x'', $5, $6
 			FROM multipart_uploads
-			WHERE upload_id = $6
+			WHERE upload_id = $7
 			ON CONFLICT(bucket_id, name) DO UPDATE SET
 				object_id = excluded.object_id,
 				content_md5 = excluded.content_md5,
@@ -113,8 +113,9 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 				size = excluded.size,
 				updated_at = excluded.updated_at,
 				sia_object = excluded.sia_object,
-				cached_at = excluded.cached_at
-		`, sqlHash256(objectID), sqlMD5(contentMD5), contentLength, sqlTime(time.Now()), sqlTime(time.Time{}), sqlUploadID(uploadID))
+				cached_at = excluded.cached_at,
+				filename = excluded.filename
+		`, sqlHash256(objectID), sqlMD5(contentMD5), contentLength, sqlTime(time.Now()), sqlTime(time.Time{}), filename, sqlUploadID(uploadID))
 		if err != nil {
 			return err
 		}

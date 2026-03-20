@@ -87,6 +87,45 @@ func (s *MemorySDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
 	return obj, nil
 }
 
+func (s *MemorySDK) UploadPacked() (sia.PackedUpload, error) {
+	return &memoryPackedUpload{sdk: s}, nil
+}
+
+type memoryPackedUpload struct {
+	sdk     *MemorySDK
+	objects []uploadedObject
+	length  int64
+}
+
+func (u *memoryPackedUpload) Add(ctx context.Context, r io.Reader) (int64, error) {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return 0, err
+	}
+	obj := sdk.Object{}
+	u.objects = append(u.objects, uploadedObject{data: data, meta: obj})
+	u.length += int64(len(data))
+	return int64(len(data)), nil
+}
+
+func (u *memoryPackedUpload) Length() int64    { return u.length }
+func (u *memoryPackedUpload) Remaining() int64 { return 1<<63 - 1 - u.length }
+
+func (u *memoryPackedUpload) Finalize(ctx context.Context) ([]sdk.Object, error) {
+	results := make([]sdk.Object, len(u.objects))
+	for i, obj := range u.objects {
+		u.sdk.objects[obj.meta.ID()] = obj
+		results[i] = obj.meta
+	}
+	return results, nil
+}
+
+func (u *memoryPackedUpload) Close() error { return nil }
+
+func (s *MemorySDK) PinObject(ctx context.Context, obj sdk.Object) error {
+	return nil
+}
+
 func (s *MemorySDK) SealObject(obj sdk.Object) slabs.SealedObject {
 	return obj.Seal(s.appKey).SealedObject
 }
@@ -117,11 +156,14 @@ func NewTester(t testing.TB, opts ...testutil.TesterOption) *testutil.S3Tester {
 }
 
 func NewCustomTester(t testing.TB, dir string, store sia.Store, sdk sia.SDK, log *zap.Logger, opts ...testutil.TesterOption) *testutil.S3Tester {
-	backend, err := sia.New(context.Background(), sdk, store, dir, sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
+	backend, err := sia.New(context.Background(), sdk, store, dir,
+		sia.WithPackingThreshold(0),
+		sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
 		sia.WithLogger(log))
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { backend.Close() })
 
 	var mergedOpts []testutil.TesterOption
 	mergedOpts = append(mergedOpts, testutil.WithBackend(backend))

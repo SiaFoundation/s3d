@@ -48,7 +48,7 @@ func TestGetObject(t *testing.T) {
 	}
 
 	// create object
-	err := store.PutObject(accessKeyID, bucket, object, &objects.Object{
+	_, err := store.PutObject(bucket, object, &objects.Object{
 		ID:         objID,
 		Meta:       objMeta,
 		ContentMD5: objMD5,
@@ -74,7 +74,7 @@ func TestGetObject(t *testing.T) {
 	}
 	// complete
 	totalSize := int64(s3.MinUploadPartSize + 2)
-	err = store.CompleteMultipartUpload(bucket, multipart, multipartUploadID, multipartID, multipartMD5, totalSize)
+	err = store.CompleteMultipartUpload(bucket, multipart, multipartUploadID, multipartID, multipartMD5, totalSize, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +270,7 @@ func TestListObjects(t *testing.T) {
 		}
 
 		for _, key := range tt.keys {
-			err := store.PutObject("", bucket, key, &objects.Object{
+			_, err := store.PutObject(bucket, key, &objects.Object{
 				ID:         obj.ID(),
 				ContentMD5: contentMD5,
 				Length:     int64(frand.Intn(1000)) + 1,
@@ -346,7 +346,7 @@ func TestListObjectsMatch(t *testing.T) {
 	etag := s3.FormatETag(contentMD5[:], 0)
 
 	for _, key := range keys {
-		err := store.PutObject("", bucket, key, &objects.Object{
+		_, err := store.PutObject(bucket, key, &objects.Object{
 			ID:         obj.ID(),
 			ContentMD5: contentMD5,
 			Length:     int64(frand.Intn(1000)) + 1,
@@ -459,7 +459,7 @@ func TestListObjectsWalk(t *testing.T) {
 	keysAll := make(map[string]struct{})
 	for range numKeys {
 		key := randomPath(minLength, maxLength, maxDepth, alphabet, delimiter)
-		err := store.PutObject("", bucket, key, &objects.Object{
+		_, err := store.PutObject(bucket, key, &objects.Object{
 			ID:         obj.ID(),
 			ContentMD5: contentMD5,
 			Length:     int64(frand.Intn(1000)) + 1,
@@ -732,7 +732,7 @@ func TestOrphanedObjects(t *testing.T) {
 	}
 
 	// put first object
-	if err := store.PutObject(accessKeyID, bucket, "a", &objects.Object{
+	if _, err := store.PutObject(bucket, "a", &objects.Object{
 		ID:         objID,
 		ContentMD5: frand.Entropy128(),
 		Length:     1,
@@ -741,12 +741,12 @@ func TestOrphanedObjects(t *testing.T) {
 	}
 
 	// copy object to a second key
-	if _, err := store.CopyObject(bucket, "a", bucket, "b", nil, false); err != nil {
+	if _, err := store.CopyObject(bucket, "a", bucket, "b", nil, false, nil); err != nil {
 		t.Fatal(err)
 	}
 
 	// delete first object - references still exist, nothing orphaned
-	if err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "a"}); err != nil {
+	if _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "a"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -758,7 +758,7 @@ func TestOrphanedObjects(t *testing.T) {
 	}
 
 	// delete second object - last reference gone, should be orphaned
-	if err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "b"}); err != nil {
+	if _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "b"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -797,7 +797,7 @@ func TestPutObjectOrphan(t *testing.T) {
 	newID := frand.Entropy256()
 
 	// put initial object - no orphans
-	if err := store.PutObject(accessKeyID, bucket, "obj", &objects.Object{
+	if _, err := store.PutObject(bucket, "obj", &objects.Object{
 		ID:         oldID,
 		ContentMD5: frand.Entropy128(),
 		Length:     1,
@@ -813,7 +813,7 @@ func TestPutObjectOrphan(t *testing.T) {
 	}
 
 	// overwrite with a different object_id - old ID should be orphaned
-	if err := store.PutObject(accessKeyID, bucket, "obj", &objects.Object{
+	if _, err := store.PutObject(bucket, "obj", &objects.Object{
 		ID:         newID,
 		ContentMD5: frand.Entropy128(),
 		Length:     1,
@@ -834,7 +834,7 @@ func TestPutObjectOrphan(t *testing.T) {
 	}
 
 	// overwrite with same object_id should not orphan
-	if err := store.PutObject(accessKeyID, bucket, "obj", &objects.Object{
+	if _, err := store.PutObject(bucket, "obj", &objects.Object{
 		ID:         newID,
 		ContentMD5: frand.Entropy128(),
 		Length:     2,

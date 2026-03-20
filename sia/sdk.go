@@ -70,6 +70,16 @@ func (s *IndexdSDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
 	return obj, nil
 }
 
+// UploadPacked creates a new packed upload.
+func (s *IndexdSDK) UploadPacked() (PackedUpload, error) {
+	return s.inner.UploadPacked(s.ulOpts...)
+}
+
+// PinObject pins the given object in the indexer.
+func (s *IndexdSDK) PinObject(ctx context.Context, obj sdk.Object) error {
+	return s.inner.PinObject(ctx, obj)
+}
+
 // DeleteObject deletes the object with the given key from the indexer.
 func (s *IndexdSDK) DeleteObject(ctx context.Context, id types.Hash256) error {
 	return s.inner.DeleteObject(ctx, id)

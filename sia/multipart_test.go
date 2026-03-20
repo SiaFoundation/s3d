@@ -559,7 +559,7 @@ func TestMultipartUploadPartCopy(t *testing.T) {
 	testutil.AssertS3Error(t, s3errs.ErrInvalidRange, err)
 
 	// assert [s3errs.ErrEntityTooLarge] is returned for oversized range
-	if err := store.PutObject(testutil.AccessKeyID, bucketSrc, objectSrc, &objects.Object{
+	if _, err := store.PutObject(bucketSrc, objectSrc, &objects.Object{
 		ID:     types.Hash256{},
 		Length: s3.MaxUploadPartSize + 1,
 	}, true); err != nil {
@@ -576,4 +576,84 @@ func TestMultipartUploadPartCopy(t *testing.T) {
 		Length: s3.MaxUploadPartSize + 1,
 	})
 	testutil.AssertS3Error(t, s3errs.ErrEntityTooLarge, err)
+}
+
+func TestMultipartPacking(t *testing.T) {
+	log := zap.NewNop()
+	dir := t.TempDir()
+
+	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	// create a backend with packing enabled
+	backend, err := sia.New(t.Context(), NewMemorySDK(), store, dir,
+		sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
+		sia.WithLogger(log))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { backend.Close() })
+	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
+
+	const (
+		bucket = "packing-multipart-bucket"
+		object = "packed"
+	)
+
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// create a multipart upload with a single small part
+	partData := []byte("hello multipart packing")
+	res, err := s3Tester.CreateMultipartUpload(t.Context(), bucket, object, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uploadID := *res.UploadId
+
+	up, err := s3Tester.UploadPart(t.Context(), bucket, object, uploadID, 1, partData)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = s3Tester.CompleteMultipartUpload(t.Context(), bucket, object, uploadID, []s3Types.CompletedPart{
+		{PartNumber: aws.Int32(1), ETag: up.ETag},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// verify the completed object is stored on disk
+	accessKeyID := testutil.AccessKeyID
+	obj, err := store.GetObject(&accessKeyID, bucket, object, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obj.Filename == nil {
+		t.Fatal("expected filename to be set for small multipart object")
+	}
+
+	// verify the file exists on disk
+	packingDir := filepath.Join(dir, sia.PackingDirectory)
+	diskPath := filepath.Join(packingDir, *obj.Filename)
+	if _, err := os.Stat(diskPath); err != nil {
+		t.Fatal("expected file to exist on disk:", err)
+	}
+
+	// verify GetObject serves the correct data
+	getObj, err := s3Tester.GetObject(t.Context(), bucket, object, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(getObj.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(body, partData) {
+		t.Fatal("data mismatch for packed multipart object")
+	}
 }
