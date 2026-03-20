@@ -393,10 +393,13 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 	}
 
 	// complete the multipart upload in the database
-	if err := s.store.CompleteMultipartUpload(bucket, object, uploadID, objectID, contentMD5, contentLength, filename); err != nil {
+	prevFilename, err := s.store.CompleteMultipartUpload(bucket, object, uploadID, objectID, contentMD5, contentLength, filename)
+	if err != nil {
 		s.tryRemove(filename)
 		return nil, fmt.Errorf("failed to complete multipart upload in store: %w", err)
 	}
+
+	s.tryRemove(prevFilename)
 
 	// remove multipart upload directory
 	if err := os.RemoveAll(uploadDir); err != nil {

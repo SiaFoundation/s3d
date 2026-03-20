@@ -74,7 +74,7 @@ func TestGetObject(t *testing.T) {
 	}
 	// complete
 	totalSize := int64(s3.MinUploadPartSize + 2)
-	err = store.CompleteMultipartUpload(bucket, multipart, multipartUploadID, multipartID, multipartMD5, totalSize, nil)
+	_, err = store.CompleteMultipartUpload(bucket, multipart, multipartUploadID, multipartID, multipartMD5, totalSize, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -741,7 +741,7 @@ func TestOrphanedObjects(t *testing.T) {
 	}
 
 	// copy object to a second key
-	if _, err := store.CopyObject(bucket, "a", bucket, "b", nil, false, nil); err != nil {
+	if _, _, err := store.CopyObject(bucket, "a", bucket, "b", nil, false, nil); err != nil {
 		t.Fatal(err)
 	}
 

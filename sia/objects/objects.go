@@ -1,11 +1,16 @@
 package objects
 
 import (
+	"errors"
 	"time"
 
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/slabs"
 )
+
+// ErrObjectModified is returned by FinalizeObject when the object was
+// modified between reading and finalizing.
+var ErrObjectModified = errors.New("object was modified")
 
 // Object represents a stored object with its metadata.
 type Object struct {

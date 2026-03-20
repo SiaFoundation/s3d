@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"path/filepath"
 	"testing"
 
@@ -109,7 +110,7 @@ func (u *memoryPackedUpload) Add(ctx context.Context, r io.Reader) (int64, error
 }
 
 func (u *memoryPackedUpload) Length() int64    { return u.length }
-func (u *memoryPackedUpload) Remaining() int64 { return 1<<63 - 1 - u.length }
+func (u *memoryPackedUpload) Remaining() int64 { return math.MaxInt64 }
 
 func (u *memoryPackedUpload) Finalize(ctx context.Context) ([]sdk.Object, error) {
 	results := make([]sdk.Object, len(u.objects))

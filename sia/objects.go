@@ -51,11 +51,13 @@ func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject,
 		dstFilename = &fn
 	}
 
-	obj, err := s.store.CopyObject(srcBucket, srcObject, dstBucket, dstObject, meta, replace, dstFilename)
+	obj, prevFilename, err := s.store.CopyObject(srcBucket, srcObject, dstBucket, dstObject, meta, replace, dstFilename)
 	if err != nil {
 		s.tryRemove(dstFilename)
 		return nil, err
 	}
+
+	s.tryRemove(prevFilename)
 
 	return &s3.CopyObjectResult{
 		ContentMD5:   obj.ContentMD5,

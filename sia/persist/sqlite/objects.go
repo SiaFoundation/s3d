@@ -149,9 +149,9 @@ func (s *Store) PutObject(bucket, name string, obj *objects.Object, updateModTim
 // CopyObject atomically reads the source object and writes it to the
 // destination within a single transaction, applying metadata according to the
 // replace flag. Returns the copied object metadata.
-func (s *Store) CopyObject(srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool, dstFilename *string) (result *objects.Object, err error) {
+func (s *Store) CopyObject(srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool, dstFilename *string) (_ *objects.Object, prevFilename *string, _ error) {
 	var obj objects.Object
-	err = s.transaction(func(tx *txn) error {
+	err := s.transaction(func(tx *txn) error {
 		srcBid, err := bucketID(tx, srcBucket)
 		if err != nil {
 			return err
@@ -175,16 +175,21 @@ func (s *Store) CopyObject(srcBucket, srcName, dstBucket, dstName string, meta m
 			}
 		}
 
+		// fetch previous filename before overwriting
+		err = tx.QueryRow(`SELECT filename FROM objects WHERE bucket_id = $1 AND name = $2`, dstBid, dstName).Scan(&prevFilename)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+
 		obj.Filename = dstFilename
 		return putObject(tx, dstBid, dstName, &obj, true)
 	})
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, s3errs.ErrNoSuchKey
+		return nil, nil, s3errs.ErrNoSuchKey
+	} else if err != nil {
+		return nil, nil, err
 	}
-	if err != nil {
-		return nil, err
-	}
-	return &obj, nil
+	return &obj, prevFilename, nil
 }
 
 // OrphanedObjects returns up to limit object IDs from the orphaned_objects table.
@@ -297,7 +302,7 @@ func (s *Store) FinalizeObject(bucket, name, expectedFilename string, objectID t
 			return err
 		}
 
-		_, err = tx.Exec(`
+		result, err := tx.Exec(`
 			UPDATE objects SET
 				object_id = $1,
 				sia_object = $2,
@@ -305,7 +310,16 @@ func (s *Store) FinalizeObject(bucket, name, expectedFilename string, objectID t
 				filename = NULL
 			WHERE bucket_id = $4 AND name = $5 AND filename = $6
 		`, sqlHash256(objectID), sqlSiaObject(siaObject), sqlTime(time.Now()), bid, name, expectedFilename)
-		return err
+		if err != nil {
+			return err
+		}
+		n, err := result.RowsAffected()
+		if err != nil {
+			return err
+		} else if n == 0 {
+			return objects.ErrObjectModified
+		}
+		return nil
 	})
 }
 

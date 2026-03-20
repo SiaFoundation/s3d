@@ -203,7 +203,12 @@ func (s *Sia) packSlab(ctx context.Context, candidates []objects.PackedObject) e
 			continue
 		}
 
-		if err := s.store.FinalizeObject(obj.Bucket, obj.Name, obj.Filename, siaObj.ID(), s.sdk.SealObject(siaObj)); err != nil {
+		if err := s.store.FinalizeObject(obj.Bucket, obj.Name, obj.Filename, siaObj.ID(), s.sdk.SealObject(siaObj)); errors.Is(err, objects.ErrObjectModified) {
+			s.logger.Warn("object was modified during packing, skipping",
+				zap.String("bucket", obj.Bucket),
+				zap.String("name", obj.Name))
+			continue
+		} else if err != nil {
 			s.logger.Error("failed to finalize packed object in store",
 				zap.String("bucket", obj.Bucket),
 				zap.String("name", obj.Name),
