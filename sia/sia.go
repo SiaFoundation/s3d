@@ -50,12 +50,15 @@ func WithKeyPair(accessKeyID, secretKey string) Option {
 	}
 }
 
-// WithPackingThreshold sets the packing threshold. Objects smaller than
-// this are stored on disk until enough data has accumulated to upload
-// efficiently. Pass 0 to disable packing.
-func WithPackingThreshold(threshold int64) Option {
+// WithPacking sets the packing threshold and leeway percentage. Objects smaller than
+// the threshold are stored on disk until enough data has accumulated to upload
+// efficiently. The leeway percentage determines how much smaller the remaining space
+// in a slab can be compared to the threshold before packing is triggered. Pass a 0
+// threshold to disable packing.
+func WithPacking(threshold int64, leewayPct float64) Option {
 	return func(s *Sia) {
 		s.packingThreshold = threshold
+		s.packingLeewayPct = leewayPct
 	}
 }
 
@@ -69,6 +72,7 @@ type Sia struct {
 	multipartDir     string
 	packingDir       string
 	packingThreshold int64
+	packingLeewayPct float64
 	accessKeys       map[string]auth.SecretAccessKey
 
 	packingMu      sync.Mutex
@@ -132,6 +136,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		multipartDir:     multipartDir,
 		packingDir:       packingDir,
 		packingThreshold: DefaultPackingThreshold,
+		packingLeewayPct: DefaultPackingLeewayPct,
 		accessKeys:       make(map[string]auth.SecretAccessKey),
 	}
 	for _, opt := range opts {

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"path/filepath"
 	"testing"
 
@@ -26,8 +25,9 @@ type uploadedObject struct {
 }
 
 type MemorySDK struct {
-	appKey  types.PrivateKey
-	objects map[types.Hash256]uploadedObject
+	appKey   types.PrivateKey
+	objects  map[types.Hash256]uploadedObject
+	slabSize int64
 
 	objectCallCount int
 	fail            bool // when true, Object() will return an error
@@ -35,8 +35,9 @@ type MemorySDK struct {
 
 func NewMemorySDK() *MemorySDK {
 	return &MemorySDK{
-		appKey:  types.GeneratePrivateKey(),
-		objects: make(map[types.Hash256]uploadedObject),
+		slabSize: 40 << 20,
+		appKey:   types.GeneratePrivateKey(),
+		objects:  make(map[types.Hash256]uploadedObject),
 	}
 }
 
@@ -89,13 +90,14 @@ func (s *MemorySDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
 }
 
 func (s *MemorySDK) UploadPacked() (sia.PackedUpload, error) {
-	return &memoryPackedUpload{sdk: s}, nil
+	return &memoryPackedUpload{sdk: s, remaining: s.slabSize}, nil
 }
 
 type memoryPackedUpload struct {
-	sdk     *MemorySDK
-	objects []uploadedObject
-	length  int64
+	sdk       *MemorySDK
+	objects   []uploadedObject
+	remaining int64
+	length    int64
 }
 
 func (u *memoryPackedUpload) Add(ctx context.Context, r io.Reader) (int64, error) {
@@ -106,11 +108,12 @@ func (u *memoryPackedUpload) Add(ctx context.Context, r io.Reader) (int64, error
 	obj := sdk.Object{}
 	u.objects = append(u.objects, uploadedObject{data: data, meta: obj})
 	u.length += int64(len(data))
+	u.remaining -= int64(len(data))
 	return int64(len(data)), nil
 }
 
 func (u *memoryPackedUpload) Length() int64    { return u.length }
-func (u *memoryPackedUpload) Remaining() int64 { return math.MaxInt64 }
+func (u *memoryPackedUpload) Remaining() int64 { return u.remaining }
 
 func (u *memoryPackedUpload) Finalize(ctx context.Context) ([]sdk.Object, error) {
 	results := make([]sdk.Object, len(u.objects))
@@ -158,7 +161,7 @@ func NewTester(t testing.TB, opts ...testutil.TesterOption) *testutil.S3Tester {
 
 func NewCustomTester(t testing.TB, dir string, store sia.Store, sdk sia.SDK, log *zap.Logger, opts ...testutil.TesterOption) *testutil.S3Tester {
 	backend, err := sia.New(context.Background(), sdk, store, dir,
-		sia.WithPackingThreshold(0),
+		sia.WithPacking(0, 0),
 		sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
 		sia.WithLogger(log))
 	if err != nil {
