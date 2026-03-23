@@ -212,6 +212,7 @@ func main() {
 	if err != nil {
 		checkFatalError("failed to create Sia backend", err)
 	}
+	defer backend.Close()
 
 	s3Handler := s3.New(backend, s3.WithHostBucketBases(cfg.S3.HostBases),
 		s3.WithLogger(log))

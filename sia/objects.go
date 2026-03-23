@@ -39,16 +39,28 @@ func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject,
 	}
 	if srcObj.Filename != nil {
 		src, err := os.Open(filepath.Join(s.packingDir, *srcObj.Filename))
-		if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			// the background packer may have uploaded and removed the file
+			// between our db read and file open, re-fetch from the store
+			srcObj, err = s.store.GetObject(&accessKeyID, srcBucket, srcObject, nil)
+			if err != nil {
+				return nil, err
+			} else if srcObj.Filename != nil {
+				return nil, fmt.Errorf("file %q not found on disk but object still references it", *srcObj.Filename)
+			}
+			// filename is now nil, fall through to store.CopyObject which
+			// will copy the object on Sia
+		} else if err != nil {
 			return nil, fmt.Errorf("failed to open source file on disk: %w", err)
-		}
-		defer src.Close()
+		} else {
+			defer src.Close()
 
-		fn, err := s.writeToDisk(src)
-		if err != nil {
-			return nil, fmt.Errorf("failed to copy file on disk: %w", err)
+			fn, err := s.writeToDisk(src)
+			if err != nil {
+				return nil, fmt.Errorf("failed to copy file on disk: %w", err)
+			}
+			dstFilename = &fn
 		}
-		dstFilename = &fn
 	}
 
 	obj, prevFilename, err := s.store.CopyObject(srcBucket, srcObject, dstBucket, dstObject, meta, replace, dstFilename)
@@ -193,7 +205,7 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 					f.Close()
 					return nil, fmt.Errorf("failed to seek file on disk: %w", err)
 				}
-				resp.Body = io.NopCloser(io.LimitReader(f, resp.Range.Length))
+				resp.Body = LimitReadCloser(f, resp.Range.Length)
 			} else {
 				resp.Body = f
 			}
@@ -370,6 +382,22 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	return &s3.PutObjectResult{
 		ContentMD5: contentMD5,
 	}, nil
+}
+
+// limitReadCloser wraps an io.LimitReader with a Closer that closes the
+// underlying ReadCloser.
+type limitReadCloser struct {
+	io.Reader
+	io.Closer
+}
+
+// LimitReadCloser returns an io.ReadCloser that reads at most n bytes from rc
+// and then closes rc when Close is called.
+func LimitReadCloser(rc io.ReadCloser, n int64) io.ReadCloser {
+	return &limitReadCloser{
+		Reader: io.LimitReader(rc, n),
+		Closer: rc,
+	}
 }
 
 // lenReader is an io.Reader that counts the number of bytes read.

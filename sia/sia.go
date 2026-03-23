@@ -147,7 +147,14 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		return nil, fmt.Errorf("sia backend requires both access key and secret key")
 	}
 
-	go s.processOrphansLoop(ctx)
+	ctx, cancel, err := s.tg.AddContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	go func() {
+		defer cancel()
+		s.processOrphansLoop(ctx)
+	}()
 
 	return s, nil
 }

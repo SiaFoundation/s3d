@@ -235,17 +235,29 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 	if obj.Filename != nil {
 		// source is on disk, read directly
 		f, err := os.Open(filepath.Join(s.packingDir, *obj.Filename))
-		if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			// the background packer may have uploaded and removed the file
+			// between our db read and file open, re-fetch from the store
+			obj, err = s.store.GetObject(&accessKeyID, srcBucket, srcObject, nil)
+			if err != nil {
+				return nil, err
+			} else if obj.Filename != nil {
+				return nil, fmt.Errorf("file %q not found on disk but object still references it", *obj.Filename)
+			}
+			// filename is now nil, fall through to Sia download path
+		} else if err != nil {
 			return nil, fmt.Errorf("failed to open source file on disk: %w", err)
+		} else {
+			defer f.Close()
+			if _, err := f.Seek(opts.Range.Start, io.SeekStart); err != nil {
+				return nil, fmt.Errorf("failed to seek source file on disk: %w", err)
+			}
+			if _, err := io.CopyN(writer, f, opts.Range.Length); err != nil {
+				return nil, fmt.Errorf("failed to copy from source file on disk: %w", err)
+			}
 		}
-		defer f.Close()
-		if _, err := f.Seek(opts.Range.Start, io.SeekStart); err != nil {
-			return nil, fmt.Errorf("failed to seek source file on disk: %w", err)
-		}
-		if _, err := io.CopyN(writer, f, opts.Range.Length); err != nil {
-			return nil, fmt.Errorf("failed to copy from source file on disk: %w", err)
-		}
-	} else {
+	}
+	if obj.Filename == nil && obj.Length > 0 {
 		// source is on Sia, fetch and download
 		pinnedObj, err := s.sdk.Object(ctx, obj.ID)
 		if err != nil {
