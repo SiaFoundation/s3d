@@ -151,7 +151,8 @@ func (s *Sia) packSlab(ctx context.Context, candidates []objects.PackedObject) (
 
 	// skip finalizing if the upload doesn't match the packing threshold
 	if len(packed) == 0 {
-		return false, errors.New("no objects could be packed into the slab")
+		s.logger.Debug("no objects could be packed into the slab")
+		return false, nil
 	} else if !s.passesPackingThreshold(upload.Length()) {
 		s.logger.Debug("packing skipped, upload does not exceed leeway threshold",
 			zap.Int("objects", len(packed)),

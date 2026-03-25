@@ -70,6 +70,7 @@ func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject,
 	}
 
 	s.tryRemove(prevFilename)
+	s.tryPack(dstFilename)
 
 	return &s3.CopyObjectResult{
 		ContentMD5:   obj.ContentMD5,
