@@ -154,6 +154,8 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 	go func() {
 		defer cancel()
 		s.processOrphansLoop(ctx)
+
+		// TODO: add loop to cleanup orphaned packed objects on disk
 	}()
 
 	return s, nil
