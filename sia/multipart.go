@@ -399,6 +399,12 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 		}
 		err = s.sdk.PinObject(ctx, obj)
 		if err != nil {
+			if delErr := s.sdk.DeleteObject(ctx, obj.ID()); delErr != nil {
+				s.logger.Error("failed to delete object after pin failure",
+					zap.String("objectID", obj.ID().String()),
+					zap.NamedError("pinFailure", err),
+					zap.Error(delErr))
+			}
 			return nil, fmt.Errorf("failed to pin object in indexer: %w", err)
 		}
 		objectID = obj.ID()
