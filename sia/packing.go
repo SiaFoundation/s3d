@@ -170,6 +170,8 @@ func (s *Sia) packSlab(ctx context.Context, candidates []objects.PackedObject) (
 	results, err := upload.Finalize(ctx)
 	if err != nil {
 		return false, fmt.Errorf("failed to finalize packed upload: %w", err)
+	} else if len(results) != len(packed) {
+		return false, fmt.Errorf("finalize returned %d results for %d objects", len(results), len(packed))
 	}
 
 	// pin the objects and finalize them in the store
@@ -183,16 +185,25 @@ func (s *Sia) packSlab(ctx context.Context, candidates []objects.PackedObject) (
 			continue
 		}
 
-		if err := s.store.FinalizeObject(obj.Bucket, obj.Name, obj.Filename, siaObj.ID(), s.sdk.SealObject(siaObj)); errors.Is(err, objects.ErrObjectModified) {
-			s.logger.Warn("object was modified during packing, skipping",
-				zap.String("bucket", obj.Bucket),
-				zap.String("name", obj.Name))
-			continue
-		} else if err != nil {
-			s.logger.Error("failed to finalize packed object in store",
-				zap.String("bucket", obj.Bucket),
-				zap.String("name", obj.Name),
-				zap.Error(err))
+		if err := s.store.FinalizeObject(obj.Bucket, obj.Name, obj.Filename, siaObj.ID(), s.sdk.SealObject(siaObj)); err != nil {
+			if errors.Is(err, objects.ErrObjectModified) {
+				s.logger.Warn("object was modified during packing, skipping",
+					zap.String("bucket", obj.Bucket),
+					zap.String("name", obj.Name))
+			} else {
+				s.logger.Error("failed to finalize packed object in store",
+					zap.String("bucket", obj.Bucket),
+					zap.String("name", obj.Name),
+					zap.Error(err))
+			}
+
+			// delete pinned object
+			if err := s.sdk.DeleteObject(ctx, siaObj.ID()); err != nil {
+				s.logger.Error("failed to delete pinned object after finalize failure",
+					zap.String("bucket", obj.Bucket),
+					zap.String("name", obj.Name),
+					zap.Error(err))
+			}
 			continue
 		}
 
