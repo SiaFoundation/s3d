@@ -113,12 +113,15 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, partNumber 
 	}
 
 	// part specified, return part info
-	return tx.QueryRow(`
-		SELECT o.object_id, o.metadata, o.updated_at, p.offset, p.content_length, p.content_md5
+	var siaObj sqlSiaObject
+	err = tx.QueryRow(`
+		SELECT o.object_id, o.metadata, o.updated_at, o.sia_object, o.cached_at, o.filename, p.offset, p.content_length, p.content_md5
 		FROM object_parts p
 		JOIN objects o ON o.bucket_id = p.bucket_id AND o.name = p.name
 		WHERE o.bucket_id = $1 AND o.name = $2 AND p.part_number = $3
-	`, bid, name, *partNumber).Scan((*sqlHash256)(&obj.ID), (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Offset, &obj.Length, (*sqlMD5)(&obj.ContentMD5))
+	`, bid, name, *partNumber).Scan((*sqlHash256)(&obj.ID), (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &siaObj, (*sqlTime)(&obj.CachedAt), &obj.Filename, &obj.Offset, &obj.Length, (*sqlMD5)(&obj.ContentMD5))
+	obj.SiaObject = slabs.SealedObject(siaObj)
+	return err
 }
 
 // PutObject stores the given object in the given bucket with the given name or
