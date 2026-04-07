@@ -25,8 +25,6 @@ import (
 
 const (
 	recoveryPhraseEnv = "S3D_RECOVERY_PHRASE"
-	accessKeyEnv      = "S3D_ACCESS_KEY"
-	secretKeyEnv      = "S3D_SECRET_KEY"
 
 	configFileEnvVar = "S3D_CONFIG_FILE"
 	dataDirEnvVar    = "S3D_DATA_DIR"
@@ -50,9 +48,6 @@ var cfg = Config{
 		},
 	},
 	Sia: Sia{
-		AccessKey: os.Getenv(accessKeyEnv),
-		SecretKey: os.Getenv(secretKeyEnv),
-
 		IndexerURL: "https://sia.storage",
 	},
 	S3: S3{},
@@ -209,7 +204,12 @@ func main() {
 		checkFatalError("failed to get app key from database", err)
 	}
 
-	backend, err := sia.New(ctx, sia.NewSDK(sdkClient), store, cfg.Directory, sia.WithKeyPair(cfg.Sia.AccessKey, cfg.Sia.SecretKey))
+	var siaOpts []sia.Option
+	for _, kp := range cfg.Sia.KeyPairs {
+		siaOpts = append(siaOpts, sia.WithKeyPair(kp.AccessKey, kp.SecretKey))
+	}
+
+	backend, err := sia.New(ctx, sia.NewSDK(sdkClient), store, cfg.Directory, siaOpts...)
 	if err != nil {
 		checkFatalError("failed to create Sia backend", err)
 	}
