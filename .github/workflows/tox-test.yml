@@ -22,10 +22,6 @@ jobs:
       - name: Install Go
         uses: actions/setup-go@v5
 
-      - name: Auth for GitHub private modules
-        run: |
-          git config --global url."https://x-access-token:${{ secrets.REPO_INDEXD_ACCESS }}@github.com/".insteadOf "https://github.com/"
-
       - name: Upgrade pip + install tox (v4)
         run: |
           python -m pip install --upgrade pip
