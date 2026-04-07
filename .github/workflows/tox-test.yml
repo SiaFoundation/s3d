@@ -21,6 +21,8 @@ jobs:
 
       - name: Install Go
         uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
 
       - name: Upgrade pip + install tox (v4)
         run: |
