@@ -45,10 +45,15 @@ type (
 		HostBases []string `yaml:"hostBases"`
 	}
 
-	// Sia contains the configuration for the Sia backend.
-	Sia struct {
+	// KeyPair contains an S3 access key and secret key pair.
+	KeyPair struct {
 		AccessKey string `yaml:"accessKey"`
 		SecretKey string `yaml:"secretKey"`
+	}
+
+	// Sia contains the configuration for the Sia backend.
+	Sia struct {
+		KeyPairs []KeyPair `yaml:"keyPairs"`
 
 		IndexerURL string `yaml:"indexerURL"`
 	}
@@ -108,14 +113,15 @@ func runConfigCmd(fp string) {
 	setDataDirectory()
 
 	fmt.Println("")
-	if cfg.Sia.AccessKey != "" && cfg.Sia.SecretKey != "" {
-		fmt.Println(ansiStyle("33m", "An access keypair is already set."))
-		fmt.Println("If you change it, you will need to update any scripts or applications that use the S3 API.")
-		if promptYesNo("Would you like to change your access keypair?") {
-			setKeypair()
+	if len(cfg.Sia.KeyPairs) > 0 {
+		fmt.Println(ansiStyle("33m", fmt.Sprintf("%d access keypair(s) already configured.", len(cfg.Sia.KeyPairs))))
+		fmt.Println("If you change them, you will need to update any scripts or applications that use the S3 API.")
+		if promptYesNo("Would you like to reconfigure your access keypairs?") {
+			cfg.Sia.KeyPairs = nil
+			setKeypairs()
 		}
 	} else {
-		setKeypair()
+		setKeypairs()
 	}
 
 	setAdvancedConfig()
@@ -198,30 +204,39 @@ func setAdvancedConfig() {
 	setListenAddress("HTTP Address", &cfg.ApiAddress)
 }
 
-// setAPIPassword prompts the user to enter an API password if one is not
-// already set via environment variable or config file.
-func setKeypair() {
+func setKeypairs() {
 	for {
-		fmt.Println("Please choose the access key id.")
-		fmt.Println("This will be used for authentication with the S3 API.")
-		fmt.Println("(It must be between 16 and 128 characters.)")
-		cfg.Sia.AccessKey = readPasswordInput("Enter password")
-		if len(cfg.Sia.AccessKey) >= 16 && len(cfg.Sia.AccessKey) <= 128 {
-			break
-		}
-		fmt.Println(ansiStyle("31m", "Access key id must be between 16 and 128 characters."))
-		fmt.Println("")
-	}
+		var kp KeyPair
 
-	for {
-		fmt.Println("Please choose the secret key.")
-		fmt.Println("This will be used for authentication with the S3 API.")
-		fmt.Println("(It must be between 32 and 128 characters.)")
-		cfg.Sia.SecretKey = readPasswordInput("Enter password")
-		if len(cfg.Sia.SecretKey) >= 32 && len(cfg.Sia.SecretKey) <= 128 {
+		for {
+			fmt.Println("Please choose the access key id.")
+			fmt.Println("This will be used for authentication with the S3 API.")
+			fmt.Println("(It must be between 16 and 128 characters.)")
+			kp.AccessKey = readPasswordInput("Enter access key")
+			if len(kp.AccessKey) >= 16 && len(kp.AccessKey) <= 128 {
+				break
+			}
+			fmt.Println(ansiStyle("31m", "Access key id must be between 16 and 128 characters."))
+			fmt.Println("")
+		}
+
+		for {
+			fmt.Println("Please choose the secret key.")
+			fmt.Println("This will be used for authentication with the S3 API.")
+			fmt.Println("(It must be between 32 and 128 characters.)")
+			kp.SecretKey = readPasswordInput("Enter secret key")
+			if len(kp.SecretKey) >= 32 && len(kp.SecretKey) <= 128 {
+				break
+			}
+			fmt.Println(ansiStyle("31m", "Secret key must be between 32 and 128 characters."))
+			fmt.Println("")
+		}
+
+		cfg.Sia.KeyPairs = append(cfg.Sia.KeyPairs, kp)
+		fmt.Println("")
+		if !promptYesNo("Would you like to add another keypair?") {
 			break
 		}
-		fmt.Println(ansiStyle("31m", "Access key id must be between 32 and 128 characters."))
 		fmt.Println("")
 	}
 }

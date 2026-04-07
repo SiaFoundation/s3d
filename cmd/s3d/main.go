@@ -50,9 +50,6 @@ var cfg = Config{
 		},
 	},
 	Sia: Sia{
-		AccessKey: os.Getenv(accessKeyEnv),
-		SecretKey: os.Getenv(secretKeyEnv),
-
 		IndexerURL: "https://app.sia.storage",
 	},
 	S3: S3{},
@@ -208,7 +205,18 @@ func main() {
 		checkFatalError("failed to get app key from database", err)
 	}
 
-	backend, err := sia.New(ctx, sia.NewSDK(sdkClient), store, cfg.Directory, sia.WithKeyPair(cfg.Sia.AccessKey, cfg.Sia.SecretKey), sia.WithLogger(log.Named("backend")))
+	// add key pair from env vars if set
+	if ak, sk := os.Getenv(accessKeyEnv), os.Getenv(secretKeyEnv); ak != "" && sk != "" {
+		cfg.Sia.KeyPairs = append(cfg.Sia.KeyPairs, KeyPair{AccessKey: ak, SecretKey: sk})
+	}
+
+	var siaOpts []sia.Option
+	for _, kp := range cfg.Sia.KeyPairs {
+		siaOpts = append(siaOpts, sia.WithKeyPair(kp.AccessKey, kp.SecretKey))
+	}
+	siaOpts = append(siaOpts, sia.WithLogger(log.Named("backend")))
+
+	backend, err := sia.New(ctx, sia.NewSDK(sdkClient), store, cfg.Directory, siaOpts...)
 	if err != nil {
 		checkFatalError("failed to create Sia backend", err)
 	}
