@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sync"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
@@ -50,33 +49,30 @@ func WithKeyPair(accessKeyID, secretKey string) Option {
 	}
 }
 
-// WithPacking sets the packing threshold and leeway percentage. Objects smaller than
-// the threshold are stored on disk until enough data has accumulated to upload
-// efficiently. The leeway percentage determines how much smaller the remaining space
-// in a slab can be compared to the threshold before packing is triggered. Pass a 0
-// threshold to disable packing.
-func WithPacking(threshold int64, leewayPct float64) Option {
+// WithPackingWaste sets the maximum percentage of wasted space tolerated per
+// slab. Objects whose upload would waste more than this fraction of a slab are
+// written to disk and batched together. Pass 0 to disable packing.
+func WithPackingWaste(pct float64) Option {
 	return func(s *Sia) {
-		s.packingThreshold = threshold
-		s.packingLeewayPct = leewayPct
+		s.packingWastePct = pct
 	}
 }
 
 // Sia implements the s3.Backend interface for storing data on Sia.
 type Sia struct {
-	sdk    SDK
+	sdk   SDK
+	store Store
+
+	multipartDir string
+	packingDir   string
+	accessKeys   map[string]auth.SecretAccessKey
+
+	slabSize        int64
+	packingWastePct float64
+	triggerPackChan chan struct{}
+
 	logger *zap.Logger
-	store  Store
 	tg     *threadgroup.ThreadGroup
-
-	multipartDir     string
-	packingDir       string
-	packingThreshold int64
-	packingLeewayPct float64
-	accessKeys       map[string]auth.SecretAccessKey
-
-	packingMu      sync.Mutex
-	packingRunning bool
 }
 
 // SDK describes the SDK used to interact with Sia.
@@ -84,6 +80,7 @@ type SDK interface {
 	DeleteObject(ctx context.Context, id types.Hash256) error
 	Download(ctx context.Context, w io.Writer, obj sdk.Object, rnge *s3.ObjectRange) error
 	Object(ctx context.Context, id types.Hash256) (sdk.Object, error)
+	SlabSize() (int64, error)
 	Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
 	UploadPacked() (PackedUpload, error)
 	PinObject(ctx context.Context, obj sdk.Object) error
@@ -129,18 +126,27 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 	}
 
 	s := &Sia{
-		logger:           zap.NewNop(),
-		sdk:              sdk,
-		store:            store,
-		tg:               threadgroup.New(),
-		multipartDir:     multipartDir,
-		packingDir:       packingDir,
-		packingThreshold: DefaultPackingThreshold,
-		packingLeewayPct: DefaultPackingLeewayPct,
-		accessKeys:       make(map[string]auth.SecretAccessKey),
+		logger:          zap.NewNop(),
+		sdk:             sdk,
+		store:           store,
+		tg:              threadgroup.New(),
+		multipartDir:    multipartDir,
+		packingDir:      packingDir,
+		packingWastePct: DefaultPackingWastePct,
+		accessKeys:      make(map[string]auth.SecretAccessKey),
 	}
 	for _, opt := range opts {
 		opt(s)
+	}
+
+	// calculate slab size from the SDK's configured redundancy settings
+	if s.packingWastePct > 0 {
+		slabSize, err := s.sdk.SlabSize()
+		if err != nil {
+			return nil, fmt.Errorf("failed to determine slab size: %w", err)
+		}
+		s.slabSize = slabSize
+		s.triggerPackChan = make(chan struct{}, 1)
 	}
 
 	if len(s.accessKeys) == 0 {
@@ -154,9 +160,20 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 	go func() {
 		defer cancel()
 		s.processOrphansLoop(ctx)
-
-		// TODO: add loop to cleanup orphaned packed objects on disk
 	}()
+
+	if s.packingWastePct > 0 {
+		ctx, cancel, err := s.tg.AddContext(ctx)
+		if err != nil {
+			return nil, err
+		}
+		go func() {
+			defer cancel()
+			s.packingLoop(ctx)
+		}()
+	}
+
+	// TODO: add loop to cleanup orphaned packed objects on disk
 
 	return s, nil
 }

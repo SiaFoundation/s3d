@@ -164,9 +164,9 @@ func TestObjectPacking(t *testing.T) {
 	sdk := NewMemorySDK()
 	sdk.slabSize = 256
 
-	// create a backend with custom packing threshold
+	// create a backend with packing enabled
 	backend, err := sia.New(t.Context(), sdk, store, dir,
-		sia.WithPacking(256, 0.1),
+		sia.WithPackingWaste(0.1),
 		sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
 		sia.WithLogger(log))
 	if err != nil {
@@ -1012,7 +1012,7 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	}
 	t.Cleanup(func() { store.Close() })
 
-	siaBackend, err := sia.New(t.Context(), memSDK, store, dir, sia.WithPacking(0, 0), sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey), sia.WithLogger(log))
+	siaBackend, err := sia.New(t.Context(), memSDK, store, dir, sia.WithPackingWaste(0), sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey), sia.WithLogger(log))
 	if err != nil {
 		t.Fatal(err)
 	}

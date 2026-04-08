@@ -427,7 +427,9 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 	}
 
 	// trigger packing if needed
-	s.tryPack(filename)
+	if filename != nil {
+		s.triggerPacking()
+	}
 
 	// calculate ETag
 	etag := s3.FormatETag(contentMD5[:], len(completed))

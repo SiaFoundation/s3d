@@ -24,17 +24,14 @@ import (
 )
 
 const (
-	recoveryPhraseEnv = "S3D_RECOVERY_PHRASE"
-	accessKeyEnv      = "S3D_ACCESS_KEY"
-	secretKeyEnv      = "S3D_SECRET_KEY"
-
-	configFileEnvVar = "S3D_CONFIG_FILE"
-	dataDirEnvVar    = "S3D_DATA_DIR"
+	recoveryPhraseEnvVar = "S3D_RECOVERY_PHRASE"
+	configFileEnvVar     = "S3D_CONFIG_FILE"
+	dataDirEnvVar        = "S3D_DATA_DIR"
 )
 
 var cfg = Config{
 	ApiAddress:     "127.0.0.1:8000",
-	RecoveryPhrase: os.Getenv(recoveryPhraseEnv),
+	RecoveryPhrase: os.Getenv(recoveryPhraseEnvVar),
 	Directory:      os.Getenv(dataDirEnvVar),
 	Log: Log{
 		File: FileLog{
@@ -203,11 +200,6 @@ func main() {
 		}
 	} else {
 		checkFatalError("failed to get app key from database", err)
-	}
-
-	// add key pair from env vars if set
-	if ak, sk := os.Getenv(accessKeyEnv), os.Getenv(secretKeyEnv); ak != "" && sk != "" {
-		cfg.Sia.KeyPairs = append(cfg.Sia.KeyPairs, KeyPair{AccessKey: ak, SecretKey: sk})
 	}
 
 	var siaOpts []sia.Option

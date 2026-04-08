@@ -70,6 +70,18 @@ func (s *IndexdSDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
 	return obj, nil
 }
 
+// SlabSize returns the slab size by creating a temporary packed upload and
+// reading its capacity.
+func (s *IndexdSDK) SlabSize() (int64, error) {
+	pu, err := s.inner.UploadPacked(s.ulOpts...)
+	if err != nil {
+		return 0, err
+	}
+	size := pu.Remaining()
+	pu.Close()
+	return size, nil
+}
+
 // UploadPacked creates a new packed upload.
 func (s *IndexdSDK) UploadPacked() (PackedUpload, error) {
 	return s.inner.UploadPacked(s.ulOpts...)

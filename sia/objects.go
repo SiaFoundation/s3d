@@ -70,7 +70,9 @@ func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject,
 	}
 
 	s.tryRemove(prevFilename)
-	s.tryPack(dstFilename)
+	if dstFilename != nil {
+		s.triggerPacking()
+	}
 
 	return &s3.CopyObjectResult{
 		ContentMD5:   obj.ContentMD5,
@@ -384,7 +386,9 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 
 	// trigger packing if needed
 	s.tryRemove(prevFilename)
-	s.tryPack(filename)
+	if filename != nil {
+		s.triggerPacking()
+	}
 
 	return &s3.PutObjectResult{
 		ContentMD5: contentMD5,

@@ -89,6 +89,10 @@ func (s *MemorySDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
 	return obj, nil
 }
 
+func (s *MemorySDK) SlabSize() (int64, error) {
+	return s.slabSize, nil
+}
+
 func (s *MemorySDK) UploadPacked() (sia.PackedUpload, error) {
 	return &memoryPackedUpload{sdk: s, remaining: s.slabSize}, nil
 }
@@ -161,7 +165,7 @@ func NewTester(t testing.TB, opts ...testutil.TesterOption) *testutil.S3Tester {
 
 func NewCustomTester(t testing.TB, dir string, store sia.Store, sdk sia.SDK, log *zap.Logger, opts ...testutil.TesterOption) *testutil.S3Tester {
 	backend, err := sia.New(context.Background(), sdk, store, dir,
-		sia.WithPacking(0, 0),
+		sia.WithPackingWaste(0),
 		sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
 		sia.WithLogger(log))
 	if err != nil {

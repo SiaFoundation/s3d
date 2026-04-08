@@ -73,8 +73,6 @@ func (s *Store) GetObject(accessKeyID *string, bucket, name string, partNumber *
 	} else if err != nil {
 		return nil, err
 	}
-
-	obj.Name = name
 	return &obj, nil
 }
 
@@ -104,6 +102,7 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, partNumber 
 			WHERE bucket_id = $1 AND name = $2
 		`, bid, name).Scan((*sqlHash256)(&obj.ID), (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Length, (*sqlMD5)(&obj.ContentMD5), &siaObj, (*sqlTime)(&obj.CachedAt), &obj.Filename)
 		obj.SiaObject = slabs.SealedObject(siaObj)
+		obj.Name = name
 		return err
 	}
 
@@ -121,6 +120,7 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, partNumber 
 		WHERE o.bucket_id = $1 AND o.name = $2 AND p.part_number = $3
 	`, bid, name, *partNumber).Scan((*sqlHash256)(&obj.ID), (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &siaObj, (*sqlTime)(&obj.CachedAt), &obj.Filename, &obj.Offset, &obj.Length, (*sqlMD5)(&obj.ContentMD5))
 	obj.SiaObject = slabs.SealedObject(siaObj)
+	obj.Name = name
 	return err
 }
 
