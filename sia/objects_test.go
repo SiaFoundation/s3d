@@ -277,38 +277,27 @@ func TestObjectPacking(t *testing.T) {
 		t.Fatal("expected copied file to be removed from disk after delete")
 	}
 
-	// upload a few small objects, enough to trigger packing, should be at 231 bytes
-	_, err = s3Tester.PutObject(t.Context(), bucket, "obj1", bytes.NewReader(frand.Bytes(100)), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = s3Tester.PutObject(t.Context(), bucket, "obj2", bytes.NewReader(frand.Bytes(80)), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = s3Tester.PutObject(t.Context(), bucket, "obj3", bytes.NewReader(frand.Bytes(115)), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = s3Tester.PutObject(t.Context(), bucket, "obj4", bytes.NewReader(frand.Bytes(16)), nil)
-	if err != nil {
-		t.Fatal(err)
+	// upload small objects that together exceed the packing threshold
+	for _, obj := range []struct {
+		name string
+		size int
+	}{
+		{"obj1", 100},
+		{"obj2", 80},
+		{"obj3", 115},
+		{"obj4", 16},
+	} {
+		_, err = s3Tester.PutObject(t.Context(), bucket, obj.name, bytes.NewReader(frand.Bytes(obj.size)), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	// assert objects for packing order
-	objects, err := store.ObjectsForPacking()
-	if err != nil {
-		t.Fatal(err)
-	} else if len(objects) != 4 {
-		t.Fatalf("expected 4 objects to be candidates for packing, got %d", len(objects))
-	} else if objects[0].Name != "obj3" || objects[1].Name != "obj1" || objects[2].Name != "obj2" || objects[3].Name != "obj4" {
-		t.Fatalf("expected objects to be sorted by size descending, got order: %s, %s, %s, %s", objects[0].Name, objects[1].Name, objects[2].Name, objects[3].Name)
-	}
+	// wait for the pack loop to process the trigger
+	time.Sleep(time.Second)
 
-	// close the backend to wait for the pack loop to finish
-	backend.Close()
-
-	// assert all objects except obj2 are packed, filename is now nil
+	// obj1 (100), obj3 (115), and obj4 (16) should be packed
+	// together (231 bytes = 9.8% waste on a 256 byte slab)
 	for _, key := range []string{"obj1", "obj3", "obj4"} {
 		obj, err := store.GetObject(&accessKeyID, bucket, key, nil)
 		if err != nil {
@@ -318,19 +307,166 @@ func TestObjectPacking(t *testing.T) {
 		}
 	}
 
-	// assert the packing directory holds the 80 byte file
+	// obj2 (80 bytes) stays on disk because it alone has too
+	// much waste (80/256 = 31%)
+	obj, err = store.GetObject(&accessKeyID, bucket, "obj2", nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if obj.Filename == nil {
+		t.Fatal("expected obj2 to remain on disk")
+	}
+
+	// packing directory should hold only the obj2 file
 	entries, err := os.ReadDir(packingDir)
 	if err != nil {
 		t.Fatal(err)
 	} else if len(entries) != 1 {
-		t.Fatalf("expected packing directory to hold a single file, got %d files", len(entries))
+		t.Fatalf("expected 1 file in packing directory, got %d", len(entries))
 	}
 
 	info, err := os.Stat(filepath.Join(packingDir, entries[0].Name()))
 	if err != nil {
-		t.Fatal("expected 80 byte file to exist on disk:", err)
+		t.Fatal("expected 80 byte file on disk:", err)
 	} else if info.Size() != 80 {
-		t.Fatalf("expected packed file to be 80 bytes, got %d bytes", info.Size())
+		t.Fatalf("expected 80 byte file, got %d bytes", info.Size())
+	}
+}
+
+func TestObjectPackingMultiSlab(t *testing.T) {
+	log := zaptest.NewLogger(t)
+	dir := t.TempDir()
+
+	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	// slab size of 256 bytes, maxSlabs = 3, so max packed upload = 768 bytes
+	sdk := NewMemorySDK()
+	sdk.slabSize = 256
+
+	backend, err := sia.New(t.Context(), sdk, store, dir,
+		sia.WithPackingWaste(0.1),
+		sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
+		sia.WithLogger(log))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { backend.Close() })
+
+	bucket := "testbucket"
+	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// upload objects that span multiple slabs when grouped
+	// 300 bytes > slabSize so it crosses a slab boundary in the group
+	// group: [300, 200] = 500 bytes on 2 slabs (512), waste = 12/512 = 2.3%
+	for _, obj := range []struct {
+		name string
+		size int
+	}{
+		{"a", 300},
+		{"b", 200},
+	} {
+		_, err = s3Tester.PutObject(t.Context(), bucket, obj.name, bytes.NewReader(frand.Bytes(obj.size)), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// wait for the pack loop to process the trigger
+	time.Sleep(time.Second)
+
+	accessKeyID := testutil.AccessKeyID
+	for _, key := range []string{"a", "b"} {
+		obj, err := store.GetObject(&accessKeyID, bucket, key, nil)
+		if err != nil {
+			t.Fatal(err)
+		} else if obj.Filename != nil {
+			t.Fatalf("expected %s to be packed, got filename %q", key, *obj.Filename)
+		}
+	}
+
+	// packing directory should be empty
+	entries, err := os.ReadDir(filepath.Join(dir, sia.PackingDirectory))
+	if err != nil {
+		t.Fatal(err)
+	} else if len(entries) != 0 {
+		t.Fatalf("expected empty packing directory, got %d files", len(entries))
+	}
+}
+
+func TestObjectPackingMultiGroup(t *testing.T) {
+	log := zaptest.NewLogger(t)
+	dir := t.TempDir()
+
+	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	// slab size of 256 bytes, maxSlabs = 3, so max packed upload = 768 bytes
+	sdk := NewMemorySDK()
+	sdk.slabSize = 256
+
+	backend, err := sia.New(t.Context(), sdk, store, dir,
+		sia.WithPackingWaste(0.1),
+		sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
+		sia.WithLogger(log))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { backend.Close() })
+
+	bucket := "testbucket"
+	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// upload objects that require multiple groups
+	// max per group = 3 * 256 = 768 bytes
+	// group 1: [300, 200] = 500 bytes on 2 slabs (512), waste = 12/512 = 2.3%
+	// group 2: [150, 100] = 250 bytes on 1 slab (256), waste = 6/256 = 2.3%
+	for _, obj := range []struct {
+		name string
+		size int
+	}{
+		{"obj1", 300},
+		{"obj2", 150},
+		{"obj3", 200},
+		{"obj4", 100},
+	} {
+		_, err = s3Tester.PutObject(t.Context(), bucket, obj.name, bytes.NewReader(frand.Bytes(obj.size)), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// wait for the pack loop to process the trigger
+	time.Sleep(time.Second)
+
+	// all objects should be packed
+	accessKeyID := testutil.AccessKeyID
+	for _, key := range []string{"obj1", "obj2", "obj3", "obj4"} {
+		obj, err := store.GetObject(&accessKeyID, bucket, key, nil)
+		if err != nil {
+			t.Fatal(err)
+		} else if obj.Filename != nil {
+			t.Fatalf("expected %s to be packed, got filename %q", key, *obj.Filename)
+		}
+	}
+
+	// packing directory should be empty
+	entries, err := os.ReadDir(filepath.Join(dir, sia.PackingDirectory))
+	if err != nil {
+		t.Fatal(err)
+	} else if len(entries) != 0 {
+		t.Fatalf("expected empty packing directory, got %d files", len(entries))
 	}
 }
 

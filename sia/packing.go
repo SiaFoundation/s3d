@@ -17,14 +17,13 @@ import (
 )
 
 const (
-	// DefaultPackingWastePct is the maximum percentage of wasted space in a
-	// slab that is tolerated before an object is packed. Objects whose upload
-	// would waste more than this percentage are written to disk and batched
-	// together with other small objects to fill slabs efficiently.
+	// DefaultPackingWastePct is the maximum percentage of wasted space that is tolerated
+	// before an object is packed. Objects whose upload would waste more than this percentage are
+	// written to disk and batched together with other small objects to fill slabs efficiently.
 	DefaultPackingWastePct = 0.1
 
-	// packedUploadThreads is the maximum number of concurrent uploads of packed objects.
-	packedUploadThreads = 4
+	packedUploadThreads  = 4
+	packedUploadMaxSlabs = 3
 
 	extMultipartPart = "part"
 	extPackedObject  = "dat"
@@ -39,90 +38,151 @@ type PackedUpload interface {
 	Close() error
 }
 
-// pendingUpload contains a packed upload and the objects that are being packed
+// packedObjects groups objects that will be uploaded together
+// in a single packed upload.
+type packedObjects struct {
+	slabSize  int64
+	totalSize int64
+	objects   []objects.PackedObject
+}
+
+// slabRemaining returns the remaining space in the current
+// slab.
+func (p *packedObjects) slabRemaining() int64 {
+	remainder := p.totalSize % p.slabSize
+	if remainder == 0 {
+		return p.slabSize
+	}
+	return p.slabSize - remainder
+}
+
+// fits returns true if the object can be added to this group
+// without exceeding the max size and while fitting in the
+// current slab's remaining space.
+func (p *packedObjects) fits(obj objects.PackedObject) bool {
+	if p.totalSize+obj.Length > p.slabSize*packedUploadMaxSlabs {
+		return false
+	}
+	return obj.Length <= p.slabRemaining() || obj.Length > p.slabSize
+}
+
+// add appends the object to this group.
+func (p *packedObjects) add(obj objects.PackedObject) {
+	p.objects = append(p.objects, obj)
+	p.totalSize += obj.Length
+}
+
+// pendingUpload contains a packed upload and the objects
+// that are being packed.
 type pendingUpload struct {
 	upload  PackedUpload
 	objects []objects.PackedObject
 }
 
-// canPack returns true if there's enough data for packing
-func (s *Sia) canPack(totalSize int64) bool {
-	minSize := int64(float64(s.slabSize) * (1 - s.packingWastePct))
-	return totalSize >= minSize
-}
-
-func (s *Sia) createPendingUploads(ctx context.Context) (_ []pendingUpload, err error) {
-	// fetch all candidates
+// preparePackedObjects fetches objects for packing and groups
+// them using best fit per slab.
+func (s *Sia) preparePackedObjects() []packedObjects {
+	// fetch objects for packing
 	candidates, err := s.store.ObjectsForPacking()
 	if err != nil {
 		s.logger.Error("failed to fetch objects for packing", zap.Error(err))
-		return nil, err
+		return nil
+	} else if len(candidates) == 0 {
+		return nil
 	}
 
-	// check if there's enough data to pack
+	// log total candidates and size before packing
+	totalCandidates := len(candidates)
 	var totalSize int64
 	for _, obj := range candidates {
 		totalSize += obj.Length
 	}
-	if !s.canPack(totalSize) {
-		s.logger.Debug("not enough data to pack",
-			zap.Int("objects", len(candidates)),
-			zap.Int64("totalSize", totalSize),
-			zap.Float64("wastePct", s.packingWastePct),
-			zap.Int64("slabSize", s.slabSize))
-		return nil, nil
-	}
-
-	s.logger.Info("packing objects",
-		zap.Int("candidates", len(candidates)),
+	s.logger.Info("found objects for packing",
+		zap.Int("objects", totalCandidates),
 		zap.Int64("totalSize", totalSize))
 
-	// close pending uploads on error
-	var pending []pendingUpload
+	// pack objects into groups
+	var groups []packedObjects
+	for len(candidates) > 0 {
+		group := packedObjects{
+			slabSize: s.slabSize,
+		}
+
+		// add candidate to group and recreate candidates
+		n := 0
+		for _, obj := range candidates {
+			if group.fits(obj) {
+				group.add(obj)
+			} else {
+				candidates[n] = obj
+				n++
+			}
+		}
+		candidates = candidates[:n]
+
+		// if no objects fit the group, we are done
+		if len(group.objects) == 0 {
+			break
+		}
+		if s.meetsUploadThreshold(group.totalSize) {
+			s.logger.Info("created pack",
+				zap.Int("objects", len(group.objects)),
+				zap.Int64("size", group.totalSize),
+				zap.Int64("slabRemaining", group.slabRemaining()))
+			groups = append(groups, group)
+		} else {
+			s.logger.Debug("discarding pack with too much waste",
+				zap.Int("objects", len(group.objects)),
+				zap.Int64("size", group.totalSize))
+		}
+	}
+
+	// log any candidates that were not packed
+	if len(candidates) > 0 {
+		s.logger.Debug("objects left over for next cycle",
+			zap.Int("objects", len(candidates)))
+	}
+
+	return groups
+}
+
+// preparePendingUploads creates packed uploads for the given
+// packs, reading files from disk into each upload. Packs
+// whose files have been deleted concurrently are discarded.
+func (s *Sia) preparePendingUploads(ctx context.Context, packs []packedObjects) (_ []pendingUpload, err error) {
+	var uploads []pendingUpload
+
+	// close uploads on error
 	defer func() {
 		if err != nil {
-			for _, pu := range pending {
+			for _, pu := range uploads {
 				pu.upload.Close()
 			}
 		}
 	}()
 
-	// loop over candidates, try to add them to the pending uploads
-	for _, obj := range candidates {
-		// find a pending upload with room for the object
-		var added bool
-		for i := range pending {
-			if obj.Length <= pending[i].upload.Remaining() {
-				err := s.addToUpload(ctx, &pending[i], obj)
-				if err != nil {
-					return nil, fmt.Errorf("failed to add object: %w", err)
-				}
-				added = true
-				break
-			}
-		}
-		if added {
-			continue
-		}
-
-		// create a new upload
+	// loop over packed objects and create uploads
+	for _, pack := range packs {
 		upload, err := s.sdk.UploadPacked()
 		if err != nil {
 			return nil, fmt.Errorf("failed to create packed upload: %w", err)
 		}
 
 		pu := pendingUpload{upload: upload}
-		err = s.addToUpload(ctx, &pu, obj)
-		if err != nil {
-			return nil, fmt.Errorf("failed to add object: %w", err)
+		for _, obj := range pack.objects {
+			if err := s.addToUpload(ctx, &pu, obj); err != nil {
+				s.logger.Error("failed to add object to upload, aborting pack", zap.Error(err))
+				pu.upload.Close()
+				pu = pendingUpload{}
+				break
+			}
 		}
-		pending = append(pending, pu)
-	}
+		if pu.upload == nil {
+			continue
+		}
 
-	// discard pending uploads that don't meet the threshold
-	ready := pending[:0]
-	for _, pu := range pending {
-		if !s.canPack(pu.upload.Length()) {
+		// verify the upload still meets the threshold
+		if !s.meetsUploadThreshold(pu.upload.Length()) {
 			s.logger.Debug("discarding underfilled upload",
 				zap.Int("objects", len(pu.objects)),
 				zap.Int64("uploadSize", pu.upload.Length()),
@@ -130,26 +190,20 @@ func (s *Sia) createPendingUploads(ctx context.Context) (_ []pendingUpload, err 
 			pu.upload.Close()
 			continue
 		}
-		ready = append(ready, pu)
+
+		uploads = append(uploads, pu)
 	}
 
-	return ready, nil
+	return uploads, nil
 }
 
-// needsPacking returns true if uploading size bytes directly would waste more
-// than packingWastePct of the last slab.
+// needsPacking returns true if uploading size bytes directly
+// would waste more than the configured packing threshold.
 func (s *Sia) needsPacking(size int64) bool {
 	if s.slabSize <= 0 {
 		return false
 	}
-
-	remainder := size % s.slabSize
-	if remainder == 0 {
-		return false
-	}
-
-	waste := s.slabSize - remainder
-	return float64(waste)/float64(s.slabSize) >= s.packingWastePct
+	return !s.meetsUploadThreshold(size)
 }
 
 func (s *Sia) packingLoop(ctx context.Context) {
@@ -171,8 +225,12 @@ func (s *Sia) packingLoop(ctx context.Context) {
 }
 
 func (s *Sia) packObjects(ctx context.Context) {
-	// create pending uploads
-	uploads, err := s.createPendingUploads(ctx)
+	packs := s.preparePackedObjects()
+	if len(packs) == 0 {
+		return
+	}
+
+	uploads, err := s.preparePendingUploads(ctx, packs)
 	if err != nil {
 		s.logger.Error("failed to create pending uploads", zap.Error(err))
 		return
@@ -285,6 +343,22 @@ func (s *Sia) upload(ctx context.Context, pu pendingUpload) error {
 	}
 
 	return nil
+}
+
+// meetsUploadThreshold returns true if size bytes can be
+// uploaded without exceeding the configured waste threshold.
+func (s *Sia) meetsUploadThreshold(size int64) bool {
+	if size <= 0 {
+		return false
+	}
+	remainder := size % s.slabSize
+	if remainder == 0 {
+		return true
+	}
+
+	waste := s.slabSize - remainder
+	allocated := size + waste
+	return float64(waste)/float64(allocated) < s.packingWastePct
 }
 
 func (s *Sia) triggerPacking() {

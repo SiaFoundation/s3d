@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/SiaFoundation/s3d/internal/testutil"
@@ -25,6 +26,7 @@ type uploadedObject struct {
 }
 
 type MemorySDK struct {
+	mu       sync.Mutex
 	appKey   types.PrivateKey
 	objects  map[types.Hash256]uploadedObject
 	slabSize int64
@@ -42,12 +44,16 @@ func NewMemorySDK() *MemorySDK {
 }
 
 func (s *MemorySDK) DeleteObject(ctx context.Context, id types.Hash256) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	delete(s.objects, id)
 	return nil
 }
 
 func (s *MemorySDK) Download(ctx context.Context, w io.Writer, obj sdk.Object, rnge *s3.ObjectRange) error {
+	s.mu.Lock()
 	uploaded, exists := s.objects[obj.ID()]
+	s.mu.Unlock()
 	if !exists {
 		return errors.New("download failed - object not found")
 	}
@@ -65,6 +71,8 @@ func (s *MemorySDK) Download(ctx context.Context, w io.Writer, obj sdk.Object, r
 // TODO: Right now, all objects have the same ID. We'll need to expose something from
 // the SDK to be able to mock objects with different IDs.
 func (s *MemorySDK) Object(ctx context.Context, objectID types.Hash256) (sdk.Object, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.objectCallCount++
 	if s.fail {
 		return sdk.Object{}, errors.New("indexer error")
@@ -82,10 +90,12 @@ func (s *MemorySDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
 		return sdk.Object{}, err
 	}
 	obj := sdk.Object{}
+	s.mu.Lock()
 	s.objects[obj.ID()] = uploadedObject{
 		data: data,
 		meta: obj,
 	}
+	s.mu.Unlock()
 	return obj, nil
 }
 
@@ -94,14 +104,13 @@ func (s *MemorySDK) SlabSize() (int64, error) {
 }
 
 func (s *MemorySDK) UploadPacked() (sia.PackedUpload, error) {
-	return &memoryPackedUpload{sdk: s, remaining: s.slabSize}, nil
+	return &memoryPackedUpload{sdk: s}, nil
 }
 
 type memoryPackedUpload struct {
-	sdk       *MemorySDK
-	objects   []uploadedObject
-	remaining int64
-	length    int64
+	sdk     *MemorySDK
+	objects []uploadedObject
+	length  int64
 }
 
 func (u *memoryPackedUpload) Add(ctx context.Context, r io.Reader) (int64, error) {
@@ -112,14 +121,25 @@ func (u *memoryPackedUpload) Add(ctx context.Context, r io.Reader) (int64, error
 	obj := sdk.Object{}
 	u.objects = append(u.objects, uploadedObject{data: data, meta: obj})
 	u.length += int64(len(data))
-	u.remaining -= int64(len(data))
 	return int64(len(data)), nil
 }
 
-func (u *memoryPackedUpload) Length() int64    { return u.length }
-func (u *memoryPackedUpload) Remaining() int64 { return u.remaining }
+func (u *memoryPackedUpload) Length() int64 { return u.length }
+
+func (u *memoryPackedUpload) Remaining() int64 {
+	if u.length == 0 {
+		return u.sdk.slabSize
+	}
+	r := u.sdk.slabSize - (u.length % u.sdk.slabSize)
+	if r == u.sdk.slabSize {
+		return u.sdk.slabSize
+	}
+	return r
+}
 
 func (u *memoryPackedUpload) Finalize(ctx context.Context) ([]sdk.Object, error) {
+	u.sdk.mu.Lock()
+	defer u.sdk.mu.Unlock()
 	results := make([]sdk.Object, len(u.objects))
 	for i, obj := range u.objects {
 		u.sdk.objects[obj.meta.ID()] = obj
@@ -139,6 +159,8 @@ func (s *MemorySDK) SealObject(obj sdk.Object) slabs.SealedObject {
 }
 
 func (s *MemorySDK) UnsealObject(sealed slabs.SealedObject) (sdk.Object, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	obj, exists := s.objects[sealed.ID()]
 	if !exists {
 		return sdk.Object{}, errors.New("object not found")
