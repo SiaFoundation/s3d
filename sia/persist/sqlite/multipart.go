@@ -48,12 +48,6 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 			return err
 		}
 
-		// fetch previous filename before overwriting
-		err = tx.QueryRow(`SELECT filename FROM objects WHERE bucket_id = $1 AND name = $2`, bid, name).Scan(&prevFilename)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return err
-		}
-
 		var exists bool
 		err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM multipart_uploads WHERE upload_id = $1 AND bucket_id = $2 AND name = $3)`,
 			sqlUploadID(uploadID), bid, name).Scan(&exists)
@@ -96,7 +90,8 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 			return fmt.Errorf("found %d parts smaller than minimum size (%d bytes)", smallParts, s3.MinUploadPartSize)
 		}
 
-		oldID, err := previousObjectID(tx, bid, name)
+		oldID, oldFilename, err := previousObject(tx, bid, name)
+		prevFilename = oldFilename
 		if err != nil {
 			return err
 		}

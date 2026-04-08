@@ -137,12 +137,8 @@ func (s *Store) PutObject(bucket, name string, obj *objects.Object, updateModTim
 			return err
 		}
 
-		err = tx.QueryRow(`SELECT filename FROM objects WHERE bucket_id = $1 AND name = $2`, bid, name).Scan(&prevFilename)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return err
-		}
-
-		return putObject(tx, bid, name, obj, updateModTime)
+		prevFilename, err = putObject(tx, bid, name, obj, updateModTime)
+		return err
 	}); err != nil {
 		return nil, err
 	}
@@ -178,14 +174,9 @@ func (s *Store) CopyObject(srcBucket, srcName, dstBucket, dstName string, meta m
 			}
 		}
 
-		// fetch previous filename before overwriting
-		err = tx.QueryRow(`SELECT filename FROM objects WHERE bucket_id = $1 AND name = $2`, dstBid, dstName).Scan(&prevFilename)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return err
-		}
-
 		obj.Filename = dstFilename
-		return putObject(tx, dstBid, dstName, &obj, true)
+		prevFilename, err = putObject(tx, dstBid, dstName, &obj, true)
+		return err
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, s3errs.ErrNoSuchKey
@@ -223,14 +214,14 @@ func (s *Store) RemoveOrphanedObject(objectID types.Hash256) error {
 	})
 }
 
-func putObject(tx *txn, bid int64, name string, obj *objects.Object, updateModTime bool) error {
+func putObject(tx *txn, bid int64, name string, obj *objects.Object, updateModTime bool) (*string, error) {
 	if obj.Meta == nil {
 		obj.Meta = make(map[string]string) // force '{}' instead of 'null' in JSON
 	}
 
-	oldID, err := previousObjectID(tx, bid, name)
+	oldID, prevFilename, err := previousObject(tx, bid, name)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	_, err = tx.Exec(`
@@ -249,33 +240,34 @@ func putObject(tx *txn, bid int64, name string, obj *objects.Object, updateModTi
 		sqlMetaJSON(obj.Meta), obj.Length, sqlTime(time.Now()),
 		sqlSiaObject(obj.SiaObject), sqlTime(obj.CachedAt), obj.Filename, updateModTime)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// clear any stale orphan entry for the new object ID, in case it was
 	// previously orphaned and is now referenced again
 	if _, err := tx.Exec("DELETE FROM orphaned_objects WHERE object_id = $1", sqlHash256(obj.ID)); err != nil {
-		return err
+		return nil, err
 	}
 
 	if oldID != nil && *oldID != obj.ID {
-		return insertOrphan(tx, *oldID)
+		return prevFilename, insertOrphan(tx, *oldID)
 	}
-	return nil
+	return prevFilename, nil
 }
 
-// previousObjectID returns the object_id currently stored for the given bucket
-// and name, or nil if no row exists.
-func previousObjectID(tx *txn, bid int64, name string) (*types.Hash256, error) {
+// previousObject returns the object_id and filename currently stored for
+// the given bucket and name, or nils if no row exists.
+func previousObject(tx *txn, bid int64, name string) (*types.Hash256, *string, error) {
 	var id types.Hash256
-	err := tx.QueryRow("SELECT object_id FROM objects WHERE bucket_id = $1 AND name = $2", bid, name).
-		Scan((*sqlHash256)(&id))
+	var filename *string
+	err := tx.QueryRow("SELECT object_id, filename FROM objects WHERE bucket_id = $1 AND name = $2", bid, name).
+		Scan((*sqlHash256)(&id), &filename)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
+		return nil, nil, nil
 	} else if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return &id, nil
+	return &id, filename, nil
 }
 
 // insertOrphan adds objectID to the orphaned_objects table if no rows in the

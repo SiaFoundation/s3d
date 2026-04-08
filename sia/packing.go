@@ -256,6 +256,12 @@ func (s *Sia) upload(ctx context.Context, pu pendingUpload) error {
 				zap.String("bucket", obj.Bucket),
 				zap.String("name", obj.Name),
 				zap.Error(err))
+			if delErr := s.sdk.DeleteObject(ctx, siaObj.ID()); delErr != nil {
+				s.logger.Error("failed to delete object after pin failure",
+					zap.String("bucket", obj.Bucket),
+					zap.String("name", obj.Name),
+					zap.Error(delErr))
+			}
 			continue
 		}
 
