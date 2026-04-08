@@ -153,7 +153,7 @@ func (s *Sia) needsPacking(size int64) bool {
 }
 
 func (s *Sia) packingLoop(ctx context.Context) {
-	t := time.NewTicker(time.Minute)
+	t := time.NewTicker(5 * time.Minute)
 	defer t.Stop()
 
 	for {
@@ -162,7 +162,7 @@ func (s *Sia) packingLoop(ctx context.Context) {
 			return
 		case <-s.triggerPackChan:
 			s.logger.Debug("packing triggered")
-			t.Reset(time.Minute)
+			t.Reset(5 * time.Minute)
 		case <-t.C:
 		}
 
@@ -177,7 +177,6 @@ func (s *Sia) packObjects(ctx context.Context) {
 		s.logger.Error("failed to create pending uploads", zap.Error(err))
 		return
 	} else if len(uploads) == 0 {
-		s.logger.Debug("no pending uploads created, skipping packing")
 		return
 	}
 
