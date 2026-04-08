@@ -89,15 +89,6 @@ func (s *Sia) createPendingUploads(ctx context.Context) (_ []pendingUpload, err 
 
 	// loop over candidates, try to add them to the pending uploads
 	for _, obj := range candidates {
-		if obj.Length > s.slabSize {
-			s.logger.Warn("skipping object that exceeds slab size",
-				zap.String("bucket", obj.Bucket),
-				zap.String("name", obj.Name),
-				zap.Int64("size", obj.Length),
-				zap.Int64("slabSize", s.slabSize))
-			continue
-		}
-
 		// find a pending upload with room for the object
 		var added bool
 		for i := range pending {
@@ -145,7 +136,8 @@ func (s *Sia) createPendingUploads(ctx context.Context) (_ []pendingUpload, err 
 	return ready, nil
 }
 
-// needsPacking returns true if the size meets the packing threshold
+// needsPacking returns true if uploading size bytes directly would waste more
+// than packingWastePct of the last slab.
 func (s *Sia) needsPacking(size int64) bool {
 	if s.slabSize <= 0 {
 		return false
