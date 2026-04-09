@@ -385,14 +385,15 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 	var objectID types.Hash256
 	var filename *string
 	if s.needsPacking(contentLength) {
-		// small result, write to disk
+		// uploading directly to Sia would be too wasteful, write to disk
+		// for the packer to pick up instead
 		fn, err := s.writeToDisk(r)
 		if err != nil {
 			return nil, fmt.Errorf("failed to write completed object to disk: %w", err)
 		}
 		filename = &fn
 	} else {
-		// upload the combined object to Sia
+		// upload directly and pin the object
 		obj, err := s.sdk.Upload(ctx, r)
 		if err != nil {
 			return nil, fmt.Errorf("failed to upload object to Sia: %w", err)

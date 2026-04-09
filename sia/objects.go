@@ -327,14 +327,15 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 			return nil, fmt.Errorf("failed to read object data: %w", err)
 		}
 	} else if s.needsPacking(opts.ContentLength) {
-		// small object, write to disk and upload to Sia later
+		// uploading directly to Sia would be too wasteful, write to disk
+		// for the packer to pick up instead
 		fn, err := s.writeToDisk(lr)
 		if err != nil {
 			return nil, fmt.Errorf("failed to write object to disk: %w", err)
 		}
 		filename = &fn
 	} else {
-		// large object — upload directly
+		// upload directly and pin the object
 		obj, err := s.sdk.Upload(ctx, lr)
 		if err != nil {
 			return nil, fmt.Errorf("failed to upload object: %w", err)
