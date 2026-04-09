@@ -15,7 +15,7 @@ import (
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"go.sia.tech/core/types"
-	"go.sia.tech/indexd/sdk"
+	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
 	"lukechampine.com/frand"

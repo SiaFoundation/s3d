@@ -16,8 +16,8 @@ import (
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/threadgroup"
-	"go.sia.tech/indexd/sdk"
 	"go.sia.tech/indexd/slabs"
+	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
 )
 

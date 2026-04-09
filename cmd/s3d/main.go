@@ -17,7 +17,7 @@ import (
 	"github.com/SiaFoundation/s3d/sia"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"go.sia.tech/core/types"
-	"go.sia.tech/indexd/sdk"
+	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"lukechampine.com/flagg"

@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/SiaFoundation/s3d/sia/objects"
-	"go.sia.tech/indexd/sdk"
+	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
 	"lukechampine.com/frand"
 )
