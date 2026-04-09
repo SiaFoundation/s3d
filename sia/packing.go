@@ -23,7 +23,7 @@ const (
 	DefaultPackingWastePct = 0.1
 
 	packedUploadThreads  = 4
-	packedUploadMaxSlabs = 3
+	packedUploadMaxSlabs = 4
 
 	extMultipartPart = "part"
 	extPackedObject  = "dat"
