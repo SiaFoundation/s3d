@@ -564,6 +564,29 @@ func TestListObjects(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Run("ListObjects", func(t *testing.T) {
+				resp, err := s3Tester.ListObjects(t.Context(), bucket, tc.prefix, tc.delimiter, s3.ListObjectsPage{
+					Marker:  tc.marker,
+					MaxKeys: tc.maxKeys,
+				})
+				if err != nil {
+					t.Fatal(err)
+				} else if len(resp.Contents) != len(tc.objects) {
+					t.Fatalf("expected %d objects, got %d", len(tc.objects), len(resp.Contents))
+				} else if *resp.IsTruncated != tc.truncated {
+					t.Fatalf("expected truncated=%v, got %v", tc.truncated, *resp.IsTruncated)
+				}
+				for i := range tc.objects {
+					if *resp.Contents[i].Key != tc.objects[i] {
+						t.Fatalf("expected object %v, got %v", tc.objects[i], *resp.Contents[i].Key)
+					} else if *resp.Contents[i].ETag != etag {
+						t.Fatalf("expected ETag %q, got %q", etag, *resp.Contents[i].ETag)
+					}
+				}
+				assertCommonPrefixesEqual(t, tc.commonPrefixes, resp.CommonPrefixes)
+				assertMarkersEqual(t, false, tc.nextMarker, resp.NextMarker)
+			})
+
 			t.Run("ListObjectsV2", func(t *testing.T) {
 				resp, err := s3Tester.ListObjectsV2(t.Context(), bucket, tc.prefix, tc.delimiter, s3.ListObjectsPage{
 					Marker:  toBase64(tc.marker),
@@ -608,6 +631,66 @@ func TestListObjects(t *testing.T) {
 				assertMarkersEqual(t, false, tc.nextMarker, resp.NextKeyMarker)
 			})
 		})
+	}
+}
+
+func TestListObjectsDelimiterNotSkipSpecial(t *testing.T) {
+	s3Tester := testutil.NewTester(t)
+
+	bucket := "test"
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// upload keys: "0/" is a directory marker, "0/1000".."0/1003" are
+	// children, and "1999", "2000" are top level objects
+	keys := []string{"0/", "0/1000", "0/1001", "0/1002", "0/1003", "1999", "2000"}
+	for _, key := range keys {
+		if _, err := s3Tester.PutObject(t.Context(), bucket, key, bytes.NewReader([]byte{}), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	delimiter := "/"
+	resp, err := s3Tester.ListObjects(t.Context(), bucket, nil, &delimiter, s3.ListObjectsPage{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// "0/" and all "0/*" keys should be rolled into the "0/" common prefix,
+	// only "1999" and "2000" should appear in Contents
+	if len(resp.Contents) != 2 {
+		var got []string
+		for _, c := range resp.Contents {
+			got = append(got, *c.Key)
+		}
+		t.Fatalf("expected 2 content keys, got %d: %v", len(resp.Contents), got)
+	} else if *resp.Contents[0].Key != "1999" || *resp.Contents[1].Key != "2000" {
+		t.Fatalf("expected [1999, 2000], got [%s, %s]", *resp.Contents[0].Key, *resp.Contents[1].Key)
+	}
+
+	if len(resp.CommonPrefixes) != 1 {
+		t.Fatalf("expected 1 common prefix, got %d", len(resp.CommonPrefixes))
+	} else if *resp.CommonPrefixes[0].Prefix != "0/" {
+		t.Fatalf("expected common prefix '0/', got '%s'", *resp.CommonPrefixes[0].Prefix)
+	}
+
+	// when prefix matches the key exactly (prefix="0/", delimiter="/"),
+	// the key should appear in Contents, not CommonPrefixes
+	prefix := "0/"
+	resp, err = s3Tester.ListObjects(t.Context(), bucket, &prefix, &delimiter, s3.ListObjectsPage{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.CommonPrefixes) != 0 {
+		t.Fatalf("expected 0 common prefixes, got %d", len(resp.CommonPrefixes))
+	}
+	if len(resp.Contents) != 5 {
+		var got []string
+		for _, c := range resp.Contents {
+			got = append(got, *c.Key)
+		}
+		t.Fatalf("expected 5 content keys, got %d: %v", len(resp.Contents), got)
 	}
 }
 

@@ -415,6 +415,63 @@ func (b *ObjectsListResult) AddPrefix(prefix string) {
 	}
 }
 
+func (s *s3) listObjectsV1(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket string) error {
+	log := s.logger.With(zap.String("bucket", bucket))
+	log.Debug("list objects v1")
+
+	// parse arguments
+	q := r.URL.Query()
+	prefix := prefixFromQuery(q)
+	maxKeys, err := parseClampedInt(q.Get("max-keys"), DefaultMaxBucketKeys, 0, MaxBucketKeys)
+	if err != nil {
+		return err
+	}
+
+	page := ListObjectsPage{MaxKeys: maxKeys}
+	if _, hasMarker := q["marker"]; hasMarker {
+		marker := q.Get("marker")
+		page.Marker = &marker
+	}
+
+	if prefix.Delimiter != "" && prefix.Delimiter != "/" {
+		return s3errs.ErrNotImplemented // only "/" delimiter is supported
+	}
+
+	// list objects
+	objects, err := s.backend.ListObjects(r.Context(), accessKeyID, bucket, prefix, page)
+	if err != nil {
+		return err
+	}
+
+	// URL-escape object keys and common prefixes if requested
+	if r.FormValue("encoding-type") == "url" {
+		for i := range objects.Contents {
+			objects.Contents[i].Key = urlEscape(objects.Contents[i].Key)
+		}
+		for i := range objects.CommonPrefixes {
+			objects.CommonPrefixes[i].Prefix = urlEscape(objects.CommonPrefixes[i].Prefix)
+		}
+	}
+
+	result := &ListObjectsV1Result{
+		ListObjectsResultBase: ListObjectsResultBase{
+			Xmlns:          "http://s3.amazonaws.com/doc/2006-03-01/",
+			Name:           bucket,
+			CommonPrefixes: objects.CommonPrefixes,
+			Contents:       objects.Contents,
+			IsTruncated:    objects.IsTruncated,
+			Delimiter:      prefix.Delimiter,
+			Prefix:         prefix.Prefix,
+			MaxKeys:        page.MaxKeys,
+			EncodingType:   q.Get("encoding-type"),
+		},
+		Marker:     q.Get("marker"),
+		NextMarker: objects.NextMarker,
+	}
+
+	return writeXMLResponse(w, result)
+}
+
 func (s *s3) listObjectsV2(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket string) error {
 	log := s.logger.With(zap.String("bucket", bucket))
 	log.Debug("list objects")
@@ -469,6 +526,7 @@ func (s *s3) listObjectsV2(w http.ResponseWriter, r *http.Request, accessKeyID *
 			Delimiter:      prefix.Delimiter,
 			Prefix:         prefix.Prefix,
 			MaxKeys:        page.MaxKeys,
+			EncodingType:   q.Get("encoding-type"),
 		},
 		KeyCount:          int64(len(objects.CommonPrefixes) + len(objects.Contents)),
 		StartAfter:        q.Get("start-after"),
