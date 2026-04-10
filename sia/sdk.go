@@ -77,9 +77,8 @@ func (s *IndexdSDK) SlabSize() (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	size := pu.Remaining()
-	pu.Close()
-	return size, nil
+	defer pu.Close()
+	return pu.SlabSize(), nil
 }
 
 // UploadPacked creates a new packed upload.
