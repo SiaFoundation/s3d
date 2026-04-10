@@ -9,8 +9,6 @@ import (
 	"fmt"
 	"hash"
 	"io"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
@@ -30,45 +28,33 @@ const metadataCacheLifetime = 24 * time.Hour
 // metadata that should be merged into the copied object except for the
 // x-amz-acl header.
 func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, replace bool, meta map[string]string) (*s3.CopyObjectResult, error) {
-	// if the source is on disk, copy the file first so we can pass the
-	// new filename to the store
 	var dstFilename *string
-	srcObj, err := s.store.GetObject(&accessKeyID, srcBucket, srcObject, nil)
+
+	// fetch object from the store
+	obj, err := s.store.GetObject(srcBucket, srcObject, nil)
 	if err != nil {
 		return nil, err
 	}
-	if srcObj.Filename != nil {
-		src, err := os.Open(filepath.Join(s.packingDir, *srcObj.Filename))
-		if errors.Is(err, os.ErrNotExist) {
-			// the background packer may have uploaded and removed the file
-			// between our db read and file open, re-fetch from the store
-			srcObj, err = s.store.GetObject(&accessKeyID, srcBucket, srcObject, nil)
-			if err != nil {
-				return nil, err
-			} else if srcObj.Filename != nil {
-				return nil, fmt.Errorf("file %q not found on disk but object still references it", *srcObj.Filename)
-			}
-			// filename is now nil, fall through to store.CopyObject which
-			// will copy the object on Sia
-		} else if err != nil {
-			return nil, fmt.Errorf("failed to open source file on disk: %w", err)
-		} else {
-			defer src.Close()
 
-			fn, err := s.writeToDisk(src)
-			if err != nil {
-				return nil, fmt.Errorf("failed to copy file on disk: %w", err)
-			}
-			dstFilename = &fn
+	// copy packed object on disk if needed
+	file, err := s.openPackedObject(obj)
+	if file != nil {
+		defer file.Close()
+		fn, err := s.writePackedObject(file)
+		if err != nil {
+			return nil, fmt.Errorf("failed to copy packed object: %w", err)
 		}
+		dstFilename = &fn
 	}
 
+	// copy the object in the store
 	obj, prevFilename, err := s.store.CopyObject(srcBucket, srcObject, dstBucket, dstObject, meta, replace, dstFilename)
 	if err != nil {
 		s.tryRemove(dstFilename)
 		return nil, err
 	}
 
+	// remove the old packed file and trigger packing
 	s.tryRemove(prevFilename)
 	if dstFilename != nil {
 		s.triggerPacking()
@@ -144,7 +130,7 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 		return nil, s3errs.ErrAccessDenied
 	}
 
-	obj, err := s.store.GetObject(accessKeyID, bucket, object, partNumber)
+	obj, err := s.store.GetObject(bucket, object, partNumber)
 	if err != nil {
 		return nil, err
 	}
@@ -187,33 +173,21 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 		return resp, nil
 	}
 
-	// serve from disk if the object is stored locally
-	if obj.Filename != nil {
-		f, err := os.Open(filepath.Join(s.packingDir, *obj.Filename))
-		if errors.Is(err, os.ErrNotExist) {
-			// the background packer may have uploaded and removed the file
-			// between our db read and file open, re-fetch from the store
-			obj, err = s.store.GetObject(accessKeyID, bucket, object, partNumber)
-			if err != nil {
-				return nil, err
-			} else if obj.Filename != nil {
-				return nil, fmt.Errorf("file %q not found on disk but object still references it", *obj.Filename)
+	// serve from disk if it's a packed object
+	file, err := s.openPackedObject(obj)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open packed object: %w", err)
+	} else if file != nil {
+		if resp.Range != nil {
+			if _, err := file.Seek(resp.Range.Start, io.SeekStart); err != nil {
+				file.Close()
+				return nil, fmt.Errorf("failed to seek file on disk: %w", err)
 			}
-			// filename is now nil, fall through to the Sia download path
-		} else if err != nil {
-			return nil, fmt.Errorf("failed to open file on disk: %w", err)
+			resp.Body = LimitReadCloser(file, resp.Range.Length)
 		} else {
-			if resp.Range != nil {
-				if _, err := f.Seek(resp.Range.Start, io.SeekStart); err != nil {
-					f.Close()
-					return nil, fmt.Errorf("failed to seek file on disk: %w", err)
-				}
-				resp.Body = LimitReadCloser(f, resp.Range.Length)
-			} else {
-				resp.Body = f
-			}
-			return resp, nil
+			resp.Body = file
 		}
+		return resp, nil
 	}
 
 	// refresh cached object metadata if needed
@@ -320,7 +294,7 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	var objectID types.Hash256
 	var siaObject slabs.SealedObject
 	var cachedAt time.Time
-	var filename *string
+	var packedFilename *string
 	if opts.ContentLength == 0 {
 		// drain reader
 		if _, err := io.Copy(io.Discard, lr); err != nil {
@@ -329,11 +303,11 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	} else if s.needsPacking(opts.ContentLength) {
 		// uploading directly to Sia would be too wasteful, write to disk
 		// for the packer to pick up instead
-		fn, err := s.writeToDisk(lr)
+		filename, err := s.writePackedObject(lr)
 		if err != nil {
 			return nil, fmt.Errorf("failed to write object to disk: %w", err)
 		}
-		filename = &fn
+		packedFilename = &filename
 	} else {
 		// upload directly and pin the object
 		obj, err := s.sdk.Upload(ctx, lr)
@@ -378,16 +352,16 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 		Length:     lr.N,
 		SiaObject:  siaObject,
 		CachedAt:   cachedAt,
-		Filename:   filename,
+		Filename:   packedFilename,
 	}, true)
 	if err != nil {
-		s.tryRemove(filename)
+		s.tryRemove(packedFilename)
 		return nil, fmt.Errorf("failed to store object metadata: %w", err)
 	}
 
 	// trigger packing if needed
 	s.tryRemove(prevFilename)
-	if filename != nil {
+	if packedFilename != nil {
 		s.triggerPacking()
 	}
 

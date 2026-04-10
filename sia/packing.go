@@ -379,7 +379,29 @@ func (s *Sia) tryRemove(filename *string) {
 	}
 }
 
-func (s *Sia) writeToDisk(r io.Reader) (filename string, err error) {
+func (s *Sia) openPackedObject(obj *objects.Object) (*os.File, error) {
+	// nothing to do if the object is nil or it's not a packed object
+	if obj == nil || obj.Filename == nil {
+		return nil, nil
+	}
+
+	// open the file on disk, if it does not exist, it may have been
+	// uploaded in the background, refresh the object and try again
+	f, err := os.Open(filepath.Join(s.packingDir, *obj.Filename))
+	if errors.Is(err, os.ErrNotExist) {
+		obj, err = s.store.GetObject(obj.Bucket, obj.Name, nil)
+		if err != nil {
+			return nil, err
+		} else if obj.Filename != nil {
+			return nil, fmt.Errorf("file %q not found on disk but object still references it", *obj.Filename)
+		}
+		return nil, nil
+	}
+
+	return f, err
+}
+
+func (s *Sia) writePackedObject(r io.Reader) (filename string, err error) {
 	filename = randFilename(extPackedObject)
 	filePath := filepath.Join(s.packingDir, filename)
 	f, err := os.OpenFile(filePath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0666)

@@ -189,8 +189,7 @@ func TestObjectPacking(t *testing.T) {
 	}
 
 	// assert the object's filename is set
-	accessKeyID := testutil.AccessKeyID
-	obj, err := store.GetObject(&accessKeyID, bucket, "obj1", nil)
+	obj, err := store.GetObject(bucket, "obj1", nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.Filename == nil {
@@ -236,7 +235,7 @@ func TestObjectPacking(t *testing.T) {
 	}
 
 	// assert the copy is also on disk with its own file
-	copyObj, err := store.GetObject(&accessKeyID, bucket, "copied", nil)
+	copyObj, err := store.GetObject(bucket, "copied", nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if copyObj.Filename == nil {
@@ -299,7 +298,7 @@ func TestObjectPacking(t *testing.T) {
 	// obj1 (100), obj3 (115), and obj4 (16) should be packed
 	// together (231 bytes = 9.8% waste on a 256 byte slab)
 	for _, key := range []string{"obj1", "obj3", "obj4"} {
-		obj, err := store.GetObject(&accessKeyID, bucket, key, nil)
+		obj, err := store.GetObject(bucket, key, nil)
 		if err != nil {
 			t.Fatal(err)
 		} else if obj.Filename != nil {
@@ -309,7 +308,7 @@ func TestObjectPacking(t *testing.T) {
 
 	// obj2 (80 bytes) stays on disk because it alone has too
 	// much waste (80/256 = 31%)
-	obj, err = store.GetObject(&accessKeyID, bucket, "obj2", nil)
+	obj, err = store.GetObject(bucket, "obj2", nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.Filename == nil {
@@ -380,9 +379,8 @@ func TestObjectPackingMultiSlab(t *testing.T) {
 	// wait for the pack loop to process the trigger
 	time.Sleep(time.Second)
 
-	accessKeyID := testutil.AccessKeyID
 	for _, key := range []string{"a", "b"} {
-		obj, err := store.GetObject(&accessKeyID, bucket, key, nil)
+		obj, err := store.GetObject(bucket, key, nil)
 		if err != nil {
 			t.Fatal(err)
 		} else if obj.Filename != nil {
@@ -451,9 +449,8 @@ func TestObjectPackingMultiGroup(t *testing.T) {
 	time.Sleep(time.Second)
 
 	// all objects should be packed
-	accessKeyID := testutil.AccessKeyID
 	for _, key := range []string{"obj1", "obj2", "obj3", "obj4"} {
-		obj, err := store.GetObject(&accessKeyID, bucket, key, nil)
+		obj, err := store.GetObject(bucket, key, nil)
 		if err != nil {
 			t.Fatal(err)
 		} else if obj.Filename != nil {
@@ -1026,8 +1023,7 @@ func TestObjectMetadataCache(t *testing.T) {
 	})
 
 	t.Run("expired cache triggers refresh", func(t *testing.T) {
-		accessKeyID := testutil.AccessKeyID
-		obj, err := store.GetObject(&accessKeyID, bucket, object, nil)
+		obj, err := store.GetObject(bucket, object, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1062,8 +1058,7 @@ func TestObjectMetadataCache(t *testing.T) {
 
 	t.Run("falls back to stale cache on indexer failure", func(t *testing.T) {
 		// expire the cache again
-		accessKeyID := testutil.AccessKeyID
-		storedObj, err := store.GetObject(&accessKeyID, bucket, object, nil)
+		storedObj, err := store.GetObject(bucket, object, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1108,8 +1103,7 @@ func TestObjectMetadataCache(t *testing.T) {
 		}
 
 		// verify empty object has no cached metadata
-		accessKeyID := testutil.AccessKeyID
-		obj, err := store.GetObject(&accessKeyID, bucket, emptyObject, nil)
+		obj, err := store.GetObject(bucket, emptyObject, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

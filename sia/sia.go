@@ -95,7 +95,7 @@ type Store interface {
 	DeleteBucket(accessKeyID, bucket string) error
 	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (*string, error)
 	FinalizeObject(bucket, name, expectedFilename string, objectID types.Hash256, siaObject slabs.SealedObject) error
-	GetObject(accessKeyID *string, bucket, object string, partNumber *int32) (*objects.Object, error)
+	GetObject(bucket, object string, partNumber *int32) (*objects.Object, error)
 	HeadBucket(accessKeyID, bucket string) error
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
 	ListObjects(accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error)
@@ -172,8 +172,6 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 			s.packingLoop(ctx)
 		}()
 	}
-
-	// TODO: add loop to cleanup orphaned packed objects on disk
 
 	return s, nil
 }

@@ -628,8 +628,7 @@ func TestMultipartPacking(t *testing.T) {
 	}
 
 	// verify the completed object is stored on disk
-	accessKeyID := testutil.AccessKeyID
-	obj, err := store.GetObject(&accessKeyID, bucket, object, nil)
+	obj, err := store.GetObject(bucket, object, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -80,7 +80,7 @@ func TestGetObject(t *testing.T) {
 	}
 
 	// get object without part number
-	obj, err := store.GetObject(aws.String(accessKeyID), bucket, object, nil)
+	obj, err := store.GetObject(bucket, object, nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.ID != objID {
@@ -94,7 +94,7 @@ func TestGetObject(t *testing.T) {
 	}
 
 	// get object with part number 1
-	objPart1, err := store.GetObject(aws.String(accessKeyID), bucket, object, aws.Int32(1))
+	objPart1, err := store.GetObject(bucket, object, aws.Int32(1))
 	if err != nil {
 		t.Fatal(err)
 	} else if objPart1.ID != objID {
@@ -110,7 +110,7 @@ func TestGetObject(t *testing.T) {
 	}
 
 	// get multipart object with part number 2
-	multipartPart2, err := store.GetObject(aws.String(accessKeyID), bucket, multipart, aws.Int32(2))
+	multipartPart2, err := store.GetObject(bucket, multipart, aws.Int32(2))
 	if err != nil {
 		t.Fatal(err)
 	} else if multipartPart2.ID != multipartID {
@@ -126,7 +126,7 @@ func TestGetObject(t *testing.T) {
 	}
 
 	// get object with invalid part number
-	_, err = store.GetObject(aws.String(accessKeyID), bucket, object, aws.Int32(3))
+	_, err = store.GetObject(bucket, object, aws.Int32(3))
 	if !errors.Is(err, s3errs.ErrInvalidPart) {
 		t.Fatal("unexpected error", err)
 	}

@@ -16,6 +16,7 @@ var ErrObjectModified = errors.New("object was modified")
 type Object struct {
 	ID           types.Hash256
 	Name         string
+	Bucket       string
 	PartsCount   int32
 	Meta         map[string]string
 	Offset       int64

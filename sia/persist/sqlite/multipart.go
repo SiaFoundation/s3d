@@ -90,7 +90,7 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 			return fmt.Errorf("found %d parts smaller than minimum size (%d bytes)", smallParts, s3.MinUploadPartSize)
 		}
 
-		oldID, oldFilename, err := previousObject(tx, bid, name)
+		oldID, oldFilename, err := objectInfo(tx, bucket, name)
 		prevFilename = oldFilename
 		if err != nil {
 			return err

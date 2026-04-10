@@ -188,7 +188,7 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 	}
 
 	// fetch source object metadata
-	obj, err := s.store.GetObject(&accessKeyID, srcBucket, srcObject, nil)
+	obj, err := s.store.GetObject(srcBucket, srcObject, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -238,7 +238,7 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 		if errors.Is(err, os.ErrNotExist) {
 			// the background packer may have uploaded and removed the file
 			// between our db read and file open, re-fetch from the store
-			obj, err = s.store.GetObject(&accessKeyID, srcBucket, srcObject, nil)
+			obj, err = s.store.GetObject(srcBucket, srcObject, nil)
 			if err != nil {
 				return nil, err
 			} else if obj.Filename != nil {
@@ -383,15 +383,15 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 	}
 
 	var objectID types.Hash256
-	var filename *string
+	var packedFilename *string
 	if s.needsPacking(contentLength) {
 		// uploading directly to Sia would be too wasteful, write to disk
 		// for the packer to pick up instead
-		fn, err := s.writeToDisk(r)
+		filename, err := s.writePackedObject(r)
 		if err != nil {
 			return nil, fmt.Errorf("failed to write completed object to disk: %w", err)
 		}
-		filename = &fn
+		packedFilename = &filename
 	} else {
 		// upload directly and pin the object
 		obj, err := s.sdk.Upload(ctx, r)
@@ -412,13 +412,20 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 	}
 
 	// complete the multipart upload in the database
-	prevFilename, err := s.store.CompleteMultipartUpload(bucket, object, uploadID, objectID, contentMD5, contentLength, filename)
+	prevFilename, err := s.store.CompleteMultipartUpload(bucket, object, uploadID, objectID, contentMD5, contentLength, packedFilename)
 	if err != nil {
-		s.tryRemove(filename)
+		s.tryRemove(packedFilename)
 		return nil, fmt.Errorf("failed to complete multipart upload in store: %w", err)
 	}
 
+	// trigger packing if needed
 	s.tryRemove(prevFilename)
+	if packedFilename != nil {
+		s.triggerPacking()
+	}
+
+	// calculate ETag
+	etag := s3.FormatETag(contentMD5[:], len(completed))
 
 	// remove multipart upload directory
 	if err := os.RemoveAll(uploadDir); err != nil {
@@ -426,14 +433,6 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 			zap.String("path", uploadDir),
 			zap.Error(err))
 	}
-
-	// trigger packing if needed
-	if filename != nil {
-		s.triggerPacking()
-	}
-
-	// calculate ETag
-	etag := s3.FormatETag(contentMD5[:], len(completed))
 
 	return &s3.CompleteMultipartUploadResult{
 		ETag:       etag,
