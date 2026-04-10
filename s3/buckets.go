@@ -20,8 +20,10 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *st
 		// nolint:gocritic
 		if _, ok := r.URL.Query()["location"]; ok {
 			return s.bucketLocation(w, r, bucket)
-		} else {
+		} else if r.URL.Query().Get("list-type") == "2" {
 			return s.listObjectsV2(w, r, accessKeyID, bucket)
+		} else {
+			return s.listObjectsV1(w, r, accessKeyID, bucket)
 		}
 	case http.MethodPut:
 		return s.createBucket(w, r, validatedKey, bucket)

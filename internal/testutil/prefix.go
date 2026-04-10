@@ -109,7 +109,8 @@ func match(p s3.Prefix, key string) *prefixMatch {
 	if appendDelim {
 		out += p.Delimiter
 	}
-	return &prefixMatch{Key: key, CommonPrefix: out != key, MatchedPart: out}
+	isCommonPrefix := out != key || (appendDelim && strings.HasSuffix(key, p.Delimiter))
+	return &prefixMatch{Key: key, CommonPrefix: isCommonPrefix, MatchedPart: out}
 }
 
 // prefixMatch describes a successful match of a key against a Prefix.
