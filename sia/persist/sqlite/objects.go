@@ -107,6 +107,7 @@ func getObject(tx *txn, obj *objects.Object, bucket, name string, partNumber *in
 		obj.ID = id.Ptr()
 		obj.SiaObject = slabs.SealedObject(siaObj)
 		obj.Name = name
+		obj.Bucket = bucket
 		return err
 	}
 

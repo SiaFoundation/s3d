@@ -38,7 +38,9 @@ func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject,
 
 	// copy packed object on disk if needed
 	file, err := s.openPackedObject(obj)
-	if file != nil {
+	if err != nil {
+		return nil, fmt.Errorf("failed to open packed object: %w", err)
+	} else if file != nil {
 		defer file.Close()
 		fn, err := s.writePackedObject(file)
 		if err != nil {

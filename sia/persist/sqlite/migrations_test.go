@@ -74,7 +74,7 @@ CREATE TABLE object_parts (
 );
 
 CREATE TABLE orphaned_objects (
-    object_id BLOB PRIMARY KEY
+    object_id BLOB NOT NULL PRIMARY KEY
 );
 
 CREATE TABLE global_settings (
