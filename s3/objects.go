@@ -562,16 +562,19 @@ func (s *s3) listObjectVersions(w http.ResponseWriter, r *http.Request, accessKe
 
 	// prepare result
 	result := ListObjectVersionsResult{
-		Xmlns:           "http://s3.amazonaws.com/doc/2006-03-01/",
-		Name:            bucket,
-		CommonPrefixes:  objects.CommonPrefixes,
-		Versions:        []Version{},
-		IsTruncated:     objects.IsTruncated,
-		Delimiter:       prefix.Delimiter,
-		Prefix:          prefix.Prefix,
-		MaxKeys:         page.MaxKeys,
-		NextKeyMarker:   objects.NextMarker,
-		VersionIDMarker: "", // versioning not supported
+		Xmlns:          "http://s3.amazonaws.com/doc/2006-03-01/",
+		Name:           bucket,
+		CommonPrefixes: objects.CommonPrefixes,
+		Versions:       []Version{},
+		IsTruncated:    objects.IsTruncated,
+		Delimiter:      prefix.Delimiter,
+		Prefix:         prefix.Prefix,
+		MaxKeys:        page.MaxKeys,
+		NextKeyMarker:  objects.NextMarker,
+	}
+	if objects.IsTruncated {
+		empty := ""
+		result.NextVersionIDMarker = &empty // versioning not supported
 	}
 	for _, obj := range objects.Contents {
 		result.Versions = append(result.Versions, Version{
