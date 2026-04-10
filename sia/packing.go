@@ -38,17 +38,36 @@ type PackedUpload interface {
 	Close() error
 }
 
-// packedObjects groups objects that will be uploaded together
-// in a single packed upload.
-type packedObjects struct {
-	slabSize  int64
-	totalSize int64
-	objects   []objects.PackedObject
+type (
+	// packedObjects groups objects that will be uploaded together
+	// in a single packed upload.
+	packedObjects struct {
+		slabSize  int64
+		totalSize int64
+		objects   []objects.PackedObject
+	}
+
+	// pendingUpload contains a packed upload and the objects
+	// that are being packed.
+	pendingUpload struct {
+		upload  PackedUpload
+		objects []objects.PackedObject
+	}
+)
+
+func (p *packedObjects) wastePct() float64 {
+	if p.totalSize <= 0 {
+		return 1
+	}
+	remainder := p.totalSize % p.slabSize
+	if remainder == 0 {
+		return 0
+	}
+	waste := p.slabSize - remainder
+	return float64(waste) / float64(p.totalSize+waste)
 }
 
-// slabRemaining returns the remaining space in the current
-// slab.
-func (p *packedObjects) slabRemaining() int64 {
+func (p *packedObjects) remainingSpace() int64 {
 	remainder := p.totalSize % p.slabSize
 	if remainder == 0 {
 		return p.slabSize
@@ -56,33 +75,23 @@ func (p *packedObjects) slabRemaining() int64 {
 	return p.slabSize - remainder
 }
 
-// fits returns true if the object can be added to this group
-// without exceeding the max size and while fitting in the
-// current slab's remaining space.
-func (p *packedObjects) fits(obj objects.PackedObject) bool {
+func (p *packedObjects) tryAdd(obj objects.PackedObject) bool {
 	if p.totalSize+obj.Length > p.slabSize*packedUploadMaxSlabs {
 		return false
+	} else if obj.Length > p.remainingSpace() && obj.Length <= p.slabSize {
+		return false
 	}
-	return obj.Length <= p.slabRemaining() || obj.Length > p.slabSize
-}
 
-// add appends the object to this group.
-func (p *packedObjects) add(obj objects.PackedObject) {
 	p.objects = append(p.objects, obj)
 	p.totalSize += obj.Length
-}
-
-// pendingUpload contains a packed upload and the objects
-// that are being packed.
-type pendingUpload struct {
-	upload  PackedUpload
-	objects []objects.PackedObject
+	return true
 }
 
 // preparePackedObjects fetches objects for packing and groups
-// them using best fit per slab.
+// them using first fit decreasing. Candidates are returned
+// from the store in descending size order, and each object is
+// placed in the first group where it fits or starts a new one.
 func (s *Sia) preparePackedObjects() []packedObjects {
-	// fetch objects for packing
 	candidates, err := s.store.ObjectsForPacking()
 	if err != nil {
 		s.logger.Error("failed to fetch objects for packing", zap.Error(err))
@@ -91,59 +100,64 @@ func (s *Sia) preparePackedObjects() []packedObjects {
 		return nil
 	}
 
-	// log total candidates and size before packing
-	totalCandidates := len(candidates)
 	var totalSize int64
 	for _, obj := range candidates {
 		totalSize += obj.Length
 	}
 	s.logger.Info("found objects for packing",
-		zap.Int("objects", totalCandidates),
+		zap.Int("objects", len(candidates)),
 		zap.Int64("totalSize", totalSize))
 
-	// pack objects into groups
+	// place each object in the first group where it fits
 	var groups []packedObjects
-	for len(candidates) > 0 {
-		group := packedObjects{
-			slabSize: s.slabSize,
-		}
-
-		// add candidate to group and recreate candidates
-		n := 0
-		for _, obj := range candidates {
-			if group.fits(obj) {
-				group.add(obj)
-			} else {
-				candidates[n] = obj
-				n++
+	for _, obj := range candidates {
+		var added bool
+		for i := range groups {
+			added = groups[i].tryAdd(obj)
+			if added {
+				break
 			}
 		}
-		candidates = candidates[:n]
-
-		// if no objects fit the group, we are done
-		if len(group.objects) == 0 {
-			break
+		if !added {
+			groups = append(groups, packedObjects{
+				slabSize:  s.slabSize,
+				totalSize: obj.Length,
+				objects:   []objects.PackedObject{obj},
+			})
 		}
-		if s.meetsUploadThreshold(group.totalSize) {
-			s.logger.Info("created pack",
-				zap.Int("objects", len(group.objects)),
-				zap.Int64("size", group.totalSize),
-				zap.Int64("slabRemaining", group.slabRemaining()))
-			groups = append(groups, group)
+	}
+
+	// filter groups that meet the waste threshold
+	var ready []packedObjects
+	var remaining []objects.PackedObject
+	for _, g := range groups {
+		if s.meetsUploadThreshold(g.totalSize) {
+			ready = append(ready, g)
 		} else {
-			s.logger.Debug("discarding pack with too much waste",
-				zap.Int("objects", len(group.objects)),
-				zap.Int64("size", group.totalSize))
+			remaining = append(remaining, g.objects...)
 		}
 	}
 
-	// log any candidates that were not packed
-	if len(candidates) > 0 {
-		s.logger.Debug("objects left over for next cycle",
-			zap.Int("objects", len(candidates)))
+	// try and fill gaps with remaining objects
+	for _, obj := range remaining {
+		for i := range ready {
+			if !s.meetsUploadThreshold(ready[i].totalSize + obj.Length) {
+				continue
+			}
+			if ready[i].tryAdd(obj) {
+				break
+			}
+		}
 	}
 
-	return groups
+	for _, g := range ready {
+		s.logger.Info("created pack",
+			zap.Int("objects", len(g.objects)),
+			zap.Int64("size", g.totalSize),
+			zap.Float64("wastePct", g.wastePct()))
+	}
+
+	return ready
 }
 
 // preparePendingUploads creates packed uploads for the given
