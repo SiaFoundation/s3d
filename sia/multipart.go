@@ -232,34 +232,22 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 	writer := &lenWriter{
 		w: io.MultiWriter(partFile, md5Hash),
 	}
-	if obj.Filename != nil {
-		// source is on disk, read directly
-		f, err := os.Open(filepath.Join(s.packingDir, *obj.Filename))
-		if errors.Is(err, os.ErrNotExist) {
-			// the background packer may have uploaded and removed the file
-			// between our db read and file open, re-fetch from the store
-			obj, err = s.store.GetObject(srcBucket, srcObject, nil)
-			if err != nil {
-				return nil, err
-			} else if obj.Filename != nil {
-				return nil, fmt.Errorf("file %q not found on disk but object still references it", *obj.Filename)
-			}
-			// filename is now nil, fall through to Sia download path
-		} else if err != nil {
-			return nil, fmt.Errorf("failed to open source file on disk: %w", err)
-		} else {
-			defer f.Close()
-			if _, err := f.Seek(opts.Range.Start, io.SeekStart); err != nil {
-				return nil, fmt.Errorf("failed to seek source file on disk: %w", err)
-			}
-			if _, err := io.CopyN(writer, f, opts.Range.Length); err != nil {
-				return nil, fmt.Errorf("failed to copy from source file on disk: %w", err)
-			}
+
+	file, err := s.openPackedObject(obj)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open source object: %w", err)
+	} else if file != nil {
+		// try write from disk if it's a packed object
+		defer file.Close()
+		if _, err := file.Seek(opts.Range.Start, io.SeekStart); err != nil {
+			return nil, fmt.Errorf("failed to seek source file on disk: %w", err)
 		}
-	}
-	if obj.Filename == nil && obj.Length > 0 {
-		// source is on Sia, fetch and download
-		pinnedObj, err := s.sdk.Object(ctx, obj.ID)
+		if _, err := io.CopyN(writer, file, opts.Range.Length); err != nil {
+			return nil, fmt.Errorf("failed to copy from source file on disk: %w", err)
+		}
+	} else if obj.ID != nil {
+		// download from Sia if it's not a packed object or empty object
+		pinnedObj, err := s.sdk.Object(ctx, *obj.ID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch object from indexer: %w", err)
 		}
@@ -271,6 +259,7 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 			return nil, err
 		}
 	}
+
 	contentLength := writer.n
 	if contentLength != opts.Range.Length {
 		return nil, s3errs.ErrInvalidRange
@@ -382,7 +371,7 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 		contentLength += int64(part.Size)
 	}
 
-	var objectID types.Hash256
+	var objectID *types.Hash256
 	var packedFilename *string
 	if s.needsPacking(contentLength) {
 		// uploading directly to Sia would be too wasteful, write to disk
@@ -408,11 +397,12 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 			}
 			return nil, fmt.Errorf("failed to pin object in indexer: %w", err)
 		}
-		objectID = obj.ID()
+		oID := obj.ID()
+		objectID = &oID
 	}
 
 	// complete the multipart upload in the database
-	prevFilename, err := s.store.CompleteMultipartUpload(bucket, object, uploadID, objectID, contentMD5, contentLength, packedFilename)
+	prevFilename, err := s.store.CompleteMultipartUpload(bucket, object, uploadID, objectID, packedFilename, contentMD5, contentLength)
 	if err != nil {
 		s.tryRemove(packedFilename)
 		return nil, fmt.Errorf("failed to complete multipart upload in store: %w", err)

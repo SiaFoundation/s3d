@@ -379,9 +379,9 @@ func (s *Sia) tryRemove(filename *string) {
 	}
 }
 
-func (s *Sia) openPackedObject(obj *objects.Object) (*os.File, error) {
+func (s *Sia) openPackedObject(obj objects.Object) (*os.File, error) {
 	// nothing to do if the object is nil or it's not a packed object
-	if obj == nil || obj.Filename == nil {
+	if obj.Filename == nil {
 		return nil, nil
 	}
 

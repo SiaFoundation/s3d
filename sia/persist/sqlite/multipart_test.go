@@ -11,6 +11,7 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia/objects"
+	"go.sia.tech/core/types"
 	"go.uber.org/zap"
 	"lukechampine.com/frand"
 )
@@ -274,10 +275,10 @@ func TestCompleteMultipartUpload(t *testing.T) {
 		}
 	}
 
-	objID := frand.Entropy256()
+	objID := types.Hash256(frand.Entropy256())
 	contentMD5 := frand.Entropy128()
 	totalSize := s3.MinUploadPartSize + 5 // part1 + part2
-	if _, err := store.CompleteMultipartUpload(bucket, object, uid, objID, contentMD5, int64(totalSize), nil); err != nil {
+	if _, err := store.CompleteMultipartUpload(bucket, object, uid, &objID, nil, contentMD5, int64(totalSize)); err != nil {
 		t.Fatal(err)
 	}
 

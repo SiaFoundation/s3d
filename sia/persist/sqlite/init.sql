@@ -13,7 +13,7 @@ CREATE TABLE buckets (
 CREATE TABLE objects (
     bucket_id INTEGER REFERENCES buckets(id) NOT NULL,
     name TEXT NOT NULL,
-    object_id BLOB NOT NULL,
+    object_id BLOB,
     content_md5 BLOB NOT NULL,
     metadata TEXT NOT NULL,
     size INTEGER NOT NULL,
@@ -21,6 +21,7 @@ CREATE TABLE objects (
     sia_object BLOB NOT NULL,
     cached_at INTEGER NOT NULL,
     filename TEXT,
+    CHECK(object_id IS NULL OR filename IS NULL),
     PRIMARY KEY (bucket_id, name)
 ) WITHOUT ROWID;
 CREATE INDEX objects_object_id_idx ON objects(object_id);

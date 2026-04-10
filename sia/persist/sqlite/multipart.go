@@ -40,7 +40,7 @@ func (s *Store) CreateMultipartUpload(bucket, name string, uploadID s3.UploadID,
 // and transferring parts from the upload to the object. If the overwritten
 // object's ID has no remaining references, it is inserted into the
 // orphaned_objects table.
-func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, objectID types.Hash256, contentMD5 [16]byte, contentLength int64, filename *string) (*string, error) {
+func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, objectID *types.Hash256, filename *string, contentMD5 [16]byte, contentLength int64) (*string, error) {
 	var prevFilename *string
 	if err := s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
@@ -117,20 +117,22 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 				sia_object = excluded.sia_object,
 				cached_at = excluded.cached_at,
 				filename = excluded.filename
-		`, sqlHash256(objectID), sqlMD5(contentMD5), contentLength, sqlTime(time.Now()), sqlTime(time.Time{}), filename, sqlUploadID(uploadID))
+		`, sqlNullableHash256(objectID), sqlMD5(contentMD5), contentLength, sqlTime(time.Now()), sqlTime(time.Time{}), filename, sqlUploadID(uploadID))
 		if err != nil {
 			return err
 		}
 
 		// clear any stale orphan entry for the new object ID, in case it was
 		// previously orphaned and is now referenced again
-		if _, err := tx.Exec("DELETE FROM orphaned_objects WHERE object_id = $1", sqlHash256(objectID)); err != nil {
-			return err
-		}
-
-		if oldID != nil && *oldID != objectID {
-			if err := insertOrphan(tx, *oldID); err != nil {
+		if objectID != nil {
+			if _, err := tx.Exec("DELETE FROM orphaned_objects WHERE object_id = $1", sqlHash256(*objectID)); err != nil {
 				return err
+			}
+
+			if oldID != nil && *oldID != *objectID {
+				if err := insertOrphan(tx, *oldID); err != nil {
+					return err
+				}
 			}
 		}
 

@@ -30,12 +30,12 @@ func TestGetObject(t *testing.T) {
 	)
 
 	var (
-		objID     = frand.Entropy256()
+		objID     = types.Hash256(frand.Entropy256())
 		objMD5    = frand.Entropy128()
 		objMeta   = map[string]string{"foo": "bar"}
 		objLength = frand.Intn(10) + 1
 
-		multipartID       = frand.Entropy256()
+		multipartID       = types.Hash256(frand.Entropy256())
 		multipartMD5      = frand.Entropy128()
 		multipartUploadID = s3.NewUploadID()
 		multipartMeta     = map[string]string{"baz": "qux"}
@@ -48,8 +48,8 @@ func TestGetObject(t *testing.T) {
 	}
 
 	// create object
-	_, err := store.PutObject(bucket, object, &objects.Object{
-		ID:         objID,
+	_, err := store.PutObject(bucket, object, objects.Object{
+		ID:         &objID,
 		Meta:       objMeta,
 		ContentMD5: objMD5,
 		Length:     int64(objLength),
@@ -74,7 +74,7 @@ func TestGetObject(t *testing.T) {
 	}
 	// complete
 	totalSize := int64(s3.MinUploadPartSize + 2)
-	_, err = store.CompleteMultipartUpload(bucket, multipart, multipartUploadID, multipartID, multipartMD5, totalSize, nil)
+	_, err = store.CompleteMultipartUpload(bucket, multipart, multipartUploadID, &multipartID, nil, multipartMD5, totalSize)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestGetObject(t *testing.T) {
 	obj, err := store.GetObject(bucket, object, nil)
 	if err != nil {
 		t.Fatal(err)
-	} else if obj.ID != objID {
+	} else if obj.ID == nil || *obj.ID != objID {
 		t.Fatalf("expected object ID %v, got %v", objID, obj.ID)
 	} else if obj.Length != int64(objLength) {
 		t.Fatalf("expected object length %d, got %d", objLength, obj.Length)
@@ -97,7 +97,7 @@ func TestGetObject(t *testing.T) {
 	objPart1, err := store.GetObject(bucket, object, aws.Int32(1))
 	if err != nil {
 		t.Fatal(err)
-	} else if objPart1.ID != objID {
+	} else if objPart1.ID == nil || *objPart1.ID != objID {
 		t.Fatalf("expected object ID %v, got %v", objID, objPart1.ID)
 	} else if objPart1.Offset != 0 {
 		t.Fatalf("expected object offset 0, got %d", objPart1.Offset)
@@ -113,7 +113,7 @@ func TestGetObject(t *testing.T) {
 	multipartPart2, err := store.GetObject(bucket, multipart, aws.Int32(2))
 	if err != nil {
 		t.Fatal(err)
-	} else if multipartPart2.ID != multipartID {
+	} else if multipartPart2.ID == nil || *multipartPart2.ID != multipartID {
 		t.Fatalf("expected object ID %v, got %v", multipartID, multipartPart2.ID)
 	} else if multipartPart2.Offset != int64(s3.MinUploadPartSize) {
 		t.Fatalf("expected object offset %d, got %d", s3.MinUploadPartSize, multipartPart2.Offset)
@@ -270,8 +270,9 @@ func TestListObjects(t *testing.T) {
 		}
 
 		for _, key := range tt.keys {
-			_, err := store.PutObject(bucket, key, &objects.Object{
-				ID:         obj.ID(),
+			id := obj.ID()
+			_, err := store.PutObject(bucket, key, objects.Object{
+				ID:         &id,
 				ContentMD5: contentMD5,
 				Length:     int64(frand.Intn(1000)) + 1,
 			}, true)
@@ -346,8 +347,9 @@ func TestListObjectsMatch(t *testing.T) {
 	etag := s3.FormatETag(contentMD5[:], 0)
 
 	for _, key := range keys {
-		_, err := store.PutObject(bucket, key, &objects.Object{
-			ID:         obj.ID(),
+		id := obj.ID()
+		_, err := store.PutObject(bucket, key, objects.Object{
+			ID:         &id,
 			ContentMD5: contentMD5,
 			Length:     int64(frand.Intn(1000)) + 1,
 		}, true)
@@ -459,8 +461,9 @@ func TestListObjectsWalk(t *testing.T) {
 	keysAll := make(map[string]struct{})
 	for range numKeys {
 		key := randomPath(minLength, maxLength, maxDepth, alphabet, delimiter)
-		_, err := store.PutObject(bucket, key, &objects.Object{
-			ID:         obj.ID(),
+		id := obj.ID()
+		_, err := store.PutObject(bucket, key, objects.Object{
+			ID:         &id,
 			ContentMD5: contentMD5,
 			Length:     int64(frand.Intn(1000)) + 1,
 		}, true)
@@ -721,7 +724,7 @@ func TestOrphanedObjects(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	objID := frand.Entropy256()
+	objID := types.Hash256(frand.Entropy256())
 
 	// no orphans initially
 	orphans, err := store.OrphanedObjects(100)
@@ -732,8 +735,8 @@ func TestOrphanedObjects(t *testing.T) {
 	}
 
 	// put first object
-	if _, err := store.PutObject(bucket, "a", &objects.Object{
-		ID:         objID,
+	if _, err := store.PutObject(bucket, "a", objects.Object{
+		ID:         &objID,
 		ContentMD5: frand.Entropy128(),
 		Length:     1,
 	}, true); err != nil {
@@ -793,12 +796,12 @@ func TestPutObjectOrphan(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	oldID := frand.Entropy256()
-	newID := frand.Entropy256()
+	oldID := types.Hash256(frand.Entropy256())
+	newID := types.Hash256(frand.Entropy256())
 
 	// put initial object - no orphans
-	if _, err := store.PutObject(bucket, "obj", &objects.Object{
-		ID:         oldID,
+	if _, err := store.PutObject(bucket, "obj", objects.Object{
+		ID:         &oldID,
 		ContentMD5: frand.Entropy128(),
 		Length:     1,
 	}, true); err != nil {
@@ -813,8 +816,8 @@ func TestPutObjectOrphan(t *testing.T) {
 	}
 
 	// overwrite with a different object_id - old ID should be orphaned
-	if _, err := store.PutObject(bucket, "obj", &objects.Object{
-		ID:         newID,
+	if _, err := store.PutObject(bucket, "obj", objects.Object{
+		ID:         &newID,
 		ContentMD5: frand.Entropy128(),
 		Length:     1,
 	}, true); err != nil {
@@ -834,8 +837,8 @@ func TestPutObjectOrphan(t *testing.T) {
 	}
 
 	// overwrite with same object_id should not orphan
-	if _, err := store.PutObject(bucket, "obj", &objects.Object{
-		ID:         newID,
+	if _, err := store.PutObject(bucket, "obj", objects.Object{
+		ID:         &newID,
 		ContentMD5: frand.Entropy128(),
 		Length:     2,
 	}, true); err != nil {

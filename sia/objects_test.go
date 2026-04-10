@@ -1242,8 +1242,8 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	}
 	orphanID := orphans[0]
 	// re-reference the orphaned object_id by inserting a new object row
-	if _, err := store.PutObject(bucket, "D", &objects.Object{
-		ID:     orphanID,
+	if _, err := store.PutObject(bucket, "D", objects.Object{
+		ID:     &orphanID,
 		Length: 1,
 	}, true); err != nil {
 		t.Fatal(err)

@@ -191,7 +191,7 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 	}
 
 	// refresh cached object metadata if needed
-	siaObj, err := s.refreshSiaObject(ctx, *accessKeyID, bucket, object, obj)
+	siaObj, err := s.refreshSiaObject(ctx, bucket, object, obj)
 	if err != nil {
 		return nil, err
 	}
@@ -214,7 +214,11 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 
 // refreshSiaObject refreshes the object's cached Sia object if it is missing
 // or stale. Returns the unsealed sdk.Object for use in downloads.
-func (s *Sia) refreshSiaObject(ctx context.Context, accessKeyID, bucket, objectKey string, obj *objects.Object) (siaObj sdk.Object, err error) {
+func (s *Sia) refreshSiaObject(ctx context.Context, bucket, objectKey string, obj objects.Object) (siaObj sdk.Object, err error) {
+	if obj.ID == nil {
+		return sdk.Object{}, errors.New("invalid object metadata: missing object ID")
+	}
+
 	cached := !obj.CachedAt.IsZero()
 
 	// if cache is fresh, unseal and return
@@ -230,7 +234,7 @@ func (s *Sia) refreshSiaObject(ctx context.Context, accessKeyID, bucket, objectK
 	}
 
 	// fetch from indexer
-	fetched, err := s.sdk.Object(ctx, obj.ID)
+	fetched, err := s.sdk.Object(ctx, *obj.ID)
 	if err != nil {
 		if cached {
 			s.logger.Warn("failed to fetch object from indexer, using stale metadata", zap.Error(err))
@@ -291,7 +295,7 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	}
 
 	// handle empty object case
-	var objectID types.Hash256
+	var objectID *types.Hash256
 	var siaObject slabs.SealedObject
 	var cachedAt time.Time
 	var packedFilename *string
@@ -324,7 +328,8 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 			}
 			return nil, fmt.Errorf("failed to pin object in indexer: %w", err)
 		}
-		objectID = obj.ID()
+		oID := obj.ID()
+		objectID = &oID
 		siaObject = s.sdk.SealObject(obj)
 		cachedAt = time.Now()
 	}
@@ -345,7 +350,7 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	}
 
 	// store the object in the database
-	prevFilename, err := s.store.PutObject(bucket, object, &objects.Object{
+	prevFilename, err := s.store.PutObject(bucket, object, objects.Object{
 		ID:         objectID,
 		ContentMD5: contentMD5,
 		Meta:       opts.Meta,

@@ -18,7 +18,6 @@ import (
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	s3Types "github.com/aws/aws-sdk-go-v2/service/s3/types"
-	"go.sia.tech/core/types"
 	"go.uber.org/zap"
 )
 
@@ -559,8 +558,7 @@ func TestMultipartUploadPartCopy(t *testing.T) {
 	testutil.AssertS3Error(t, s3errs.ErrInvalidRange, err)
 
 	// assert [s3errs.ErrEntityTooLarge] is returned for oversized range
-	if _, err := store.PutObject(bucketSrc, objectSrc, &objects.Object{
-		ID:     types.Hash256{},
+	if _, err := store.PutObject(bucketSrc, objectSrc, objects.Object{
 		Length: s3.MaxUploadPartSize + 1,
 	}, true); err != nil {
 		t.Fatal(err)

@@ -30,6 +30,9 @@ type sqlHash256 types.Hash256
 
 func (h *sqlHash256) Scan(src any) error {
 	switch src := src.(type) {
+	case nil:
+		*h = sqlHash256{}
+		return nil
 	case []byte:
 		if len(src) != len(sqlHash256{}) {
 			return fmt.Errorf("failed to scan source into Hash256 due to invalid number of bytes %v != %v: %v", len(src), len(sqlHash256{}), src)
@@ -42,7 +45,25 @@ func (h *sqlHash256) Scan(src any) error {
 }
 
 func (h sqlHash256) Value() (driver.Value, error) {
+	if h == (sqlHash256{}) {
+		return nil, nil
+	}
 	return h[:], nil
+}
+
+func (h sqlHash256) Ptr() *types.Hash256 {
+	if h == (sqlHash256{}) {
+		return nil
+	}
+	hash := types.Hash256(h)
+	return &hash
+}
+
+func sqlNullableHash256(h *types.Hash256) sqlHash256 {
+	if h == nil {
+		return sqlHash256{}
+	}
+	return sqlHash256(*h)
 }
 
 type sqlTime time.Time

@@ -28,14 +28,14 @@ func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (
 
 		// delete the row and return its values for precondition checks and
 		// orphan detection; the transaction rolls back if preconditions fail
-		var deletedID types.Hash256
+		var deletedID sqlHash256
 		var contentMD5 [16]byte
 		var size int64
 		var updatedAt time.Time
 		err = tx.QueryRow(`
 			DELETE FROM objects WHERE bucket_id = $1 AND name = $2
 			RETURNING object_id, content_md5, size, updated_at, filename
-		`, bid, objectID.Key).Scan((*sqlHash256)(&deletedID), (*sqlMD5)(&contentMD5), &size, (*sqlTime)(&updatedAt), &filename)
+		`, bid, objectID.Key).Scan(&deletedID, (*sqlMD5)(&contentMD5), &size, (*sqlTime)(&updatedAt), &filename)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		} else if err != nil {
@@ -52,7 +52,7 @@ func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (
 			return s3errs.ErrPreconditionFailed
 		}
 
-		return insertOrphan(tx, deletedID)
+		return insertOrphan(tx, types.Hash256(deletedID))
 	}); err != nil {
 		return nil, err
 	}
@@ -60,16 +60,16 @@ func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (
 }
 
 // GetObject retrieves the object with the given bucket and name.
-func (s *Store) GetObject(bucket, name string, partNumber *int32) (*objects.Object, error) {
+func (s *Store) GetObject(bucket, name string, partNumber *int32) (objects.Object, error) {
 	var obj objects.Object
 	if err := s.transaction(func(tx *txn) error {
 		return getObject(tx, &obj, bucket, name, partNumber)
 	}); errors.Is(err, sql.ErrNoRows) {
-		return nil, s3errs.ErrNoSuchKey
+		return objects.Object{}, s3errs.ErrNoSuchKey
 	} else if err != nil {
-		return nil, err
+		return objects.Object{}, err
 	}
-	return &obj, nil
+	return obj, nil
 }
 
 func getObject(tx *txn, obj *objects.Object, bucket, name string, partNumber *int32) error {
@@ -98,11 +98,13 @@ func getObject(tx *txn, obj *objects.Object, bucket, name string, partNumber *in
 			obj.PartsCount = *partNumber
 		}
 		var siaObj sqlSiaObject
+		var id sqlHash256
 		err := tx.QueryRow(`
 			SELECT object_id, metadata, updated_at, size, content_md5, sia_object, cached_at, filename
 			FROM objects
 			WHERE bucket_id = $1 AND name = $2
-		`, bid, name).Scan((*sqlHash256)(&obj.ID), (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Length, (*sqlMD5)(&obj.ContentMD5), &siaObj, (*sqlTime)(&obj.CachedAt), &obj.Filename)
+		`, bid, name).Scan(&id, (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Length, (*sqlMD5)(&obj.ContentMD5), &siaObj, (*sqlTime)(&obj.CachedAt), &obj.Filename)
+		obj.ID = id.Ptr()
 		obj.SiaObject = slabs.SealedObject(siaObj)
 		obj.Name = name
 		return err
@@ -115,12 +117,14 @@ func getObject(tx *txn, obj *objects.Object, bucket, name string, partNumber *in
 
 	// part specified, return part info
 	var siaObj sqlSiaObject
+	var id sqlHash256
 	err = tx.QueryRow(`
 		SELECT o.object_id, o.metadata, o.updated_at, o.sia_object, o.cached_at, o.filename, p.offset, p.content_length, p.content_md5
 		FROM object_parts p
 		JOIN objects o ON o.bucket_id = p.bucket_id AND o.name = p.name
 		WHERE o.bucket_id = $1 AND o.name = $2 AND p.part_number = $3
-	`, bid, name, *partNumber).Scan((*sqlHash256)(&obj.ID), (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &siaObj, (*sqlTime)(&obj.CachedAt), &obj.Filename, &obj.Offset, &obj.Length, (*sqlMD5)(&obj.ContentMD5))
+	`, bid, name, *partNumber).Scan(&id, (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &siaObj, (*sqlTime)(&obj.CachedAt), &obj.Filename, &obj.Offset, &obj.Length, (*sqlMD5)(&obj.ContentMD5))
+	obj.ID = id.Ptr()
 	obj.SiaObject = slabs.SealedObject(siaObj)
 	obj.Name = name
 	obj.Bucket = bucket
@@ -132,7 +136,7 @@ func getObject(tx *txn, obj *objects.Object, bucket, name string, partNumber *in
 // `updated_at` time that represents the S3 last modified time will be updated.
 // If the overwritten object's ID has no remaining references, it is inserted
 // into the orphaned_objects table.
-func (s *Store) PutObject(bucket, name string, obj *objects.Object, updateModTime bool) (*string, error) {
+func (s *Store) PutObject(bucket, name string, obj objects.Object, updateModTime bool) (*string, error) {
 	var prevFilename *string
 	if err := s.transaction(func(tx *txn) (err error) {
 		prevFilename, err = putObject(tx, bucket, name, obj, updateModTime)
@@ -146,7 +150,7 @@ func (s *Store) PutObject(bucket, name string, obj *objects.Object, updateModTim
 // CopyObject atomically reads the source object and writes it to the
 // destination within a single transaction, applying metadata according to the
 // replace flag. Returns the copied object metadata.
-func (s *Store) CopyObject(srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool, dstFilename *string) (_ *objects.Object, prevFilename *string, _ error) {
+func (s *Store) CopyObject(srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool, dstFilename *string) (_ objects.Object, prevFilename *string, _ error) {
 	var obj objects.Object
 	err := s.transaction(func(tx *txn) error {
 		err := getObject(tx, &obj, srcBucket, srcName, nil)
@@ -159,17 +163,17 @@ func (s *Store) CopyObject(srcBucket, srcName, dstBucket, dstName string, meta m
 		} else {
 			maps.Copy(obj.Meta, meta)
 		}
-
 		obj.Filename = dstFilename
-		prevFilename, err = putObject(tx, dstBucket, dstName, &obj, true)
+
+		prevFilename, err = putObject(tx, dstBucket, dstName, obj, true)
 		return err
 	})
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil, s3errs.ErrNoSuchKey
+		return objects.Object{}, nil, s3errs.ErrNoSuchKey
 	} else if err != nil {
-		return nil, nil, err
+		return objects.Object{}, nil, err
 	}
-	return &obj, prevFilename, nil
+	return obj, prevFilename, nil
 }
 
 // OrphanedObjects returns up to limit object IDs from the orphaned_objects table.
@@ -200,7 +204,7 @@ func (s *Store) RemoveOrphanedObject(objectID types.Hash256) error {
 	})
 }
 
-func putObject(tx *txn, bucket, name string, obj *objects.Object, updateModTime bool) (*string, error) {
+func putObject(tx *txn, bucket, name string, obj objects.Object, updateModTime bool) (*string, error) {
 	if obj.Meta == nil {
 		obj.Meta = make(map[string]string) // force '{}' instead of 'null' in JSON
 	}
@@ -227,7 +231,7 @@ func putObject(tx *txn, bucket, name string, obj *objects.Object, updateModTime 
 			sia_object = excluded.sia_object,
 			cached_at = excluded.cached_at,
 			filename = excluded.filename
-	`, bID, name, sqlHash256(obj.ID), sqlMD5(obj.ContentMD5),
+	`, bID, name, sqlNullableHash256(obj.ID), sqlMD5(obj.ContentMD5),
 		sqlMetaJSON(obj.Meta), obj.Length, sqlTime(time.Now()),
 		sqlSiaObject(obj.SiaObject), sqlTime(obj.CachedAt), obj.Filename, updateModTime)
 	if err != nil {
@@ -236,11 +240,13 @@ func putObject(tx *txn, bucket, name string, obj *objects.Object, updateModTime 
 
 	// clear any stale orphan entry for the new object ID, in case it was
 	// previously orphaned and is now referenced again
-	if _, err := tx.Exec("DELETE FROM orphaned_objects WHERE object_id = $1", sqlHash256(obj.ID)); err != nil {
-		return nil, err
+	if obj.ID != nil {
+		if _, err := tx.Exec("DELETE FROM orphaned_objects WHERE object_id = $1", sqlHash256(*obj.ID)); err != nil {
+			return nil, err
+		}
 	}
 
-	if oldID != nil && *oldID != obj.ID {
+	if oldID != nil && (obj.ID == nil || *oldID != *obj.ID) {
 		return prevFilename, insertOrphan(tx, *oldID)
 	}
 	return prevFilename, nil
@@ -249,21 +255,21 @@ func putObject(tx *txn, bucket, name string, obj *objects.Object, updateModTime 
 // objectInfo returns the object_id and filename currently stored
 // for the given bucket and name, or nils if no row exists.
 func objectInfo(tx *txn, bucket, name string) (*types.Hash256, *string, error) {
-	var id types.Hash256
+	var id sqlHash256
 	var filename *string
 	err := tx.
 		QueryRow(`
-			SELECT o.object_id, o.filename 
+			SELECT o.object_id, o.filename
 			FROM objects o
-			INNER JOIN buckets b ON b.id = o.bucket_id 
+			INNER JOIN buckets b ON b.id = o.bucket_id
 			WHERE b.name = $1 AND o.name = $2`, bucket, name).
-		Scan((*sqlHash256)(&id), &filename)
+		Scan(&id, &filename)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, nil
 	} else if err != nil {
 		return nil, nil, err
 	}
-	return &id, filename, nil
+	return id.Ptr(), filename, nil
 }
 
 // insertOrphan adds objectID to the orphaned_objects table if no rows in the

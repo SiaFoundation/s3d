@@ -14,7 +14,9 @@ var ErrObjectModified = errors.New("object was modified")
 
 // Object represents a stored object with its metadata.
 type Object struct {
-	ID           types.Hash256
+	ID       *types.Hash256 // set if stored on Sia
+	Filename *string        // set if stored on disk
+
 	Name         string
 	Bucket       string
 	PartsCount   int32
@@ -26,7 +28,6 @@ type Object struct {
 
 	SiaObject slabs.SealedObject // sealed Sia object for downloads (must be unsealed before use)
 	CachedAt  time.Time          // zero if not cached
-	Filename  *string            // set if stored on disk
 }
 
 // PackedObject contains the fields needed to pack an object.
