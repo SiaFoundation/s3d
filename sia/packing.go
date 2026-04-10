@@ -22,7 +22,7 @@ const (
 	// written to disk and batched together with other small objects to fill slabs efficiently.
 	DefaultPackingWastePct = 0.1
 
-	packedUploadThreads  = 4
+	packedUploadThreads  = 6
 	packedUploadMaxSlabs = 4
 
 	extMultipartPart = "part"
