@@ -13,8 +13,8 @@ import (
 	"github.com/SiaFoundation/s3d/sia"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"go.sia.tech/core/types"
-	sdk "go.sia.tech/siastorage"
 	"go.sia.tech/indexd/slabs"
+	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
 )
