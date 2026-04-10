@@ -201,7 +201,7 @@ type (
 		// NextVersionIdMarker specifies the first object version not returned that
 		// satisfies the search criteria. Use this value for the version-id-marker
 		// request parameter in a subsequent request.
-		NextVersionIDMarker string `xml:"NextVersionIdMarker"`
+		NextVersionIDMarker *string `xml:"NextVersionIdMarker,omitempty"`
 
 		// AWS responds with a list of either <Version> or <DeleteMarker> objects. The order
 		// needs to be preserved:
