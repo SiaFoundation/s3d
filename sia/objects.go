@@ -50,12 +50,12 @@ func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject,
 	// copy the object in the store
 	obj, prevFilename, err := s.store.CopyObject(srcBucket, srcObject, dstBucket, dstObject, meta, replace, dstFilename)
 	if err != nil {
-		s.tryRemove(dstFilename)
+		s.tryRemovePackedObject(dstFilename)
 		return nil, err
 	}
 
 	// remove the old packed file and trigger packing
-	s.tryRemove(prevFilename)
+	s.tryRemovePackedObject(prevFilename)
 	if dstFilename != nil {
 		s.triggerPacking()
 	}
@@ -75,7 +75,7 @@ func (s *Sia) DeleteObject(ctx context.Context, accessKeyID, bucket string, obje
 		return nil, err
 	}
 
-	s.tryRemove(filename)
+	s.tryRemovePackedObject(filename)
 
 	return &s3.DeleteObjectResult{
 		IsDeleteMarker: false,
@@ -360,12 +360,12 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 		Filename:   packedFilename,
 	}, true)
 	if err != nil {
-		s.tryRemove(packedFilename)
+		s.tryRemovePackedObject(packedFilename)
 		return nil, fmt.Errorf("failed to store object metadata: %w", err)
 	}
 
 	// trigger packing if needed
-	s.tryRemove(prevFilename)
+	s.tryRemovePackedObject(prevFilename)
 	if packedFilename != nil {
 		s.triggerPacking()
 	}

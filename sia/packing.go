@@ -336,7 +336,7 @@ func (s *Sia) upload(ctx context.Context, pu pendingUpload) error {
 			continue
 		}
 
-		s.tryRemove(&obj.Filename)
+		s.tryRemovePackedObject(&obj.Filename)
 		s.logger.Debug("packed object uploaded to Sia",
 			zap.String("bucket", obj.Bucket),
 			zap.String("name", obj.Name))
@@ -368,17 +368,6 @@ func (s *Sia) triggerPacking() {
 	}
 }
 
-func (s *Sia) tryRemove(filename *string) {
-	if filename == nil {
-		return
-	}
-	if err := os.Remove(filepath.Join(s.packingDir, *filename)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		s.logger.Error("failed to remove file on disk",
-			zap.String("filename", *filename),
-			zap.Error(err))
-	}
-}
-
 func (s *Sia) openPackedObject(obj objects.Object) (*os.File, error) {
 	// nothing to do if the object is nil or it's not a packed object
 	if obj.Filename == nil {
@@ -399,6 +388,17 @@ func (s *Sia) openPackedObject(obj objects.Object) (*os.File, error) {
 	}
 
 	return f, err
+}
+
+func (s *Sia) tryRemovePackedObject(filename *string) {
+	if filename == nil {
+		return
+	}
+	if err := os.Remove(filepath.Join(s.packingDir, *filename)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		s.logger.Error("failed to remove file on disk",
+			zap.String("filename", *filename),
+			zap.Error(err))
+	}
 }
 
 func (s *Sia) writePackedObject(r io.Reader) (filename string, err error) {

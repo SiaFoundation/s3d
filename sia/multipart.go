@@ -404,12 +404,12 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 	// complete the multipart upload in the database
 	prevFilename, err := s.store.CompleteMultipartUpload(bucket, object, uploadID, objectID, packedFilename, contentMD5, contentLength)
 	if err != nil {
-		s.tryRemove(packedFilename)
+		s.tryRemovePackedObject(packedFilename)
 		return nil, fmt.Errorf("failed to complete multipart upload in store: %w", err)
 	}
 
 	// trigger packing if needed
-	s.tryRemove(prevFilename)
+	s.tryRemovePackedObject(prevFilename)
 	if packedFilename != nil {
 		s.triggerPacking()
 	}
