@@ -16,7 +16,7 @@ RUN git config --global --add safe.directory .
 RUN go generate ./...
 
 # build
-RUN go build -o bin/ -tags='netgo timetzdata' -trimpath -a -ldflags '-s -w'  ./cmd/s3d
+RUN CGO_ENABLED=1 go build -o bin/ -tags='netgo timetzdata' -trimpath -a -ldflags '-s -w -linkmode external -extldflags "-static"'  ./cmd/s3d
 
 FROM debian:bookworm-slim
 
