@@ -16,7 +16,7 @@ import (
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/testutils"
 	sdk "go.sia.tech/siastorage"
-	"go.uber.org/zap/zaptest"
+	"go.uber.org/zap"
 )
 
 type keyPair struct {
@@ -41,6 +41,8 @@ var (
 )
 
 func TestS3(t *testing.T) {
+	log := zap.NewNop()
+
 	t.Run("memory backend", func(t *testing.T) {
 		var opts []testutil.MemoryBackendOption
 		for _, kp := range allKeyPairs {
@@ -48,14 +50,12 @@ func TestS3(t *testing.T) {
 		}
 		backend := testutil.NewMemoryBackend(opts...)
 
-		port := startS3Server(t, backend)
+		port := startS3Server(t, backend, log)
 		confPath := writeS3TestsConf(t, t.TempDir(), port)
 		runTox(t, confPath)
 	})
 
 	t.Run("sia backend", func(t *testing.T) {
-		log := zaptest.NewLogger(t)
-
 		// spin up a test cluster with consensus, indexer, and hosts
 		cluster := testutils.NewCluster(t, testutils.WithLogger(log), testutils.WithHosts(35))
 
@@ -96,7 +96,7 @@ func TestS3(t *testing.T) {
 		}
 
 		// start the s3 server and run the tox tests
-		port := startS3Server(t, backend)
+		port := startS3Server(t, backend, log)
 		confPath := writeS3TestsConf(t, t.TempDir(), port)
 		runTox(t, confPath)
 	})
@@ -119,27 +119,29 @@ func s3testsDir(t *testing.T) string {
 
 // startS3Server starts an HTTP server with the given s3 backend on a random
 // port and returns the port. The server is shut down when the test finishes.
-func startS3Server(t *testing.T, backend s3.Backend) int {
+func startS3Server(t *testing.T, backend s3.Backend, log *zap.Logger) int {
 	t.Helper()
-	log := zaptest.NewLogger(t)
-
-	handler := s3.New(backend,
-		s3.WithHostBucketBases([]string{"localhost"}),
-		s3.WithLogger(log))
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to listen: %v", err)
 	}
 
+	handler := s3.New(backend, s3.WithHostBucketBases([]string{"localhost"}), s3.WithLogger(log.Named("s3-server")))
 	server := &http.Server{Handler: handler}
+	errCh := make(chan error, 1)
 	go func() {
 		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
-			t.Errorf("server error: %v", err)
+			errCh <- err
+			return
 		}
+		close(errCh)
 	}()
 	t.Cleanup(func() {
 		server.Close()
+		if err := <-errCh; err != nil {
+			t.Errorf("server error: %v", err)
+		}
 	})
 
 	return listener.Addr().(*net.TCPAddr).Port
