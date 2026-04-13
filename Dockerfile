@@ -38,4 +38,5 @@ VOLUME [ "/data" ]
 # S3 API port
 EXPOSE 8000/tcp
 
-ENTRYPOINT [ "s3d", "-api.s3", ":8000" ]
+ENTRYPOINT [ "s3d" ]
+CMD [ "-api.s3", ":8000" ]
