@@ -6,12 +6,12 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.41.5
 	github.com/aws/aws-sdk-go-v2/config v1.32.14
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.14
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.98.0
-	github.com/mattn/go-sqlite3 v1.14.41
-	go.sia.tech/core v0.19.1-0.20260326151920-bbeb92b26458
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.99.0
+	github.com/mattn/go-sqlite3 v1.14.42
+	go.sia.tech/core v0.19.1
 	go.sia.tech/indexd v0.1.0
 	go.uber.org/zap v1.27.1
-	golang.org/x/term v0.41.0
+	golang.org/x/term v0.42.0
 	gopkg.in/yaml.v3 v3.0.1
 	lukechampine.com/flagg v1.1.1
 	lukechampine.com/frand v1.5.1
@@ -48,7 +48,7 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/crypto v0.49.0 // indirect
 	golang.org/x/net v0.52.0 // indirect
-	golang.org/x/sys v0.42.0 // indirect
+	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/text v0.35.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	golang.org/x/tools v0.43.0 // indirect
