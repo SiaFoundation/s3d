@@ -11,6 +11,21 @@ jobs:
     permissions:
       contents: read
 
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v5
 
@@ -30,102 +45,14 @@ jobs:
       - name: Clone test repo
         run: git clone https://github.com/SiaFoundation/s3-tests.git
 
-      - name: List files
-        run: ls -la ${{ github.workspace }}
-
-      # Create envs, resolve deps, but don't run tests yet (speeds up failure surfacing)
+      # warm up the tox env so the Go test's `tox --skip-pkg-install` is fast
       - name: Setup test suite (create envs only)
-        env:
-          S3TEST_CONF: ${{ github.workspace }}/s3tests.conf
         run: tox run -vv --notest -c ./s3-tests
 
-      - name: Build s3d-tox
-        run: go build -o s3d-tox ./cmd/s3d-tox
-
-      - name: Launch s3d and save pid
-        run: |
-          nohup ./s3d-tox > s3d.log 2>&1 &
-          echo $! > s3d.pid
-
-          # wait a bit to let s3d start
-          for i in {1..10}; do
-            if kill -0 $(cat s3d.pid); then
-              sleep 1
-              if nc -z localhost 8000; then
-                break
-              fi
-            fi
-          done
-
-      - name: Run test_headers.py
+      - name: Run s3-tests
         env:
-          S3TEST_CONF: ${{ github.workspace }}/s3tests.conf
-          S3_USE_SIGV4: "True" # We only support v4 signatures
-
-        # We ignore the following tests
-        # - The ones that require AWSv2 signatures since s3d only supports
-        #   v4
-        # - Tests around the "Expect" header since Go's http server
-        #   doesn't give us enough control over it. S3 ignores bad Expect headers,
-        #   but Go's http server responds with "417 Expectation Failed" instead.
-        # - Tests that are marked as "fails_on_rgw" since they are known to fail
-        #   due to the tests not being able to correctly manipulate request
-        #   headers.
-        # - Tests around ACLs since s3d currently does not implement ACL handling.
-        run: |
-          tox run --skip-pkg-install -c ./s3-tests -- s3tests/functional/test_headers.py \
-            -m "not auth_aws2 and not fails_on_rgw" \
-            -k "not _create_bad_expect_ and not _acl"
-
-      - name: Run test_s3.py
-        env:
-          S3TEST_CONF: ${{ github.workspace }}/s3tests.conf
-          S3_USE_SIGV4: "True" # We only support v4 signatures
-        run: |
-          tox run --skip-pkg-install -c ./s3-tests -- s3tests/functional/test_s3.py \
-            -m "(copy or delete or list_objects or multipart) and not s3d_not_implemented and not s3d_not_supported and not bucket_logging"
-
-      # NOTE: The following tests are currently disabled
-      #
-      #      - name: Run test_iam.py
-      #        env:
-      #          S3TEST_CONF: ${{ github.workspace }}/s3tests.conf
-      #          S3_USE_SIGV4: "True" # We only support v4 signatures
-      #        run: tox run --skip-pkg-install -c ./s3-tests -- s3tests/functional/test_iam.py
-      #
-      #
-      #      - name: Run test_s3select.py
-      #        env:
-      #          S3TEST_CONF: ${{ github.workspace }}/s3tests.conf
-      #          S3_USE_SIGV4: "True" # We only support v4 signatures
-      #        run: tox run --skip-pkg-install -c ./s3-tests -- s3tests/functional/test_s3select.py
-      #
-      #      - name: Run test_sns.py
-      #        env:
-      #          S3TEST_CONF: ${{ github.workspace }}/s3tests.conf
-      #          S3_USE_SIGV4: "True" # We only support v4 signatures
-      #        run: tox run --skip-pkg-install -c ./s3-tests -- s3tests/functional/test_sns.py
-      #
-      #      - name: Run test_sts.py
-      #        env:
-      #          S3TEST_CONF: ${{ github.workspace }}/s3tests.conf
-      #          S3_USE_SIGV4: "True" # We only support v4 signatures
-      #        run: tox run --skip-pkg-install -c ./s3-tests -- s3tests/functional/test_sts.py
-      #
-      #      - name: Run test_utils.py
-      #        env:
-      #          S3TEST_CONF: ${{ github.workspace }}/s3tests.conf
-      #          S3_USE_SIGV4: "True" # We only support v4 signatures
-      #        run: tox run --skip-pkg-install -c ./s3-tests -- s3tests/functional/test_utils.py
-
-      - name: Kill s3d
-        if: always()
-        run: |
-          kill $(cat s3d.pid) || true
-
-      - name: Upload s3d logs as artifact
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: s3d-logs
-          path: s3d.log
+          S3_TESTS_DIR: ${{ github.workspace }}/s3-tests
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        run: cd tox && go test -v -timeout 30m -run TestS3 .
