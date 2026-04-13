@@ -53,7 +53,7 @@ var cfg = Config{
 		AccessKey: os.Getenv(accessKeyEnv),
 		SecretKey: os.Getenv(secretKeyEnv),
 
-		IndexerURL: "https://app.sia.storage",
+		IndexerURL: "https://sia.storage",
 	},
 	S3: S3{},
 }
@@ -63,6 +63,7 @@ func main() {
 	defer cancel()
 
 	rootCmd := flagg.Root
+	rootCmd.StringVar(&cfg.ApiAddress, "api.s3", cfg.ApiAddress, "address to serve S3 API on")
 	versionCmd := flagg.New("version", ``)
 	configCmd := flagg.New("config", ``)
 

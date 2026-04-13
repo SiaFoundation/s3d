@@ -1,0 +1,22 @@
+# This file contains an example docker-compose configuration for running s3d.
+#
+# Before starting the service, run the configuration wizard:
+#   docker compose run --rm -it s3d config
+# Then start the service:
+#   docker compose up -d
+#
+# On first run, s3d will print a URL to approve the app connection.
+# Run 'docker compose logs -f s3d' to see the URL and complete setup.
+
+services:
+  s3d:
+    build: .
+    image: ghcr.io/siafoundation/s3d:master
+    restart: unless-stopped
+    ports:
+      - 8000:8000/tcp
+    volumes:
+      - s3d:/data
+
+volumes:
+  s3d:
