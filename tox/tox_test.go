@@ -57,7 +57,7 @@ func TestS3(t *testing.T) {
 
 	t.Run("sia backend", func(t *testing.T) {
 		// spin up a test cluster with consensus, indexer, and hosts
-		cluster := testutils.NewCluster(t, testutils.WithLogger(log), testutils.WithHosts(35))
+		cluster := testutils.NewCluster(t, testutils.WithLogger(log), testutils.WithHosts(30))
 
 		// create an account and wait for contracts
 		sk := cluster.AddAccount(t)
