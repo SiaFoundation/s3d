@@ -301,6 +301,28 @@ func (t *S3Tester) ListBuckets(ctx context.Context) ([]types.Bucket, error) {
 	return resp.Buckets, err
 }
 
+// ListObjects is a convenience wrapper around the AWS SDK's ListObjects (v1) API.
+func (t *S3Tester) ListObjects(ctx context.Context, bucket string, prefix, delimiter *string, page s3.ListObjectsPage) (*service.ListObjectsOutput, error) {
+	var maxKeys *int32
+	if page.MaxKeys > 0 {
+		maxKeys = aws.Int32(int32(page.MaxKeys))
+	}
+	resp, err := t.client.ListObjects(ctx, &service.ListObjectsInput{
+		Bucket:    aws.String(bucket),
+		Delimiter: delimiter,
+		Marker:    page.Marker,
+		MaxKeys:   maxKeys,
+		Prefix:    prefix,
+	})
+	if err != nil {
+		return nil, err
+	}
+	for i := range resp.Contents {
+		*resp.Contents[i].ETag = strings.Trim(*resp.Contents[i].ETag, `"`)
+	}
+	return resp, nil
+}
+
 // ListObjectsV2 is a convenience wrapper around the AWS SDK's ListObjectsV2 API.
 func (t *S3Tester) ListObjectsV2(ctx context.Context, bucket string, prefix, delimiter *string, page s3.ListObjectsPage) (*service.ListObjectsV2Output, error) {
 	var maxKeys *int32

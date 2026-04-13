@@ -126,6 +126,20 @@ type (
 		Owner        *UserInfo    `xml:"Owner,omitempty"`
 	}
 
+	// ListObjectsV1Result is the response to a ListObjects (v1) request.
+	ListObjectsV1Result struct {
+		ListObjectsResultBase
+
+		// Indicates where in the bucket listing begins. Echoed from the
+		// request.
+		Marker string `xml:"Marker"`
+
+		// When the response is truncated, you can use the key name in this
+		// field as the marker in the subsequent request to get the next set
+		// of objects.
+		NextMarker string `xml:"NextMarker,omitempty"`
+	}
+
 	// ListObjectsV2Result is the response to a ListObjectsV2 request.
 	ListObjectsV2Result struct {
 		ListObjectsResultBase
@@ -187,7 +201,7 @@ type (
 		// NextVersionIdMarker specifies the first object version not returned that
 		// satisfies the search criteria. Use this value for the version-id-marker
 		// request parameter in a subsequent request.
-		NextVersionIDMarker string `xml:"NextVersionIdMarker,omitempty"`
+		NextVersionIDMarker *string `xml:"NextVersionIdMarker,omitempty"`
 
 		// AWS responds with a list of either <Version> or <DeleteMarker> objects. The order
 		// needs to be preserved:
@@ -230,6 +244,8 @@ type (
 		Prefix string `xml:"Prefix"`
 
 		MaxKeys int64 `xml:"MaxKeys,omitempty"`
+
+		EncodingType string `xml:"EncodingType,omitempty"`
 
 		CommonPrefixes []CommonPrefix `xml:"CommonPrefixes,omitempty"`
 		Contents       []*Content     `xml:"Contents"`

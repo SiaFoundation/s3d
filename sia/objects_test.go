@@ -943,16 +943,14 @@ func TestDeleteObjects(t *testing.T) {
 	assertDeleted(t, "nonexistent", resp.Deleted[2])
 
 	// verify deleted objects are gone and others remain
-	// TODO: Re-enable once ListObjectsV2 is implemented
-	//	objs, err := s3Tester.ListObjectsV2(t.Context(), bucket, nil, nil, s3.ListObjectsPage{})
-	//	if err != nil {
-	//		t.Fatal(err)
-	//	}
-	//	if *objs.KeyCount != 3 {
-	//		t.Fatalf("expected 3 remaining objects, got %d", objs.KeyCount)
-	//	} else if *objs.Contents[0].Key != "1" || *objs.Contents[1].Key != "3" || *objs.Contents[2].Key != "5" {
-	//		t.Fatalf("remaining objects mismatch: %+v", objs.Contents)
-	//	}
+	objs, err := s3Tester.ListObjectsV2(t.Context(), bucket, nil, nil, s3.ListObjectsPage{})
+	if err != nil {
+		t.Fatal(err)
+	} else if *objs.KeyCount != 2 {
+		t.Fatalf("expected 2 remaining objects, got %d", *objs.KeyCount)
+	} else if *objs.Contents[0].Key != "3" || *objs.Contents[1].Key != "5" {
+		t.Fatalf("remaining objects mismatch: %+v", objs.Contents)
+	}
 
 	// delete the remaining ones using 'quiet' mode
 	resp, err = s3Tester.DeleteObjects(t.Context(), bucket, testutil.ObjectIdentifiers("3", "5"), aws.Bool(true))
@@ -964,14 +962,13 @@ func TestDeleteObjects(t *testing.T) {
 		t.Fatalf("expected 0 errors in quiet mode, got %d", len(resp.Errors))
 	}
 
-	// verify deleted objects are gone and others remain
-	// TODO: Re-enable once ListObjectsV2 is implemented
-	// objs, err = s3Tester.ListObjectsV2(t.Context(), bucket, nil, nil, s3.ListObjectsPage{})
-	// if err != nil {
-	// 	t.Fatal(err)
-	// } else if objs.KeyCount != nil {
-	// 	t.Fatalf("expected 0 remaining objects, got %d", *objs.KeyCount)
-	// }
+	// verify all objects are gone
+	objs, err = s3Tester.ListObjectsV2(t.Context(), bucket, nil, nil, s3.ListObjectsPage{})
+	if err != nil {
+		t.Fatal(err)
+	} else if len(objs.Contents) != 0 {
+		t.Fatalf("expected 0 remaining objects, got %d", len(objs.Contents))
+	}
 }
 
 func TestObjectMetadataCache(t *testing.T) {
