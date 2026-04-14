@@ -281,10 +281,10 @@ func TestObjectPacking(t *testing.T) {
 		name string
 		size int
 	}{
-		{"obj1", 100},
-		{"obj2", 80},
-		{"obj3", 115},
-		{"obj4", 16},
+		{"obj1", 80},
+		{"obj2", 40},
+		{"obj3", 75},
+		{"obj4", 100},
 	} {
 		_, err = s3Tester.PutObject(t.Context(), bucket, obj.name, bytes.NewReader(frand.Bytes(obj.size)), nil)
 		if err != nil {
@@ -295,8 +295,7 @@ func TestObjectPacking(t *testing.T) {
 	// wait for the pack loop to process the trigger
 	time.Sleep(time.Second)
 
-	// obj1 (100), obj3 (115), and obj4 (16) should be packed
-	// together (231 bytes = 9.8% waste on a 256 byte slab)
+	// obj1, obj3, and obj4 should be packed together
 	for _, key := range []string{"obj1", "obj3", "obj4"} {
 		obj, err := store.GetObject(bucket, key, nil)
 		if err != nil {
@@ -306,8 +305,7 @@ func TestObjectPacking(t *testing.T) {
 		}
 	}
 
-	// obj2 (80 bytes) stays on disk because it alone has too
-	// much waste (80/256 = 31%)
+	// obj2 should still be on disk
 	obj, err = store.GetObject(bucket, "obj2", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -325,9 +323,9 @@ func TestObjectPacking(t *testing.T) {
 
 	info, err := os.Stat(filepath.Join(packingDir, entries[0].Name()))
 	if err != nil {
-		t.Fatal("expected 80 byte file on disk:", err)
-	} else if info.Size() != 80 {
-		t.Fatalf("expected 80 byte file, got %d bytes", info.Size())
+		t.Fatal("expected 40 byte file on disk:", err)
+	} else if info.Size() != 40 {
+		t.Fatalf("expected 40 byte file, got %d bytes", info.Size())
 	}
 }
 
