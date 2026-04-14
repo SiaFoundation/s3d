@@ -783,6 +783,57 @@ func TestOrphanedObjects(t *testing.T) {
 	} else if len(orphans) != 0 {
 		t.Fatalf("expected no orphans after removal, got %d", len(orphans))
 	}
+
+	// put packed object with nil ID, no orphan expected
+	filename := "packed.dat"
+	if _, err := store.PutObject(bucket, "c", objects.Object{
+		Filename:   &filename,
+		ContentMD5: frand.Entropy128(),
+		Length:     1,
+	}, true); err != nil {
+		t.Fatal(err)
+	}
+
+	orphans, err = store.OrphanedObjects(100)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(orphans) != 0 {
+		t.Fatalf("expected no orphans for nil ID put, got %d", len(orphans))
+	}
+
+	// overwrite nil ID with a real ID, no orphan expected
+	newID := types.Hash256(frand.Entropy256())
+	if _, err := store.PutObject(bucket, "c", objects.Object{
+		ID:         &newID,
+		ContentMD5: frand.Entropy128(),
+		Length:     2,
+	}, true); err != nil {
+		t.Fatal(err)
+	}
+
+	orphans, err = store.OrphanedObjects(100)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(orphans) != 0 {
+		t.Fatalf("expected no orphans going from nil to real ID, got %d", len(orphans))
+	}
+
+	// overwrite real ID with packed object, old ID should be orphaned
+	filename2 := "packed2.dat"
+	if _, err := store.PutObject(bucket, "c", objects.Object{
+		Filename:   &filename2,
+		ContentMD5: frand.Entropy128(),
+		Length:     3,
+	}, true); err != nil {
+		t.Fatal(err)
+	}
+
+	orphans, err = store.OrphanedObjects(100)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(orphans) != 1 || orphans[0] != newID {
+		t.Fatalf("expected orphan %v, got %v", newID, orphans)
+	}
 }
 
 func TestPutObjectOrphan(t *testing.T) {
@@ -850,5 +901,60 @@ func TestPutObjectOrphan(t *testing.T) {
 		t.Fatal(err)
 	} else if len(orphans) != 0 {
 		t.Fatal("overwrite with same ID should not orphan")
+	}
+
+	// overwrite real ID with nil ID should orphan
+	filename := "packed.dat"
+	if _, err := store.PutObject(bucket, "obj", objects.Object{
+		Filename:   &filename,
+		ContentMD5: frand.Entropy128(),
+		Length:     3,
+	}, true); err != nil {
+		t.Fatal(err)
+	}
+
+	orphans, err = store.OrphanedObjects(100)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(orphans) != 1 || orphans[0] != newID {
+		t.Fatalf("expected orphaned ID %v, got %v", newID, orphans)
+	}
+
+	if err := store.RemoveOrphanedObject(newID); err != nil {
+		t.Fatal(err)
+	}
+
+	// overwrite nil ID with nil ID should not orphan
+	filename2 := "packed2.dat"
+	if _, err := store.PutObject(bucket, "obj", objects.Object{
+		Filename:   &filename2,
+		ContentMD5: frand.Entropy128(),
+		Length:     4,
+	}, true); err != nil {
+		t.Fatal(err)
+	}
+
+	orphans, err = store.OrphanedObjects(100)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(orphans) != 0 {
+		t.Fatal("nil to nil overwrite should not orphan")
+	}
+
+	// overwrite nil ID with real ID should not orphan
+	anotherID := types.Hash256(frand.Entropy256())
+	if _, err := store.PutObject(bucket, "obj", objects.Object{
+		ID:         &anotherID,
+		ContentMD5: frand.Entropy128(),
+		Length:     5,
+	}, true); err != nil {
+		t.Fatal(err)
+	}
+
+	orphans, err = store.OrphanedObjects(100)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(orphans) != 0 {
+		t.Fatal("nil to real ID overwrite should not orphan")
 	}
 }

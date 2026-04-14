@@ -7,55 +7,61 @@ import (
 )
 
 func TestPackedObjects(t *testing.T) {
-	const slabSize = 256
-	p := packedObjects{slabSize: slabSize}
+	const (
+		slabSize        = 256
+		packingWastePct = 0.1
+	)
+	p := packedObjects{}
 
 	// assert remaining space on empty group is a full slab
-	if p.remainingSpace() != slabSize {
-		t.Fatalf("expected %d, got %d", slabSize, p.remainingSpace())
+	if p.remainingSpace(slabSize) != slabSize {
+		t.Fatalf("expected %d, got %d", slabSize, p.remainingSpace(slabSize))
 	}
 
 	// assert 100% waste on empty group
-	if p.wastePct() != 1 {
-		t.Fatalf("expected 1, got %f", p.wastePct())
+	if p.wastePct(slabSize) != 1 {
+		t.Fatalf("expected 1, got %f", p.wastePct(slabSize))
 	}
 
-	// add a small object
-	if !p.tryAdd(objects.PackedObject{Length: 100, Name: "a"}) {
+	// assert tryAdd succeeds when waste is high
+	if !p.tryAdd(objects.PackedObject{Length: 100, Name: "a"}, slabSize, packingWastePct) {
 		t.Fatal("expected tryAdd to succeed")
 	}
 
 	// assert remaining space decreased
-	if p.remainingSpace() != 156 {
-		t.Fatalf("expected 156, got %d", p.remainingSpace())
+	if p.remainingSpace(slabSize) != 156 {
+		t.Fatalf("expected 156, got %d", p.remainingSpace(slabSize))
 	}
 
-	// assert object that doesn't fit in remainder is rejected
-	if p.tryAdd(objects.PackedObject{Length: 200}) {
-		t.Fatal("expected tryAdd to fail for object exceeding remainder")
-	}
-
-	// assert object larger than a slab is accepted (spans slabs)
-	if !p.tryAdd(objects.PackedObject{Length: slabSize + 1, Name: "b"}) {
-		t.Fatal("expected tryAdd to succeed for slab spanning object")
-	}
-
-	// assert state after two adds
-	if p.totalSize != 357 {
-		t.Fatalf("expected totalSize 357, got %d", p.totalSize)
-	} else if len(p.objects) != 2 {
-		t.Fatalf("expected 2 objects, got %d", len(p.objects))
-	}
-
-	// assert object exceeding max slabs is rejected
-	p2 := packedObjects{slabSize: slabSize, totalSize: (packedUploadMaxSlabs - 1) * slabSize}
-	if p2.tryAdd(objects.PackedObject{Length: slabSize + 1}) {
-		t.Fatal("expected tryAdd to fail when exceeding max slabs")
+	// assert filling to exact slab boundary succeeds
+	if !p.tryAdd(objects.PackedObject{Length: 156, Name: "b"}, slabSize, packingWastePct) {
+		t.Fatal("expected tryAdd to succeed")
 	}
 
 	// assert zero waste on exact slab boundary
-	p3 := packedObjects{slabSize: slabSize, totalSize: slabSize}
-	if p3.wastePct() != 0 {
-		t.Fatalf("expected 0, got %f", p3.wastePct())
+	if p.wastePct(slabSize) != 0 {
+		t.Fatalf("expected 0, got %f", p.wastePct(slabSize))
+	}
+
+	// assert slab spanning object is rejected when waste is low
+	if p.tryAdd(objects.PackedObject{Length: slabSize + 1}, slabSize, packingWastePct) {
+		t.Fatal("expected tryAdd to fail")
+	}
+
+	// assert object exceeding remaining space is rejected when waste is low
+	if p.tryAdd(objects.PackedObject{Length: slabSize + 1}, slabSize, packingWastePct) {
+		t.Fatal("expected tryAdd to fail")
+	}
+
+	// assert object fitting in remaining space is accepted when waste is low
+	if !p.tryAdd(objects.PackedObject{Length: 50, Name: "c"}, slabSize, packingWastePct) {
+		t.Fatal("expected tryAdd to succeed")
+	}
+
+	// assert final state
+	if p.totalSize != 306 {
+		t.Fatalf("expected totalSize 306, got %d", p.totalSize)
+	} else if len(p.objects) != 3 {
+		t.Fatalf("expected 3 objects, got %d", len(p.objects))
 	}
 }

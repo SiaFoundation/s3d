@@ -22,8 +22,7 @@ const (
 	// written to disk and batched together with other small objects to fill slabs efficiently.
 	DefaultPackingWastePct = 0.1
 
-	packedUploadThreads  = 6
-	packedUploadMaxSlabs = 4
+	packedUploadThreads = 4
 
 	extMultipartPart = "part"
 	extPackedObject  = "dat"
@@ -42,46 +41,39 @@ type (
 	// packedObjects groups objects that will be uploaded together
 	// in a single packed upload.
 	packedObjects struct {
-		slabSize  int64
-		totalSize int64
 		objects   []objects.PackedObject
-	}
-
-	// pendingUpload contains a packed upload and the objects
-	// that are being packed.
-	pendingUpload struct {
-		upload  PackedUpload
-		objects []objects.PackedObject
+		totalSize int64
 	}
 )
 
-func (p *packedObjects) wastePct() float64 {
-	if p.totalSize <= 0 {
+func (p *packedObjects) remainingSpace(slabSize int64) int64 {
+	if len(p.objects) == 0 {
+		return slabSize
+	}
+	return slabSize - (p.totalSize % slabSize)
+}
+
+func (p *packedObjects) wastePct(slabSize int64) float64 {
+	if p.totalSize == 0 {
 		return 1
 	}
-	remainder := p.totalSize % p.slabSize
+	remainder := p.totalSize % slabSize
 	if remainder == 0 {
 		return 0
 	}
-	waste := p.slabSize - remainder
+	waste := slabSize - remainder
 	return float64(waste) / float64(p.totalSize+waste)
 }
 
-func (p *packedObjects) remainingSpace() int64 {
-	remainder := p.totalSize % p.slabSize
-	if remainder == 0 {
-		return p.slabSize
+func (p *packedObjects) tryAdd(obj objects.PackedObject, slabSize int64, packingWastePct float64) bool {
+	// if we already meet the waste threshold, only allow small objects that fit in the remaining space
+	if p.wastePct(slabSize) < packingWastePct {
+		if obj.Length > slabSize {
+			return false
+		} else if obj.Length > p.remainingSpace(slabSize) {
+			return false
+		}
 	}
-	return p.slabSize - remainder
-}
-
-func (p *packedObjects) tryAdd(obj objects.PackedObject) bool {
-	if p.totalSize+obj.Length > p.slabSize*packedUploadMaxSlabs {
-		return false
-	} else if obj.Length > p.remainingSpace() && obj.Length <= p.slabSize {
-		return false
-	}
-
 	p.objects = append(p.objects, obj)
 	p.totalSize += obj.Length
 	return true
@@ -113,14 +105,13 @@ func (s *Sia) preparePackedObjects() []packedObjects {
 	for _, obj := range candidates {
 		var added bool
 		for i := range groups {
-			added = groups[i].tryAdd(obj)
+			added = groups[i].tryAdd(obj, s.slabSize, s.packingWastePct)
 			if added {
 				break
 			}
 		}
 		if !added {
 			groups = append(groups, packedObjects{
-				slabSize:  s.slabSize,
 				totalSize: obj.Length,
 				objects:   []objects.PackedObject{obj},
 			})
@@ -131,7 +122,7 @@ func (s *Sia) preparePackedObjects() []packedObjects {
 	var ready []packedObjects
 	var remaining []objects.PackedObject
 	for _, g := range groups {
-		if s.meetsUploadThreshold(g.totalSize) {
+		if g.wastePct(s.slabSize) < s.packingWastePct {
 			ready = append(ready, g)
 		} else {
 			remaining = append(remaining, g.objects...)
@@ -141,10 +132,7 @@ func (s *Sia) preparePackedObjects() []packedObjects {
 	// try and fill gaps with remaining objects
 	for _, obj := range remaining {
 		for i := range ready {
-			if !s.meetsUploadThreshold(ready[i].totalSize + obj.Length) {
-				continue
-			}
-			if ready[i].tryAdd(obj) {
+			if ready[i].tryAdd(obj, s.slabSize, s.packingWastePct) {
 				break
 			}
 		}
@@ -154,61 +142,10 @@ func (s *Sia) preparePackedObjects() []packedObjects {
 		s.logger.Info("created pack",
 			zap.Int("objects", len(g.objects)),
 			zap.Int64("size", g.totalSize),
-			zap.Float64("wastePct", g.wastePct()))
+			zap.Float64("wastePct", g.wastePct(s.slabSize)))
 	}
 
 	return ready
-}
-
-// preparePendingUploads creates packed uploads for the given
-// packs, reading files from disk into each upload. Packs
-// whose files have been deleted concurrently are discarded.
-func (s *Sia) preparePendingUploads(ctx context.Context, packs []packedObjects) (_ []pendingUpload, err error) {
-	var uploads []pendingUpload
-
-	// close uploads on error
-	defer func() {
-		if err != nil {
-			for _, pu := range uploads {
-				pu.upload.Close()
-			}
-		}
-	}()
-
-	// loop over packed objects and create uploads
-	for _, pack := range packs {
-		upload, err := s.sdk.UploadPacked()
-		if err != nil {
-			return nil, fmt.Errorf("failed to create packed upload: %w", err)
-		}
-
-		pu := pendingUpload{upload: upload}
-		for _, obj := range pack.objects {
-			if err := s.addToUpload(ctx, &pu, obj); err != nil {
-				s.logger.Error("failed to add object to upload, aborting pack", zap.Error(err))
-				pu.upload.Close()
-				pu = pendingUpload{}
-				break
-			}
-		}
-		if pu.upload == nil {
-			continue
-		}
-
-		// verify the upload still meets the threshold
-		if !s.meetsUploadThreshold(pu.upload.Length()) {
-			s.logger.Debug("discarding underfilled upload",
-				zap.Int("objects", len(pu.objects)),
-				zap.Int64("uploadSize", pu.upload.Length()),
-				zap.Int64("slabSize", s.slabSize))
-			pu.upload.Close()
-			continue
-		}
-
-		uploads = append(uploads, pu)
-	}
-
-	return uploads, nil
 }
 
 // needsPacking returns true if uploading size bytes directly
@@ -217,7 +154,13 @@ func (s *Sia) needsPacking(size int64) bool {
 	if s.slabSize <= 0 {
 		return false
 	}
-	return !s.meetsUploadThreshold(size)
+	remainder := size % s.slabSize
+	if remainder == 0 {
+		return false
+	}
+	waste := s.slabSize - remainder
+	wastePct := float64(waste) / float64(size+waste)
+	return wastePct > s.packingWastePct
 }
 
 func (s *Sia) packingLoop(ctx context.Context) {
@@ -239,31 +182,24 @@ func (s *Sia) packingLoop(ctx context.Context) {
 }
 
 func (s *Sia) packObjects(ctx context.Context) {
+	// fetch and prepare objects for packing
 	packs := s.preparePackedObjects()
 	if len(packs) == 0 {
 		return
 	}
 
-	uploads, err := s.preparePendingUploads(ctx, packs)
-	if err != nil {
-		s.logger.Error("failed to create pending uploads", zap.Error(err))
-		return
-	} else if len(uploads) == 0 {
-		return
-	}
-
 	var wg sync.WaitGroup
-	uploadsCh := make(chan pendingUpload, packedUploadThreads)
+	uploadsCh := make(chan packedObjects, packedUploadThreads)
 
-	// start workers to finalize uploads
+	// start upload workers
 	for range packedUploadThreads {
 		wg.Go(func() {
-			for pu := range uploadsCh {
+			for p := range uploadsCh {
 				s.logger.Info("uploading packed object",
-					zap.Int("objects", len(pu.objects)),
-					zap.Int64("size", pu.upload.Length()))
+					zap.Int("objects", len(p.objects)),
+					zap.Int64("size", p.totalSize))
 
-				err := s.upload(ctx, pu)
+				err := s.uploadPackedObjects(ctx, p)
 				if err != nil {
 					s.logger.Error("failed to upload packed object", zap.Error(err))
 				}
@@ -272,114 +208,115 @@ func (s *Sia) packObjects(ctx context.Context) {
 	}
 
 	// send uploads to workers
-	for _, pu := range uploads {
-		uploadsCh <- pu
+	for _, p := range packs {
+		uploadsCh <- p
 	}
 	close(uploadsCh)
+
 	wg.Wait()
 }
 
-func (s *Sia) addToUpload(ctx context.Context, pu *pendingUpload, obj objects.PackedObject) error {
-	f, err := os.Open(filepath.Join(s.packingDir, obj.Filename))
+func (s *Sia) uploadPackedObjects(ctx context.Context, pack packedObjects) error {
+	upload, err := s.sdk.UploadPacked()
 	if err != nil {
-		s.logger.Warn("failed to open file for packing",
-			zap.String("filename", obj.Filename),
-			zap.Error(err))
-		return nil
+		return fmt.Errorf("failed to create packed upload: %w", err)
 	}
-	defer f.Close()
+	defer upload.Close()
 
-	if _, err := pu.upload.Add(ctx, f); err != nil {
-		return fmt.Errorf("failed to add object to packed upload: %w", err)
+	var objIdx []int
+	for i, obj := range pack.objects {
+		file, err := s.openPackedFile(obj.Filename)
+		if err != nil {
+			s.logger.Error("failed to open packed file for upload",
+				zap.String("bucket", obj.Bucket),
+				zap.String("name", obj.Name),
+				zap.String("filename", obj.Filename),
+				zap.Error(err))
+			continue
+		}
+		n, err := upload.Add(ctx, file)
+		if err != nil {
+			s.logger.Error("failed to add object to packed upload",
+				zap.String("bucket", obj.Bucket),
+				zap.String("name", obj.Name),
+				zap.String("filename", obj.Filename),
+				zap.Error(err))
+			file.Close()
+			continue
+		} else if n != obj.Length {
+			s.logger.Warn("unexpected number of bytes added to packed upload",
+				zap.String("bucket", obj.Bucket),
+				zap.String("name", obj.Name),
+				zap.String("filename", obj.Filename),
+				zap.Int64("expected", obj.Length),
+				zap.Int64("got", n))
+		}
+		file.Close()
+		objIdx = append(objIdx, i)
 	}
-	pu.objects = append(pu.objects, obj)
-	return nil
-}
-
-func (s *Sia) upload(ctx context.Context, pu pendingUpload) error {
-	defer pu.upload.Close()
 
 	// finalize upload
-	results, err := pu.upload.Finalize(ctx)
+	results, err := upload.Finalize(ctx)
 	if err != nil {
 		s.logger.Error("failed to finalize packed upload", zap.Error(err))
 		return err
-	} else if len(results) != len(pu.objects) {
+	} else if len(results) != len(objIdx) {
 		s.logger.Error("finalize returned unexpected number of results",
-			zap.Int("expected", len(pu.objects)),
+			zap.Int("expected", len(objIdx)),
 			zap.Int("got", len(results)))
-		return fmt.Errorf("unexpected number of results: expected %d, got %d", len(pu.objects), len(results))
+		return fmt.Errorf("unexpected number of results: expected %d, got %d", len(objIdx), len(results))
 	}
 
 	// pin object and finalize in store
-	for i, obj := range pu.objects {
-		siaObj := results[i]
-		if err := s.sdk.PinObject(ctx, siaObj); err != nil {
+	for i, obj := range results {
+		packObj := pack.objects[objIdx[i]]
+		if err := s.sdk.PinObject(ctx, obj); err != nil {
 			s.logger.Error("failed to pin packed object",
-				zap.String("bucket", obj.Bucket),
-				zap.String("name", obj.Name),
+				zap.String("bucket", packObj.Bucket),
+				zap.String("name", packObj.Name),
 				zap.Error(err))
-			if delErr := s.sdk.DeleteObject(ctx, siaObj.ID()); delErr != nil {
+			if delErr := s.sdk.DeleteObject(ctx, obj.ID()); delErr != nil {
 				s.logger.Error("failed to delete object after pin failure",
-					zap.String("bucket", obj.Bucket),
-					zap.String("name", obj.Name),
+					zap.String("bucket", packObj.Bucket),
+					zap.String("name", packObj.Name),
 					zap.Error(delErr))
 			}
 			continue
 		}
 
-		if err := s.store.FinalizeObject(obj.Bucket, obj.Name, obj.Filename, siaObj.ID(), s.sdk.SealObject(siaObj)); err != nil {
+		if err := s.store.FinalizeObject(packObj.Bucket, packObj.Name, packObj.Filename, obj.ID(), s.sdk.SealObject(obj)); err != nil {
 			if errors.Is(err, objects.ErrObjectModified) {
 				s.logger.Warn("object was modified during packing, skipping",
-					zap.String("bucket", obj.Bucket),
-					zap.String("name", obj.Name))
+					zap.String("bucket", packObj.Bucket),
+					zap.String("name", packObj.Name))
 			} else {
 				s.logger.Error("failed to finalize packed object in store",
-					zap.String("bucket", obj.Bucket),
-					zap.String("name", obj.Name),
+					zap.String("bucket", packObj.Bucket),
+					zap.String("name", packObj.Name),
 					zap.Error(err))
 			}
 
 			// delete pinned object
-			if err := s.sdk.DeleteObject(ctx, siaObj.ID()); err != nil {
+			if err := s.sdk.DeleteObject(ctx, obj.ID()); err != nil {
 				s.logger.Error("failed to delete pinned object after finalize failure",
-					zap.String("bucket", obj.Bucket),
-					zap.String("name", obj.Name),
+					zap.String("bucket", packObj.Bucket),
+					zap.String("name", packObj.Name),
 					zap.Error(err))
 			}
 			continue
 		}
 
-		s.tryRemovePackedObject(&obj.Filename)
+		s.tryRemovePackedObject(&packObj.Filename)
 		s.logger.Debug("packed object uploaded to Sia",
-			zap.String("bucket", obj.Bucket),
-			zap.String("name", obj.Name))
+			zap.String("bucket", packObj.Bucket),
+			zap.String("name", packObj.Name))
 	}
 
 	return nil
 }
 
-// meetsUploadThreshold returns true if size bytes can be
-// uploaded without exceeding the configured waste threshold.
-func (s *Sia) meetsUploadThreshold(size int64) bool {
-	if size <= 0 {
-		return false
-	}
-	remainder := size % s.slabSize
-	if remainder == 0 {
-		return true
-	}
-
-	waste := s.slabSize - remainder
-	allocated := size + waste
-	return float64(waste)/float64(allocated) < s.packingWastePct
-}
-
-func (s *Sia) triggerPacking() {
-	select {
-	case s.triggerPackChan <- struct{}{}:
-	default:
-	}
+func (s *Sia) openPackedFile(filename string) (*os.File, error) {
+	return os.Open(filepath.Join(s.packingDir, filename))
 }
 
 func (s *Sia) openPackedObject(obj objects.Object) (*os.File, error) {
@@ -390,7 +327,7 @@ func (s *Sia) openPackedObject(obj objects.Object) (*os.File, error) {
 
 	// open the file on disk, if it does not exist, it may have been
 	// uploaded in the background, refresh the object and try again
-	f, err := os.Open(filepath.Join(s.packingDir, *obj.Filename))
+	f, err := s.openPackedFile(*obj.Filename)
 	if errors.Is(err, os.ErrNotExist) {
 		obj, err = s.store.GetObject(obj.Bucket, obj.Name, nil)
 		if err != nil {
@@ -402,6 +339,13 @@ func (s *Sia) openPackedObject(obj objects.Object) (*os.File, error) {
 	}
 
 	return f, err
+}
+
+func (s *Sia) triggerPacking() {
+	select {
+	case s.triggerPackChan <- struct{}{}:
+	default:
+	}
 }
 
 func (s *Sia) tryRemovePackedObject(filename *string) {

@@ -128,11 +128,12 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 			if _, err := tx.Exec("DELETE FROM orphaned_objects WHERE object_id = $1", sqlHash256(*objectID)); err != nil {
 				return err
 			}
+		}
 
-			if oldID != nil && *oldID != *objectID {
-				if err := insertOrphan(tx, *oldID); err != nil {
-					return err
-				}
+		// orphan the old object if it differs from the new one
+		if oldID != nil && (objectID == nil || *oldID != *objectID) {
+			if err := insertOrphan(tx, *oldID); err != nil {
+				return err
 			}
 		}
 
