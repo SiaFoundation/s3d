@@ -1,6 +1,7 @@
 package tox_test
 
 import (
+	"bytes"
 	"fmt"
 	"net"
 	"net/http"
@@ -294,10 +295,17 @@ func runToxCommand(t *testing.T, confPath, testsDir string, args ...string) {
 		"S3TEST_CONF="+confPath,
 		"S3_USE_SIGV4=True",
 	)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
 
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("tox failed: %v", err)
+	var buf bytes.Buffer
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+
+	err := cmd.Run()
+	output := buf.String()
+	if err != nil {
+		t.Fatalf("tox failed: %v\n%s", err, output)
+	} else if bytes.Contains(buf.Bytes(), []byte("FAILED")) {
+		t.Fatalf("tox reported failures:\n%s", output)
 	}
+	t.Log(output)
 }
