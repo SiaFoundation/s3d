@@ -22,7 +22,7 @@ const (
 	// written to disk and batched together with other small objects to fill slabs efficiently.
 	DefaultPackingWastePct = 0.1
 
-	packedUploadThreads = 4
+	packedUploadThreads = 8
 
 	extMultipartPart = "part"
 	extPackedObject  = "dat"
@@ -47,10 +47,14 @@ type (
 )
 
 func (p *packedObjects) remainingSpace(slabSize int64) int64 {
-	if len(p.objects) == 0 {
+	if p.totalSize == 0 {
 		return slabSize
 	}
-	return slabSize - (p.totalSize % slabSize)
+	remainder := p.totalSize % slabSize
+	if remainder == 0 {
+		return 0
+	}
+	return slabSize - remainder
 }
 
 func (p *packedObjects) wastePct(slabSize int64) float64 {
