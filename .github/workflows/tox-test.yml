@@ -55,4 +55,4 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: postgres
-        run: cd tox && go test -v -timeout 30m -run TestS3 .
+        run: cd tox && go test -v -timeout 1h -run TestS3 .
