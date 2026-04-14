@@ -14,6 +14,7 @@ import (
 
 var (
 	_ scannerValuer = (*sqlHash256)(nil)
+	_ scannerValuer = (*sqlNullHash256)(nil)
 	_ scannerValuer = (*sqlMD5)(nil)
 	_ scannerValuer = (*sqlTime)(nil)
 	_ scannerValuer = (*sqlUploadID)(nil)
@@ -30,9 +31,6 @@ type sqlHash256 types.Hash256
 
 func (h *sqlHash256) Scan(src any) error {
 	switch src := src.(type) {
-	case nil:
-		*h = sqlHash256{}
-		return nil
 	case []byte:
 		if len(src) != len(sqlHash256{}) {
 			return fmt.Errorf("failed to scan source into Hash256 due to invalid number of bytes %v != %v: %v", len(src), len(sqlHash256{}), src)
@@ -45,25 +43,39 @@ func (h *sqlHash256) Scan(src any) error {
 }
 
 func (h sqlHash256) Value() (driver.Value, error) {
-	if h == (sqlHash256{}) {
-		return nil, nil
-	}
 	return h[:], nil
 }
 
-func (h sqlHash256) Ptr() *types.Hash256 {
-	if h == (sqlHash256{}) {
-		return nil
-	}
-	hash := types.Hash256(h)
-	return &hash
+type sqlNullHash256 struct {
+	h **types.Hash256
 }
 
-func sqlNullableHash256(h *types.Hash256) sqlHash256 {
-	if h == nil {
-		return sqlHash256{}
+func sqlNullableHash256(h **types.Hash256) *sqlNullHash256 {
+	return &sqlNullHash256{h: h}
+}
+
+func (h *sqlNullHash256) Scan(src any) error {
+	switch src := src.(type) {
+	case nil:
+		*h.h = nil
+		return nil
+	case []byte:
+		if len(src) != len(types.Hash256{}) {
+			return fmt.Errorf("failed to scan source into nullable Hash256 due to invalid number of bytes %v != %v: %v", len(src), len(types.Hash256{}), src)
+		}
+		*h.h = new(types.Hash256)
+		copy((*h.h)[:], src)
+		return nil
+	default:
+		return fmt.Errorf("cannot scan %T to nullable Hash256", src)
 	}
-	return sqlHash256(*h)
+}
+
+func (h sqlNullHash256) Value() (driver.Value, error) {
+	if *h.h == nil {
+		return nil, nil
+	}
+	return (*h.h)[:], nil
 }
 
 type sqlTime time.Time
