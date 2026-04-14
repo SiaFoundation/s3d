@@ -22,7 +22,7 @@ const (
 	// written to disk and batched together with other small objects to fill slabs efficiently.
 	DefaultPackingWastePct = 0.1
 
-	packedUploadThreads = 8
+	packedUploadThreads = 16
 
 	extMultipartPart = "part"
 	extPackedObject  = "dat"
@@ -200,8 +200,10 @@ func (s *Sia) packObjects(ctx context.Context) {
 		wg.Go(func() {
 			for p := range uploadsCh {
 				s.logger.Info("uploading packed object",
-					zap.Int("objects", len(p.objects)),
-					zap.Int64("size", p.totalSize))
+					zap.Int64("size", p.totalSize),
+					zap.Float64("waste", p.wastePct(s.slabSize)),
+					zap.Int("n", len(p.objects)),
+				)
 
 				err := s.uploadPackedObjects(ctx, p)
 				if err != nil {
