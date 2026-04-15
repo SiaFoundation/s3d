@@ -41,40 +41,59 @@ type (
 	// packedObjects groups objects that will be uploaded together
 	// in a single packed upload.
 	packedObjects struct {
+		slabSize        int64
+		packingWastePct float64
+
 		objects   []objects.PackedObject
 		totalSize int64
 	}
 )
 
-func (p *packedObjects) remainingSpace(slabSize int64) int64 {
-	if p.totalSize == 0 {
-		return slabSize
+func (s *Sia) newPackedObject(initial objects.PackedObject) packedObjects {
+	return packedObjects{
+		slabSize:        s.slabSize,
+		packingWastePct: s.packingWastePct,
+		objects:         []objects.PackedObject{initial},
+		totalSize:       initial.Length,
 	}
-	remainder := p.totalSize % slabSize
+}
+
+func (p *packedObjects) remainingSpace() int64 {
+	if p.totalSize == 0 {
+		return p.slabSize
+	}
+	remainder := p.totalSize % p.slabSize
 	if remainder == 0 {
 		return 0
 	}
-	return slabSize - remainder
+	return p.slabSize - remainder
 }
 
-func (p *packedObjects) wastePct(slabSize int64) float64 {
+func (p *packedObjects) wastePct() float64 {
 	if p.totalSize == 0 {
 		return 1
 	}
-	remainder := p.totalSize % slabSize
+	remainder := p.totalSize % p.slabSize
 	if remainder == 0 {
 		return 0
 	}
-	waste := slabSize - remainder
+	waste := p.slabSize - remainder
 	return float64(waste) / float64(p.totalSize+waste)
 }
 
-func (p *packedObjects) tryAdd(obj objects.PackedObject, slabSize int64, packingWastePct float64) bool {
+func (p *packedObjects) slabs() int64 {
+	if p.totalSize == 0 {
+		return 0
+	}
+	return (p.totalSize + p.slabSize - 1) / p.slabSize
+}
+
+func (p *packedObjects) tryAdd(obj objects.PackedObject) bool {
 	// if we already meet the waste threshold, only allow small objects that fit in the remaining space
-	if p.wastePct(slabSize) < packingWastePct {
-		if obj.Length > slabSize {
+	if p.wastePct() < p.packingWastePct {
+		if obj.Length > p.slabSize {
 			return false
-		} else if obj.Length > p.remainingSpace(slabSize) {
+		} else if obj.Length > p.remainingSpace() {
 			return false
 		}
 	}
@@ -109,16 +128,13 @@ func (s *Sia) preparePackedObjects() []packedObjects {
 	for _, obj := range candidates {
 		var added bool
 		for i := range groups {
-			added = groups[i].tryAdd(obj, s.slabSize, s.packingWastePct)
+			added = groups[i].tryAdd(obj)
 			if added {
 				break
 			}
 		}
 		if !added {
-			groups = append(groups, packedObjects{
-				totalSize: obj.Length,
-				objects:   []objects.PackedObject{obj},
-			})
+			groups = append(groups, s.newPackedObject(obj))
 		}
 	}
 
@@ -126,7 +142,7 @@ func (s *Sia) preparePackedObjects() []packedObjects {
 	var ready []packedObjects
 	var remaining []objects.PackedObject
 	for _, g := range groups {
-		if g.wastePct(s.slabSize) < s.packingWastePct {
+		if g.wastePct() < s.packingWastePct {
 			ready = append(ready, g)
 		} else {
 			remaining = append(remaining, g.objects...)
@@ -136,7 +152,7 @@ func (s *Sia) preparePackedObjects() []packedObjects {
 	// try and fill gaps with remaining objects
 	for _, obj := range remaining {
 		for i := range ready {
-			if ready[i].tryAdd(obj, s.slabSize, s.packingWastePct) {
+			if ready[i].tryAdd(obj) {
 				break
 			}
 		}
@@ -146,7 +162,8 @@ func (s *Sia) preparePackedObjects() []packedObjects {
 		s.logger.Info("created pack",
 			zap.Int("objects", len(g.objects)),
 			zap.Int64("size", g.totalSize),
-			zap.Float64("wastePct", g.wastePct(s.slabSize)))
+			zap.Int64("slabs", g.slabs()),
+			zap.String("waste", fmt.Sprintf("%.2f%%", g.wastePct()*100)))
 	}
 
 	return ready
@@ -201,7 +218,8 @@ func (s *Sia) packObjects(ctx context.Context) {
 			for p := range uploadsCh {
 				s.logger.Info("uploading packed object",
 					zap.Int64("size", p.totalSize),
-					zap.Float64("waste", p.wastePct(s.slabSize)),
+					zap.Int64("slabs", p.slabs()),
+					zap.String("waste", fmt.Sprintf("%.2f%%", p.wastePct()*100)),
 					zap.Int("n", len(p.objects)),
 				)
 
