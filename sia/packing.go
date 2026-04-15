@@ -325,10 +325,15 @@ func (s *Sia) openPackedFile(filename string) (*os.File, error) {
 	return os.Open(filepath.Join(s.packingDir, filename))
 }
 
-func (s *Sia) openPackedObject(obj objects.Object) (*os.File, error) {
+// openPackedObject opens the backing file for a packed object on disk. If the
+// file is missing because the object was uploaded to Sia in the background,
+// it refreshes obj from the store and returns a nil file. The returned object
+// is obj itself on the happy path, or the refreshed object on the miss path,
+// so callers always have current metadata.
+func (s *Sia) openPackedObject(obj objects.Object) (*os.File, objects.Object, error) {
 	// nothing to do if the object is nil or it's not a packed object
 	if obj.Filename == nil {
-		return nil, nil
+		return nil, obj, nil
 	}
 
 	// open the file on disk, if it does not exist, it may have been
@@ -337,14 +342,14 @@ func (s *Sia) openPackedObject(obj objects.Object) (*os.File, error) {
 	if errors.Is(err, os.ErrNotExist) {
 		obj, err = s.store.GetObject(obj.Bucket, obj.Name, nil)
 		if err != nil {
-			return nil, err
+			return nil, objects.Object{}, err
 		} else if obj.Filename != nil {
-			return nil, fmt.Errorf("file %q not found on disk but object still references it", *obj.Filename)
+			return nil, objects.Object{}, fmt.Errorf("file %q not found on disk but object still references it", *obj.Filename)
 		}
-		return nil, nil
+		return nil, obj, nil
 	}
 
-	return f, err
+	return f, obj, err
 }
 
 func (s *Sia) triggerPacking() {

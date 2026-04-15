@@ -958,3 +958,89 @@ func TestPutObjectOrphan(t *testing.T) {
 		t.Fatal("nil to real ID overwrite should not orphan")
 	}
 }
+
+func TestFinalizeObject(t *testing.T) {
+	const (
+		accessKeyID = "test-accesskey"
+		bucket      = "test-bucket"
+		name        = "test-object"
+	)
+
+	store := initTestDB(t, zap.NewNop())
+	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	filename := "packed.dat"
+	if _, err := store.PutObject(bucket, name, objects.Object{
+		Filename:   &filename,
+		ContentMD5: frand.Entropy128(),
+		Length:     1,
+	}, true); err != nil {
+		t.Fatal(err)
+	}
+
+	sdkObj := sdk.Object{}
+	sealed := sdkObj.Seal(types.GeneratePrivateKey())
+	objID := sealed.ID()
+
+	// finalize with a mismatched expected filename should not update the row
+	err := store.FinalizeObject(bucket, name, "wrong.dat", objID, sealed.SealedObject)
+	if !errors.Is(err, objects.ErrObjectModified) {
+		t.Fatalf("expected ErrObjectModified, got %v", err)
+	}
+
+	obj, err := store.GetObject(bucket, name, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if obj.Filename == nil || *obj.Filename != filename {
+		t.Fatalf("expected filename %q, got %v", filename, obj.Filename)
+	} else if obj.ID != nil {
+		t.Fatalf("expected nil object ID, got %v", obj.ID)
+	}
+
+	// simulate a concurrent overwrite that changes the filename between
+	// reading and finalizing
+	filename2 := "packed2.dat"
+	if _, err := store.PutObject(bucket, name, objects.Object{
+		Filename:   &filename2,
+		ContentMD5: frand.Entropy128(),
+		Length:     2,
+	}, true); err != nil {
+		t.Fatal(err)
+	}
+
+	err = store.FinalizeObject(bucket, name, filename, objID, sealed.SealedObject)
+	if !errors.Is(err, objects.ErrObjectModified) {
+		t.Fatalf("expected ErrObjectModified after overwrite, got %v", err)
+	}
+
+	obj, err = store.GetObject(bucket, name, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if obj.Filename == nil || *obj.Filename != filename2 {
+		t.Fatalf("expected filename %q, got %v", filename2, obj.Filename)
+	} else if obj.ID != nil {
+		t.Fatalf("expected nil object ID, got %v", obj.ID)
+	}
+
+	// finalizing with the current filename should succeed and clear the filename
+	if err := store.FinalizeObject(bucket, name, filename2, objID, sealed.SealedObject); err != nil {
+		t.Fatal(err)
+	}
+
+	obj, err = store.GetObject(bucket, name, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if obj.Filename != nil {
+		t.Fatalf("expected nil filename after finalize, got %v", *obj.Filename)
+	} else if obj.ID == nil || *obj.ID != objID {
+		t.Fatalf("expected object ID %v, got %v", objID, obj.ID)
+	}
+
+	// a stale finalize call after success should no longer match
+	err = store.FinalizeObject(bucket, name, filename2, objID, sealed.SealedObject)
+	if !errors.Is(err, objects.ErrObjectModified) {
+		t.Fatalf("expected ErrObjectModified on stale finalize, got %v", err)
+	}
+}

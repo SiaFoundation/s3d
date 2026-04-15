@@ -233,7 +233,7 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 		w: io.MultiWriter(partFile, md5Hash),
 	}
 
-	file, err := s.openPackedObject(obj)
+	file, obj, err := s.openPackedObject(obj)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open source object: %w", err)
 	} else if file != nil {

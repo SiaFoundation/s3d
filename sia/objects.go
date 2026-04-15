@@ -37,7 +37,7 @@ func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject,
 	}
 
 	// copy packed object on disk if needed
-	file, err := s.openPackedObject(obj)
+	file, _, err := s.openPackedObject(obj)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open packed object: %w", err)
 	} else if file != nil {
@@ -176,7 +176,7 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 	}
 
 	// serve from disk if it's a packed object
-	file, err := s.openPackedObject(obj)
+	file, obj, err := s.openPackedObject(obj)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open packed object: %w", err)
 	} else if file != nil {
