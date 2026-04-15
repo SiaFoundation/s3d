@@ -9,7 +9,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.99.0
 	github.com/mattn/go-sqlite3 v1.14.42
 	go.sia.tech/core v0.19.1
-	go.sia.tech/indexd v0.1.1-0.20260413082012-b800b686f044
+	go.sia.tech/indexd v0.1.1-0.20260410081129-29ab0c1887a1
 	go.sia.tech/siastorage v0.0.3
 	go.uber.org/zap v1.27.1
 	golang.org/x/term v0.42.0
