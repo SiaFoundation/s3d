@@ -15,6 +15,7 @@ import (
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"go.sia.tech/core/types"
+	"go.sia.tech/indexd/slabs"
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
@@ -833,6 +834,46 @@ func TestOrphanedObjects(t *testing.T) {
 		t.Fatal(err)
 	} else if len(orphans) != 1 || orphans[0] != newID {
 		t.Fatalf("expected orphan %v, got %v", newID, orphans)
+	}
+}
+
+func TestCopyObject(t *testing.T) {
+	const (
+		accessKeyID = "test-accesskey"
+		bucketSrc   = "test-bucket-src"
+		bucketDst   = "test-bucket-dst"
+	)
+
+	store := initTestDB(t, zap.NewNop())
+
+	// create two buckets
+	if err := store.CreateBucket(accessKeyID, bucketSrc); err != nil {
+		t.Fatal(err)
+	} else if err := store.CreateBucket(accessKeyID, bucketDst); err != nil {
+		t.Fatal(err)
+	}
+
+	// put packed object with nil ID
+	filename := "src.dat"
+	_, err := store.PutObject(bucketSrc, "c", objects.Object{
+		Filename:   &filename,
+		ContentMD5: frand.Entropy128(),
+		Length:     1,
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	objID := types.Hash256(frand.Entropy256())
+	err = store.FinalizeObject(bucketSrc, "c", filename, objID, slabs.SealedObject{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	copied := "copy.dat"
+	_, _, err = store.CopyObject(bucketSrc, "c", bucketDst, "c", nil, false, &copied)
+	if !errors.Is(err, objects.ErrObjectFinalized) {
+		t.Fatal(err)
 	}
 }
 

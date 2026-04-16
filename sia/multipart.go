@@ -382,20 +382,10 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 		}
 		packedFilename = &filename
 	} else {
-		// upload directly and pin the object
+		// upload directly
 		obj, err := s.sdk.Upload(ctx, r)
 		if err != nil {
 			return nil, fmt.Errorf("failed to upload object to Sia: %w", err)
-		}
-		err = s.sdk.PinObject(ctx, obj)
-		if err != nil {
-			if delErr := s.sdk.DeleteObject(ctx, obj.ID()); delErr != nil {
-				s.logger.Error("failed to delete object after pin failure",
-					zap.String("objectID", obj.ID().String()),
-					zap.NamedError("pinFailure", err),
-					zap.Error(delErr))
-			}
-			return nil, fmt.Errorf("failed to pin object in indexer: %w", err)
 		}
 		oID := obj.ID()
 		objectID = &oID

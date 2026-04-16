@@ -21,7 +21,7 @@ CREATE TABLE objects (
     sia_object BLOB NOT NULL,
     cached_at INTEGER NOT NULL,
     filename TEXT,
-    CHECK((object_id IS NULL AND filename IS NOT NULL) OR (object_id IS NOT NULL AND filename IS NULL) OR size = 0), -- object is either uploaded on Sia, stored on disk or has no content
+    CHECK((object_id IS NULL AND filename IS NOT NULL) OR (object_id IS NOT NULL AND filename IS NULL) OR (object_id IS NULL AND filename IS NULL AND size = 0)), -- object is either uploaded on Sia, stored on disk or has no content
     PRIMARY KEY (bucket_id, name)
 ) WITHOUT ROWID;
 CREATE INDEX objects_object_id_idx ON objects(object_id);

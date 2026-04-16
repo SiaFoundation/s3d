@@ -89,7 +89,7 @@ func (s *MemorySDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
 	if err != nil {
 		return sdk.Object{}, err
 	}
-	obj := sdk.Object{}
+	obj := sdk.NewEmptyObject()
 	s.mu.Lock()
 	s.objects[obj.ID()] = uploadedObject{
 		data: data,
@@ -118,7 +118,7 @@ func (u *memoryPackedUpload) Add(ctx context.Context, r io.Reader) (int64, error
 	if err != nil {
 		return 0, err
 	}
-	obj := sdk.Object{}
+	obj := sdk.NewEmptyObject()
 	u.objects = append(u.objects, uploadedObject{data: data, meta: obj})
 	u.length += int64(len(data))
 	return int64(len(data)), nil

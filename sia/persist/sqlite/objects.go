@@ -172,7 +172,9 @@ func (s *Store) CopyObject(srcBucket, srcName, dstBucket, dstName string, meta m
 		prevFilename, err = putObject(tx, dstBucket, dstName, obj, true)
 		return err
 	})
-	if errors.Is(err, sql.ErrNoRows) {
+	if err != nil && strings.Contains(err.Error(), "CHECK constraint failed") {
+		return objects.Object{}, nil, objects.ErrObjectFinalized
+	} else if errors.Is(err, sql.ErrNoRows) {
 		return objects.Object{}, nil, s3errs.ErrNoSuchKey
 	} else if err != nil {
 		return objects.Object{}, nil, err
@@ -218,7 +220,7 @@ func putObject(tx *txn, bucket, name string, obj objects.Object, updateModTime b
 		return nil, err
 	}
 
-	oldID, prevFilename, err := objectInfo(tx, bucket, name)
+	oldID, prevFilename, err := objectInfo(tx, bID, name)
 	if err != nil {
 		return nil, err
 	}
@@ -258,15 +260,14 @@ func putObject(tx *txn, bucket, name string, obj objects.Object, updateModTime b
 
 // objectInfo returns the object_id and filename currently stored
 // for the given bucket and name, or nils if no row exists.
-func objectInfo(tx *txn, bucket, name string) (*types.Hash256, *string, error) {
+func objectInfo(tx *txn, bucketID int64, name string) (*types.Hash256, *string, error) {
 	var objID sql.Null[*sqlHash256]
 	var filename *string
 	err := tx.
 		QueryRow(`
 			SELECT o.object_id, o.filename
 			FROM objects o
-			INNER JOIN buckets b ON b.id = o.bucket_id
-			WHERE b.name = $1 AND o.name = $2`, bucket, name).
+			WHERE o.bucket_id = $1 AND o.name = $2`, bucketID, name).
 		Scan(&objID, &filename)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, nil

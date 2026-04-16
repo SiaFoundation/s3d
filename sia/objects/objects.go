@@ -8,9 +8,15 @@ import (
 	"go.sia.tech/indexd/slabs"
 )
 
-// ErrObjectModified is returned by FinalizeObject when the object was
-// modified between reading and finalizing.
-var ErrObjectModified = errors.New("object was modified")
+var (
+	// ErrObjectFinalized is returned when an object is expected to be
+	// packed but was finalized.
+	ErrObjectFinalized = errors.New("object already finalized")
+
+	// ErrObjectModified is returned by FinalizeObject when the object was
+	// modified between reading and finalizing.
+	ErrObjectModified = errors.New("object was modified")
+)
 
 // Object represents a stored object with its metadata.
 type Object struct {

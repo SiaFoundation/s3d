@@ -51,6 +51,12 @@ func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject,
 
 	// copy the object in the store
 	obj, prevFilename, err := s.store.CopyObject(srcBucket, srcObject, dstBucket, dstObject, meta, replace, dstFilename)
+	if errors.Is(err, objects.ErrObjectModified) {
+		// refresh the object and try again
+		if obj, refreshErr := s.store.GetObject(srcBucket, srcObject, nil); refreshErr == nil && obj.Filename == nil {
+			obj, prevFilename, err = s.store.CopyObject(srcBucket, srcObject, dstBucket, dstObject, meta, replace, dstFilename)
+		}
+	}
 	if err != nil {
 		s.tryRemovePackedObject(dstFilename)
 		return nil, err
@@ -319,16 +325,6 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 		obj, err := s.sdk.Upload(ctx, lr)
 		if err != nil {
 			return nil, fmt.Errorf("failed to upload object: %w", err)
-		}
-		err = s.sdk.PinObject(ctx, obj)
-		if err != nil {
-			if delErr := s.sdk.DeleteObject(ctx, obj.ID()); delErr != nil {
-				s.logger.Error("failed to delete object after pin failure",
-					zap.String("objectID", obj.ID().String()),
-					zap.NamedError("pinFailure", err),
-					zap.Error(delErr))
-			}
-			return nil, fmt.Errorf("failed to pin object in indexer: %w", err)
 		}
 		oID := obj.ID()
 		objectID = &oID
