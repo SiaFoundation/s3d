@@ -2,12 +2,12 @@ package sia
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
@@ -15,7 +15,6 @@ import (
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.sia.tech/core/types"
-	"go.sia.tech/indexd/slabs"
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
 )
@@ -59,8 +58,8 @@ type SDK interface {
 	Download(ctx context.Context, w io.Writer, obj sdk.Object, rnge *s3.ObjectRange) error
 	Object(ctx context.Context, id types.Hash256) (sdk.Object, error)
 	Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
-	SealObject(obj sdk.Object) slabs.SealedObject
-	UnsealObject(sealed slabs.SealedObject) (sdk.Object, error)
+	SealObject(obj sdk.Object) sdk.SealedObject
+	UnsealObject(sealed sdk.SealedObject) (sdk.Object, error)
 }
 
 // Store represents the storage backend used by the Sia backend.
@@ -157,7 +156,7 @@ func (s *Sia) ProcessOrphans(ctx context.Context) {
 			default:
 			}
 
-			if err := s.sdk.DeleteObject(ctx, id); err != nil && !errors.Is(err, slabs.ErrObjectNotFound) {
+			if err := s.sdk.DeleteObject(ctx, id); err != nil && !strings.Contains(err.Error(), "object not found") {
 				s.logger.Error("failed to unpin object from indexer", zap.Error(err), zap.Stringer("objectID", &id))
 				return
 			}

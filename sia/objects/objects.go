@@ -4,7 +4,7 @@ import (
 	"time"
 
 	"go.sia.tech/core/types"
-	"go.sia.tech/indexd/slabs"
+	sdk "go.sia.tech/siastorage"
 )
 
 // Object represents a stored object with its metadata.
@@ -18,8 +18,8 @@ type Object struct {
 	ContentMD5   [16]byte
 	LastModified time.Time
 
-	SiaObject slabs.SealedObject // sealed Sia object for downloads (must be unsealed before use)
-	CachedAt  time.Time          // zero if not cached
+	SiaObject sdk.SealedObject // sealed Sia object for downloads (must be unsealed before use)
+	CachedAt  time.Time        // zero if not cached
 }
 
 // Part represents a single part of a multipart upload.

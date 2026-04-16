@@ -16,7 +16,6 @@ import (
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"go.sia.tech/core/types"
-	"go.sia.tech/indexd/slabs"
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
 )
@@ -246,7 +245,7 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 
 	// handle empty object case
 	var objectID types.Hash256
-	var siaObject slabs.SealedObject
+	var siaObject sdk.SealedObject
 	var cachedAt time.Time
 	if opts.ContentLength == 0 {
 		// drain reader

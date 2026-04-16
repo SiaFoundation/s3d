@@ -588,7 +588,7 @@ func BenchmarkListObjects(b *testing.B) {
 
 						_, err = tx.Exec(`
 			INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at, sia_object, cached_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, bid, layer4, sqlHash256(objID), sqlMD5(contentMD5), []byte{}, size, sqlTime(now), sqlSiaObject(sealed.SealedObject), sqlTime(now))
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, bid, layer4, sqlHash256(objID), sqlMD5(contentMD5), []byte{}, size, sqlTime(now), sqlSiaObject(sealed), sqlTime(now))
 					}
 				}
 			}

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/SiaFoundation/s3d/internal/testutil"
@@ -148,72 +149,18 @@ func startS3Server(t *testing.T, backend s3.Backend, log *zap.Logger) int {
 	return listener.Addr().(*net.TCPAddr).Port
 }
 
-// writeS3TestsConf writes an s3tests.conf file to dir with the given port and
-// returns the path to the file.
+// writeS3TestsConf reads the tox.conf template from the package directory,
+// substitutes the port placeholder, writes the result to dir, and returns
+// the path.
 func writeS3TestsConf(t *testing.T, dir string, port int) string {
 	t.Helper()
 
-	conf := fmt.Sprintf(`[DEFAULT]
-host = localhost
-port = %d
-is_secure = False
-ssl_verify = False
+	toxConf, err := os.ReadFile("tox.conf")
+	if err != nil {
+		t.Fatalf("failed to read tox.conf: %v", err)
+	}
 
-[fixtures]
-bucket prefix = s3d-{random}-
-iam name prefix = s3-tests-
-iam path prefix = /s3-tests/
-
-[s3 main]
-display_name = M. Tester
-user_id = testid
-email = tester@ceph.com
-api_name = default
-access_key = %s
-secret_key = %s
-
-[s3 alt]
-display_name = john.doe
-email = john.doe@example.com
-user_id = 56789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234
-access_key = %s
-secret_key = %s
-
-[s3 tenant]
-display_name = testx$tenanteduser
-user_id = testx$9876543210abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-access_key = %s
-secret_key = %s
-email = tenanteduser@example.com
-tenant = testx
-
-[iam]
-email = s3@example.com
-user_id = 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-access_key = ABCDEFGHIJKLMNOPQRST
-secret_key = abcdefghijklmnopqrstuvwxyzabcdefghijklmn
-display_name = youruseridhere
-
-[iam root]
-access_key = %s
-secret_key = %s
-user_id = rootuserid
-email = root@example.com
-
-[iam alt root]
-access_key = %s
-secret_key = %s
-user_id = altrootuserid
-email = altroot@example.com
-`,
-		port,
-		mainKeyPair.accessKey, mainKeyPair.secretKey,
-		altKeyPair.accessKey, altKeyPair.secretKey,
-		tenantKeyPair.accessKey, tenantKeyPair.secretKey,
-		mainKeyPair.accessKey, mainKeyPair.secretKey,
-		altKeyPair.accessKey, altKeyPair.secretKey,
-	)
-
+	conf := strings.ReplaceAll(string(toxConf), "{{PORT}}", fmt.Sprintf("%d", port))
 	fp := filepath.Join(dir, "s3tests.conf")
 	if err := os.WriteFile(fp, []byte(conf), 0644); err != nil {
 		t.Fatalf("failed to write s3tests.conf: %v", err)

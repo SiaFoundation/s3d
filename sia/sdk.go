@@ -7,7 +7,6 @@ import (
 
 	"github.com/SiaFoundation/s3d/s3"
 	"go.sia.tech/core/types"
-	"go.sia.tech/indexd/slabs"
 	sdk "go.sia.tech/siastorage"
 )
 
@@ -81,11 +80,11 @@ func (s *IndexdSDK) Object(ctx context.Context, objectKey types.Hash256) (sdk.Ob
 }
 
 // SealObject seals the object using the app key.
-func (s *IndexdSDK) SealObject(obj sdk.Object) slabs.SealedObject {
-	return obj.Seal(s.inner.AppKey()).SealedObject
+func (s *IndexdSDK) SealObject(obj sdk.Object) sdk.SealedObject {
+	return obj.Seal(s.inner.AppKey())
 }
 
 // UnsealObject unseals a sealed object using the app key.
-func (s *IndexdSDK) UnsealObject(sealed slabs.SealedObject) (sdk.Object, error) {
-	return (&sdk.SealedObject{SealedObject: sealed}).Open(s.inner.AppKey())
+func (s *IndexdSDK) UnsealObject(sealed sdk.SealedObject) (sdk.Object, error) {
+	return sealed.Open(s.inner.AppKey())
 }
