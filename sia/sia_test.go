@@ -13,7 +13,8 @@ import (
 	"github.com/SiaFoundation/s3d/sia"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"go.sia.tech/core/types"
-	sdk "go.sia.tech/siastorage"
+	"go.sia.tech/indexd/sdk"
+	"go.sia.tech/indexd/slabs"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
 )
@@ -86,11 +87,11 @@ func (s *MemorySDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
 	return obj, nil
 }
 
-func (s *MemorySDK) SealObject(obj sdk.Object) sdk.SealedObject {
-	return obj.Seal(s.appKey)
+func (s *MemorySDK) SealObject(obj sdk.Object) slabs.SealedObject {
+	return obj.Seal(s.appKey).SealedObject
 }
 
-func (s *MemorySDK) UnsealObject(sealed sdk.SealedObject) (sdk.Object, error) {
+func (s *MemorySDK) UnsealObject(sealed slabs.SealedObject) (sdk.Object, error) {
 	obj, exists := s.objects[sealed.ID()]
 	if !exists {
 		return sdk.Object{}, errors.New("object not found")

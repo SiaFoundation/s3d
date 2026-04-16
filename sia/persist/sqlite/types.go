@@ -9,7 +9,7 @@ import (
 
 	"github.com/SiaFoundation/s3d/s3"
 	"go.sia.tech/core/types"
-	sdk "go.sia.tech/siastorage"
+	"go.sia.tech/indexd/slabs"
 )
 
 var (
@@ -99,7 +99,7 @@ func (uid sqlUploadID) Value() (driver.Value, error) {
 	return uid[:], nil
 }
 
-type sqlSiaObject sdk.SealedObject
+type sqlSiaObject slabs.SealedObject
 
 func (m *sqlSiaObject) Scan(src any) error {
 	switch src := src.(type) {
@@ -108,14 +108,14 @@ func (m *sqlSiaObject) Scan(src any) error {
 			*m = sqlSiaObject{}
 			return nil
 		}
-		return (*sdk.SealedObject)(m).UnmarshalSia(src)
+		return (*slabs.SealedObject)(m).UnmarshalSia(src)
 	default:
 		return fmt.Errorf("cannot scan %T to SiaObject", src)
 	}
 }
 
 func (m sqlSiaObject) Value() (driver.Value, error) {
-	so := sdk.SealedObject(m)
+	so := slabs.SealedObject(m)
 	return so.MarshalSia()
 }
 

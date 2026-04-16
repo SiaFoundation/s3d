@@ -12,7 +12,7 @@ import (
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.sia.tech/core/types"
-	sdk "go.sia.tech/siastorage"
+	"go.sia.tech/indexd/slabs"
 )
 
 // DeleteObject deletes the object with the given bucket and name if it exists
@@ -98,7 +98,7 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, partNumber 
 			FROM objects
 			WHERE bucket_id = $1 AND name = $2
 		`, bid, name).Scan((*sqlHash256)(&obj.ID), (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Length, (*sqlMD5)(&obj.ContentMD5), &siaObj, (*sqlTime)(&obj.CachedAt))
-		obj.SiaObject = sdk.SealedObject(siaObj)
+		obj.SiaObject = slabs.SealedObject(siaObj)
 		return err
 	}
 
