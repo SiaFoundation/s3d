@@ -26,6 +26,9 @@ const (
 	MultipartDirectory = "multipart"
 )
 
+// ErrNoAccessKey is returned when no access key is provided to the Sia backend.
+var ErrNoAccessKey = errors.New("sia backend requires at least one access key")
+
 // Option is a configuration option for the S3 API handler.
 type Option func(*Sia)
 
@@ -39,6 +42,9 @@ func WithLogger(logger *zap.Logger) Option {
 // WithKeyPair adds a key pair to the Sia backend.
 func WithKeyPair(accessKeyID, secretKey string) func(*Sia) {
 	return func(mb *Sia) {
+		if accessKeyID == "" || secretKey == "" {
+			return
+		}
 		mb.accessKeys[accessKeyID] = auth.SecretAccessKey(secretKey)
 	}
 }
@@ -105,7 +111,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		opt(sia)
 	}
 	if len(sia.accessKeys) == 0 {
-		return nil, fmt.Errorf("sia backend requires both access key and secret key")
+		return nil, ErrNoAccessKey
 	}
 
 	go sia.processOrphansLoop(ctx)

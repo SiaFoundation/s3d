@@ -114,7 +114,7 @@ func runConfigCmd(fp string) {
 
 	fmt.Println("")
 	if len(cfg.Sia.KeyPairs) > 0 {
-		fmt.Println(ansiStyle("33m", fmt.Sprintf("%d access keypair(s) already configured.", len(cfg.Sia.KeyPairs))))
+		fmt.Println(ansiStyle("33", fmt.Sprintf("%d access keypair(s) already configured.", len(cfg.Sia.KeyPairs))))
 		fmt.Println("If you change them, you will need to update any scripts or applications that use the S3 API.")
 		if promptYesNo("Would you like to reconfigure your access keypairs?") {
 			cfg.Sia.KeyPairs = nil
@@ -216,7 +216,7 @@ func setKeypairs() {
 			if len(kp.AccessKey) >= 16 && len(kp.AccessKey) <= 128 {
 				break
 			}
-			fmt.Println(ansiStyle("31m", "Access key id must be between 16 and 128 characters."))
+			fmt.Println(ansiStyle("31", "Access key id must be between 16 and 128 characters."))
 			fmt.Println("")
 		}
 
@@ -228,7 +228,7 @@ func setKeypairs() {
 			if len(kp.SecretKey) >= 32 && len(kp.SecretKey) <= 128 {
 				break
 			}
-			fmt.Println(ansiStyle("31m", "Secret key must be between 32 and 128 characters."))
+			fmt.Println(ansiStyle("31", "Secret key must be between 32 and 128 characters."))
 			fmt.Println("")
 		}
 
@@ -293,7 +293,7 @@ func promptQuestion(question string, answers []string) string {
 				return answer
 			}
 		}
-		fmt.Println(ansiStyle("31m", fmt.Sprintf("Answer must be %s", humanList(answers, "or"))))
+		fmt.Println(ansiStyle("31", fmt.Sprintf("Answer must be %s", humanList(answers, "or"))))
 	}
 }
 
@@ -317,8 +317,8 @@ func setDataDirectory() {
 	_, existsErr := os.Stat(filepath.Join(cfg.Directory, "s3d.db"))
 	dataExists := existsErr == nil
 	if dataExists {
-		fmt.Println(ansiStyle("33m", "There is existing data in the data directory."))
-		fmt.Println(ansiStyle("33m", "If you change your data directory, you will need to manually move the data from your old data directory to your new one."))
+		fmt.Println(ansiStyle("33", "There is existing data in the data directory."))
+		fmt.Println(ansiStyle("33", "If you change your data directory, you will need to manually move the data from your old data directory to your new one."))
 	}
 
 	if !promptYesNo("Would you like to change the data directory? (Current: " + dir + ")") {
@@ -330,7 +330,7 @@ func setDataDirectory() {
 // stdoutError prints an error message to stdout
 func stdoutError(msg string) {
 	if cfg.Log.StdOut.EnableANSI {
-		fmt.Println(ansiStyle("31m", msg))
+		fmt.Println(ansiStyle("31", msg))
 	} else {
 		fmt.Println(msg)
 	}
