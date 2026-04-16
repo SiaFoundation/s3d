@@ -210,7 +210,9 @@ func main() {
 	}
 
 	backend, err := sia.New(ctx, sia.NewSDK(sdkClient), store, cfg.Directory, siaOpts...)
-	if err != nil {
+	if errors.Is(err, sia.ErrNoAccessKey) {
+		checkFatalError("Please provide at least one key pair. You can do so by updating the config file or running the 'config' command", err)
+	} else if err != nil {
 		checkFatalError("failed to create Sia backend", err)
 	}
 
