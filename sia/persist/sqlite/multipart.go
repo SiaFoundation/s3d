@@ -117,7 +117,7 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 				sia_object = excluded.sia_object,
 				cached_at = excluded.cached_at,
 				filename = excluded.filename
-		`, sqlNullableHash256(&objectID), sqlMD5(contentMD5), contentLength, sqlTime(time.Now()), sqlTime(time.Time{}), filename, sqlUploadID(uploadID))
+		`, (*sqlHash256)(objectID), sqlMD5(contentMD5), contentLength, sqlTime(time.Now()), sqlTime(time.Time{}), filename, sqlUploadID(uploadID))
 		if err != nil {
 			return err
 		}
