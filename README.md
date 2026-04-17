@@ -13,9 +13,10 @@ It supports AWS Signature V4 authentication, path-style and virtual-hosted-style
 bucket addressing, multipart uploads, and upload packing for small objects.
 
 `s3d` is built on top of the [Sia Storage SDK](https://pkg.go.dev/go.sia.tech/siastorage).
-None of the data uploaded through `s3d` is stored on the `s3d` server itself.
 All data is encrypted client-side by the SDK and distributed across the Sia
-network. The server only stores lightweight metadata in a local SQLite database.
+network. The server stores lightweight metadata in a local SQLite database.
+Small objects may be temporarily buffered on disk before being uploaded to Sia;
+see [Upload Packing](#upload-packing) for details.
 
 To build your own app on Sia, take a look at the
 [Sia Developer Portal](https://devs.sia.storage).
