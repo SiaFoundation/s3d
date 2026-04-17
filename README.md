@@ -1,6 +1,6 @@
-# [![S3d](https://sia.tech/api/media/file/banner-s3d.png)](http://sia.tech)
+# [![S3d](https://sia.tech/api/media/file/banner-s3d.png)](https://sia.tech)
 
-[![GoDoc](https://godoc.org/github.com/SiaFoundation/s3d?status.svg)](https://godoc.org/github.com/SiaFoundation/s3d)
+[![GoDoc](https://pkg.go.dev/badge/github.com/SiaFoundation/s3d)](https://pkg.go.dev/github.com/SiaFoundation/s3d)
 
 An S3-compatible gateway for the [Sia](https://sia.tech) network.
 
@@ -84,7 +84,7 @@ volumes:
 Run the configuration wizard to generate a config file.
 
 ```sh
-docker compose run --rm -it s3d config
+docker compose run --rm s3d config
 ```
 
 ### 3. Start `s3d`
