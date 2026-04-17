@@ -9,19 +9,36 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"go.sia.tech/core/types"
-	"go.sia.tech/indexd/slabs"
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
 )
 
 const metadataCacheLifetime = 24 * time.Hour
+
+func (s *Sia) pendingUploadDir() string {
+	return filepath.Join(s.directory, PendingUploadsDirectory)
+}
+
+func (s *Sia) openPendingUpload(fileName string) (*os.File, error) {
+	return os.Open(filepath.Join(s.pendingUploadDir(), fileName))
+}
+
+func (s *Sia) removePendingUpload(fileName string) error {
+	// We use RemoveAll here since RemoveAll uses
+	// FILE_DISPOSITION_POSIX_SEMANTICS on supported Windows versions, which
+	// allows us to delete files that currenty being served without an error.
+	// Remove would fail on Windows which would lead to an unnecessary orphaned
+	// file.
+	return os.RemoveAll(filepath.Join(s.pendingUploadDir(), fileName))
+}
 
 // CopyObject copies an object from the source bucket and object key to the
 // destination bucket and object key. The provided metadata map contains any
@@ -43,9 +60,12 @@ func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject,
 // DeleteObject deletes the object with the given key from the specified
 // bucket for the user identified by the given access key.
 func (s *Sia) DeleteObject(ctx context.Context, accessKeyID, bucket string, object s3.ObjectID) (*s3.DeleteObjectResult, error) {
-	err := s.store.DeleteObject(accessKeyID, bucket, object)
+	fileName, err := s.store.DeleteObject(accessKeyID, bucket, object)
 	if err != nil {
 		return nil, err
+	} else if fileName != nil {
+		// object hasn't been uploaded yet, so we clean up the file
+		_ = s.removePendingUpload(*fileName)
 	}
 
 	return &s3.DeleteObjectResult{
@@ -144,7 +164,28 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 		return resp, nil
 	}
 
-	// refresh cached object metadata if needed
+	// read from disk if the object hasn't been uploaded yet
+	if obj.FileName != nil {
+		f, err := s.openPendingUpload(*obj.FileName)
+		if os.IsNotExist(err) {
+			// possible race, check if the object was uploaded to Sia in the
+			// meantime
+			obj, err = s.store.GetObject(accessKeyID, bucket, object, partNumber)
+			if err != nil {
+				return nil, err
+			} else if obj.SiaObject == nil {
+				return nil, fmt.Errorf("pending upload file disappeared and object is not on Sia")
+			}
+		} else if err != nil {
+			return nil, fmt.Errorf("failed to open pending upload file: %w", err)
+		} else {
+			// file is served from disk
+			resp.Body = f
+			return resp, nil
+		}
+	}
+
+	// object is on Sia, refresh cached object metadata if needed
 	siaObj, err := s.refreshSiaObject(ctx, *accessKeyID, bucket, object, obj)
 	if err != nil {
 		return nil, err
@@ -169,12 +210,15 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 // refreshSiaObject refreshes the object's cached Sia object if it is missing
 // or stale. Returns the unsealed sdk.Object for use in downloads.
 func (s *Sia) refreshSiaObject(ctx context.Context, accessKeyID, bucket, objectKey string, obj *objects.Object) (siaObj sdk.Object, err error) {
+	if obj.SiaObject == nil {
+		return sdk.Object{}, fmt.Errorf("object is missing Sia object metadata") // should never happen
+	}
 	cached := !obj.CachedAt.IsZero()
 
 	// if cache is fresh, unseal and return
 	cachedUntil := obj.CachedAt.Add(metadataCacheLifetime)
 	if time.Now().Before(cachedUntil) {
-		siaObj, err = s.sdk.UnsealObject(obj.SiaObject)
+		siaObj, err = s.sdk.UnsealObject(*obj.SiaObject)
 		if err != nil {
 			s.logger.Warn("failed to unseal cached object, will fetch from indexer", zap.Error(err))
 			cached = false
@@ -189,13 +233,14 @@ func (s *Sia) refreshSiaObject(ctx context.Context, accessKeyID, bucket, objectK
 		if cached {
 			s.logger.Warn("failed to fetch object from indexer, using stale metadata", zap.Error(err))
 			// try to unseal the stale cached object
-			return s.sdk.UnsealObject(obj.SiaObject)
+			return s.sdk.UnsealObject(*obj.SiaObject)
 		}
 		return sdk.Object{}, fmt.Errorf("failed to fetch object from indexer: %w", err)
 	}
 
 	// seal the fetched object for storage
-	obj.SiaObject = s.sdk.SealObject(fetched)
+	sealed := s.sdk.SealObject(fetched)
+	obj.SiaObject = &sealed
 	obj.CachedAt = time.Now()
 	if err := s.store.PutObject(accessKeyID, bucket, objectKey, obj, false); err != nil {
 		s.logger.Warn("failed to update object metadata cache", zap.Error(err))
@@ -222,7 +267,7 @@ func (s *Sia) ListObjects(ctx context.Context, accessKeyID *string, bucket strin
 }
 
 // PutObject puts an object with the given key into the specified bucket.
-func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object string, r io.Reader, opts s3.PutObjectOptions) (*s3.PutObjectResult, error) {
+func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object string, r io.Reader, opts s3.PutObjectOptions) (_ *s3.PutObjectResult, err error) {
 	// quick check if the bucket exists
 	if err := s.store.HeadBucket(accessKeyID, bucket); err != nil {
 		return nil, err
@@ -239,33 +284,37 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 		r = io.TeeReader(r, sha256Hash)
 	}
 
-	// count size of uploaded data
-	lr := &lenReader{
-		inner: r,
-	}
-
 	// handle empty object case
-	var objectID types.Hash256
-	var siaObject slabs.SealedObject
-	var cachedAt time.Time
+	var objPath string
+	var size int64
 	if opts.ContentLength == 0 {
 		// drain reader
-		if _, err := io.Copy(io.Discard, lr); err != nil {
+		if _, err := io.Copy(io.Discard, r); err != nil {
 			return nil, fmt.Errorf("failed to read object data: %w", err)
 		}
 	} else {
-		// upload the data
-		obj, err := s.sdk.Upload(ctx, lr)
+		// save the object
+		objPath = filepath.Join(s.pendingUploadDir(), randObjectName(bucket, object))
+		f, err := os.Create(objPath)
 		if err != nil {
-			return nil, fmt.Errorf("failed to upload object: %w", err)
+			return nil, fmt.Errorf("failed to create temporary file: %w", err)
 		}
-		objectID = obj.ID()
-		siaObject = s.sdk.SealObject(obj)
-		cachedAt = time.Now()
+		size, err = io.Copy(f, io.LimitReader(r, opts.ContentLength))
+		if err != nil {
+			return nil, fmt.Errorf("failed to store object: %w", err)
+		} else if err := f.Sync(); err != nil {
+			return nil, fmt.Errorf("failed to sync object to disk: %w", err)
+		}
 	}
 
+	defer func() {
+		if err != nil && objPath != "" {
+			_ = os.Remove(objPath)
+		}
+	}()
+
 	// check content length
-	if opts.ContentLength != lr.N {
+	if opts.ContentLength != size {
 		return nil, s3errs.ErrIncompleteBody
 	}
 
@@ -294,17 +343,4 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	return &s3.PutObjectResult{
 		ContentMD5: contentMD5,
 	}, nil
-}
-
-// lenReader is an io.Reader that counts the number of bytes read.
-type lenReader struct {
-	N     int64
-	inner io.Reader
-}
-
-// Read counts the number of bytes read from the inner reader.
-func (r *lenReader) Read(d []byte) (int, error) {
-	n, err := r.inner.Read(d)
-	r.N += int64(n)
-	return n, err
 }
