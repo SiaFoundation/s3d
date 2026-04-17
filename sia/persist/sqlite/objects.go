@@ -16,9 +16,11 @@ import (
 
 // DeleteObject deletes the object with the given bucket and name if it exists
 // and all provided preconditions match. If the deleted object's ID has no
-// remaining references, it is inserted into the orphaned_objects table.
-func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) error {
-	return s.transaction(func(tx *txn) error {
+// remaining references, it is inserted into the orphaned_objects table. If the
+// object hasn't been uploaded yet, its filename is returned for cleanup.
+func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (*string, error) {
+	var fileName *string
+	err := s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
@@ -32,8 +34,8 @@ func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) e
 		var updatedAt time.Time
 		err = tx.QueryRow(`
 			DELETE FROM objects WHERE bucket_id = $1 AND name = $2
-			RETURNING object_id, content_md5, size, updated_at
-		`, bid, objectID.Key).Scan((*sqlHash256)(&deletedID), (*sqlMD5)(&contentMD5), &size, (*sqlTime)(&updatedAt))
+			RETURNING file_name, object_id, content_md5, size, updated_at
+		`, bid, objectID.Key).Scan(&fileName, (*sqlHash256)(&deletedID), (*sqlMD5)(&contentMD5), &size, (*sqlTime)(&updatedAt))
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil // object doesn't exist, nothing to delete
 		} else if err != nil {
@@ -52,6 +54,7 @@ func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) e
 
 		return insertOrphan(tx, deletedID)
 	})
+	return fileName, err
 }
 
 // GetObject retrieves the object with the given bucket and name.
@@ -91,13 +94,15 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, partNumber 
 			}
 			obj.PartsCount = *partNumber
 		}
-		var siaObj sqlSiaObject
+		var siaObj sql.Null[sqlSiaObject]
 		err := tx.QueryRow(`
-			SELECT object_id, metadata, updated_at, size, content_md5, sia_object, cached_at
+			SELECT file_name, object_id, metadata, updated_at, size, content_md5, sia_object, cached_at
 			FROM objects
 			WHERE bucket_id = $1 AND name = $2
-		`, bid, name).Scan((*sqlHash256)(&obj.ID), (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Length, (*sqlMD5)(&obj.ContentMD5), &siaObj, (*sqlTime)(&obj.CachedAt))
-		obj.SiaObject = slabs.SealedObject(siaObj)
+		`, bid, name).Scan(&obj.FileName, (*sqlHash256)(&obj.ID), (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Length, (*sqlMD5)(&obj.ContentMD5), &siaObj, (*sqlTime)(&obj.CachedAt))
+		if siaObj.Valid {
+			obj.SiaObject = (*slabs.SealedObject)(&siaObj.V)
+		}
 		return err
 	}
 
@@ -116,7 +121,7 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, partNumber 
 }
 
 // PutObject stores the given object in the given bucket with the given name or
-// overwrites it if it already exists.  If updatedModTime is true, the
+// overwrites it if it already exists. If updatedModTime is true, the
 // `updated_at` time that represents the S3 last modified time will be updated.
 // If the overwritten object's ID has no remaining references, it is inserted
 // into the orphaned_objects table.

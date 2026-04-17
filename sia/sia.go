@@ -24,6 +24,10 @@ const (
 	// MultipartDirectory is the directory name used for storing multipart
 	// uploads.
 	MultipartDirectory = "multipart"
+
+	// PendingUploadsDirectory is the directory name used for storing pending
+	// uploads that haven't been completed yet.
+	PendingUploadsDirectory = "pending"
 )
 
 // ErrNoAccessKey is returned when no access key is provided to the Sia backend.
@@ -74,7 +78,7 @@ type Store interface {
 	CopyObject(srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool) (*objects.Object, error)
 	CreateBucket(accessKeyID, bucket string) error
 	DeleteBucket(accessKeyID, bucket string) error
-	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) error
+	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (*string, error)
 	GetObject(accessKeyID *string, bucket, object string, partNumber *int32) (*objects.Object, error)
 	HeadBucket(accessKeyID, bucket string) error
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
@@ -94,11 +98,6 @@ type Store interface {
 
 // New creates a new Sia backend instance.
 func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Option) (*Sia, error) {
-	directory = filepath.Join(directory, MultipartDirectory)
-	if err := os.MkdirAll(directory, 0700); err != nil {
-		return nil, fmt.Errorf("failed to create multipart upload directory: %w", err)
-	}
-
 	sia := &Sia{
 		logger: zap.NewNop(),
 		sdk:    sdk,
@@ -112,6 +111,15 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 	}
 	if len(sia.accessKeys) == 0 {
 		return nil, ErrNoAccessKey
+	}
+
+	for _, dir := range []string{
+		filepath.Join(sia.directory, PendingUploadsDirectory),
+		filepath.Join(sia.directory, MultipartDirectory),
+	} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			return nil, fmt.Errorf("failed to create directory %q: %w", dir, err)
+		}
 	}
 
 	go sia.processOrphansLoop(ctx)

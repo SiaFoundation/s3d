@@ -18,8 +18,11 @@ CREATE TABLE objects (
     metadata TEXT NOT NULL,
     size INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
-    sia_object BLOB NOT NULL,
+    file_name TEXT,
+    sia_object BLOB,
     cached_at INTEGER NOT NULL,
+    -- file is either stored on disk or on Sia
+    CHECK ((sia_object IS NULL AND file_name IS NOT NULL) OR (sia_object IS NOT NULL AND file_name IS NULL)),
     PRIMARY KEY (bucket_id, name)
 ) WITHOUT ROWID;
 CREATE INDEX objects_object_id_idx ON objects(object_id);
