@@ -35,7 +35,7 @@ func TestGetObject(t *testing.T) {
 		objLength = frand.Intn(10) + 1
 
 		// TODO: most of these are used to be able to call MarkObjectUploaded in
-		// testes. Once we have the actual upload logic in place, we should be
+		// tests. Once we have the actual upload logic in place, we should be
 		// able to call that instead of just marking the upload done. Then we
 		// should be able to get rid of some of this here again.
 		objSealKey = types.GeneratePrivateKey()
@@ -59,7 +59,7 @@ func TestGetObject(t *testing.T) {
 	}
 
 	// create object
-	err := store.PutObject(accessKeyID, bucket, object, objMD5, objMeta, int64(objLength), "", true)
+	err := store.PutObject(accessKeyID, bucket, object, objMD5, objMeta, int64(objLength), new(string), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,7 +317,7 @@ func TestListObjects(t *testing.T) {
 		}
 
 		for _, key := range tt.keys {
-			err := store.PutObject("", bucket, key, contentMD5, nil, int64(frand.Intn(1000))+1, "", true)
+			err := store.PutObject("", bucket, key, contentMD5, nil, int64(frand.Intn(1000))+1, new(string), true)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -388,7 +388,7 @@ func TestListObjectsMatch(t *testing.T) {
 	etag := s3.FormatETag(contentMD5[:], 0)
 
 	for _, key := range keys {
-		err := store.PutObject("", bucket, key, contentMD5, nil, int64(frand.Intn(1000))+1, "", true)
+		err := store.PutObject("", bucket, key, contentMD5, nil, int64(frand.Intn(1000))+1, new(string), true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -496,7 +496,7 @@ func TestListObjectsWalk(t *testing.T) {
 	keysAll := make(map[string]struct{})
 	for range numKeys {
 		key := randomPath(minLength, maxLength, maxDepth, alphabet, delimiter)
-		err := store.PutObject("", bucket, key, contentMD5, nil, int64(frand.Intn(1000))+1, "", true)
+		err := store.PutObject("", bucket, key, contentMD5, nil, int64(frand.Intn(1000))+1, new(string), true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -767,7 +767,7 @@ func TestOrphanedObjects(t *testing.T) {
 	}
 
 	// put first object and mark it uploaded
-	if err := store.PutObject(accessKeyID, bucket, "a", frand.Entropy128(), nil, 1, "", true); err != nil {
+	if err := store.PutObject(accessKeyID, bucket, "a", frand.Entropy128(), nil, 1, new(string), true); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.MarkObjectUploaded(bucket, "a", sealed.SealedObject); err != nil {
@@ -835,7 +835,7 @@ func TestPutObjectOrphan(t *testing.T) {
 	newID := newSealed.ID()
 
 	// put initial object and mark it uploaded
-	if err := store.PutObject(accessKeyID, bucket, "obj", frand.Entropy128(), nil, 1, "", true); err != nil {
+	if err := store.PutObject(accessKeyID, bucket, "obj", frand.Entropy128(), nil, 1, new(string), true); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.MarkObjectUploaded(bucket, "obj", oldSealed.SealedObject); err != nil {
@@ -850,7 +850,7 @@ func TestPutObjectOrphan(t *testing.T) {
 	}
 
 	// overwrite with a different object_id - old ID should be orphaned
-	if err := store.PutObject(accessKeyID, bucket, "obj", frand.Entropy128(), nil, 1, "", true); err != nil {
+	if err := store.PutObject(accessKeyID, bucket, "obj", frand.Entropy128(), nil, 1, new(string), true); err != nil {
 		t.Fatal(err)
 	}
 
@@ -870,7 +870,7 @@ func TestPutObjectOrphan(t *testing.T) {
 	if err := store.MarkObjectUploaded(bucket, "obj", newSealed.SealedObject); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.PutObject(accessKeyID, bucket, "obj", frand.Entropy128(), nil, 2, "", true); err != nil {
+	if err := store.PutObject(accessKeyID, bucket, "obj", frand.Entropy128(), nil, 2, new(string), true); err != nil {
 		t.Fatal(err)
 	}
 

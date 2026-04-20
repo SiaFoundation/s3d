@@ -86,7 +86,9 @@ func (s *Sia) DeleteObject(ctx context.Context, accessKeyID, bucket string, obje
 		return nil, err
 	} else if fileName != nil {
 		// object hasn't been uploaded yet, so we clean up the file
-		_ = s.removeUpload(*fileName)
+		if err := s.removeUpload(*fileName); err != nil {
+			s.logger.Warn("failed to remove pending upload file", zap.String("bucket", bucket), zap.String("object", object.Key), zap.Error(err))
+		}
 	}
 
 	return &s3.DeleteObjectResult{
@@ -312,6 +314,7 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 
 	// handle empty object case
 	var objPath string
+	var fileName *string
 	var size int64
 	if opts.ContentLength == 0 {
 		// drain reader
@@ -320,16 +323,22 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 		}
 	} else {
 		// save the object
-		objPath = filepath.Join(s.uploadDir(), randObjectName(bucket, object))
+		randFileName := randObjectName(bucket, object)
+		objPath = filepath.Join(s.uploadDir(), randFileName)
+		fileName = &randFileName
 		f, err := os.Create(objPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create temporary file: %w", err)
 		}
 		size, err = io.Copy(f, io.LimitReader(r, opts.ContentLength))
 		if err != nil {
+			_ = f.Close()
 			return nil, fmt.Errorf("failed to store object: %w", err)
 		} else if err := f.Sync(); err != nil {
+			_ = f.Close()
 			return nil, fmt.Errorf("failed to sync object to disk: %w", err)
+		} else if err := f.Close(); err != nil {
+			return nil, fmt.Errorf("failed to close object file: %w", err)
 		}
 	}
 
@@ -355,7 +364,7 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	}
 
 	// store the object in the database
-	if err := s.store.PutObject(accessKeyID, bucket, object, contentMD5, opts.Meta, size, filepath.Base(objPath), true); err != nil {
+	if err := s.store.PutObject(accessKeyID, bucket, object, contentMD5, opts.Meta, size, fileName, true); err != nil {
 		return nil, fmt.Errorf("failed to store object metadata: %w", err)
 	}
 

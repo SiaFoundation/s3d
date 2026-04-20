@@ -100,10 +100,10 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 		}
 
 		// upsert object with metadata from multipart upload
-		// the upload_id serves as the file_name since parts are stored
+		// the upload_id serves as the filename since parts are stored
 		// under the upload directory
 		_, err = tx.Exec(`
-			INSERT INTO objects (bucket_id, name, content_md5, metadata, size, updated_at, file_name, cached_at)
+			INSERT INTO objects (bucket_id, name, content_md5, metadata, size, updated_at, filename, cached_at)
 			SELECT bucket_id, name, $1, metadata, $2, $3, $4, 0
 			FROM multipart_uploads
 			WHERE upload_id = $5
@@ -113,7 +113,7 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 				metadata = excluded.metadata,
 				size = excluded.size,
 				updated_at = excluded.updated_at,
-				file_name = excluded.file_name,
+				filename = excluded.filename,
 				sia_object = NULL,
 				cached_at = 0
 		`, sqlMD5(contentMD5), contentLength, sqlTime(time.Now()), uploadID.String(), sqlUploadID(uploadID))
@@ -198,7 +198,7 @@ func (s *Store) AddMultipartPart(bucket, name string, uploadID s3.UploadID, file
 			INSERT INTO multipart_parts (upload_id, part_number, filename, content_md5, content_length, created_at)
 			VALUES ($1, $2, $3, $4, $5, $6)
 			ON CONFLICT(upload_id, part_number) DO UPDATE SET
-				filename       = EXCLUDED.filename,
+				filename      = EXCLUDED.filename,
 				content_md5    = EXCLUDED.content_md5,
 				content_length = EXCLUDED.content_length,
 				created_at     = EXCLUDED.created_at
