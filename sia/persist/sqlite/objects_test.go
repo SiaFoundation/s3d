@@ -34,6 +34,10 @@ func TestGetObject(t *testing.T) {
 		objMeta   = map[string]string{"foo": "bar"}
 		objLength = frand.Intn(10) + 1
 
+		// TODO: most of these are used to be able to call MarkObjectUploaded in
+		// testes. Once we have the actual upload logic in place, we should be
+		// able to call that instead of just marking the upload done. Then we
+		// should be able to get rid of some of this here again.
 		objSealKey = types.GeneratePrivateKey()
 		objSdkObj  = sdk.Object{}
 		objSealed  = objSdkObj.Seal(objSealKey)
