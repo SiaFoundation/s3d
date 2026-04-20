@@ -23,6 +23,11 @@ import (
 
 const metadataCacheLifetime = 24 * time.Hour
 
+type readCloser struct {
+	io.Reader
+	io.Closer
+}
+
 func (s *Sia) uploadDir() string {
 	return filepath.Join(s.directory, UploadsDirectory)
 }
@@ -207,7 +212,7 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 			return nil, fmt.Errorf("failed to open pending upload file: %w", err)
 		} else {
 			if resp.Range != nil {
-				resp.Body = io.NopCloser(io.LimitReader(rc, resp.Range.Length))
+				resp.Body = readCloser{Reader: io.LimitReader(rc, resp.Range.Length), Closer: rc}
 			} else {
 				resp.Body = rc
 			}

@@ -137,7 +137,7 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object string
 
 	// create part directory
 	partDir, err := s.ensureMultipartPartDir(uploadID, opts.PartNumber)
-	if err := os.Mkdir(partDir, 0700); errors.Is(err, os.ErrNotExist) {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil, s3errs.ErrNoSuchUpload
 	} else if err != nil && !errors.Is(err, os.ErrExist) {
 		return nil, fmt.Errorf("failed to create part directory: %w", err)

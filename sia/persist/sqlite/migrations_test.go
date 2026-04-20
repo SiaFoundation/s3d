@@ -35,7 +35,7 @@ CREATE TABLE objects (
     sia_object BLOB,
     cached_at INTEGER NOT NULL,
     -- file is either stored on disk or on Sia
-    CHECK ((sia_object IS NULL AND object_id IS NULL AND filename IS NOT NULL) OR (sia_object IS NOT NULL AND object_id IS NOT NULL AND filename IS NULL) OR size = 0),
+    CHECK ((sia_object IS NULL AND object_id IS NULL AND filename IS NOT NULL) OR (sia_object IS NOT NULL AND object_id IS NOT NULL AND filename IS NULL) OR (object_id IS NULL AND filename IS NULL AND size = 0)),
     PRIMARY KEY (bucket_id, name)
 ) WITHOUT ROWID;
 CREATE INDEX objects_object_id_idx ON objects(object_id);
