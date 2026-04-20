@@ -47,6 +47,10 @@ func (s *Sia) createMultipartUploadDir(uploadID s3.UploadID) (string, error) {
 	return uploadDir, nil
 }
 
+// TODO: when we start calling this after completing an upload, we need to make
+// sure we don't delete the dir while potentially still serving the data from
+// disk. That's because unlike with 'removeUpload', multipart uploads don't open
+// all file handles beforehand.
 func (s *Sia) removeMultipartUploadDir(uploadID s3.UploadID) error {
 	return os.RemoveAll(s.multipartUploadDir(uploadID))
 }
