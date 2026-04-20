@@ -5,6 +5,7 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"io"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -819,6 +820,79 @@ func TestObjectMetadataCache(t *testing.T) {
 	})
 }
 
+func TestCopyAndDeleteObject(t *testing.T) {
+	log := zaptest.NewLogger(t)
+	dir := t.TempDir()
+	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	s3Tester := NewCustomTester(t, dir, store, NewMemorySDK(), log)
+
+	const bucket = "bucket"
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// upload an object
+	data := frand.Bytes(256)
+	_, err = s3Tester.PutObject(t.Context(), bucket, "src", bytes.NewReader(data), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// find the file on disk
+	uploadsDir := filepath.Join(dir, sia.UploadsDirectory)
+	entries, err := os.ReadDir(uploadsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 upload file, got %d", len(entries))
+	}
+	uploadFile := entries[0].Name()
+
+	// copy src -> dst
+	_, err = s3Tester.CopyObject(t.Context(), bucket, "src", bucket, "dst", types.MetadataDirectiveCopy, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// delete the source
+	if err := s3Tester.DeleteObject(t.Context(), bucket, "src"); err != nil {
+		t.Fatal(err)
+	}
+
+	// file should still exist on disk (dst still references it)
+	if _, err := os.Stat(filepath.Join(uploadsDir, uploadFile)); err != nil {
+		t.Fatalf("expected upload file to still exist after deleting src, got: %v", err)
+	}
+
+	// download the destination and verify contents
+	obj, err := s3Tester.GetObject(t.Context(), bucket, "dst", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(obj.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatal("downloaded data does not match original")
+	}
+
+	// delete the destination
+	if err := s3Tester.DeleteObject(t.Context(), bucket, "dst"); err != nil {
+		t.Fatal(err)
+	}
+
+	// file should now be gone from disk
+	if _, err := os.Stat(filepath.Join(uploadsDir, uploadFile)); !os.IsNotExist(err) {
+		t.Fatalf("expected upload file to be deleted, got: %v", err)
+	}
+}
+
 func TestDeleteObjectUnpin(t *testing.T) {
 	// TODO: add back once background uploads to Sia are implemented
 	t.SkipNow()
@@ -932,7 +1006,7 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	}
 	orphanID := orphans[0]
 	// re-reference the orphaned object_id by inserting a new object row
-	if err := store.PutObject(testutil.AccessKeyID, bucket, "D", [16]byte{}, nil, 1, "", true); err != nil {
+	if err := store.PutObject(testutil.AccessKeyID, bucket, "D", [16]byte{}, nil, 1, new(string), true); err != nil {
 		t.Fatal(err)
 	}
 	siaBackend.ProcessOrphans(t.Context())

@@ -34,7 +34,7 @@ func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (
 		var updatedAt time.Time
 		err = tx.QueryRow(`
 			DELETE FROM objects WHERE bucket_id = $1 AND name = $2
-			RETURNING file_name, object_id, content_md5, size, updated_at
+			RETURNING filename, object_id, content_md5, size, updated_at
 		`, bid, objectID.Key).Scan(&fileName, &deletedID, (*sqlMD5)(&contentMD5), &size, (*sqlTime)(&updatedAt))
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil // object doesn't exist, nothing to delete
@@ -50,6 +50,18 @@ func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (
 		}
 		if objectID.LastModifiedTime != nil && !updatedAt.Truncate(time.Second).Equal(objectID.LastModifiedTime.StdTime()) {
 			return s3errs.ErrPreconditionFailed
+		}
+
+		// only return the filename for cleanup if no other object
+		// references the same file
+		if fileName != nil {
+			var shared bool
+			if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM objects WHERE filename = $1)`, *fileName).Scan(&shared); err != nil {
+				return err
+			}
+			if shared {
+				fileName = nil
+			}
 		}
 
 		if deletedID.Valid {
@@ -100,7 +112,7 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, partNumber 
 		var objectID sql.Null[sqlHash256]
 		var siaObj sql.Null[sqlSiaObject]
 		err := tx.QueryRow(`
-			SELECT file_name, object_id, metadata, updated_at, size, content_md5, sia_object, cached_at
+			SELECT filename, object_id, metadata, updated_at, size, content_md5, sia_object, cached_at
 			FROM objects
 			WHERE bucket_id = $1 AND name = $2
 		`, bid, name).Scan(&obj.FileName, &objectID, (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Length, (*sqlMD5)(&obj.ContentMD5), &siaObj, (*sqlTime)(&obj.CachedAt))
@@ -137,19 +149,19 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, partNumber 
 // `updated_at` time that represents the S3 last modified time will be updated.
 // If the overwritten object's ID has no remaining references, it is inserted
 // into the orphaned_objects table.
-func (s *Store) PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName string, updateModTime bool) error {
+func (s *Store) PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string, updateModTime bool) error {
 	return s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
-		return putObject(tx, bid, name, nil, contentMD5, meta, length, &fileName, nil, time.Time{}, updateModTime)
+		return putObject(tx, bid, name, nil, contentMD5, meta, length, fileName, nil, time.Time{}, updateModTime)
 	})
 }
 
 // MarkObjectUploaded transitions a pending upload to a Sia-backed object by
 // setting the object_id, sia_object and cached_at fields while clearing
-// file_name. Fails if the object already has an object_id.
+// filename. Fails if the object already has an object_id.
 func (s *Store) MarkObjectUploaded(bucket, name string, siaObject slabs.SealedObject) error {
 	return s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
@@ -159,7 +171,7 @@ func (s *Store) MarkObjectUploaded(bucket, name string, siaObject slabs.SealedOb
 		objID := siaObject.ID()
 		res, err := tx.Exec(`
 			UPDATE objects
-			SET object_id = $1, sia_object = $2, file_name = NULL, cached_at = $3
+			SET object_id = $1, sia_object = $2, filename = NULL, cached_at = $3
 			WHERE bucket_id = $4 AND name = $5 AND object_id IS NULL
 		`, sqlHash256(objID), sqlSiaObject(siaObject), sqlTime(time.Now()), bid, name)
 		if err != nil {
@@ -301,7 +313,7 @@ func putObject(tx *txn, bid int64, name string, id *types.Hash256, contentMD5 [1
 	}
 
 	_, err = tx.Exec(`
-		INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at, file_name, sia_object, cached_at)
+		INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at, filename, sia_object, cached_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		ON CONFLICT(bucket_id, name) DO UPDATE SET
 			object_id = excluded.object_id,
@@ -309,7 +321,7 @@ func putObject(tx *txn, bid int64, name string, id *types.Hash256, contentMD5 [1
 			metadata = excluded.metadata,
 			size = excluded.size,
 			updated_at = CASE WHEN $11 THEN excluded.updated_at ELSE objects.updated_at END,
-			file_name = excluded.file_name,
+			filename = excluded.filename,
 			sia_object = excluded.sia_object,
 			cached_at = excluded.cached_at
 	`, bid, name, (*sqlHash256)(id), sqlMD5(contentMD5),

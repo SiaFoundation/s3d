@@ -80,7 +80,7 @@ type Store interface {
 	ListObjects(accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error)
 	ObjectParts(bucket, name string) ([]objects.Part, error)
 	OrphanedObjects(limit int) ([]types.Hash256, error)
-	PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName string, updateModTime bool) error
+	PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string, updateModTime bool) error
 	MarkObjectUploaded(bucket, name string, siaObject slabs.SealedObject) error
 	UpdateSiaObject(siaObject slabs.SealedObject, cachedAt time.Time) error
 	RemoveOrphanedObject(objectID types.Hash256) error
