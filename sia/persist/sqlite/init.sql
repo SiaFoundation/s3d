@@ -13,7 +13,7 @@ CREATE TABLE buckets (
 CREATE TABLE objects (
     bucket_id INTEGER REFERENCES buckets(id) NOT NULL,
     name TEXT NOT NULL,
-    object_id BLOB NOT NULL,
+    object_id BLOB,
     content_md5 BLOB NOT NULL,
     metadata TEXT NOT NULL,
     size INTEGER NOT NULL,
@@ -22,7 +22,7 @@ CREATE TABLE objects (
     sia_object BLOB,
     cached_at INTEGER NOT NULL,
     -- file is either stored on disk or on Sia
-    CHECK ((sia_object IS NULL AND file_name IS NOT NULL) OR (sia_object IS NOT NULL AND file_name IS NULL)),
+    CHECK ((sia_object IS NULL AND object_id IS NULL AND file_name IS NOT NULL) OR (sia_object IS NOT NULL AND object_id IS NOT NULL AND file_name IS NULL)),
     PRIMARY KEY (bucket_id, name)
 ) WITHOUT ROWID;
 CREATE INDEX objects_object_id_idx ON objects(object_id);
@@ -53,6 +53,7 @@ CREATE TABLE object_parts (
     bucket_id INTEGER NOT NULL,
     name TEXT NOT NULL,
     part_number INTEGER NOT NULL,
+    filename TEXT NOT NULL,
     content_md5 BLOB NOT NULL,
     content_length INTEGER NOT NULL,
     offset INTEGER NOT NULL,

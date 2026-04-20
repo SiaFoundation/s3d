@@ -78,13 +78,16 @@ type Store interface {
 	HeadBucket(accessKeyID, bucket string) error
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
 	ListObjects(accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error)
+	ObjectParts(bucket, name string) ([]objects.Part, error)
 	OrphanedObjects(limit int) ([]types.Hash256, error)
-	PutObject(accessKeyID, bucket, name string, obj *objects.Object, updateModTime bool) error
+	PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName string, updateModTime bool) error
+	MarkObjectUploaded(bucket, name string, siaObject slabs.SealedObject) error
+	UpdateSiaObject(siaObject slabs.SealedObject, cachedAt time.Time) error
 	RemoveOrphanedObject(objectID types.Hash256) error
 	AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) error
 	AddMultipartPart(bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (string, error)
 	CreateMultipartUpload(bucket, name string, uploadID s3.UploadID, meta map[string]string) error
-	CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, objectID types.Hash256, contentMD5 [16]byte, contentLength int64) error
+	CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64) error
 	HasMultipartUpload(bucket, name string, uploadID s3.UploadID) error
 	ListMultipartUploads(bucket string, prefix s3.Prefix, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error)
 	ListParts(bucket, name string, uploadID s3.UploadID, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error)
