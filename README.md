@@ -211,8 +211,8 @@ generate one.
 
 ### Environment Variables
 
-The following environment variables may be used to override the default
-configuration and take precedence over the config file settings.
+The following environment variables may be used to seed default values. If a
+config file is found, its settings will take precedence over these variables.
 
 | Variable | Description |
 |----------|-------------|
@@ -223,7 +223,7 @@ configuration and take precedence over the config file settings.
 ### Example Config
 
 ```yaml
-apiAddress: :8000
+apiAddress: 127.0.0.1:8000
 directory: /var/lib/s3d
 recoveryPhrase: your twelve word recovery phrase goes right here in this field
 log:
