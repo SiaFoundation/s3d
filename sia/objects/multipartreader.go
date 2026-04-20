@@ -48,14 +48,11 @@ func NewReader(partsDir string, parts []Part, offset int64) (*MultipartReader, e
 		partsDir:       partsDir,
 	}
 
-	// seek past remaining bytes within the first part
+	// discard remaining bytes within the first part so the hasher stays correct
 	if offset > 0 && len(parts) > 0 {
-		if err := r.openNext(); err != nil {
-			return nil, fmt.Errorf("failed to open first part: %w", err)
-		}
-		if _, err := r.curr.Seek(offset, io.SeekStart); err != nil {
+		if _, err := io.CopyN(io.Discard, r, offset); err != nil {
 			r.Close()
-			return nil, fmt.Errorf("failed to seek within part: %w", err)
+			return nil, fmt.Errorf("failed to skip to offset: %w", err)
 		}
 	}
 	return r, nil
