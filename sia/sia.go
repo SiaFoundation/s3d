@@ -32,7 +32,10 @@ const (
 	PackingDirectory = "packing"
 )
 
-// Option is a configuration option for the Sia backend.
+// ErrNoAccessKey is returned when no access key is provided to the Sia backend.
+var ErrNoAccessKey = errors.New("sia backend requires at least one access key")
+
+// Option is a configuration option for the S3 API handler.
 type Option func(*Sia)
 
 // WithLogger sets the logger for the Sia backend.
@@ -42,19 +45,22 @@ func WithLogger(logger *zap.Logger) Option {
 	}
 }
 
-// WithKeyPair adds a key pair to the Sia backend.
-func WithKeyPair(accessKeyID, secretKey string) Option {
-	return func(s *Sia) {
-		s.accessKeys[accessKeyID] = auth.SecretAccessKey(secretKey)
-	}
-}
-
 // WithPackingWaste sets the maximum percentage of wasted space tolerated per
 // slab. Objects whose upload would waste more than this fraction of a slab are
 // written to disk and batched together. Pass 0 to disable packing.
 func WithPackingWaste(pct float64) Option {
 	return func(s *Sia) {
 		s.packingWastePct = pct
+	}
+}
+
+// WithKeyPair adds a key pair to the Sia backend.
+func WithKeyPair(accessKeyID, secretKey string) func(*Sia) {
+	return func(mb *Sia) {
+		if accessKeyID == "" || secretKey == "" {
+			return
+		}
+		mb.accessKeys[accessKeyID] = auth.SecretAccessKey(secretKey)
 	}
 }
 
@@ -150,7 +156,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 	}
 
 	if len(s.accessKeys) == 0 {
-		return nil, fmt.Errorf("sia backend requires both access key and secret key")
+		return nil, ErrNoAccessKey
 	}
 
 	ctx, cancel, err := s.tg.AddContext(ctx)

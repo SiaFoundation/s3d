@@ -157,6 +157,11 @@ func main() {
 	}
 	defer store.Close()
 
+	// before initializing the SDK, check whether we have at least one key pair configured
+	if len(cfg.Sia.KeyPairs) == 0 {
+		checkFatalError("Please provide at least one valid key pair. You can do so by updating the config file or running the 'config' command", sia.ErrNoAccessKey)
+	}
+
 	builder := sdk.NewBuilder(cfg.Sia.IndexerURL, sdk.AppMetadata{
 		ID:          types.HashBytes([]byte("s3d")),
 		Name:        "S3d",
@@ -210,7 +215,9 @@ func main() {
 	siaOpts = append(siaOpts, sia.WithLogger(log.Named("backend")))
 
 	backend, err := sia.New(ctx, sia.NewSDK(sdkClient), store, cfg.Directory, siaOpts...)
-	if err != nil {
+	if errors.Is(err, sia.ErrNoAccessKey) {
+		checkFatalError("Please provide at least one valid key pair. You can do so by updating the config file or running the 'config' command", err)
+	} else if err != nil {
 		checkFatalError("failed to create Sia backend", err)
 	}
 	defer backend.Close()

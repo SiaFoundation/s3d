@@ -467,10 +467,6 @@ WHERE o.bucket_id = ?`
 
 		if !result.IsTruncated {
 			result.NextMarker = ""
-		} else if prefix.HasDelimiter && strings.HasSuffix(result.NextMarker, prefix.Delimiter) {
-			// NextMarker is a common prefix. Append \xFF to skip past all objects
-			// with that prefix on the next call.
-			result.NextMarker += "\xFF"
 		}
 
 		return nil
