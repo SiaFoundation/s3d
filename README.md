@@ -146,28 +146,31 @@ supported.
 
 ### Supported Operations
 
-| Category | Operation | Status |
-|----------|-----------|--------|
-| **Buckets** | CreateBucket | Supported |
-| | DeleteBucket | Supported |
-| | HeadBucket | Supported |
-| | ListBuckets | Supported |
-| | GetBucketLocation | Supported |
-| **Objects** | PutObject | Supported |
-| | GetObject | Supported |
-| | HeadObject | Supported |
-| | DeleteObject | Supported |
-| | DeleteObjects | Supported |
-| | CopyObject | Supported |
-| | ListObjects (v1) | Supported |
-| | ListObjects (v2) | Supported |
-| **Multipart** | CreateMultipartUpload | Supported |
-| | UploadPart | Supported |
-| | UploadPartCopy | Supported |
-| | CompleteMultipartUpload | Supported |
-| | AbortMultipartUpload | Supported |
-| | ListParts | Supported |
-| | ListMultipartUploads | Supported |
+| Operation | Status |
+|-----------|--------|
+| **Buckets** | |
+| CreateBucket | Supported |
+| DeleteBucket | Supported |
+| HeadBucket | Supported |
+| ListBuckets | Supported |
+| GetBucketLocation | Supported |
+| **Objects** | |
+| PutObject | Supported |
+| GetObject | Supported |
+| HeadObject | Supported |
+| DeleteObject | Supported |
+| DeleteObjects | Supported |
+| CopyObject | Supported |
+| ListObjects (v1) | Supported |
+| ListObjects (v2) | Supported |
+| **Multipart** | |
+| CreateMultipartUpload | Supported |
+| UploadPart | Supported |
+| UploadPartCopy | Supported |
+| CompleteMultipartUpload | Supported |
+| AbortMultipartUpload | Supported |
+| ListParts | Supported |
+| ListMultipartUploads | Supported |
 
 ### Not Supported
 
@@ -202,8 +205,8 @@ generate one.
 
 ### Default Paths
 
-| | Config File | Data Directory |
-|---------|-------------|----------------|
+| Platform | Config File | Data Directory |
+|----------|-------------|----------------|
 | Linux | `/etc/s3d/s3d.yml` | `/var/lib/s3d` |
 | macOS | `~/Library/Application Support/s3d/s3d.yml` | `~/Library/Application Support/s3d` |
 | Windows | `%APPDATA%/s3d/s3d.yml` | `%APPDATA%/s3d` |
