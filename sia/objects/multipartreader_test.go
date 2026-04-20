@@ -41,7 +41,7 @@ func TestMultipartReader(t *testing.T) {
 	r, err := NewReader(dir, []Part{
 		{PartNumber: 1, Filename: writePart(1, p1), Size: int64(len(p1)), ContentMD5: md5.Sum(p1)},
 		{PartNumber: 2, Filename: writePart(2, p2), Size: int64(len(p2)), ContentMD5: md5.Sum(p2)},
-	})
+	}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestMultipartReader(t *testing.T) {
 	r, err = NewReader(dir, []Part{
 		{PartNumber: 1, Filename: writePart(1, p1), Size: int64(len(p1)), ContentMD5: md5.Sum(p1)},
 		{PartNumber: 2, Filename: writePart(2, p2), Size: int64(len(p2)), ContentMD5: md5.Sum(p2)},
-	})
+	}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestMultipartReader(t *testing.T) {
 	// assert MD5 is validated
 	r, err = NewReader(dir, []Part{
 		{PartNumber: 3, Filename: writePart(3, []byte("x")), Size: 1, ContentMD5: md5.Sum([]byte("y"))},
-	})
+	}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestMultipartReader(t *testing.T) {
 	wrongSizeFile := writePart(5, []byte("actual data"))
 	r, err = NewReader(dir, []Part{
 		{PartNumber: 5, Filename: wrongSizeFile, Size: 999, ContentMD5: md5.Sum([]byte("actual data"))},
-	})
+	}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestMultipartReader(t *testing.T) {
 	}
 
 	// assert part file must exist
-	r, err = NewReader(dir, []Part{{PartNumber: 6, Filename: "nonexistent.file", Size: 10, ContentMD5: md5.Sum([]byte("irrelevant"))}})
+	r, err = NewReader(dir, []Part{{PartNumber: 6, Filename: "nonexistent.file", Size: 10, ContentMD5: md5.Sum([]byte("irrelevant"))}}, 0)
 	if err == nil || !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected file open error, got %v", err)
 	}

@@ -9,7 +9,7 @@ import (
 
 // Object represents a stored object with its metadata.
 type Object struct {
-	ID           types.Hash256
+	ID           *types.Hash256
 	FileName     *string
 	Name         string
 	PartsCount   int32
