@@ -300,11 +300,6 @@ func putObject(tx *txn, bid int64, name string, id *types.Hash256, contentMD5 [1
 		return err
 	}
 
-	var siaObjArg any
-	if siaObject != nil {
-		siaObjArg = sqlSiaObject(*siaObject)
-	}
-
 	_, err = tx.Exec(`
 		INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at, file_name, sia_object, cached_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
@@ -319,7 +314,7 @@ func putObject(tx *txn, bid int64, name string, id *types.Hash256, contentMD5 [1
 			cached_at = excluded.cached_at
 	`, bid, name, (*sqlHash256)(id), sqlMD5(contentMD5),
 		sqlMetaJSON(meta), length, sqlTime(time.Now()),
-		fileName, siaObjArg, sqlTime(cachedAt), updateModTime)
+		fileName, (*sqlSiaObject)(siaObject), sqlTime(cachedAt), updateModTime)
 	if err != nil {
 		return err
 	}
