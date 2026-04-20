@@ -36,7 +36,7 @@ func randObjectName(bucket, object string) string {
 }
 
 func (s *Sia) multipartUploadDir(uploadID s3.UploadID) string {
-	return filepath.Join(s.directory, MultipartDirectory, uploadID.String())
+	return filepath.Join(s.directory, UploadsDirectory, uploadID.String())
 }
 
 func (s *Sia) createMultipartUploadDir(uploadID s3.UploadID) (string, error) {
