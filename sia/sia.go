@@ -21,13 +21,8 @@ import (
 )
 
 const (
-	// MultipartDirectory is the directory name used for storing multipart
-	// uploads.
-	MultipartDirectory = "multipart"
-
-	// PendingUploadsDirectory is the directory name used for storing pending
-	// uploads that haven't been completed yet.
-	PendingUploadsDirectory = "pending"
+	//  UploadsDirectory is the directory name used for storing pending uploads.
+	UploadsDirectory = "uploads"
 )
 
 // ErrNoAccessKey is returned when no access key is provided to the Sia backend.
@@ -113,14 +108,13 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		return nil, ErrNoAccessKey
 	}
 
-	for _, dir := range []string{
-		filepath.Join(sia.directory, PendingUploadsDirectory),
-		filepath.Join(sia.directory, MultipartDirectory),
-	} {
-		if err := os.MkdirAll(dir, 0700); err != nil {
-			return nil, fmt.Errorf("failed to create directory %q: %w", dir, err)
-		}
+	dir := filepath.Join(sia.directory, UploadsDirectory)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return nil, fmt.Errorf("failed to create directory %q: %w", dir, err)
 	}
+
+	// TODO: clean up orphaned uploads and multipart uploads in uploads
+	// directory on startup
 
 	go sia.processOrphansLoop(ctx)
 

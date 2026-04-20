@@ -23,21 +23,21 @@ import (
 
 const metadataCacheLifetime = 24 * time.Hour
 
-func (s *Sia) pendingUploadDir() string {
-	return filepath.Join(s.directory, PendingUploadsDirectory)
+func (s *Sia) uploadDir() string {
+	return filepath.Join(s.directory, UploadsDirectory)
 }
 
-func (s *Sia) openPendingUpload(fileName string) (*os.File, error) {
-	return os.Open(filepath.Join(s.pendingUploadDir(), fileName))
+func (s *Sia) openUpload(fileName string) (*os.File, error) {
+	return os.Open(filepath.Join(s.uploadDir(), fileName))
 }
 
-func (s *Sia) removePendingUpload(fileName string) error {
+func (s *Sia) removeUpload(fileName string) error {
 	// We use RemoveAll here since RemoveAll uses
 	// FILE_DISPOSITION_POSIX_SEMANTICS on supported Windows versions, which
 	// allows us to delete files that currenty being served without an error.
 	// Remove would fail on Windows which would lead to an unnecessary orphaned
 	// file.
-	return os.RemoveAll(filepath.Join(s.pendingUploadDir(), fileName))
+	return os.RemoveAll(filepath.Join(s.uploadDir(), fileName))
 }
 
 // CopyObject copies an object from the source bucket and object key to the
@@ -65,7 +65,7 @@ func (s *Sia) DeleteObject(ctx context.Context, accessKeyID, bucket string, obje
 		return nil, err
 	} else if fileName != nil {
 		// object hasn't been uploaded yet, so we clean up the file
-		_ = s.removePendingUpload(*fileName)
+		_ = s.removeUpload(*fileName)
 	}
 
 	return &s3.DeleteObjectResult{
@@ -166,7 +166,7 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 
 	// read from disk if the object hasn't been uploaded yet
 	if obj.FileName != nil {
-		f, err := s.openPendingUpload(*obj.FileName)
+		f, err := s.openUpload(*obj.FileName)
 		if os.IsNotExist(err) {
 			// possible race, check if the object was uploaded to Sia in the
 			// meantime
@@ -294,7 +294,7 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 		}
 	} else {
 		// save the object
-		objPath = filepath.Join(s.pendingUploadDir(), randObjectName(bucket, object))
+		objPath = filepath.Join(s.uploadDir(), randObjectName(bucket, object))
 		f, err := os.Create(objPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create temporary file: %w", err)
