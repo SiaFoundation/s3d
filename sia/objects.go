@@ -345,6 +345,8 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	defer func() {
 		if err != nil && objPath != "" {
 			_ = os.Remove(objPath)
+		} else if objPath != "" {
+			s.triggerPacking()
 		}
 	}()
 

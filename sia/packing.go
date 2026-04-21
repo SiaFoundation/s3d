@@ -13,7 +13,6 @@ import (
 	"github.com/SiaFoundation/s3d/sia/objects"
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
-	"lukechampine.com/frand"
 )
 
 const (
@@ -164,21 +163,6 @@ func (s *Sia) preparePackedObjects() []packedObjects {
 	}
 
 	return ready
-}
-
-// needsPacking returns true if uploading size bytes directly
-// would waste more than the configured packing threshold.
-func (s *Sia) needsPacking(size int64) bool {
-	if s.slabSize <= 0 {
-		return false
-	}
-	remainder := size % s.slabSize
-	if remainder == 0 {
-		return false
-	}
-	waste := s.slabSize - remainder
-	wastePct := float64(waste) / float64(size+waste)
-	return wastePct > s.packingWastePct
 }
 
 func (s *Sia) packingLoop(ctx context.Context) {
@@ -349,10 +333,4 @@ func (s *Sia) removeUploadQuiet(fileName string) {
 			zap.String("filename", fileName),
 			zap.Error(err))
 	}
-}
-
-func randUploadName() string {
-	var uuid [8]byte
-	frand.Read(uuid[:])
-	return fmt.Sprintf("%x.obj", uuid[:])
 }

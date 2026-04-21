@@ -79,7 +79,6 @@ type SDK interface {
 	DeleteObject(ctx context.Context, id types.Hash256) error
 	Download(ctx context.Context, w io.Writer, obj sdk.Object, rnge *s3.ObjectRange) error
 	Object(ctx context.Context, id types.Hash256) (sdk.Object, error)
-	Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
 	SlabSize() (int64, error)
 	UploadPacked() (PackedUpload, error)
 	PinObject(ctx context.Context, obj sdk.Object) error
@@ -135,16 +134,6 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		return nil, ErrNoAccessKey
 	}
 
-	// calculate slab size from the SDK's configured redundancy settings
-	if sia.packingWastePct > 0 {
-		slabSize, err := sia.sdk.SlabSize()
-		if err != nil {
-			return nil, fmt.Errorf("failed to determine slab size: %w", err)
-		}
-		sia.slabSize = slabSize
-		sia.triggerPackChan = make(chan struct{}, 1)
-	}
-
 	dir := filepath.Join(sia.directory, UploadsDirectory)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create directory %q: %w", dir, err)
@@ -163,6 +152,12 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 	}()
 
 	if sia.packingWastePct > 0 {
+		slabSize, err := sia.sdk.SlabSize()
+		if err != nil {
+			return nil, fmt.Errorf("failed to determine slab size: %w", err)
+		}
+		sia.slabSize = slabSize
+
 		ctx, cancel, err := sia.tg.AddContext(ctx)
 		if err != nil {
 			return nil, err

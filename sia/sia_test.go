@@ -84,6 +84,8 @@ func (s *MemorySDK) Object(ctx context.Context, objectID types.Hash256) (sdk.Obj
 	return obj.meta, nil
 }
 
+// Upload stores an object in memory. It is not part of the SDK interface but
+// used by tests to simulate the background upload to Sia.
 func (s *MemorySDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error) {
 	data, err := io.ReadAll(r)
 	if err != nil {

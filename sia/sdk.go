@@ -58,18 +58,6 @@ func (s *IndexdSDK) Download(ctx context.Context, w io.Writer, obj sdk.Object, r
 	return s.inner.Download(ctx, w, obj, opts...)
 }
 
-// Upload uploads an object to indexd and saves it.
-func (s *IndexdSDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error) {
-	obj := sdk.NewEmptyObject()
-	if err := s.inner.Upload(ctx, &obj, r, s.ulOpts...); err != nil {
-		return sdk.Object{}, err
-	}
-	if err := s.inner.PinObject(ctx, obj); err != nil {
-		return sdk.Object{}, err
-	}
-	return obj, nil
-}
-
 // SlabSize returns the slab size by creating a temporary packed upload and
 // reading its capacity.
 func (s *IndexdSDK) SlabSize() (int64, error) {
