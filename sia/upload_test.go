@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/SiaFoundation/s3d/sia/objects"
@@ -15,6 +16,10 @@ import (
 // still open, and the open handle can still be read from and matches the
 // original data.
 func TestOpenAndRemoveUpload(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not allow deleting open files")
+	}
+
 	dir := t.TempDir()
 	uploadsDir := filepath.Join(dir, UploadsDirectory)
 	if err := os.MkdirAll(uploadsDir, 0700); err != nil {
