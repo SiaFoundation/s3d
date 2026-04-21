@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"time"
@@ -199,7 +200,7 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 			offset = resp.Range.Start
 		}
 		rc, err := s.openUpload(bucket, object, obj, offset)
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			// possible race, check if the object was uploaded to Sia in the
 			// meantime
 			obj, err = s.store.GetObject(accessKeyID, bucket, object, partNumber)
@@ -328,7 +329,7 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 		}
 	} else {
 		// save the object
-		randFileName := randObjectName(bucket, object)
+		randFileName := randObjectName()
 		objPath = filepath.Join(s.uploadDir(), randFileName)
 		fileName = &randFileName
 		f, err := os.Create(objPath)
