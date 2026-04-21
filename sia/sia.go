@@ -22,14 +22,8 @@ import (
 )
 
 const (
-	// MultipartDirectory is the directory name used for storing multipart
-	// uploads.
-	MultipartDirectory = "multipart"
-
-	// PackingDirectory is the directory name used for storing small objects
-	// on disk before they are packed and uploaded to Sia together to minimize
-	// waste.
-	PackingDirectory = "packing"
+	// UploadsDirectory is the directory name used for storing pending uploads.
+	UploadsDirectory = "uploads"
 )
 
 // ErrNoAccessKey is returned when no access key is provided to the Sia backend.
@@ -42,15 +36,6 @@ type Option func(*Sia)
 func WithLogger(logger *zap.Logger) Option {
 	return func(s *Sia) {
 		s.logger = logger.Named("sia")
-	}
-}
-
-// WithPackingWaste sets the maximum percentage of wasted space tolerated per
-// slab. Objects whose upload would waste more than this fraction of a slab are
-// written to disk and batched together. Pass 0 to disable packing.
-func WithPackingWaste(pct float64) Option {
-	return func(s *Sia) {
-		s.packingWastePct = pct
 	}
 }
 
@@ -69,16 +54,11 @@ type Sia struct {
 	sdk   SDK
 	store Store
 
-	multipartDir string
-	packingDir   string
-	accessKeys   map[string]auth.SecretAccessKey
+	directory  string
+	accessKeys map[string]auth.SecretAccessKey
 
-	slabSize        int64
-	packingWastePct float64
-	triggerPackChan chan struct{}
-
-	logger *zap.Logger
 	tg     *threadgroup.ThreadGroup
+	logger *zap.Logger
 }
 
 // SDK describes the SDK used to interact with Sia.
@@ -86,33 +66,31 @@ type SDK interface {
 	DeleteObject(ctx context.Context, id types.Hash256) error
 	Download(ctx context.Context, w io.Writer, obj sdk.Object, rnge *s3.ObjectRange) error
 	Object(ctx context.Context, id types.Hash256) (sdk.Object, error)
-	SlabSize() (int64, error)
 	Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
-	UploadPacked() (PackedUpload, error)
-	PinObject(ctx context.Context, obj sdk.Object) error
 	SealObject(obj sdk.Object) slabs.SealedObject
 	UnsealObject(sealed slabs.SealedObject) (sdk.Object, error)
 }
 
 // Store represents the storage backend used by the Sia backend.
 type Store interface {
-	CopyObject(srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool, dstFilename *string) (objects.Object, *string, error)
+	CopyObject(srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool) (*objects.Object, error)
 	CreateBucket(accessKeyID, bucket string) error
 	DeleteBucket(accessKeyID, bucket string) error
 	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (*string, error)
-	FinalizeObject(bucket, name, expectedFilename string, objectID types.Hash256, siaObject slabs.SealedObject) error
-	GetObject(bucket, object string, partNumber *int32) (objects.Object, error)
+	GetObject(accessKeyID *string, bucket, object string, partNumber *int32) (*objects.Object, error)
 	HeadBucket(accessKeyID, bucket string) error
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
 	ListObjects(accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error)
-	ObjectsForPacking() ([]objects.PackedObject, error)
+	ObjectParts(bucket, name string) ([]objects.Part, error)
 	OrphanedObjects(limit int) ([]types.Hash256, error)
-	PutObject(bucket, name string, obj objects.Object, updateModTime bool) (*string, error)
+	PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string, updateModTime bool) error
+	MarkObjectUploaded(bucket, name string, siaObject slabs.SealedObject) error
+	UpdateSiaObject(siaObject slabs.SealedObject, cachedAt time.Time) error
 	RemoveOrphanedObject(objectID types.Hash256) error
 	AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) error
 	AddMultipartPart(bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (string, error)
 	CreateMultipartUpload(bucket, name string, uploadID s3.UploadID, meta map[string]string) error
-	CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, objectID *types.Hash256, filename *string, contentMD5 [16]byte, contentLength int64) (*string, error)
+	CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64) error
 	HasMultipartUpload(bucket, name string, uploadID s3.UploadID) error
 	ListMultipartUploads(bucket string, prefix s3.Prefix, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error)
 	ListParts(bucket, name string, uploadID s3.UploadID, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error)
@@ -121,65 +99,41 @@ type Store interface {
 
 // New creates a new Sia backend instance.
 func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Option) (*Sia, error) {
-	multipartDir := filepath.Join(directory, MultipartDirectory)
-	if err := os.MkdirAll(multipartDir, 0700); err != nil {
-		return nil, fmt.Errorf("failed to create multipart upload directory: %w", err)
-	}
+	sia := &Sia{
+		sdk:   sdk,
+		store: store,
 
-	packingDir := filepath.Join(directory, PackingDirectory)
-	if err := os.MkdirAll(packingDir, 0700); err != nil {
-		return nil, fmt.Errorf("failed to create packing directory: %w", err)
-	}
+		directory:  directory,
+		accessKeys: make(map[string]auth.SecretAccessKey),
 
-	s := &Sia{
-		logger:          zap.NewNop(),
-		sdk:             sdk,
-		store:           store,
-		tg:              threadgroup.New(),
-		multipartDir:    multipartDir,
-		packingDir:      packingDir,
-		packingWastePct: DefaultPackingWastePct,
-		accessKeys:      make(map[string]auth.SecretAccessKey),
+		logger: zap.NewNop(),
+		tg:     threadgroup.New(),
 	}
 	for _, opt := range opts {
-		opt(s)
+		opt(sia)
 	}
-
-	// calculate slab size from the SDK's configured redundancy settings
-	if s.packingWastePct > 0 {
-		slabSize, err := s.sdk.SlabSize()
-		if err != nil {
-			return nil, fmt.Errorf("failed to determine slab size: %w", err)
-		}
-		s.slabSize = slabSize
-		s.triggerPackChan = make(chan struct{}, 1)
-	}
-
-	if len(s.accessKeys) == 0 {
+	if len(sia.accessKeys) == 0 {
 		return nil, ErrNoAccessKey
 	}
 
-	ctx, cancel, err := s.tg.AddContext(ctx)
+	dir := filepath.Join(sia.directory, UploadsDirectory)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return nil, fmt.Errorf("failed to create directory %q: %w", dir, err)
+	}
+
+	// TODO: clean up orphaned uploads and multipart uploads in uploads
+	// directory on startup
+
+	ctx, cancel, err := sia.tg.AddContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 	go func() {
 		defer cancel()
-		s.processOrphansLoop(ctx)
+		sia.processOrphansLoop(ctx)
 	}()
 
-	if s.packingWastePct > 0 {
-		ctx, cancel, err := s.tg.AddContext(ctx)
-		if err != nil {
-			return nil, err
-		}
-		go func() {
-			defer cancel()
-			s.packingLoop(ctx)
-		}()
-	}
-
-	return s, nil
+	return sia, nil
 }
 
 // Close shuts down the Sia backend and waits for background goroutines.

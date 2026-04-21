@@ -1,30 +1,17 @@
 package objects
 
 import (
-	"errors"
 	"time"
 
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/slabs"
 )
 
-var (
-	// ErrObjectFinalized is returned when an object is expected to be
-	// packed but was finalized.
-	ErrObjectFinalized = errors.New("object already finalized")
-
-	// ErrObjectModified is returned by FinalizeObject when the object was
-	// modified between reading and finalizing.
-	ErrObjectModified = errors.New("object was modified")
-)
-
 // Object represents a stored object with its metadata.
 type Object struct {
-	ID       *types.Hash256 // set if stored on Sia
-	Filename *string        // set if stored on disk
-
+	ID           *types.Hash256
+	FileName     *string
 	Name         string
-	Bucket       string
 	PartsCount   int32
 	Meta         map[string]string
 	Offset       int64
@@ -32,16 +19,8 @@ type Object struct {
 	ContentMD5   [16]byte
 	LastModified time.Time
 
-	SiaObject slabs.SealedObject // sealed Sia object for downloads (must be unsealed before use)
-	CachedAt  time.Time          // zero if not cached
-}
-
-// PackedObject contains the fields needed to pack an object.
-type PackedObject struct {
-	Bucket   string
-	Name     string
-	Filename string
-	Length   int64
+	SiaObject *slabs.SealedObject // sealed Sia object for downloads (must be unsealed before use)
+	CachedAt  time.Time           // zero if not cached
 }
 
 // Part represents a single part of a multipart upload.

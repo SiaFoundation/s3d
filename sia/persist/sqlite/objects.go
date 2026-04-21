@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"strings"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
@@ -17,10 +16,11 @@ import (
 
 // DeleteObject deletes the object with the given bucket and name if it exists
 // and all provided preconditions match. If the deleted object's ID has no
-// remaining references, it is inserted into the orphaned_objects table.
+// remaining references, it is inserted into the orphaned_objects table. If the
+// object hasn't been uploaded yet, its filename is returned for cleanup.
 func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (*string, error) {
-	var filename *string
-	if err := s.transaction(func(tx *txn) error {
+	var fileName *string
+	err := s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
@@ -34,10 +34,10 @@ func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (
 		var updatedAt time.Time
 		err = tx.QueryRow(`
 			DELETE FROM objects WHERE bucket_id = $1 AND name = $2
-			RETURNING object_id, content_md5, size, updated_at, filename
-		`, bid, objectID.Key).Scan(&deletedID, (*sqlMD5)(&contentMD5), &size, (*sqlTime)(&updatedAt), &filename)
+			RETURNING filename, object_id, content_md5, size, updated_at
+		`, bid, objectID.Key).Scan(&fileName, &deletedID, (*sqlMD5)(&contentMD5), &size, (*sqlTime)(&updatedAt))
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil
+			return nil // object doesn't exist, nothing to delete
 		} else if err != nil {
 			return err
 		}
@@ -52,38 +52,47 @@ func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (
 			return s3errs.ErrPreconditionFailed
 		}
 
+		// only return the filename for cleanup if no other object
+		// references the same file
+		if fileName != nil {
+			var shared bool
+			if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM objects WHERE filename = $1)`, *fileName).Scan(&shared); err != nil {
+				return err
+			}
+			if shared {
+				fileName = nil
+			}
+		}
+
 		if deletedID.Valid {
 			return insertOrphan(tx, types.Hash256(deletedID.V))
 		}
 		return nil
-	}); err != nil {
-		return nil, err
-	}
-	return filename, nil
+	})
+	return fileName, err
 }
 
 // GetObject retrieves the object with the given bucket and name.
-func (s *Store) GetObject(bucket, name string, partNumber *int32) (objects.Object, error) {
+func (s *Store) GetObject(accessKeyID *string, bucket, name string, partNumber *int32) (*objects.Object, error) {
 	var obj objects.Object
 	if err := s.transaction(func(tx *txn) error {
-		return getObject(tx, &obj, bucket, name, partNumber)
+		bid, err := bucketID(tx, bucket)
+		if err != nil {
+			return err
+		}
+		return getObject(tx, &obj, bid, name, partNumber)
 	}); errors.Is(err, sql.ErrNoRows) {
-		return objects.Object{}, s3errs.ErrNoSuchKey
+		return nil, s3errs.ErrNoSuchKey
 	} else if err != nil {
-		return objects.Object{}, err
+		return nil, err
 	}
-	return obj, nil
+
+	return &obj, nil
 }
 
-func getObject(tx *txn, obj *objects.Object, bucket, name string, partNumber *int32) error {
-	// get bucket ID
-	bid, err := bucketID(tx, bucket)
-	if err != nil {
-		return err
-	}
-
+func getObject(tx *txn, obj *objects.Object, bid int64, name string, partNumber *int32) error {
 	// get parts count
-	err = tx.QueryRow(`
+	err := tx.QueryRow(`
 		SELECT COUNT(*)
 		FROM object_parts
 		WHERE bucket_id = $1 AND name = $2
@@ -100,17 +109,19 @@ func getObject(tx *txn, obj *objects.Object, bucket, name string, partNumber *in
 			}
 			obj.PartsCount = *partNumber
 		}
-		var siaObj sqlSiaObject
-		var objID sql.Null[*sqlHash256]
+		var objectID sql.Null[sqlHash256]
+		var siaObj sql.Null[sqlSiaObject]
 		err := tx.QueryRow(`
-			SELECT object_id, metadata, updated_at, size, content_md5, sia_object, cached_at, filename
+			SELECT filename, object_id, metadata, updated_at, size, content_md5, sia_object, cached_at
 			FROM objects
 			WHERE bucket_id = $1 AND name = $2
-		`, bid, name).Scan(&objID, (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Length, (*sqlMD5)(&obj.ContentMD5), &siaObj, (*sqlTime)(&obj.CachedAt), &obj.Filename)
-		obj.ID = (*types.Hash256)(objID.V)
-		obj.SiaObject = slabs.SealedObject(siaObj)
-		obj.Name = name
-		obj.Bucket = bucket
+		`, bid, name).Scan(&obj.FileName, &objectID, (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Length, (*sqlMD5)(&obj.ContentMD5), &siaObj, (*sqlTime)(&obj.CachedAt))
+		if objectID.Valid {
+			obj.ID = (*types.Hash256)(&objectID.V)
+		}
+		if siaObj.Valid {
+			obj.SiaObject = (*slabs.SealedObject)(&siaObj.V)
+		}
 		return err
 	}
 
@@ -120,45 +131,91 @@ func getObject(tx *txn, obj *objects.Object, bucket, name string, partNumber *in
 	}
 
 	// part specified, return part info
-	var siaObj sqlSiaObject
-	var objID sql.Null[*sqlHash256]
+	var partObjID sql.Null[sqlHash256]
 	err = tx.QueryRow(`
-		SELECT o.object_id, o.metadata, o.updated_at, o.sia_object, o.cached_at, o.filename, p.offset, p.content_length, p.content_md5
+		SELECT o.object_id, o.metadata, o.updated_at, p.offset, p.content_length, p.content_md5
 		FROM object_parts p
 		JOIN objects o ON o.bucket_id = p.bucket_id AND o.name = p.name
 		WHERE o.bucket_id = $1 AND o.name = $2 AND p.part_number = $3
-	`, bid, name, *partNumber).Scan(&objID, (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &siaObj, (*sqlTime)(&obj.CachedAt), &obj.Filename, &obj.Offset, &obj.Length, (*sqlMD5)(&obj.ContentMD5))
-	obj.ID = (*types.Hash256)(objID.V)
-	obj.SiaObject = slabs.SealedObject(siaObj)
-	obj.Name = name
-	obj.Bucket = bucket
+	`, bid, name, *partNumber).Scan(&partObjID, (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Offset, &obj.Length, (*sqlMD5)(&obj.ContentMD5))
+	if partObjID.Valid {
+		obj.ID = (*types.Hash256)(&partObjID.V)
+	}
 	return err
 }
 
 // PutObject stores the given object in the given bucket with the given name or
-// overwrites it if it already exists.  If updatedModTime is true, the
+// overwrites it if it already exists. If updatedModTime is true, the
 // `updated_at` time that represents the S3 last modified time will be updated.
 // If the overwritten object's ID has no remaining references, it is inserted
 // into the orphaned_objects table.
-func (s *Store) PutObject(bucket, name string, obj objects.Object, updateModTime bool) (*string, error) {
-	var prevFilename *string
-	if err := s.transaction(func(tx *txn) (err error) {
-		prevFilename, err = putObject(tx, bucket, name, obj, updateModTime)
-		return
-	}); err != nil {
-		return nil, err
-	}
-	return prevFilename, nil
+func (s *Store) PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string, updateModTime bool) error {
+	return s.transaction(func(tx *txn) error {
+		bid, err := bucketID(tx, bucket)
+		if err != nil {
+			return err
+		}
+		return putObject(tx, bid, name, nil, contentMD5, meta, length, fileName, nil, time.Time{}, updateModTime)
+	})
+}
+
+// MarkObjectUploaded transitions a pending upload to a Sia-backed object by
+// setting the object_id, sia_object and cached_at fields while clearing
+// filename. Fails if the object already has an object_id.
+func (s *Store) MarkObjectUploaded(bucket, name string, siaObject slabs.SealedObject) error {
+	return s.transaction(func(tx *txn) error {
+		bid, err := bucketID(tx, bucket)
+		if err != nil {
+			return err
+		}
+		objID := siaObject.ID()
+		res, err := tx.Exec(`
+			UPDATE objects
+			SET object_id = $1, sia_object = $2, filename = NULL, cached_at = $3
+			WHERE bucket_id = $4 AND name = $5 AND object_id IS NULL
+		`, sqlHash256(objID), sqlSiaObject(siaObject), sqlTime(time.Now()), bid, name)
+		if err != nil {
+			return err
+		} else if n, err := res.RowsAffected(); err != nil {
+			return err
+		} else if n == 0 {
+			return fmt.Errorf("object already has an object ID or does not exist")
+		}
+		return err
+	})
+}
+
+// UpdateSiaObject refreshes the cached sia_object and cached_at fields for for
+// all uploaded objects with the corresponding object id.
+func (s *Store) UpdateSiaObject(siaObject slabs.SealedObject, cachedAt time.Time) error {
+	return s.transaction(func(tx *txn) error {
+		res, err := tx.Exec(`
+			UPDATE objects SET sia_object = $1, cached_at = $2
+			WHERE object_id = $3
+		`, sqlSiaObject(siaObject), sqlTime(cachedAt), sqlHash256(siaObject.ID()))
+		if err != nil {
+			return err
+		} else if n, err := res.RowsAffected(); err != nil {
+			return err
+		} else if n == 0 {
+			return fmt.Errorf("object not found or object ID mismatch")
+		}
+		return err
+	})
 }
 
 // CopyObject atomically reads the source object and writes it to the
 // destination within a single transaction, applying metadata according to the
 // replace flag. Returns the copied object metadata.
-func (s *Store) CopyObject(srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool, dstFilename *string) (_ objects.Object, prevFilename *string, _ error) {
+func (s *Store) CopyObject(srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool) (result *objects.Object, err error) {
 	var obj objects.Object
-	err := s.transaction(func(tx *txn) error {
-		err := getObject(tx, &obj, srcBucket, srcName, nil)
+	err = s.transaction(func(tx *txn) error {
+		srcBid, err := bucketID(tx, srcBucket)
 		if err != nil {
+			return err
+		}
+
+		if err := getObject(tx, &obj, srcBid, srcName, nil); err != nil {
 			return err
 		}
 
@@ -167,19 +224,54 @@ func (s *Store) CopyObject(srcBucket, srcName, dstBucket, dstName string, meta m
 		} else {
 			maps.Copy(obj.Meta, meta)
 		}
-		obj.Filename = dstFilename
 
-		prevFilename, err = putObject(tx, dstBucket, dstName, obj, true)
-		return err
+		dstBid := srcBid
+		if dstBucket != srcBucket {
+			dstBid, err = bucketID(tx, dstBucket)
+			if err != nil {
+				return err
+			}
+		}
+
+		return putObject(tx, dstBid, dstName, obj.ID, obj.ContentMD5, obj.Meta, obj.Length, obj.FileName, obj.SiaObject, obj.CachedAt, true)
 	})
-	if err != nil && strings.Contains(err.Error(), "CHECK constraint failed") {
-		return objects.Object{}, nil, objects.ErrObjectFinalized
-	} else if errors.Is(err, sql.ErrNoRows) {
-		return objects.Object{}, nil, s3errs.ErrNoSuchKey
-	} else if err != nil {
-		return objects.Object{}, nil, err
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, s3errs.ErrNoSuchKey
 	}
-	return obj, prevFilename, nil
+	if err != nil {
+		return nil, err
+	}
+	return &obj, nil
+}
+
+// ObjectParts returns the parts for a completed multipart object.
+func (s *Store) ObjectParts(bucket, name string) ([]objects.Part, error) {
+	var parts []objects.Part
+	err := s.transaction(func(tx *txn) error {
+		bid, err := bucketID(tx, bucket)
+		if err != nil {
+			return err
+		}
+		rows, err := tx.Query(`
+			SELECT part_number, filename, content_length, content_md5
+			FROM object_parts
+			WHERE bucket_id = $1 AND name = $2
+			ORDER BY part_number
+		`, bid, name)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var p objects.Part
+			if err := rows.Scan(&p.PartNumber, &p.Filename, &p.Size, (*sqlMD5)(&p.ContentMD5)); err != nil {
+				return err
+			}
+			parts = append(parts, p)
+		}
+		return rows.Err()
+	})
+	return parts, err
 }
 
 // OrphanedObjects returns up to limit object IDs from the orphaned_objects table.
@@ -210,23 +302,18 @@ func (s *Store) RemoveOrphanedObject(objectID types.Hash256) error {
 	})
 }
 
-func putObject(tx *txn, bucket, name string, obj objects.Object, updateModTime bool) (*string, error) {
-	if obj.Meta == nil {
-		obj.Meta = make(map[string]string) // force '{}' instead of 'null' in JSON
+func putObject(tx *txn, bid int64, name string, id *types.Hash256, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string, siaObject *slabs.SealedObject, cachedAt time.Time, updateModTime bool) error {
+	if meta == nil {
+		meta = make(map[string]string) // force '{}' instead of 'null' in JSON
 	}
 
-	bID, err := bucketID(tx, bucket)
+	oldID, err := previousObjectID(tx, bid, name)
 	if err != nil {
-		return nil, err
-	}
-
-	oldID, prevFilename, err := objectInfo(tx, bID, name)
-	if err != nil {
-		return nil, err
+		return err
 	}
 
 	_, err = tx.Exec(`
-		INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at, sia_object, cached_at, filename)
+		INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at, filename, sia_object, cached_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		ON CONFLICT(bucket_id, name) DO UPDATE SET
 			object_id = excluded.object_id,
@@ -234,47 +321,45 @@ func putObject(tx *txn, bucket, name string, obj objects.Object, updateModTime b
 			metadata = excluded.metadata,
 			size = excluded.size,
 			updated_at = CASE WHEN $11 THEN excluded.updated_at ELSE objects.updated_at END,
+			filename = excluded.filename,
 			sia_object = excluded.sia_object,
-			cached_at = excluded.cached_at,
-			filename = excluded.filename
-	`, bID, name, (*sqlHash256)(obj.ID), sqlMD5(obj.ContentMD5),
-		sqlMetaJSON(obj.Meta), obj.Length, sqlTime(time.Now()),
-		sqlSiaObject(obj.SiaObject), sqlTime(obj.CachedAt), obj.Filename, updateModTime)
+			cached_at = excluded.cached_at
+	`, bid, name, (*sqlHash256)(id), sqlMD5(contentMD5),
+		sqlMetaJSON(meta), length, sqlTime(time.Now()),
+		fileName, (*sqlSiaObject)(siaObject), sqlTime(cachedAt), updateModTime)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	// clear any stale orphan entry for the new object ID, in case it was
 	// previously orphaned and is now referenced again
-	if obj.ID != nil {
-		if _, err := tx.Exec("DELETE FROM orphaned_objects WHERE object_id = $1", sqlHash256(*obj.ID)); err != nil {
-			return nil, err
+	if id != nil {
+		if _, err := tx.Exec("DELETE FROM orphaned_objects WHERE object_id = $1", sqlHash256(*id)); err != nil {
+			return err
 		}
 	}
 
-	if oldID != nil && (obj.ID == nil || *oldID != *obj.ID) {
-		return prevFilename, insertOrphan(tx, *oldID)
+	if oldID != nil && (id == nil || *oldID != *id) {
+		return insertOrphan(tx, *oldID)
 	}
-	return prevFilename, nil
+	return nil
 }
 
-// objectInfo returns the object_id and filename currently stored
-// for the given bucket and name, or nils if no row exists.
-func objectInfo(tx *txn, bucketID int64, name string) (*types.Hash256, *string, error) {
-	var objID sql.Null[*sqlHash256]
-	var filename *string
-	err := tx.
-		QueryRow(`
-			SELECT o.object_id, o.filename
-			FROM objects o
-			WHERE o.bucket_id = $1 AND o.name = $2`, bucketID, name).
-		Scan(&objID, &filename)
+// previousObjectID returns the object_id currently stored for the given bucket
+// and name, or nil if no row exists.
+func previousObjectID(tx *txn, bid int64, name string) (*types.Hash256, error) {
+	var id sql.Null[sqlHash256]
+	err := tx.QueryRow("SELECT object_id FROM objects WHERE bucket_id = $1 AND name = $2", bid, name).
+		Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil, nil
+		return nil, nil
 	} else if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return (*types.Hash256)(objID.V), filename, nil
+	if !id.Valid {
+		return nil, nil
+	}
+	return (*types.Hash256)(&id.V), nil
 }
 
 // insertOrphan adds objectID to the orphaned_objects table if no rows in the
@@ -292,68 +377,6 @@ func insertOrphan(tx *txn, objectID types.Hash256) error {
 	}
 	_, err := tx.Exec("INSERT OR IGNORE INTO orphaned_objects (object_id) VALUES ($1)", sqlHash256(objectID))
 	return err
-}
-
-// FinalizeObject transitions an object from disk to Sia storage. It sets the
-// object_id, sia_object, and cached_at fields and clears the filename. The
-// update only proceeds if the current filename matches expectedFilename.
-func (s *Store) FinalizeObject(bucket, name, expectedFilename string, objectID types.Hash256, siaObject slabs.SealedObject) error {
-	return s.transaction(func(tx *txn) error {
-		bid, err := bucketID(tx, bucket)
-		if err != nil {
-			return err
-		}
-
-		result, err := tx.Exec(`
-			UPDATE objects SET
-				object_id = $1,
-				sia_object = $2,
-				cached_at = $3,
-				filename = NULL
-			WHERE bucket_id = $4 AND name = $5 AND filename = $6
-		`, sqlHash256(objectID), sqlSiaObject(siaObject), sqlTime(time.Now()), bid, name, expectedFilename)
-		if err != nil {
-			return err
-		}
-		n, err := result.RowsAffected()
-		if err != nil {
-			return err
-		} else if n == 0 {
-			return objects.ErrObjectModified
-		}
-		return nil
-	})
-}
-
-// ObjectsForPacking returns all objects stored on disk, ordered by size
-// descending for greedy best-fit slab packing.
-func (s *Store) ObjectsForPacking() ([]objects.PackedObject, error) {
-	var objs []objects.PackedObject
-	if err := s.transaction(func(tx *txn) error {
-		rows, err := tx.Query(`
-			SELECT b.name, o.name, o.filename, o.size
-			FROM objects o
-			JOIN buckets b ON b.id = o.bucket_id
-			WHERE o.filename IS NOT NULL
-			ORDER BY o.size DESC
-		`)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-
-		for rows.Next() {
-			var obj objects.PackedObject
-			if err := rows.Scan(&obj.Bucket, &obj.Name, &obj.Filename, &obj.Length); err != nil {
-				return err
-			}
-			objs = append(objs, obj)
-		}
-		return rows.Err()
-	}); err != nil {
-		return nil, err
-	}
-	return objs, nil
 }
 
 // ListObjects lists objects in the specified bucket for the user identified

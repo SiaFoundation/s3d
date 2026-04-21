@@ -11,7 +11,6 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia/objects"
-	"go.sia.tech/core/types"
 )
 
 // CreateMultipartUpload persists metadata for a new multipart upload.
@@ -40,9 +39,8 @@ func (s *Store) CreateMultipartUpload(bucket, name string, uploadID s3.UploadID,
 // and transferring parts from the upload to the object. If the overwritten
 // object's ID has no remaining references, it is inserted into the
 // orphaned_objects table.
-func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, objectID *types.Hash256, filename *string, contentMD5 [16]byte, contentLength int64) (*string, error) {
-	var prevFilename *string
-	if err := s.transaction(func(tx *txn) error {
+func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64) error {
+	return s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
@@ -90,8 +88,7 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 			return fmt.Errorf("found %d parts smaller than minimum size (%d bytes)", smallParts, s3.MinUploadPartSize)
 		}
 
-		oldID, oldFilename, err := objectInfo(tx, bid, name)
-		prevFilename = oldFilename
+		oldID, err := previousObjectID(tx, bid, name)
 		if err != nil {
 			return err
 		}
@@ -103,35 +100,28 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 		}
 
 		// upsert object with metadata from multipart upload
+		// the upload_id serves as the filename since parts are stored
+		// under the upload directory
 		_, err = tx.Exec(`
-			INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at, sia_object, cached_at, filename)
-			SELECT bucket_id, name, $1, $2, metadata, $3, $4, x'', $5, $6
+			INSERT INTO objects (bucket_id, name, content_md5, metadata, size, updated_at, filename, cached_at)
+			SELECT bucket_id, name, $1, metadata, $2, $3, $4, 0
 			FROM multipart_uploads
-			WHERE upload_id = $7
+			WHERE upload_id = $5
 			ON CONFLICT(bucket_id, name) DO UPDATE SET
-				object_id = excluded.object_id,
+				object_id = NULL,
 				content_md5 = excluded.content_md5,
 				metadata = excluded.metadata,
 				size = excluded.size,
 				updated_at = excluded.updated_at,
-				sia_object = excluded.sia_object,
-				cached_at = excluded.cached_at,
-				filename = excluded.filename
-		`, (*sqlHash256)(objectID), sqlMD5(contentMD5), contentLength, sqlTime(time.Now()), sqlTime(time.Time{}), filename, sqlUploadID(uploadID))
+				filename = excluded.filename,
+				sia_object = NULL,
+				cached_at = 0
+		`, sqlMD5(contentMD5), contentLength, sqlTime(time.Now()), uploadID.String(), sqlUploadID(uploadID))
 		if err != nil {
 			return err
 		}
 
-		// clear any stale orphan entry for the new object ID, in case it was
-		// previously orphaned and is now referenced again
-		if objectID != nil {
-			if _, err := tx.Exec("DELETE FROM orphaned_objects WHERE object_id = $1", sqlHash256(*objectID)); err != nil {
-				return err
-			}
-		}
-
-		// orphan the old object if it differs from the new one
-		if oldID != nil && (objectID == nil || *oldID != *objectID) {
+		if oldID != nil {
 			if err := insertOrphan(tx, *oldID); err != nil {
 				return err
 			}
@@ -139,8 +129,8 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 
 		// move parts to object_parts
 		_, err = tx.Exec(`
-			INSERT INTO object_parts (bucket_id, name, part_number, content_md5, content_length, offset)
-			SELECT $1, $2, part_number, content_md5, content_length,
+			INSERT INTO object_parts (bucket_id, name, part_number, filename, content_md5, content_length, offset)
+			SELECT $1, $2, part_number, filename, content_md5, content_length,
 				(SELECT COALESCE(SUM(content_length), 0)
 				FROM multipart_parts mp
 				WHERE mp.upload_id = $3 AND mp.part_number < multipart_parts.part_number)
@@ -154,10 +144,7 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 		// delete the multipart upload
 		_, err = tx.Exec(`DELETE FROM multipart_uploads WHERE upload_id = $1`, sqlUploadID(uploadID))
 		return err
-	}); err != nil {
-		return nil, err
-	}
-	return prevFilename, nil
+	})
 }
 
 // AbortMultipartUpload removes a multipart upload from the store.
@@ -211,7 +198,7 @@ func (s *Store) AddMultipartPart(bucket, name string, uploadID s3.UploadID, file
 			INSERT INTO multipart_parts (upload_id, part_number, filename, content_md5, content_length, created_at)
 			VALUES ($1, $2, $3, $4, $5, $6)
 			ON CONFLICT(upload_id, part_number) DO UPDATE SET
-				filename       = EXCLUDED.filename,
+				filename      = EXCLUDED.filename,
 				content_md5    = EXCLUDED.content_md5,
 				content_length = EXCLUDED.content_length,
 				created_at     = EXCLUDED.created_at
