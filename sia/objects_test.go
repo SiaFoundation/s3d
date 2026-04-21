@@ -685,8 +685,14 @@ func TestObjectMetadataCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	obj, err := store.GetObject(nil, bucket, object, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if obj.FileName == nil {
+		t.Fatal("expected pending upload to have a filename")
+	}
 	sealed := memSDK.SealObject(siaObj)
-	if err := store.MarkObjectUploaded(bucket, object, sealed); err != nil {
+	if err := store.MarkObjectUploaded(bucket, object, *obj.FileName, sealed); err != nil {
 		t.Fatal(err)
 	}
 

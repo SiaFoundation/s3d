@@ -161,8 +161,9 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte,
 
 // MarkObjectUploaded transitions a pending upload to a Sia-backed object by
 // setting the object_id, sia_object and cached_at fields while clearing
-// filename. Fails if the object already has an object_id.
-func (s *Store) MarkObjectUploaded(bucket, name string, siaObject slabs.SealedObject) error {
+// filename. The update only proceeds if the current filename matches
+// expectedFilename, returning ErrObjectModified when zero rows are affected.
+func (s *Store) MarkObjectUploaded(bucket, name, expectedFilename string, siaObject slabs.SealedObject) error {
 	return s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
@@ -172,16 +173,16 @@ func (s *Store) MarkObjectUploaded(bucket, name string, siaObject slabs.SealedOb
 		res, err := tx.Exec(`
 			UPDATE objects
 			SET object_id = $1, sia_object = $2, filename = NULL, cached_at = $3
-			WHERE bucket_id = $4 AND name = $5 AND object_id IS NULL
-		`, sqlHash256(objID), sqlSiaObject(siaObject), sqlTime(time.Now()), bid, name)
+			WHERE bucket_id = $4 AND name = $5 AND filename = $6
+		`, sqlHash256(objID), sqlSiaObject(siaObject), sqlTime(time.Now()), bid, name, expectedFilename)
 		if err != nil {
 			return err
 		} else if n, err := res.RowsAffected(); err != nil {
 			return err
 		} else if n == 0 {
-			return fmt.Errorf("object already has an object ID or does not exist")
+			return objects.ErrObjectModified
 		}
-		return err
+		return nil
 	})
 }
 
@@ -299,37 +300,6 @@ func (s *Store) RemoveOrphanedObject(objectID types.Hash256) error {
 	return s.transaction(func(tx *txn) error {
 		_, err := tx.Exec("DELETE FROM orphaned_objects WHERE object_id = $1", sqlHash256(objectID))
 		return err
-	})
-}
-
-// FinalizeObject transitions an object from disk to Sia storage. It sets the
-// object_id, sia_object, and cached_at fields and clears the filename. The
-// update only proceeds if the current filename matches expectedFilename.
-func (s *Store) FinalizeObject(bucket, name, expectedFilename string, objectID types.Hash256, siaObject slabs.SealedObject) error {
-	return s.transaction(func(tx *txn) error {
-		bid, err := bucketID(tx, bucket)
-		if err != nil {
-			return err
-		}
-
-		result, err := tx.Exec(`
-			UPDATE objects SET
-				object_id = $1,
-				sia_object = $2,
-				cached_at = $3,
-				filename = NULL
-			WHERE bucket_id = $4 AND name = $5 AND filename = $6
-		`, sqlHash256(objectID), sqlSiaObject(siaObject), sqlTime(time.Now()), bid, name, expectedFilename)
-		if err != nil {
-			return err
-		}
-		n, err := result.RowsAffected()
-		if err != nil {
-			return err
-		} else if n == 0 {
-			return objects.ErrObjectModified
-		}
-		return nil
 	})
 }
 

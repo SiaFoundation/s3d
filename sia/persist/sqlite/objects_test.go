@@ -101,7 +101,7 @@ func TestGetObject(t *testing.T) {
 	}
 
 	// mark the object as uploaded
-	if err := store.MarkObjectUploaded(bucket, object, objSealed.SealedObject); err != nil {
+	if err := store.MarkObjectUploaded(bucket, object, "", objSealed.SealedObject); err != nil {
 		t.Fatal(err)
 	}
 
@@ -130,7 +130,7 @@ func TestGetObject(t *testing.T) {
 	}
 
 	// mark multipart object as uploaded
-	if err := store.MarkObjectUploaded(bucket, multipart, multipartSealed.SealedObject); err != nil {
+	if err := store.MarkObjectUploaded(bucket, multipart, multipartUploadID.String(), multipartSealed.SealedObject); err != nil {
 		t.Fatal(err)
 	}
 
@@ -771,7 +771,7 @@ func TestOrphanedObjects(t *testing.T) {
 	if err := store.PutObject(accessKeyID, bucket, "a", frand.Entropy128(), nil, 1, new(string), true); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.MarkObjectUploaded(bucket, "a", sealed.SealedObject); err != nil {
+	if err := store.MarkObjectUploaded(bucket, "a", "", sealed.SealedObject); err != nil {
 		t.Fatal(err)
 	}
 
@@ -839,7 +839,7 @@ func TestPutObjectOrphan(t *testing.T) {
 	if err := store.PutObject(accessKeyID, bucket, "obj", frand.Entropy128(), nil, 1, new(string), true); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.MarkObjectUploaded(bucket, "obj", oldSealed.SealedObject); err != nil {
+	if err := store.MarkObjectUploaded(bucket, "obj", "", oldSealed.SealedObject); err != nil {
 		t.Fatal(err)
 	}
 
@@ -868,7 +868,7 @@ func TestPutObjectOrphan(t *testing.T) {
 	}
 
 	// mark new upload and overwrite again with same object_id - should not orphan
-	if err := store.MarkObjectUploaded(bucket, "obj", newSealed.SealedObject); err != nil {
+	if err := store.MarkObjectUploaded(bucket, "obj", "", newSealed.SealedObject); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.PutObject(accessKeyID, bucket, "obj", frand.Entropy128(), nil, 2, new(string), true); err != nil {
@@ -883,7 +883,7 @@ func TestPutObjectOrphan(t *testing.T) {
 	}
 }
 
-func TestFinalizeObject(t *testing.T) {
+func TestMarkObjectUploaded(t *testing.T) {
 	const (
 		accessKeyID = "test-accesskey"
 		bucket      = "test-bucket"
@@ -904,8 +904,8 @@ func TestFinalizeObject(t *testing.T) {
 	sdkObj := sdk.Object{}
 	sealed := sdkObj.Seal(types.GeneratePrivateKey())
 
-	// finalize with the correct filename should succeed
-	if err := store.FinalizeObject(bucket, object, fileName, sealed.ID(), sealed.SealedObject); err != nil {
+	// marking with the correct filename should succeed
+	if err := store.MarkObjectUploaded(bucket, object, fileName, sealed.SealedObject); err != nil {
 		t.Fatal(err)
 	}
 
@@ -915,17 +915,112 @@ func TestFinalizeObject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.FileName != nil {
-		t.Fatal("expected filename to be cleared after finalize")
+		t.Fatal("expected filename to be cleared after upload")
 	} else if obj.SiaObject == nil {
-		t.Fatal("expected sia_object to be set after finalize")
+		t.Fatal("expected sia_object to be set after upload")
 	}
 
-	// finalize again with the same filename should return ErrObjectModified
+	// marking again with the same filename should return ErrObjectModified
 	// since the first call already cleared it
 	sdkObj2 := sdk.Object{}
 	sealed2 := sdkObj2.Seal(types.GeneratePrivateKey())
-	err = store.FinalizeObject(bucket, object, fileName, sealed2.ID(), sealed2.SealedObject)
+	err = store.MarkObjectUploaded(bucket, object, fileName, sealed2.SealedObject)
 	if !errors.Is(err, objects.ErrObjectModified) {
 		t.Fatalf("expected ErrObjectModified, got %v", err)
+	}
+}
+
+func TestObjectsForPacking(t *testing.T) {
+	const (
+		accessKeyID = "test-accesskey"
+		bucket      = "test-bucket"
+	)
+
+	store := initTestDB(t, zaptest.NewLogger(t))
+	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// insert three pending uploads with filenames, varying sizes
+	for _, tc := range []struct {
+		name   string
+		size   int64
+		fnName string
+	}{
+		{"small", 10, "small.obj"},
+		{"medium", 500, "medium.obj"},
+		{"large", 1000, "large.obj"},
+	} {
+		fn := tc.fnName
+		if err := store.PutObject(accessKeyID, bucket, tc.name, frand.Entropy128(), nil, tc.size, &fn, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// insert an object that has been uploaded to Sia, so filename is cleared
+	fn := "uploaded.obj"
+	if err := store.PutObject(accessKeyID, bucket, "uploaded", frand.Entropy128(), nil, 200, &fn, true); err != nil {
+		t.Fatal(err)
+	}
+	sealObj := sdk.Object{}
+	sealed := sealObj.Seal(types.GeneratePrivateKey())
+	if err := store.MarkObjectUploaded(bucket, "uploaded", fn, sealed.SealedObject); err != nil {
+		t.Fatal(err)
+	}
+
+	// insert a completed multipart upload with 2 parts
+	uid := s3.NewUploadID()
+	if err := store.CreateMultipartUpload(bucket, "multipart", uid, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AddMultipartPart(bucket, "multipart", uid, "p1", 1, frand.Entropy128(), s3.MinUploadPartSize); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AddMultipartPart(bucket, "multipart", uid, "p2", 2, frand.Entropy128(), 50); err != nil {
+		t.Fatal(err)
+	}
+	mpSize := int64(s3.MinUploadPartSize + 50)
+	if err := store.CompleteMultipartUpload(bucket, "multipart", uid, frand.Entropy128(), mpSize); err != nil {
+		t.Fatal(err)
+	}
+
+	packed, err := store.ObjectsForPacking()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// "uploaded" should be excluded since its filename was cleared
+	if len(packed) != 4 {
+		t.Fatalf("expected 4 objects, got %d", len(packed))
+	}
+
+	// verify descending size order
+	for i := 1; i < len(packed); i++ {
+		if packed[i].Length > packed[i-1].Length {
+			t.Fatalf("expected descending order, but %s (%d) > %s (%d)",
+				packed[i].Name, packed[i].Length, packed[i-1].Name, packed[i-1].Length)
+		}
+	}
+
+	// verify the multipart object has the correct parts count
+	// and that regular objects have 0
+	for _, obj := range packed {
+		if obj.Name == "multipart" {
+			if obj.PartsCount != 2 {
+				t.Fatalf("expected 2 parts for multipart object, got %d", obj.PartsCount)
+			}
+			if obj.Length != mpSize {
+				t.Fatalf("expected multipart size %d, got %d", mpSize, obj.Length)
+			}
+		} else if obj.PartsCount != 0 {
+			t.Fatalf("expected 0 parts for %s, got %d", obj.Name, obj.PartsCount)
+		}
+	}
+
+	// verify all returned objects have a filename set
+	for _, obj := range packed {
+		if obj.Filename == "" {
+			t.Fatalf("expected non-empty filename for %s", obj.Name)
+		}
 	}
 }

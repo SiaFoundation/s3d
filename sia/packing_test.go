@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/SiaFoundation/s3d/sia/objects"
+	"go.uber.org/zap/zaptest"
 )
 
 func TestPackedObjects(t *testing.T) {
@@ -76,5 +77,55 @@ func TestPackedObjects(t *testing.T) {
 	// assert object exceeding remaining space is rejected when waste is low
 	if p2.tryAdd(objects.PackedObject{Length: p2.remainingSpace() + 1}) {
 		t.Fatal("expected tryAdd to fail")
+	}
+}
+
+// packingStore is a minimal Store stub for testing preparePackedObjects.
+type packingStore struct {
+	Store
+	objects []objects.PackedObject
+}
+
+func (s *packingStore) ObjectsForPacking() ([]objects.PackedObject, error) {
+	return s.objects, nil
+}
+
+func TestPreparePackedObjects(t *testing.T) {
+	// four objects sized so FFD puts 92+8 in one group and 85+42 in another,
+	// only the first group meets 10% waste, then gap fill reclaims 85 but
+	// not 42
+	store := &packingStore{
+		objects: []objects.PackedObject{
+			{Name: "a", Length: 92},
+			{Name: "b", Length: 85},
+			{Name: "c", Length: 42},
+			{Name: "d", Length: 8},
+		},
+	}
+	s := Sia{
+		store:           store,
+		slabSize:        100,
+		packingWastePct: 0.10,
+		logger:          zaptest.NewLogger(t),
+	}
+
+	ready := s.preparePackedObjects()
+
+	// assert single ready group with the three objects that fit
+	if len(ready) != 1 {
+		t.Fatalf("expected 1 ready group, got %d", len(ready))
+	}
+	if ready[0].totalSize != 185 {
+		t.Fatalf("expected totalSize 185, got %d", ready[0].totalSize)
+	}
+	if len(ready[0].objects) != 3 {
+		t.Fatalf("expected 3 objects, got %d", len(ready[0].objects))
+	}
+
+	// assert the 42 byte object was excluded
+	for _, obj := range ready[0].objects {
+		if obj.Name == "c" {
+			t.Fatal("42 byte object should have been excluded")
+		}
 	}
 }

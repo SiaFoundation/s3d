@@ -9,12 +9,8 @@ import (
 )
 
 var (
-	// ErrObjectFinalized is returned when an object is expected to be
-	// packed but was finalized.
-	ErrObjectFinalized = errors.New("object already finalized")
-
-	// ErrObjectModified is returned by MarkObjectUploaded when the object
-	// was modified between reading and finalizing.
+	// ErrObjectModified is returned by MarkObjectUploaded when the object's
+	// filename no longer matches the expected value.
 	ErrObjectModified = errors.New("object was modified")
 )
 

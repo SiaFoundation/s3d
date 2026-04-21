@@ -269,6 +269,8 @@ func (s *Sia) uploadPackedObjects(ctx context.Context, pack packedObjects) error
 				zap.String("filename", obj.Filename),
 				zap.Int64("expected", obj.Length),
 				zap.Int64("got", n))
+			rc.Close()
+			return fmt.Errorf("packed upload short write for %s/%s: expected %d bytes, got %d", obj.Bucket, obj.Name, obj.Length, n)
 		}
 		rc.Close()
 		objIdx = append(objIdx, i)
@@ -303,7 +305,7 @@ func (s *Sia) uploadPackedObjects(ctx context.Context, pack packedObjects) error
 			continue
 		}
 
-		if err := s.store.FinalizeObject(packObj.Bucket, packObj.Name, packObj.Filename, obj.ID(), s.sdk.SealObject(obj)); err != nil {
+		if err := s.store.MarkObjectUploaded(packObj.Bucket, packObj.Name, packObj.Filename, s.sdk.SealObject(obj)); err != nil {
 			if errors.Is(err, objects.ErrObjectModified) {
 				s.logger.Warn("object was modified during packing, skipping",
 					zap.String("bucket", packObj.Bucket),
