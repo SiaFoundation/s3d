@@ -1,11 +1,16 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 
 	"github.com/SiaFoundation/s3d/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3"
+	"github.com/SiaFoundation/s3d/sia"
+	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"go.uber.org/zap"
 )
 
@@ -37,11 +42,27 @@ func main() {
 		log.Fatalf("failed to create logger: %v", err)
 	}
 
-	var opts []testutil.MemoryBackendOption
-	for _, pair := range toxKeyPairs {
-		opts = append(opts, testutil.WithKeyPair(pair.AccessKey, pair.AccessKey, pair.SecretKey))
+	dir, err := os.MkdirTemp("", "s3d-tox-")
+	if err != nil {
+		log.Fatalf("failed to create temp dir: %v", err)
 	}
-	backend := testutil.NewMemoryBackend(opts...)
+	defer os.RemoveAll(dir)
+
+	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), logger)
+	if err != nil {
+		log.Fatalf("failed to open database: %v", err)
+	}
+	defer store.Close()
+
+	opts := []sia.Option{sia.WithLogger(logger)}
+	for _, pair := range toxKeyPairs {
+		opts = append(opts, sia.WithKeyPair(pair.AccessKey, pair.SecretKey))
+	}
+
+	backend, err := sia.New(context.Background(), testutil.NewMemorySDK(), store, dir, opts...)
+	if err != nil {
+		log.Fatalf("failed to create Sia backend: %v", err)
+	}
 
 	s3 := s3.New(backend,
 		s3.WithHostBucketBases([]string{"localhost"}),

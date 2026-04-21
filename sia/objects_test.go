@@ -654,7 +654,7 @@ func TestDeleteObjects(t *testing.T) {
 }
 
 func TestObjectMetadataCache(t *testing.T) {
-	memSDK := NewMemorySDK()
+	memSDK := testutil.NewMemorySDK()
 	log := zaptest.NewLogger(t)
 	dir := t.TempDir()
 	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
@@ -690,15 +690,15 @@ func TestObjectMetadataCache(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	memSDK.objectCallCount = 0
+	memSDK.ObjectCallCount = 0
 	t.Run("uses cached metadata", func(t *testing.T) {
 		// first GET should use cached metadata
 		_, err := s3Tester.GetObject(t.Context(), bucket, object, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if memSDK.objectCallCount != 0 {
-			t.Fatalf("expected 0 calls to SDK.Object when using fresh cache, got %d", memSDK.objectCallCount)
+		if memSDK.ObjectCallCount != 0 {
+			t.Fatalf("expected 0 calls to SDK.Object when using fresh cache, got %d", memSDK.ObjectCallCount)
 		}
 
 		// second GET should still use cached metadata without calling indexer
@@ -706,8 +706,8 @@ func TestObjectMetadataCache(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if memSDK.objectCallCount != 0 {
-			t.Fatalf("expected 0 calls to SDK.Object on second GET, got %d", memSDK.objectCallCount)
+		if memSDK.ObjectCallCount != 0 {
+			t.Fatalf("expected 0 calls to SDK.Object on second GET, got %d", memSDK.ObjectCallCount)
 		}
 	})
 
@@ -723,25 +723,25 @@ func TestObjectMetadataCache(t *testing.T) {
 		}
 
 		// reset counter
-		memSDK.objectCallCount = 0
+		memSDK.ObjectCallCount = 0
 
 		// GET with expired cache should call SDK.Object to refresh
 		_, err = s3Tester.GetObject(t.Context(), bucket, object, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if memSDK.objectCallCount != 1 {
-			t.Fatalf("expected 1 call to SDK.Object when cache expired, got %d", memSDK.objectCallCount)
+		if memSDK.ObjectCallCount != 1 {
+			t.Fatalf("expected 1 call to SDK.Object when cache expired, got %d", memSDK.ObjectCallCount)
 		}
 
 		// subsequent GET should use refreshed cache without calling indexer
-		memSDK.objectCallCount = 0
+		memSDK.ObjectCallCount = 0
 		_, err = s3Tester.GetObject(t.Context(), bucket, object, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if memSDK.objectCallCount != 0 {
-			t.Fatalf("expected 0 calls to SDK.Object when using refreshed cache, got %d", memSDK.objectCallCount)
+		if memSDK.ObjectCallCount != 0 {
+			t.Fatalf("expected 0 calls to SDK.Object when using refreshed cache, got %d", memSDK.ObjectCallCount)
 		}
 	})
 
@@ -757,16 +757,16 @@ func TestObjectMetadataCache(t *testing.T) {
 		}
 
 		// make SDK.Object return an error to simulate indexer failure
-		memSDK.fail = true
-		memSDK.objectCallCount = 0
+		memSDK.Fail = true
+		memSDK.ObjectCallCount = 0
 
 		// GET with expired cache and indexer failure should fall back to stale cache
 		obj, err := s3Tester.GetObject(t.Context(), bucket, object, nil)
 		if err != nil {
 			t.Fatal("expected download to succeed with stale cache, got error:", err)
 		}
-		if memSDK.objectCallCount != 1 {
-			t.Fatalf("expected 1 failed call to SDK.Object, got %d", memSDK.objectCallCount)
+		if memSDK.ObjectCallCount != 1 {
+			t.Fatalf("expected 1 failed call to SDK.Object, got %d", memSDK.ObjectCallCount)
 		}
 
 		// verify body can still be read from stale cache
@@ -778,11 +778,11 @@ func TestObjectMetadataCache(t *testing.T) {
 			t.Fatal("body mismatch when using stale cache")
 		}
 
-		memSDK.fail = false
+		memSDK.Fail = false
 	})
 
 	t.Run("empty objects skip cache", func(t *testing.T) {
-		memSDK.objectCallCount = 0
+		memSDK.ObjectCallCount = 0
 
 		// upload an empty object
 		const emptyObject = "empty"
@@ -802,13 +802,13 @@ func TestObjectMetadataCache(t *testing.T) {
 		}
 
 		// GET empty object should succeed without calling SDK.Object
-		memSDK.objectCallCount = 0
+		memSDK.ObjectCallCount = 0
 		resp, err := s3Tester.GetObject(t.Context(), bucket, emptyObject, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if memSDK.objectCallCount != 0 {
-			t.Fatalf("expected 0 calls to SDK.Object for empty object GET, got %d", memSDK.objectCallCount)
+		if memSDK.ObjectCallCount != 0 {
+			t.Fatalf("expected 0 calls to SDK.Object for empty object GET, got %d", memSDK.ObjectCallCount)
 		}
 
 		// verify empty body
@@ -830,7 +830,7 @@ func TestCopyAndDeleteObject(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
-	s3Tester := NewCustomTester(t, dir, store, NewMemorySDK(), log)
+	s3Tester := NewCustomTester(t, dir, store, testutil.NewMemorySDK(), log)
 
 	const bucket = "bucket"
 	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
@@ -899,7 +899,7 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	// TODO: add back once background uploads to Sia are implemented
 	t.SkipNow()
 
-	memSDK := NewMemorySDK()
+	memSDK := testutil.NewMemorySDK()
 	log := zaptest.NewLogger(t)
 	dir := t.TempDir()
 	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
@@ -927,8 +927,8 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	}
 
 	// verify SDK has the object pinned
-	if len(memSDK.objects) != 1 {
-		t.Fatalf("expected 1 pinned object, got %d", len(memSDK.objects))
+	if len(memSDK.Objects) != 1 {
+		t.Fatalf("expected 1 pinned object, got %d", len(memSDK.Objects))
 	}
 
 	// copy A to B (shares same object_id)
@@ -942,8 +942,8 @@ func TestDeleteObjectUnpin(t *testing.T) {
 		t.Fatal(err)
 	}
 	siaBackend.ProcessOrphans(t.Context())
-	if len(memSDK.objects) != 1 {
-		t.Fatalf("expected 1 pinned object after deleting A (B still references it), got %d", len(memSDK.objects))
+	if len(memSDK.Objects) != 1 {
+		t.Fatalf("expected 1 pinned object after deleting A (B still references it), got %d", len(memSDK.Objects))
 	}
 
 	// delete B - should unpin since no references remain
@@ -951,8 +951,8 @@ func TestDeleteObjectUnpin(t *testing.T) {
 		t.Fatal(err)
 	}
 	siaBackend.ProcessOrphans(t.Context())
-	if len(memSDK.objects) != 0 {
-		t.Fatalf("expected 0 pinned objects after deleting B, got %d", len(memSDK.objects))
+	if len(memSDK.Objects) != 0 {
+		t.Fatalf("expected 0 pinned objects after deleting B, got %d", len(memSDK.Objects))
 	}
 
 	// test empty object deletion does not attempt to unpin
@@ -961,15 +961,15 @@ func TestDeleteObjectUnpin(t *testing.T) {
 		t.Fatal(err)
 	}
 	siaBackend.ProcessOrphans(t.Context())
-	if len(memSDK.objects) != 0 {
-		t.Fatalf("expected 0 pinned objects for empty object, got %d", len(memSDK.objects))
+	if len(memSDK.Objects) != 0 {
+		t.Fatalf("expected 0 pinned objects for empty object, got %d", len(memSDK.Objects))
 	}
 	if err := s3Tester.DeleteObject(t.Context(), bucket, "empty"); err != nil {
 		t.Fatal(err)
 	}
 	siaBackend.ProcessOrphans(t.Context())
-	if len(memSDK.objects) != 0 {
-		t.Fatalf("expected 0 pinned objects after deleting empty object, got %d", len(memSDK.objects))
+	if len(memSDK.Objects) != 0 {
+		t.Fatalf("expected 0 pinned objects after deleting empty object, got %d", len(memSDK.Objects))
 	}
 
 	// test PutObject overwrite unpins old object
@@ -979,8 +979,8 @@ func TestDeleteObjectUnpin(t *testing.T) {
 		t.Fatal(err)
 	}
 	siaBackend.ProcessOrphans(t.Context())
-	if len(memSDK.objects) != 1 {
-		t.Fatalf("expected 1 pinned object, got %d", len(memSDK.objects))
+	if len(memSDK.Objects) != 1 {
+		t.Fatalf("expected 1 pinned object, got %d", len(memSDK.Objects))
 	}
 	// overwrite with different data (different object_id)
 	_, err = s3Tester.PutObject(t.Context(), bucket, "C", bytes.NewReader(data2), nil)
@@ -989,8 +989,8 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	}
 	siaBackend.ProcessOrphans(t.Context())
 	// old object should be unpinned, new one pinned
-	if len(memSDK.objects) != 1 {
-		t.Fatalf("expected 1 pinned object after overwrite, got %d", len(memSDK.objects))
+	if len(memSDK.Objects) != 1 {
+		t.Fatalf("expected 1 pinned object after overwrite, got %d", len(memSDK.Objects))
 	}
 
 	// test re-reference before orphan sweep: delete last reference to create
@@ -1012,7 +1012,7 @@ func TestDeleteObjectUnpin(t *testing.T) {
 		t.Fatal(err)
 	}
 	siaBackend.ProcessOrphans(t.Context())
-	if _, ok := memSDK.objects[orphanID]; !ok {
+	if _, ok := memSDK.Objects[orphanID]; !ok {
 		t.Fatal("re-referenced object should NOT have been unpinned")
 	}
 }

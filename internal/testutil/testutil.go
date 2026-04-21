@@ -520,8 +520,7 @@ func NewTester(t testing.TB, opts ...TesterOption) *S3Tester {
 	}
 
 	if cfg.backend == nil {
-		backend := NewMemoryBackend(WithKeyPair(Owner, AccessKeyID, SecretAccessKey))
-		cfg.backend = backend
+		cfg.backend = NewBackend(t)
 	}
 
 	handler := s3.New(cfg.backend,
