@@ -245,6 +245,30 @@ func TestListObjects(t *testing.T) {
 				}},
 		},
 		{
+			// regression: NextMarker can't contain \xFF when it is a
+			// common prefix, the \xFF skip is applied on re-entry via
+			// adjustMarkerForCommonPrefix
+			keys: []string{"a", "b/1", "b/2", "c"},
+			cases: []testCase{
+				{
+					name:           "CommonPrefixMarkerPage1",
+					delimiter:      "/",
+					maxKeys:        2,
+					objects:        []string{"a"},
+					commonPrefixes: []string{"b/"},
+					truncated:      true,
+					nextMarker:     "b/",
+				},
+				{
+					name:      "CommonPrefixMarkerPage2",
+					delimiter: "/",
+					marker:    "b/",
+					maxKeys:   2,
+					objects:   []string{"c"},
+				},
+			},
+		},
+		{
 			keys: largeDirectoryKeys,
 			cases: []testCase{
 				{
