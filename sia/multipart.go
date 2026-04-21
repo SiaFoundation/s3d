@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
@@ -25,14 +24,10 @@ func randPartName() string {
 	return fmt.Sprintf("%x.part", uuid[:])
 }
 
-func randObjectName(bucket, object string) string {
+func randObjectName() string {
 	var uuid [8]byte
 	frand.Read(uuid[:])
-	// replace the separator in the object key to avoid issues with the
-	// filesystem
-	object = filepath.ToSlash(object)
-	object = strings.ReplaceAll(object, "/", "_")
-	return fmt.Sprintf("%s-%s-%x.obj", bucket, object, uuid[:])
+	return fmt.Sprintf("%x.obj", uuid[:])
 }
 
 func (s *Sia) multipartUploadDir(uploadID s3.UploadID) string {

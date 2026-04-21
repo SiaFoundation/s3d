@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"crypto/md5"
 	"encoding/hex"
+	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -888,7 +890,7 @@ func TestCopyAndDeleteObject(t *testing.T) {
 	}
 
 	// file should now be gone from disk
-	if _, err := os.Stat(filepath.Join(uploadsDir, uploadFile)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(uploadsDir, uploadFile)); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("expected upload file to be deleted, got: %v", err)
 	}
 }
