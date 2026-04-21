@@ -45,7 +45,7 @@ func (s *Sia) openUpload(bucket, name string, obj *objects.Object, offset int64)
 		uploadDir := filepath.Join(s.uploadDir(), *obj.FileName)
 		return objects.NewReader(uploadDir, parts, offset)
 	}
-	f, err := os.Open(filepath.Join(s.uploadDir(), *obj.FileName))
+	f, err := openFileAllowDelete(filepath.Join(s.uploadDir(), *obj.FileName))
 	if err != nil {
 		return nil, err
 	}
