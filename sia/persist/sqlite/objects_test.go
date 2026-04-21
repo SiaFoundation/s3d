@@ -35,19 +35,6 @@ func TestGetObject(t *testing.T) {
 		objMeta   = map[string]string{"foo": "bar"}
 		objLength = frand.Intn(10) + 1
 
-		// TODO: most of these are used to be able to call MarkObjectUploaded in
-		// tests. Once we have the actual upload logic in place, we should be
-		// able to call that instead of just marking the upload done. Then we
-		// should be able to get rid of some of this here again.
-		objSealKey = types.GeneratePrivateKey()
-		objSdkObj  = sdk.Object{}
-		objSealed  = objSdkObj.Seal(objSealKey)
-		objID      = objSealed.ID()
-
-		multipartSealKey  = types.GeneratePrivateKey()
-		multipartSdkObj   = sdk.Object{}
-		multipartSealed   = multipartSdkObj.Seal(multipartSealKey)
-		multipartID       = multipartSealed.ID()
 		multipartMD5      = frand.Entropy128()
 		multipartUploadID = s3.NewUploadID()
 		multipartMeta     = map[string]string{"baz": "qux"}
@@ -101,11 +88,14 @@ func TestGetObject(t *testing.T) {
 	}
 
 	// mark the object as uploaded
+	objSdkObj := sdk.Object{}
+	objSealed := objSdkObj.Seal(types.GeneratePrivateKey())
 	if err := store.MarkObjectUploaded(bucket, object, "", objSealed.SealedObject); err != nil {
 		t.Fatal(err)
 	}
 
 	// re-fetch and verify the object_id is now set
+	objID := objSealed.ID()
 	obj, err = store.GetObject(&accessKeyID, bucket, object, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -130,16 +120,19 @@ func TestGetObject(t *testing.T) {
 	}
 
 	// mark multipart object as uploaded
-	if err := store.MarkObjectUploaded(bucket, multipart, multipartUploadID.String(), multipartSealed.SealedObject); err != nil {
+	mpSdkObj := sdk.Object{}
+	mpSealed := mpSdkObj.Seal(types.GeneratePrivateKey())
+	if err := store.MarkObjectUploaded(bucket, multipart, multipartUploadID.String(), mpSealed.SealedObject); err != nil {
 		t.Fatal(err)
 	}
 
 	// get multipart object with part number 2
+	mpID := mpSealed.ID()
 	multipartPart2, err := store.GetObject(aws.String(accessKeyID), bucket, multipart, aws.Int32(2))
 	if err != nil {
 		t.Fatal(err)
-	} else if multipartPart2.ID == nil || *multipartPart2.ID != multipartID {
-		t.Fatalf("expected object ID %v, got %v", multipartID, multipartPart2.ID)
+	} else if multipartPart2.ID == nil || *multipartPart2.ID != mpID {
+		t.Fatalf("expected object ID %v, got %v", mpID, multipartPart2.ID)
 	} else if multipartPart2.Offset != int64(s3.MinUploadPartSize) {
 		t.Fatalf("expected object offset %d, got %d", s3.MinUploadPartSize, multipartPart2.Offset)
 	} else if multipartPart2.Length != 2 {
