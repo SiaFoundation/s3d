@@ -302,6 +302,68 @@ func (s *Store) RemoveOrphanedObject(objectID types.Hash256) error {
 	})
 }
 
+// FinalizeObject transitions an object from disk to Sia storage. It sets the
+// object_id, sia_object, and cached_at fields and clears the filename. The
+// update only proceeds if the current filename matches expectedFilename.
+func (s *Store) FinalizeObject(bucket, name, expectedFilename string, objectID types.Hash256, siaObject slabs.SealedObject) error {
+	return s.transaction(func(tx *txn) error {
+		bid, err := bucketID(tx, bucket)
+		if err != nil {
+			return err
+		}
+
+		result, err := tx.Exec(`
+			UPDATE objects SET
+				object_id = $1,
+				sia_object = $2,
+				cached_at = $3,
+				filename = NULL
+			WHERE bucket_id = $4 AND name = $5 AND filename = $6
+		`, sqlHash256(objectID), sqlSiaObject(siaObject), sqlTime(time.Now()), bid, name, expectedFilename)
+		if err != nil {
+			return err
+		}
+		n, err := result.RowsAffected()
+		if err != nil {
+			return err
+		} else if n == 0 {
+			return objects.ErrObjectModified
+		}
+		return nil
+	})
+}
+
+// ObjectsForPacking returns all objects stored on disk, ordered by size
+// descending for greedy best-fit slab packing.
+func (s *Store) ObjectsForPacking() ([]objects.PackedObject, error) {
+	var objs []objects.PackedObject
+	if err := s.transaction(func(tx *txn) error {
+		rows, err := tx.Query(`
+			SELECT b.name, o.name, o.filename, o.size
+			FROM objects o
+			JOIN buckets b ON b.id = o.bucket_id
+			WHERE o.filename IS NOT NULL
+			ORDER BY o.size DESC
+		`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var obj objects.PackedObject
+			if err := rows.Scan(&obj.Bucket, &obj.Name, &obj.Filename, &obj.Length); err != nil {
+				return err
+			}
+			objs = append(objs, obj)
+		}
+		return rows.Err()
+	}); err != nil {
+		return nil, err
+	}
+	return objs, nil
+}
+
 func putObject(tx *txn, bid int64, name string, id *types.Hash256, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string, siaObject *slabs.SealedObject, cachedAt time.Time, updateModTime bool) error {
 	if meta == nil {
 		meta = make(map[string]string) // force '{}' instead of 'null' in JSON

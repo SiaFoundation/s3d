@@ -1,10 +1,21 @@
 package objects
 
 import (
+	"errors"
 	"time"
 
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/slabs"
+)
+
+var (
+	// ErrObjectFinalized is returned when an object is expected to be
+	// packed but was finalized.
+	ErrObjectFinalized = errors.New("object already finalized")
+
+	// ErrObjectModified is returned by MarkObjectUploaded when the object
+	// was modified between reading and finalizing.
+	ErrObjectModified = errors.New("object was modified")
 )
 
 // Object represents a stored object with its metadata.
@@ -21,6 +32,14 @@ type Object struct {
 
 	SiaObject *slabs.SealedObject // sealed Sia object for downloads (must be unsealed before use)
 	CachedAt  time.Time           // zero if not cached
+}
+
+// PackedObject contains the fields needed to pack an object.
+type PackedObject struct {
+	Bucket   string
+	Name     string
+	Filename string
+	Length   int64
 }
 
 // Part represents a single part of a multipart upload.

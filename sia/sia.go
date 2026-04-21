@@ -39,6 +39,15 @@ func WithLogger(logger *zap.Logger) Option {
 	}
 }
 
+// WithPackingWaste sets the maximum percentage of wasted space tolerated per
+// slab. Objects whose upload would waste more than this fraction of a slab are
+// written to disk and batched together. Pass 0 to disable packing.
+func WithPackingWaste(pct float64) Option {
+	return func(s *Sia) {
+		s.packingWastePct = pct
+	}
+}
+
 // WithKeyPair adds a key pair to the Sia backend.
 func WithKeyPair(accessKeyID, secretKey string) func(*Sia) {
 	return func(mb *Sia) {
@@ -57,6 +66,10 @@ type Sia struct {
 	directory  string
 	accessKeys map[string]auth.SecretAccessKey
 
+	slabSize        int64
+	packingWastePct float64
+	triggerPackChan chan struct{}
+
 	tg     *threadgroup.ThreadGroup
 	logger *zap.Logger
 }
@@ -67,6 +80,9 @@ type SDK interface {
 	Download(ctx context.Context, w io.Writer, obj sdk.Object, rnge *s3.ObjectRange) error
 	Object(ctx context.Context, id types.Hash256) (sdk.Object, error)
 	Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
+	SlabSize() (int64, error)
+	UploadPacked() (PackedUpload, error)
+	PinObject(ctx context.Context, obj sdk.Object) error
 	SealObject(obj sdk.Object) slabs.SealedObject
 	UnsealObject(sealed slabs.SealedObject) (sdk.Object, error)
 }
@@ -81,7 +97,9 @@ type Store interface {
 	HeadBucket(accessKeyID, bucket string) error
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
 	ListObjects(accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error)
+	FinalizeObject(bucket, name, expectedFilename string, objectID types.Hash256, siaObject slabs.SealedObject) error
 	ObjectParts(bucket, name string) ([]objects.Part, error)
+	ObjectsForPacking() ([]objects.PackedObject, error)
 	OrphanedObjects(limit int) ([]types.Hash256, error)
 	PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string, updateModTime bool) error
 	MarkObjectUploaded(bucket, name string, siaObject slabs.SealedObject) error
@@ -103,8 +121,9 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		sdk:   sdk,
 		store: store,
 
-		directory:  directory,
-		accessKeys: make(map[string]auth.SecretAccessKey),
+		directory:       directory,
+		accessKeys:      make(map[string]auth.SecretAccessKey),
+		packingWastePct: DefaultPackingWastePct,
 
 		logger: zap.NewNop(),
 		tg:     threadgroup.New(),
@@ -114,6 +133,16 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 	}
 	if len(sia.accessKeys) == 0 {
 		return nil, ErrNoAccessKey
+	}
+
+	// calculate slab size from the SDK's configured redundancy settings
+	if sia.packingWastePct > 0 {
+		slabSize, err := sia.sdk.SlabSize()
+		if err != nil {
+			return nil, fmt.Errorf("failed to determine slab size: %w", err)
+		}
+		sia.slabSize = slabSize
+		sia.triggerPackChan = make(chan struct{}, 1)
 	}
 
 	dir := filepath.Join(sia.directory, UploadsDirectory)
@@ -132,6 +161,17 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		defer cancel()
 		sia.processOrphansLoop(ctx)
 	}()
+
+	if sia.packingWastePct > 0 {
+		ctx, cancel, err := sia.tg.AddContext(ctx)
+		if err != nil {
+			return nil, err
+		}
+		go func() {
+			defer cancel()
+			sia.packingLoop(ctx)
+		}()
+	}
 
 	return sia, nil
 }
