@@ -28,3 +28,7 @@ func openFileAllowDelete(path string) (*os.File, error) {
 
 	return os.NewFile(uintptr(h), path), nil
 }
+
+func syncDir(path string) error {
+	return nil
+}
