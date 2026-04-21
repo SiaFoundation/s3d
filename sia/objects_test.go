@@ -918,6 +918,8 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { siaBackend.Close() })
+
 	s3Tester := testutil.NewTester(t, testutil.WithBackend(siaBackend))
 
 	const bucket = "bucket"

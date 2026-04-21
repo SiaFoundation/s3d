@@ -40,11 +40,18 @@ func WithLogger(logger *zap.Logger) Option {
 }
 
 // WithPackingWaste sets the maximum percentage of wasted space tolerated per
-// slab. Objects whose upload would waste more than this fraction of a slab are
-// written to disk and batched together. Pass 0 to disable packing.
+// slab.
 func WithPackingWaste(pct float64) Option {
 	return func(s *Sia) {
 		s.packingWastePct = pct
+	}
+}
+
+// WithPackingDisabled disables the background packing loop. Callers can still
+// trigger packing manually via PackObjects.
+func WithPackingDisabled() Option {
+	return func(s *Sia) {
+		s.packingDisabled = true
 	}
 }
 
@@ -68,6 +75,7 @@ type Sia struct {
 
 	slabSize        int64
 	packingWastePct float64
+	packingDisabled bool
 
 	tg     *threadgroup.ThreadGroup
 	logger *zap.Logger
@@ -130,6 +138,8 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 	}
 	if len(sia.accessKeys) == 0 {
 		return nil, ErrNoAccessKey
+	} else if sia.packingWastePct <= 0 {
+		return nil, errors.New("packing waste percentage must be greater than 0")
 	}
 
 	dir := filepath.Join(sia.directory, UploadsDirectory)
@@ -138,13 +148,11 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 	}
 
 	// initialize slab size if packing is enabled
-	if sia.packingWastePct > 0 {
-		slabSize, err := sia.sdk.SlabSize()
-		if err != nil {
-			return nil, fmt.Errorf("failed to determine slab size: %w", err)
-		}
-		sia.slabSize = slabSize
+	slabSize, err := sia.sdk.SlabSize()
+	if err != nil {
+		return nil, fmt.Errorf("failed to determine slab size: %w", err)
 	}
+	sia.slabSize = slabSize
 
 	// TODO: clean up orphaned uploads and multipart uploads in uploads
 	// directory on startup
@@ -158,7 +166,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		sia.processOrphansLoop(ctx)
 	}()
 
-	if sia.packingWastePct > 0 {
+	if !sia.packingDisabled {
 		ctx, cancel, err := sia.tg.AddContext(ctx)
 		if err != nil {
 			return nil, err
