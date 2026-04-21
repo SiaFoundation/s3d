@@ -138,6 +138,15 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		return nil, fmt.Errorf("failed to create directory %q: %w", dir, err)
 	}
 
+	// initialize slab size if packing is enabled
+	if sia.packingWastePct > 0 {
+		slabSize, err := sia.sdk.SlabSize()
+		if err != nil {
+			return nil, fmt.Errorf("failed to determine slab size: %w", err)
+		}
+		sia.slabSize = slabSize
+	}
+
 	// TODO: clean up orphaned uploads and multipart uploads in uploads
 	// directory on startup
 
@@ -151,12 +160,6 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 	}()
 
 	if sia.packingWastePct > 0 {
-		slabSize, err := sia.sdk.SlabSize()
-		if err != nil {
-			return nil, fmt.Errorf("failed to determine slab size: %w", err)
-		}
-		sia.slabSize = slabSize
-
 		ctx, cancel, err := sia.tg.AddContext(ctx)
 		if err != nil {
 			return nil, err
