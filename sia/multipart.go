@@ -393,13 +393,6 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 		return nil, fmt.Errorf("failed to stat upload directory: %w", err)
 	}
 
-	// create reader for the completed object
-	r, err := objects.NewReader(uploadDir, completed, 0)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create multipart reader: %w", err)
-	}
-	defer r.Close()
-
 	// compute final content MD5
 	hash := md5.New()
 	for _, part := range completed {
