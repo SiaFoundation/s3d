@@ -12,6 +12,7 @@ import (
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"github.com/SiaFoundation/s3d/sia/objects"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"go.sia.tech/core/types"
@@ -879,5 +880,52 @@ func TestPutObjectOrphan(t *testing.T) {
 		t.Fatal(err)
 	} else if len(orphans) != 1 || orphans[0] != newID {
 		t.Fatalf("expected orphaned ID %v, got %v", newID, orphans)
+	}
+}
+
+func TestFinalizeObject(t *testing.T) {
+	const (
+		accessKeyID = "test-accesskey"
+		bucket      = "test-bucket"
+		object      = "test-object"
+	)
+
+	store := initTestDB(t, zaptest.NewLogger(t))
+	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// create a pending upload
+	fileName := "test-file.obj"
+	if err := store.PutObject(accessKeyID, bucket, object, frand.Entropy128(), nil, 100, &fileName, true); err != nil {
+		t.Fatal(err)
+	}
+
+	sdkObj := sdk.Object{}
+	sealed := sdkObj.Seal(types.GeneratePrivateKey())
+
+	// finalize with the correct filename should succeed
+	if err := store.FinalizeObject(bucket, object, fileName, sealed.ID(), sealed.SealedObject); err != nil {
+		t.Fatal(err)
+	}
+
+	// verify the object is now on Sia
+	akid := accessKeyID
+	obj, err := store.GetObject(&akid, bucket, object, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if obj.FileName != nil {
+		t.Fatal("expected filename to be cleared after finalize")
+	} else if obj.SiaObject == nil {
+		t.Fatal("expected sia_object to be set after finalize")
+	}
+
+	// finalize again with the same filename should return ErrObjectModified
+	// since the first call already cleared it
+	sdkObj2 := sdk.Object{}
+	sealed2 := sdkObj2.Seal(types.GeneratePrivateKey())
+	err = store.FinalizeObject(bucket, object, fileName, sealed2.ID(), sealed2.SealedObject)
+	if !errors.Is(err, objects.ErrObjectModified) {
+		t.Fatalf("expected ErrObjectModified, got %v", err)
 	}
 }
