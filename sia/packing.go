@@ -165,26 +165,24 @@ func (s *Sia) preparePackedObjects() []packedObjects {
 }
 
 func (s *Sia) packingLoop(ctx context.Context) {
-	t := time.NewTicker(5 * time.Minute)
+	t := time.NewTicker(time.Minute)
 	defer t.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-s.triggerPackChan:
-			s.logger.Debug("packing triggered")
-			t.Reset(5 * time.Minute)
 		case <-t.C:
+			s.PackObjects(ctx)
 		}
-
-		s.PackObjects(ctx)
 	}
 }
 
 // PackObjects runs a single packing cycle: it fetches pending objects,
 // groups them into slabs, and uploads them to Sia.
 func (s *Sia) PackObjects(ctx context.Context) {
+	s.logger.Debug("packing loop tick")
+
 	// fetch and prepare objects for packing
 	packs := s.preparePackedObjects()
 	if len(packs) == 0 {
@@ -322,13 +320,6 @@ func (s *Sia) uploadPackedObjects(ctx context.Context, pack packedObjects) error
 	}
 
 	return nil
-}
-
-func (s *Sia) triggerPacking() {
-	select {
-	case s.triggerPackChan <- struct{}{}:
-	default:
-	}
 }
 
 func (s *Sia) removeUploadQuiet(fileName string) {

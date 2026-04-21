@@ -412,8 +412,6 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 		return nil, fmt.Errorf("failed to complete multipart upload in store: %w", err)
 	}
 
-	s.triggerPacking()
-
 	// calculate ETag
 	etag := s3.FormatETag(contentMD5[:], len(completed))
 

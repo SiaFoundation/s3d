@@ -68,7 +68,6 @@ type Sia struct {
 
 	slabSize        int64
 	packingWastePct float64
-	triggerPackChan chan struct{}
 
 	tg     *threadgroup.ThreadGroup
 	logger *zap.Logger
