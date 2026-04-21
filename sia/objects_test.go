@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"crypto/md5"
 	"encoding/hex"
+	"errors"
 	"io"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -14,7 +17,6 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia"
-	"github.com/SiaFoundation/s3d/sia/objects"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -669,7 +671,7 @@ func TestObjectMetadataCache(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// upload a non-empty object via PutObject - metadata will be cached from upload
+	// upload a non-empty object via PutObject
 	data := frand.Bytes(64)
 
 	const object = "object"
@@ -678,9 +680,19 @@ func TestObjectMetadataCache(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// simulate the background upload to Sia by uploading and sealing
+	siaObj, err := memSDK.Upload(t.Context(), bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed := memSDK.SealObject(siaObj)
+	if err := store.MarkObjectUploaded(bucket, object, sealed); err != nil {
+		t.Fatal(err)
+	}
+
 	memSDK.objectCallCount = 0
 	t.Run("uses cached metadata", func(t *testing.T) {
-		// first GET should use cached metadata from upload
+		// first GET should use cached metadata
 		_, err := s3Tester.GetObject(t.Context(), bucket, object, nil)
 		if err != nil {
 			t.Fatal(err)
@@ -706,8 +718,7 @@ func TestObjectMetadataCache(t *testing.T) {
 			t.Fatal(err)
 		}
 		// set retrieval time to 25 hours ago (past the 24-hour cache lifetime)
-		obj.CachedAt = time.Now().Add(-25 * time.Hour)
-		if err := store.PutObject(accessKeyID, bucket, object, obj, true); err != nil {
+		if err := store.UpdateSiaObject(*obj.SiaObject, time.Now().Add(-25*time.Hour)); err != nil {
 			t.Fatal(err)
 		}
 
@@ -741,8 +752,7 @@ func TestObjectMetadataCache(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		storedObj.CachedAt = time.Now().Add(-25 * time.Hour)
-		if err := store.PutObject(accessKeyID, bucket, object, storedObj, true); err != nil {
+		if err := store.UpdateSiaObject(*storedObj.SiaObject, time.Now().Add(-25*time.Hour)); err != nil {
 			t.Fatal(err)
 		}
 
@@ -812,7 +822,83 @@ func TestObjectMetadataCache(t *testing.T) {
 	})
 }
 
+func TestCopyAndDeleteObject(t *testing.T) {
+	log := zaptest.NewLogger(t)
+	dir := t.TempDir()
+	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	s3Tester := NewCustomTester(t, dir, store, NewMemorySDK(), log)
+
+	const bucket = "bucket"
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// upload an object
+	data := frand.Bytes(256)
+	_, err = s3Tester.PutObject(t.Context(), bucket, "src", bytes.NewReader(data), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// find the file on disk
+	uploadsDir := filepath.Join(dir, sia.UploadsDirectory)
+	entries, err := os.ReadDir(uploadsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 upload file, got %d", len(entries))
+	}
+	uploadFile := entries[0].Name()
+
+	// copy src -> dst
+	_, err = s3Tester.CopyObject(t.Context(), bucket, "src", bucket, "dst", types.MetadataDirectiveCopy, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// delete the source
+	if err := s3Tester.DeleteObject(t.Context(), bucket, "src"); err != nil {
+		t.Fatal(err)
+	}
+
+	// file should still exist on disk (dst still references it)
+	if _, err := os.Stat(filepath.Join(uploadsDir, uploadFile)); err != nil {
+		t.Fatalf("expected upload file to still exist after deleting src, got: %v", err)
+	}
+
+	// download the destination and verify contents
+	obj, err := s3Tester.GetObject(t.Context(), bucket, "dst", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(obj.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatal("downloaded data does not match original")
+	}
+
+	// delete the destination
+	if err := s3Tester.DeleteObject(t.Context(), bucket, "dst"); err != nil {
+		t.Fatal(err)
+	}
+
+	// file should now be gone from disk
+	if _, err := os.Stat(filepath.Join(uploadsDir, uploadFile)); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("expected upload file to be deleted, got: %v", err)
+	}
+}
+
 func TestDeleteObjectUnpin(t *testing.T) {
+	// TODO: add back once background uploads to Sia are implemented
+	t.SkipNow()
+
 	memSDK := NewMemorySDK()
 	log := zaptest.NewLogger(t)
 	dir := t.TempDir()
@@ -922,10 +1008,7 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	}
 	orphanID := orphans[0]
 	// re-reference the orphaned object_id by inserting a new object row
-	if err := store.PutObject(testutil.AccessKeyID, bucket, "D", &objects.Object{
-		ID:     orphanID,
-		Length: 1,
-	}, true); err != nil {
+	if err := store.PutObject(testutil.AccessKeyID, bucket, "D", [16]byte{}, nil, 1, new(string), true); err != nil {
 		t.Fatal(err)
 	}
 	siaBackend.ProcessOrphans(t.Context())

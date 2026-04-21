@@ -15,15 +15,14 @@ import (
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.sia.tech/core/types"
-	"go.sia.tech/indexd/sdk"
 	"go.sia.tech/indexd/slabs"
+	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
 )
 
 const (
-	// MultipartDirectory is the directory name used for storing multipart
-	// uploads.
-	MultipartDirectory = "multipart"
+	//  UploadsDirectory is the directory name used for storing pending uploads.
+	UploadsDirectory = "uploads"
 )
 
 // ErrNoAccessKey is returned when no access key is provided to the Sia backend.
@@ -74,18 +73,21 @@ type Store interface {
 	CopyObject(srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool) (*objects.Object, error)
 	CreateBucket(accessKeyID, bucket string) error
 	DeleteBucket(accessKeyID, bucket string) error
-	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) error
+	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (*string, error)
 	GetObject(accessKeyID *string, bucket, object string, partNumber *int32) (*objects.Object, error)
 	HeadBucket(accessKeyID, bucket string) error
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
 	ListObjects(accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error)
+	ObjectParts(bucket, name string) ([]objects.Part, error)
 	OrphanedObjects(limit int) ([]types.Hash256, error)
-	PutObject(accessKeyID, bucket, name string, obj *objects.Object, updateModTime bool) error
+	PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string, updateModTime bool) error
+	MarkObjectUploaded(bucket, name string, siaObject slabs.SealedObject) error
+	UpdateSiaObject(siaObject slabs.SealedObject, cachedAt time.Time) error
 	RemoveOrphanedObject(objectID types.Hash256) error
 	AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) error
 	AddMultipartPart(bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (string, error)
 	CreateMultipartUpload(bucket, name string, uploadID s3.UploadID, meta map[string]string) error
-	CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, objectID types.Hash256, contentMD5 [16]byte, contentLength int64) error
+	CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64) error
 	HasMultipartUpload(bucket, name string, uploadID s3.UploadID) error
 	ListMultipartUploads(bucket string, prefix s3.Prefix, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error)
 	ListParts(bucket, name string, uploadID s3.UploadID, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error)
@@ -94,11 +96,6 @@ type Store interface {
 
 // New creates a new Sia backend instance.
 func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Option) (*Sia, error) {
-	directory = filepath.Join(directory, MultipartDirectory)
-	if err := os.MkdirAll(directory, 0700); err != nil {
-		return nil, fmt.Errorf("failed to create multipart upload directory: %w", err)
-	}
-
 	sia := &Sia{
 		logger: zap.NewNop(),
 		sdk:    sdk,
@@ -113,6 +110,14 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 	if len(sia.accessKeys) == 0 {
 		return nil, ErrNoAccessKey
 	}
+
+	dir := filepath.Join(sia.directory, UploadsDirectory)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return nil, fmt.Errorf("failed to create directory %q: %w", dir, err)
+	}
+
+	// TODO: clean up orphaned uploads and multipart uploads in uploads
+	// directory on startup
 
 	go sia.processOrphansLoop(ctx)
 

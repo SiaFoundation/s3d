@@ -7,8 +7,8 @@ import (
 
 	"github.com/SiaFoundation/s3d/s3"
 	"go.sia.tech/core/types"
-	"go.sia.tech/indexd/sdk"
 	"go.sia.tech/indexd/slabs"
+	sdk "go.sia.tech/siastorage"
 )
 
 type (

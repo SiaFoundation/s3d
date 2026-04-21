@@ -16,7 +16,7 @@ import (
 	"github.com/SiaFoundation/s3d/sia"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"go.sia.tech/core/types"
-	"go.sia.tech/indexd/sdk"
+	sdk "go.sia.tech/siastorage"
 	"go.sia.tech/indexd/testutils"
 	"go.uber.org/zap"
 	"gopkg.in/ini.v1"
