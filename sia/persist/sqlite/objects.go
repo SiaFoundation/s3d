@@ -339,10 +339,12 @@ func (s *Store) ObjectsForPacking() ([]objects.PackedObject, error) {
 	var objs []objects.PackedObject
 	if err := s.transaction(func(tx *txn) error {
 		rows, err := tx.Query(`
-			SELECT b.name, o.name, o.filename, o.size
+			SELECT b.name, o.name, o.filename, o.size, COUNT(p.part_number)
 			FROM objects o
 			JOIN buckets b ON b.id = o.bucket_id
+			LEFT JOIN object_parts p ON p.bucket_id = o.bucket_id AND p.name = o.name
 			WHERE o.filename IS NOT NULL
+			GROUP BY o.bucket_id, o.name
 			ORDER BY o.size DESC
 		`)
 		if err != nil {
@@ -352,7 +354,7 @@ func (s *Store) ObjectsForPacking() ([]objects.PackedObject, error) {
 
 		for rows.Next() {
 			var obj objects.PackedObject
-			if err := rows.Scan(&obj.Bucket, &obj.Name, &obj.Filename, &obj.Length); err != nil {
+			if err := rows.Scan(&obj.Bucket, &obj.Name, &obj.Filename, &obj.Length, &obj.PartsCount); err != nil {
 				return err
 			}
 			objs = append(objs, obj)

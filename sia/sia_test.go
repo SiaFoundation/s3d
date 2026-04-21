@@ -101,6 +101,9 @@ func (s *MemorySDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
 	return obj, nil
 }
 
+// SetSlabSize overrides the slab size for testing.
+func (s *MemorySDK) SetSlabSize(size int64) { s.slabSize = size }
+
 func (s *MemorySDK) SlabSize() (int64, error) {
 	return s.slabSize, nil
 }

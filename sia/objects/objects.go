@@ -36,10 +36,11 @@ type Object struct {
 
 // PackedObject contains the fields needed to pack an object.
 type PackedObject struct {
-	Bucket   string
-	Name     string
-	Filename string
-	Length   int64
+	Bucket     string
+	Name       string
+	Filename   string
+	Length     int64
+	PartsCount int32
 }
 
 // Part represents a single part of a multipart upload.

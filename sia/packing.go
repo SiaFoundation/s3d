@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -179,11 +178,13 @@ func (s *Sia) packingLoop(ctx context.Context) {
 		case <-t.C:
 		}
 
-		s.packObjects(ctx)
+		s.PackObjects(ctx)
 	}
 }
 
-func (s *Sia) packObjects(ctx context.Context) {
+// PackObjects runs a single packing cycle: it fetches pending objects,
+// groups them into slabs, and uploads them to Sia.
+func (s *Sia) PackObjects(ctx context.Context) {
 	// fetch and prepare objects for packing
 	packs := s.preparePackedObjects()
 	if len(packs) == 0 {
@@ -230,23 +231,26 @@ func (s *Sia) uploadPackedObjects(ctx context.Context, pack packedObjects) error
 
 	var objIdx []int
 	for i, obj := range pack.objects {
-		file, err := os.Open(filepath.Join(s.uploadDir(), obj.Filename))
+		rc, err := s.openUpload(obj.Bucket, obj.Name, &objects.Object{
+			FileName:   &obj.Filename,
+			PartsCount: obj.PartsCount,
+		}, 0)
 		if err != nil {
-			s.logger.Error("failed to open packed file for upload",
+			s.logger.Error("failed to open upload for packing",
 				zap.String("bucket", obj.Bucket),
 				zap.String("name", obj.Name),
 				zap.String("filename", obj.Filename),
 				zap.Error(err))
 			continue
 		}
-		n, err := upload.Add(ctx, file)
+		n, err := upload.Add(ctx, rc)
 		if err != nil {
 			s.logger.Error("failed to add object to packed upload",
 				zap.String("bucket", obj.Bucket),
 				zap.String("name", obj.Name),
 				zap.String("filename", obj.Filename),
 				zap.Error(err))
-			file.Close()
+			rc.Close()
 			continue
 		} else if n != obj.Length {
 			s.logger.Warn("unexpected number of bytes added to packed upload",
@@ -256,7 +260,7 @@ func (s *Sia) uploadPackedObjects(ctx context.Context, pack packedObjects) error
 				zap.Int64("expected", obj.Length),
 				zap.Int64("got", n))
 		}
-		file.Close()
+		rc.Close()
 		objIdx = append(objIdx, i)
 	}
 
