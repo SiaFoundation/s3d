@@ -137,7 +137,7 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object string
 
 	// create part directory
 	partDir, err := s.ensureMultipartPartDir(uploadID, opts.PartNumber)
-	if err := os.Mkdir(partDir, 0700); errors.Is(err, os.ErrNotExist) {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil, s3errs.ErrNoSuchUpload
 	} else if err != nil && !errors.Is(err, os.ErrExist) {
 		return nil, fmt.Errorf("failed to create part directory: %w", err)
@@ -392,13 +392,6 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 	if _, err := os.Stat(uploadDir); err != nil {
 		return nil, fmt.Errorf("failed to stat upload directory: %w", err)
 	}
-
-	// create reader for the completed object
-	r, err := objects.NewReader(uploadDir, completed, 0)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create multipart reader: %w", err)
-	}
-	defer r.Close()
 
 	// compute final content MD5
 	hash := md5.New()
