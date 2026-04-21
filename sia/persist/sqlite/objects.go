@@ -367,14 +367,6 @@ func putObject(tx *txn, bid int64, name string, id *types.Hash256, contentMD5 [1
 		return err
 	}
 
-	// clear any stale orphan entry for the new object ID, in case it was
-	// previously orphaned and is now referenced again
-	if id != nil {
-		if _, err := tx.Exec("DELETE FROM orphaned_objects WHERE object_id = $1", sqlHash256(*id)); err != nil {
-			return err
-		}
-	}
-
 	if oldID != nil && (id == nil || *oldID != *id) {
 		return insertOrphan(tx, *oldID)
 	}

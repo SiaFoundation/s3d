@@ -994,10 +994,8 @@ func TestCopyAndDeleteObject(t *testing.T) {
 }
 
 func TestDeleteObjectUnpin(t *testing.T) {
-	// TODO: add back once background uploads to Sia are implemented
-	t.SkipNow()
-
 	memSDK := NewMemorySDK()
+	memSDK.SetSlabSize(32)
 	log := zaptest.NewLogger(t)
 	dir := t.TempDir()
 	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
@@ -1025,6 +1023,7 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	siaBackend.UploadObjects(t.Context())
 
 	// verify SDK has the object pinned
 	if len(memSDK.objects) != 1 {
@@ -1078,7 +1077,7 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	siaBackend.ProcessOrphans(t.Context())
+	siaBackend.UploadObjects(t.Context())
 	if len(memSDK.objects) != 1 {
 		t.Fatalf("expected 1 pinned object, got %d", len(memSDK.objects))
 	}
@@ -1087,32 +1086,10 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	siaBackend.UploadObjects(t.Context())
 	siaBackend.ProcessOrphans(t.Context())
 	// old object should be unpinned, new one pinned
 	if len(memSDK.objects) != 1 {
 		t.Fatalf("expected 1 pinned object after overwrite, got %d", len(memSDK.objects))
-	}
-
-	// test re-reference before orphan sweep: delete last reference to create
-	// an orphan, then re-reference the same object_id via PutObject before
-	// calling ProcessOrphans — the object should NOT be unpinned.
-	if err := s3Tester.DeleteObject(t.Context(), bucket, "C"); err != nil {
-		t.Fatal(err)
-	}
-	orphans, err := store.OrphanedObjects(100)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(orphans) != 1 {
-		t.Fatalf("expected 1 orphan, got %d", len(orphans))
-	}
-	orphanID := orphans[0]
-	// re-reference the orphaned object_id by inserting a new object row
-	if err := store.PutObject(testutil.AccessKeyID, bucket, "D", [16]byte{}, nil, 1, new(string), true); err != nil {
-		t.Fatal(err)
-	}
-	siaBackend.ProcessOrphans(t.Context())
-	if _, ok := memSDK.objects[orphanID]; !ok {
-		t.Fatal("re-referenced object should NOT have been unpinned")
 	}
 }

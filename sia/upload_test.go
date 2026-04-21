@@ -3,6 +3,7 @@ package sia
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/SiaFoundation/s3d/sia/objects"
@@ -135,6 +136,10 @@ func TestPrepareUploads(t *testing.T) {
 // TestOpenAndRemoveUpload tests the locking mechanism that defers file
 // deletion until all locks are released.
 func TestOpenAndRemoveUpload(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not allow deleting open files")
+	}
+
 	dir := t.TempDir()
 	uploadsDir := filepath.Join(dir, UploadsDirectory)
 	if err := os.MkdirAll(uploadsDir, 0700); err != nil {
