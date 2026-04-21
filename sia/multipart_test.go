@@ -3,7 +3,9 @@ package sia_test
 import (
 	"bytes"
 	"crypto/md5"
+	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -179,7 +181,7 @@ func TestMultipartAddPart(t *testing.T) {
 
 	// verify multipart upload directory is removed
 	_, err = os.Stat(filepath.Join(dir, sia.UploadsDirectory, uploadID))
-	if !os.IsNotExist(err) {
+	if !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("expected multipart upload directory to be removed, but it exists")
 	}
 
