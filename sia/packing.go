@@ -21,6 +21,7 @@ const (
 	DefaultPackingWastePct = 0.1
 
 	packedUploadThreads = 8
+	maxSlabsPerPack     = 6
 )
 
 // PackedUpload defines the interface for a packed upload.
@@ -84,14 +85,26 @@ func (p *packedObjects) slabs() int64 {
 }
 
 func (p *packedObjects) tryAdd(obj objects.PackedObject) bool {
-	// if we already meet the waste threshold, only allow small objects that fit in the remaining space
+	newTotal := p.totalSize + obj.Length
+	newSlabs := (newTotal + p.slabSize - 1) / p.slabSize
+
+	// don't exceed the maximum number of slabs per pack
+	if newSlabs > maxSlabsPerPack {
+		return false
+	}
+
+	// if we already meet the waste threshold, only accept the object if
+	// the resulting group still meets it
 	if p.wastePct() < p.packingWastePct {
-		if obj.Length > p.slabSize {
-			return false
-		} else if obj.Length > p.remainingSpace() {
-			return false
+		remainder := newTotal % p.slabSize
+		if remainder != 0 {
+			waste := p.slabSize - remainder
+			if float64(waste)/float64(newTotal+waste) >= p.packingWastePct {
+				return false
+			}
 		}
 	}
+
 	p.objects = append(p.objects, obj)
 	p.totalSize += obj.Length
 	return true
@@ -181,11 +194,10 @@ func (s *Sia) packingLoop(ctx context.Context) {
 // PackObjects runs a single packing cycle: it fetches pending objects,
 // groups them into slabs, and uploads them to Sia.
 func (s *Sia) PackObjects(ctx context.Context) {
-	s.logger.Debug("packing loop tick")
-
 	// fetch and prepare objects for packing
 	packs := s.preparePackedObjects()
 	if len(packs) == 0 {
+		s.logger.Debug("packing loop tick")
 		return
 	}
 
