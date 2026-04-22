@@ -45,15 +45,6 @@ type (
 	}
 )
 
-func (s *Sia) newPackedObject(initial objects.PackedObject) packedObjects {
-	return packedObjects{
-		slabSize:        s.slabSize,
-		packingWastePct: s.packingWastePct,
-		objects:         []objects.PackedObject{initial},
-		totalSize:       initial.Length,
-	}
-}
-
 func (p *packedObjects) remainingSpace() int64 {
 	if p.totalSize == 0 {
 		return p.slabSize
@@ -110,10 +101,15 @@ func (p *packedObjects) tryAdd(obj objects.PackedObject) bool {
 	return true
 }
 
-// preparePackedObjects fetches objects for packing and groups
-// them using first fit decreasing. Candidates are returned
-// from the store in descending size order, and each object is
-// placed in the first group where it fits or starts a new one.
+func (s *Sia) newPackedObject(initial objects.PackedObject) packedObjects {
+	return packedObjects{
+		slabSize:        s.slabSize,
+		packingWastePct: s.packingWastePct,
+		objects:         []objects.PackedObject{initial},
+		totalSize:       initial.Length,
+	}
+}
+
 func (s *Sia) preparePackedObjects() []packedObjects {
 	candidates, err := s.store.ObjectsForPacking()
 	if err != nil {
@@ -186,14 +182,12 @@ func (s *Sia) packingLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			s.PackObjects(ctx)
+			s.packObjects(ctx)
 		}
 	}
 }
 
-// PackObjects runs a single packing cycle: it fetches pending objects,
-// groups them into slabs, and uploads them to Sia.
-func (s *Sia) PackObjects(ctx context.Context) {
+func (s *Sia) packObjects(ctx context.Context) {
 	// fetch and prepare objects for packing
 	packs := s.preparePackedObjects()
 	if len(packs) == 0 {

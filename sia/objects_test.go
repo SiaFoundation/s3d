@@ -238,6 +238,98 @@ func TestPutObject(t *testing.T) {
 		s3Tester := NewTester(t, testutil.WithTLS())
 		test(t, s3Tester)
 	})
+
+	t.Run("packing", func(t *testing.T) {
+		log := zaptest.NewLogger(t)
+		dir := t.TempDir()
+		store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { store.Close() })
+
+		memSDK := NewMemorySDK()
+		memSDK.SetSlabSize(24)
+		backend, err := sia.New(t.Context(), memSDK, store, dir,
+			sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
+			sia.WithLogger(log))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { backend.Close() })
+		s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
+
+		const bucket = "packing-bucket"
+		if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+			t.Fatal(err)
+		}
+
+		// upload a small object that qualifies for packing, sized to nearly fill a slab
+		data := []byte("hello packing via put!!")
+		_, err = s3Tester.PutObject(t.Context(), bucket, "packed", bytes.NewReader(data), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// verify the object is on disk
+		obj, err := store.GetObject(aws.String(testutil.AccessKeyID), bucket, "packed", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if obj.FileName == nil {
+			t.Fatal("expected filename to be set for packed object")
+		}
+		uploadPath := filepath.Join(dir, sia.UploadsDirectory, *obj.FileName)
+		if _, err := os.Stat(uploadPath); err != nil {
+			t.Fatal("expected upload file to exist on disk:", err)
+		}
+
+		// verify GetObject serves correct data from disk
+		getObj, err := s3Tester.GetObject(t.Context(), bucket, "packed", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(getObj.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(body, data) {
+			t.Fatal("data mismatch before packing")
+		}
+
+		// run the packing loop
+		backend.PackObjects(t.Context())
+
+		// verify the object is now on Sia
+		obj, err = store.GetObject(aws.String(testutil.AccessKeyID), bucket, "packed", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if obj.FileName != nil {
+			t.Fatal("expected filename to be nil after packing")
+		}
+		if obj.SiaObject == nil {
+			t.Fatal("expected sia object to be set after packing")
+		}
+
+		// verify upload file is removed from disk
+		if _, err := os.Stat(uploadPath); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatal("expected upload file to be removed after packing")
+		}
+
+		// verify GetObject still serves correct data from Sia
+		getObj, err = s3Tester.GetObject(t.Context(), bucket, "packed", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err = io.ReadAll(getObj.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(body, data) {
+			t.Fatal("data mismatch after packing")
+		}
+	})
 }
 
 func TestCopyObject(t *testing.T) {

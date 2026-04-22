@@ -587,6 +587,11 @@ func TestMultipartPacking(t *testing.T) {
 		t.Fatal("expected sia object to be set after packing")
 	}
 
+	// verify upload directory is removed from disk after packing
+	if _, err := os.Stat(uploadDir); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatal("expected upload directory to be removed after packing")
+	}
+
 	// verify GetObject still serves the correct data, now from Sia
 	getObj, err = s3Tester.GetObject(t.Context(), bucket, object, nil)
 	if err != nil {

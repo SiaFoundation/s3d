@@ -47,8 +47,7 @@ func WithPackingWaste(pct float64) Option {
 	}
 }
 
-// WithPackingDisabled disables the background packing loop. Callers can still
-// trigger packing manually via PackObjects.
+// WithPackingDisabled disables the background packing loop.
 func WithPackingDisabled() Option {
 	return func(s *Sia) {
 		s.packingDisabled = true
