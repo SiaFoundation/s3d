@@ -21,8 +21,11 @@ const (
 	// other small objects to fill slabs efficiently.
 	DefaultUploadWastePct = 0.1
 
-	numUploadThreads  = 8
-	maxSlabsPerUpload = 6
+	// DefaultMaxGroupSize is the maximum total size of a single upload
+	// group. Objects are batched together until this limit is reached.
+	DefaultMaxGroupSize = 1 << 30 // 1 GiB
+
+	numUploadThreads = 8
 )
 
 // PackedUpload defines the interface for a packed upload.
@@ -39,6 +42,7 @@ type (
 	// in a single packed upload.
 	uploadGroup struct {
 		slabSize       int64
+		maxGroupSize   int64
 		uploadWastePct float64
 
 		objects   []objects.ObjectForUpload
@@ -78,14 +82,13 @@ func (p *uploadGroup) slabs() int64 {
 
 func (p *uploadGroup) tryAdd(obj objects.ObjectForUpload) bool {
 	newTotal := p.totalSize + obj.Length
-	newSlabs := (newTotal + p.slabSize - 1) / p.slabSize
 
-	// don't exceed the maximum number of slabs per upload
-	maxSlabs := newSlabs > maxSlabsPerUpload
+	// don't exceed the maximum group size
+	maxSize := newTotal > p.maxGroupSize
 
 	// once we meet the waste threshold, only accept objects that fit in
 	// the remaining space of the last slab or that reduce waste
-	if maxSlabs || p.wastePct() < p.uploadWastePct {
+	if maxSize || p.wastePct() < p.uploadWastePct {
 		var newWaste float64
 		if remainder := newTotal % p.slabSize; remainder != 0 {
 			waste := p.slabSize - remainder
@@ -93,8 +96,8 @@ func (p *uploadGroup) tryAdd(obj objects.ObjectForUpload) bool {
 		}
 		reducesWaste := newWaste < p.wastePct()
 		fitsLastSlab := obj.Length <= p.remainingSpace()
-		if maxSlabs && !fitsLastSlab {
-			// max slabs exceeded and object doesn't fit in remaining space
+		if maxSize && !fitsLastSlab {
+			// max group size exceeded and object doesn't fit in remaining space
 			return false
 		} else if !fitsLastSlab && !reducesWaste {
 			// neither fits in remaining space nor reduces waste
@@ -110,6 +113,7 @@ func (p *uploadGroup) tryAdd(obj objects.ObjectForUpload) bool {
 func (s *Sia) newUploadGroup(initial objects.ObjectForUpload) uploadGroup {
 	return uploadGroup{
 		slabSize:       s.slabSize,
+		maxGroupSize:   DefaultMaxGroupSize,
 		uploadWastePct: s.uploadWastePct,
 		objects:        []objects.ObjectForUpload{initial},
 		totalSize:      initial.Length,

@@ -15,6 +15,7 @@ import (
 func TestUploadGroup(t *testing.T) {
 	p := uploadGroup{
 		slabSize:       100,
+		maxGroupSize:   600,
 		uploadWastePct: 0.1,
 	}
 
@@ -41,9 +42,10 @@ func TestUploadGroup(t *testing.T) {
 		t.Fatalf("expected 0 waste, got %f", p.wastePct())
 	}
 
-	// start a fresh group to test last slab filling and slab cap
+	// start a fresh group to test last slab filling and max group size
 	p = uploadGroup{
 		slabSize:       100,
+		maxGroupSize:   600,
 		uploadWastePct: 0.1,
 	}
 
@@ -60,22 +62,20 @@ func TestUploadGroup(t *testing.T) {
 	if !p.tryAdd(objects.ObjectForUpload{Length: 50, Name: "f"}) {
 		t.Fatal("expected tryAdd to succeed")
 	}
-	if p.slabs() != maxSlabsPerUpload {
-		t.Fatalf("expected %d slabs, got %d", maxSlabsPerUpload, p.slabs())
-	}
 	if p.wastePct() != 0 {
 		t.Fatalf("expected 0 waste, got %f", p.wastePct())
 	}
 
-	// adding anything more exceeds maxSlabsPerUpload
+	// adding anything more exceeds maxGroupSize
 	if p.tryAdd(objects.ObjectForUpload{Length: 1, Name: "g"}) {
-		t.Fatal("expected tryAdd to fail due to slab cap")
+		t.Fatal("expected tryAdd to fail due to max group size")
 	}
 
-	// start a fresh group with an object that exceeds maxSlabsPerUpload
-	// 810 bytes = 9 slabs, 90 bytes wasted in the last slab
+	// start a fresh group with an object that exceeds maxGroupSize
+	// 810 bytes with maxGroupSize=600, 90 bytes wasted in the last slab
 	p = uploadGroup{
 		slabSize:       100,
+		maxGroupSize:   600,
 		uploadWastePct: 0.1,
 
 		objects:   []objects.ObjectForUpload{{Length: 810, Name: "h"}},
@@ -86,16 +86,10 @@ func TestUploadGroup(t *testing.T) {
 	if !p.tryAdd(objects.ObjectForUpload{Length: 40, Name: "i"}) {
 		t.Fatal("expected tryAdd to succeed for object fitting last slab")
 	}
-	if !p.tryAdd(objects.ObjectForUpload{Length: 50, Name: "j"}) {
-		t.Fatal("expected tryAdd to succeed for object fitting last slab")
-	}
-	if p.slabs() != 9 {
-		t.Fatalf("expected 9 slabs, got %d", p.slabs())
-	}
 
-	// object that does not fit in remaining space should be rejected
-	if p.tryAdd(objects.ObjectForUpload{Length: 1, Name: "k"}) {
-		t.Fatal("expected tryAdd to fail")
+	// object that does not fit in remaining space should not be accepted, even if it reduces waste
+	if p.tryAdd(objects.ObjectForUpload{Length: 140, Name: "k"}) {
+		t.Fatal("expected tryAdd to fail for object not fitting last slab even if it reduces waste")
 	}
 }
 

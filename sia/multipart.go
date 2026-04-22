@@ -252,7 +252,7 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 		}
 	} else {
 		if obj.SiaObject == nil {
-			return nil, fmt.Errorf("object metadata not yet synced from indexer")
+			return nil, fmt.Errorf("object missing metadata")
 		}
 		pinnedObj, err := s.sdk.UnsealObject(*obj.SiaObject)
 		if err != nil {
