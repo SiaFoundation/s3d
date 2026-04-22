@@ -1,842 +1,129 @@
 package testutil
 
 import (
-	"bytes"
 	"context"
-	"crypto/md5"
-	"crypto/sha256"
+	"errors"
+	"fmt"
 	"io"
-	"maps"
-	"slices"
-	"sort"
-	"strconv"
-	"strings"
-	"time"
+	"path/filepath"
+	"testing"
 
 	"github.com/SiaFoundation/s3d/s3"
-	"github.com/SiaFoundation/s3d/s3/auth"
-	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"github.com/SiaFoundation/s3d/sia"
+	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
+	"go.sia.tech/core/types"
+	"go.sia.tech/indexd/slabs"
+	sdk "go.sia.tech/siastorage"
+	"go.uber.org/zap/zaptest"
 )
 
-const (
-	// ETagSize is the size of an ETag in bytes.
-	ETagSize = 16
-)
+// UploadedObject is an object stored in the in-memory SDK.
+type UploadedObject struct {
+	Data []byte
+	Meta sdk.Object
+}
 
-type (
-	// MemoryBackendOption is a functional argument for configuring a
-	// MemoryBackend.
-	MemoryBackendOption func(*MemoryBackend)
+// MemorySDK is an in-memory SDK for testing.
+type MemorySDK struct {
+	AppKey  types.PrivateKey
+	Objects map[types.Hash256]UploadedObject
 
-	// MemoryBackend is an in-memory implementation of the s3 backend for testing.
-	MemoryBackend struct {
-		buckets          map[string]*bucket
-		accessKeys       map[string]accessKey
-		multipartUploads map[s3.UploadID]*multipartUpload
-	}
+	ObjectCallCount int
+	Fail            bool // when true, Object() returns an error
+}
 
-	accessKey struct {
-		owner  string
-		secret auth.SecretAccessKey
-	}
-
-	bucket struct {
-		owner   string
-		objects map[string]*object
-	}
-
-	object struct {
-		name         string
-		data         []byte
-		lastModified time.Time
-		metadata     map[string]string
-		contentMD5   [16]byte
-		parts        map[int]objectMultipartPart
-	}
-
-	objectMultipartPart struct {
-		offset     int64
-		length     int64
-		contentMD5 [16]byte
-	}
-
-	multipartUpload struct {
-		bucket    string
-		key       string
-		metadata  map[string]string
-		parts     map[int]*multipartPart
-		createdAt time.Time
-	}
-
-	multipartPart struct {
-		data         []byte
-		contentMD5   [16]byte
-		lastModified time.Time
-	}
-)
-
-// WithKeyPair adds a key pair to the MemoryBackend.
-func WithKeyPair(owner, accessKeyID, secretKey string) func(*MemoryBackend) {
-	return func(mb *MemoryBackend) {
-		mb.accessKeys[accessKeyID] = accessKey{
-			owner:  owner,
-			secret: auth.SecretAccessKey(secretKey),
-		}
+// NewMemorySDK creates a new MemorySDK.
+func NewMemorySDK() *MemorySDK {
+	return &MemorySDK{
+		AppKey:  types.GeneratePrivateKey(),
+		Objects: make(map[types.Hash256]UploadedObject),
 	}
 }
 
-// NewMemoryBackend creates a new MemoryBackend.
-func NewMemoryBackend(opts ...MemoryBackendOption) *MemoryBackend {
-	backend := &MemoryBackend{
-		accessKeys:       make(map[string]accessKey),
-		buckets:          make(map[string]*bucket),
-		multipartUploads: make(map[s3.UploadID]*multipartUpload),
+// DeleteObject removes the object with the given ID.
+func (s *MemorySDK) DeleteObject(ctx context.Context, id types.Hash256) error {
+	delete(s.Objects, id)
+	return nil
+}
+
+// Download writes the stored data for obj to w, optionally limited to rnge.
+func (s *MemorySDK) Download(ctx context.Context, w io.Writer, obj sdk.Object, rnge *s3.ObjectRange) error {
+	uploaded, exists := s.Objects[obj.ID()]
+	if !exists {
+		return errors.New("download failed - object not found")
 	}
-	for _, opt := range opts {
-		opt(backend)
+	data := uploaded.Data
+	if rnge != nil {
+		if rnge.Start+rnge.Length > int64(len(data)) {
+			return fmt.Errorf("download failed - range %d-%d exceeds object size %d", rnge.Start, rnge.Start+rnge.Length, len(data))
+		}
+		data = data[rnge.Start : rnge.Start+rnge.Length]
+	}
+	_, err := w.Write(data)
+	return err
+}
+
+// Object returns the metadata for the object with the given ID.
+//
+// TODO: Right now, all objects have the same ID. We'll need to expose
+// something from the SDK to be able to mock objects with different IDs.
+func (s *MemorySDK) Object(ctx context.Context, objectID types.Hash256) (sdk.Object, error) {
+	s.ObjectCallCount++
+	if s.Fail {
+		return sdk.Object{}, errors.New("indexer error")
+	}
+	obj, exists := s.Objects[objectID]
+	if !exists {
+		return sdk.Object{}, errors.New("object not found")
+	}
+	return obj.Meta, nil
+}
+
+// Upload stores the data from r as a new object and returns its metadata.
+func (s *MemorySDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error) {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return sdk.Object{}, err
+	}
+	obj := sdk.Object{}
+	s.Objects[obj.ID()] = UploadedObject{
+		Data: data,
+		Meta: obj,
+	}
+	return obj, nil
+}
+
+// SealObject seals obj with the SDK's app key.
+func (s *MemorySDK) SealObject(obj sdk.Object) slabs.SealedObject {
+	return obj.Seal(s.AppKey).SealedObject
+}
+
+// UnsealObject returns the stored metadata for the given sealed object.
+func (s *MemorySDK) UnsealObject(sealed slabs.SealedObject) (sdk.Object, error) {
+	obj, exists := s.Objects[sealed.ID()]
+	if !exists {
+		return sdk.Object{}, errors.New("object not found")
+	}
+	return obj.Meta, nil
+}
+
+// NewBackend returns a Sia backend wired up to an in-memory SDK and a
+// per-test SQLite store in a temporary directory.
+func NewBackend(tb testing.TB) *sia.Sia {
+	tb.Helper()
+	dir := tb.TempDir()
+	log := zaptest.NewLogger(tb)
+	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	tb.Cleanup(func() { store.Close() })
+
+	backend, err := sia.New(tb.Context(), NewMemorySDK(), store, dir,
+		sia.WithKeyPair(AccessKeyID, SecretAccessKey),
+		sia.WithLogger(log))
+	if err != nil {
+		tb.Fatal(err)
 	}
 	return backend
-}
-
-// CopyObject copies an object from the source bucket/object to the destination.
-// https://docs.aws.amazon.com/AmazonS3/latest/API/API_CopyObject.html
-func (b *MemoryBackend) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, replace bool, meta map[string]string) (*s3.CopyObjectResult, error) {
-	srcBkt, exists := b.buckets[srcBucket]
-	if !exists {
-		return nil, s3errs.ErrNoSuchBucket
-	} else if srcBkt.owner != b.accessKeys[accessKeyID].owner {
-		return nil, s3errs.ErrAccessDenied
-	}
-	dstBkt, exists := b.buckets[dstBucket]
-	if !exists {
-		return nil, s3errs.ErrNoSuchBucket
-	} else if dstBkt.owner != b.accessKeys[accessKeyID].owner {
-		return nil, s3errs.ErrAccessDenied
-	}
-	srcObjct, exists := srcBkt.objects[srcObject]
-	if !exists {
-		return nil, s3errs.ErrNoSuchKey
-	}
-
-	if !replace {
-		for k, v := range srcObjct.metadata {
-			if _, exists := meta[k]; !exists {
-				meta[k] = v // merge metadata
-			}
-		}
-	}
-	if _, exists := dstBkt.objects[dstObject]; !exists {
-		dstBkt.objects = make(map[string]*object)
-	}
-	dstObjct := &object{
-		name:         dstObject,
-		data:         slices.Clone(srcObjct.data),
-		lastModified: nowUTC(),
-		metadata:     meta,
-		contentMD5:   srcObjct.contentMD5,
-		parts:        srcObjct.parts,
-	}
-	b.buckets[dstBucket].objects[dstObject] = dstObjct
-	return &s3.CopyObjectResult{
-		ContentMD5:   dstObjct.contentMD5,
-		LastModified: dstObjct.lastModified,
-		VersionID:    "", // versioning isn't supported
-	}, nil
-}
-
-// CreateBucket creates a new bucket if it doesn't exist yet and returns an
-// error otherwise.
-// https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateBucket.html
-func (b *MemoryBackend) CreateBucket(ctx context.Context, accessKeyID, name string) error {
-	if _, exists := b.accessKeys[accessKeyID]; !exists {
-		return s3errs.ErrInvalidAccessKeyId
-	} else if bkt, exists := b.buckets[name]; exists && bkt.owner == b.accessKeys[accessKeyID].owner {
-		return s3errs.ErrBucketAlreadyOwnedByYou
-	} else if exists {
-		return s3errs.ErrBucketAlreadyExists
-	}
-	b.buckets[name] = &bucket{
-		owner: b.accessKeys[accessKeyID].owner,
-	}
-	return nil
-}
-
-// DeleteBucket deletes the specified bucket if it exists, is owned by the user
-// requesting deletion and is empty.
-func (b *MemoryBackend) DeleteBucket(ctx context.Context, accessKeyID, name string) error {
-	bkt, exists := b.buckets[name]
-	if !exists {
-		return s3errs.ErrNoSuchBucket
-	} else if bkt.owner != b.accessKeys[accessKeyID].owner {
-		return s3errs.ErrAccessDenied
-	} else if len(bkt.objects) > 0 {
-		return s3errs.ErrBucketNotEmpty
-	}
-	for _, upload := range b.multipartUploads {
-		if upload.bucket == name {
-			return s3errs.ErrBucketNotEmpty
-		}
-	}
-	delete(b.buckets, name)
-	return nil
-}
-
-// DeleteObject deletes the specified object from the given bucket.
-func (b *MemoryBackend) DeleteObject(ctx context.Context, accessKeyID, bucket string, object s3.ObjectID) (*s3.DeleteObjectResult, error) {
-	bkt, exists := b.buckets[bucket]
-	if !exists {
-		return nil, s3errs.ErrNoSuchBucket
-	} else if bkt.owner != b.accessKeys[accessKeyID].owner {
-		return nil, s3errs.ErrAccessDenied
-	}
-	if o, exists := bkt.objects[object.Key]; exists && !o.matches(object) {
-		return nil, s3errs.ErrPreconditionFailed
-	}
-	delete(bkt.objects, object.Key)
-	return &s3.DeleteObjectResult{
-		IsDeleteMarker: false,
-		VersionID:      "",
-	}, nil
-}
-
-// DeleteObjects deletes multiple objects from the specified bucket.
-func (b *MemoryBackend) DeleteObjects(ctx context.Context, accessKeyID, bucket string, objects []s3.ObjectID) (*s3.ObjectsDeleteResult, error) {
-	bkt, exists := b.buckets[bucket]
-	if !exists {
-		return nil, s3errs.ErrNoSuchBucket
-	} else if bkt.owner != b.accessKeys[accessKeyID].owner {
-		return nil, s3errs.ErrAccessDenied
-	}
-	var res s3.ObjectsDeleteResult
-	for _, obj := range objects {
-		o, exists := bkt.objects[obj.Key]
-		if exists && !o.matches(obj) {
-			res.Error = append(res.Error, s3.ErrorResult{
-				Key:     obj.Key,
-				Code:    s3errs.ErrPreconditionFailed.Code,
-				Message: s3errs.ErrPreconditionFailed.Description,
-			})
-			continue
-		}
-
-		delete(bkt.objects, obj.Key)
-		res.Deleted = append(res.Deleted, s3.ObjectID{
-			Key:       obj.Key,
-			VersionID: "", // versioning isn't supported
-		})
-	}
-	return &res, nil
-}
-
-// GetObject retrieves an object from the specified bucket.
-func (b *MemoryBackend) GetObject(ctx context.Context, accessKeyID *string, bucket, object string, requestedRange *s3.ObjectRangeRequest, partNumber *int32) (*s3.Object, error) {
-	return b.headOrGetObject(ctx, accessKeyID, bucket, object, requestedRange, partNumber, false)
-}
-
-// HeadBucket checks if the specified bucket exists and is owned by the user.
-func (b *MemoryBackend) HeadBucket(ctx context.Context, accessKeyID, bucket string) error {
-	bkt, exists := b.buckets[bucket]
-	if !exists {
-		return s3errs.ErrNoSuchBucket
-	} else if bkt.owner != b.accessKeys[accessKeyID].owner {
-		return s3errs.ErrAccessDenied
-	}
-	return nil
-}
-
-// HeadObject retrieves metadata about the specified object without returning
-// the object's data.
-func (b *MemoryBackend) HeadObject(ctx context.Context, accessKeyID *string, bucket, object string, requestedRange *s3.ObjectRangeRequest, partNumber *int32) (*s3.Object, error) {
-	return b.headOrGetObject(ctx, accessKeyID, bucket, object, requestedRange, partNumber, true)
-}
-
-// ListObjects lists objects in the specified bucket that match the given prefix
-// and pagination settings.
-func (b *MemoryBackend) ListObjects(ctx context.Context, accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error) {
-	bkt, exists := b.buckets[bucket]
-	if !exists {
-		return nil, s3errs.ErrNoSuchBucket
-	} else if accessKeyID == nil || bkt.owner != b.accessKeys[*accessKeyID].owner {
-		return nil, s3errs.ErrAccessDenied
-	}
-
-	var owner *s3.UserInfo
-	if page.FetchOwner != nil && *page.FetchOwner {
-		owner = &s3.UserInfo{
-			ID: bkt.owner,
-		}
-	}
-
-	// flatten the objects into a slice and sort them lexicographically
-	objects := slices.Collect(maps.Values(bkt.objects))
-	slices.SortFunc(objects, func(a, b *object) int {
-		return strings.Compare(a.name, b.name)
-	})
-
-	result := s3.NewObjectsListResult(page.MaxKeys)
-	if page.MaxKeys == 0 {
-		return result, nil
-	}
-
-	var lastMatchedPart string
-	for _, obj := range objects {
-		match := match(prefix, obj.name)
-		switch {
-		case match == nil:
-			continue
-		case match.CommonPrefix:
-			if page.Marker != nil && strings.Compare(*page.Marker, match.MatchedPart) >= 0 {
-				continue
-			}
-			if match.MatchedPart == lastMatchedPart {
-				continue // should not count towards keys
-			}
-			result.AddPrefix(match.MatchedPart)
-			lastMatchedPart = match.MatchedPart
-		default:
-			if page.Marker != nil && strings.Compare(*page.Marker, obj.name) >= 0 {
-				continue
-			}
-			result.Add(&s3.Content{
-				Key:          obj.name,
-				LastModified: s3.NewContentTime(obj.lastModified),
-				ETag:         s3.FormatETag(obj.contentMD5[:], 0),
-				Owner:        owner,
-				Size:         int64(len(obj.data)),
-			})
-		}
-
-		if result.IsTruncated {
-			break
-		}
-	}
-	if !result.IsTruncated {
-		result.NextMarker = ""
-	}
-
-	return result, nil
-}
-
-// PutObject puts an object into the specified bucket with the given data and
-// metadata.
-func (b *MemoryBackend) PutObject(_ context.Context, accessKeyID, bucket, obj string, r io.Reader, opts s3.PutObjectOptions) (*s3.PutObjectResult, error) {
-	bkt, exists := b.buckets[bucket]
-	if !exists {
-		return nil, s3errs.ErrNoSuchBucket
-	}
-	if bkt.owner != b.accessKeys[accessKeyID].owner {
-		return nil, s3errs.ErrAccessDenied
-	}
-	if bkt.objects == nil {
-		bkt.objects = make(map[string]*object)
-	}
-	data, err := io.ReadAll(r)
-	if err != nil {
-		return nil, err
-	} else if len(data) != int(opts.ContentLength) {
-		return nil, s3errs.ErrIncompleteBody
-	}
-
-	contentMD5 := md5.Sum(data)
-	if opts.ContentMD5 != nil && *opts.ContentMD5 != contentMD5 {
-		return nil, s3errs.ErrBadDigest
-	}
-	contentSHA256 := sha256.Sum256(data)
-	if opts.ContentSHA256 != nil && *opts.ContentSHA256 != contentSHA256 {
-		return nil, s3errs.ErrBadDigest
-	}
-
-	bkt.objects[obj] = &object{
-		name:         obj,
-		data:         slices.Clone(data),
-		contentMD5:   contentMD5,
-		lastModified: nowUTC(),
-		metadata:     opts.Meta,
-		parts:        make(map[int]objectMultipartPart),
-	}
-	return &s3.PutObjectResult{
-		ContentMD5: contentMD5,
-	}, nil
-}
-
-// CreateMultipartUpload creates a new multipart upload.
-func (b *MemoryBackend) CreateMultipartUpload(_ context.Context, accessKeyID, bucket, key string, opts s3.CreateMultipartUploadOptions) (*s3.CreateMultipartUploadResult, error) {
-	bkt, exists := b.buckets[bucket]
-	if !exists {
-		return nil, s3errs.ErrNoSuchBucket
-	}
-	if bkt.owner != b.accessKeys[accessKeyID].owner {
-		return nil, s3errs.ErrAccessDenied
-	}
-
-	uploadID := s3.NewUploadID()
-	b.multipartUploads[uploadID] = &multipartUpload{
-		bucket:    bucket,
-		key:       key,
-		metadata:  opts.Meta,
-		parts:     make(map[int]*multipartPart),
-		createdAt: nowUTC(),
-	}
-
-	return &s3.CreateMultipartUploadResult{
-		UploadID: uploadID,
-	}, nil
-}
-
-// ListMultipartUploads lists in-progress multipart uploads for the given bucket.
-func (b *MemoryBackend) ListMultipartUploads(_ context.Context, accessKeyID, bucket string, opts s3.ListMultipartUploadsOptions, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error) {
-	bkt, exists := b.buckets[bucket]
-	if !exists {
-		return nil, s3errs.ErrNoSuchBucket
-	}
-	if bkt.owner != b.accessKeys[accessKeyID].owner {
-		return nil, s3errs.ErrAccessDenied
-	}
-
-	type entry struct {
-		key      string
-		uploadID s3.UploadID
-		created  time.Time
-	}
-
-	var entries []entry
-	for id, upload := range b.multipartUploads {
-		if upload.bucket != bucket {
-			continue
-		}
-		if opts.Prefix != "" && !strings.HasPrefix(upload.key, opts.Prefix) {
-			continue
-		}
-		entries = append(entries, entry{
-			key:      upload.key,
-			uploadID: id,
-			created:  upload.createdAt,
-		})
-	}
-
-	sort.Slice(entries, func(i, j int) bool {
-		if entries[i].key == entries[j].key {
-			return entries[i].uploadID.String() < entries[j].uploadID.String()
-		}
-		return entries[i].key < entries[j].key
-	})
-
-	// apply markers
-	if page.KeyMarker != "" {
-		i := 0
-		for i < len(entries) {
-			cmp := strings.Compare(entries[i].key, page.KeyMarker)
-			if cmp < 0 {
-				i++
-				continue
-			}
-			if cmp == 0 && page.UploadIDMarker != "" && entries[i].uploadID.String() <= page.UploadIDMarker {
-				i++
-				continue
-			}
-			break
-		}
-		entries = entries[i:]
-	}
-
-	// sanitize max uploads
-	maxUploads := page.MaxUploads
-	if maxUploads <= 0 || maxUploads > s3.MaxMultipartUploads {
-		maxUploads = s3.MaxMultipartUploads
-	}
-
-	// collect results
-	uploads := make([]s3.MultipartUploadInfo, 0, len(entries))
-	for _, entry := range entries {
-		uploads = append(uploads, s3.MultipartUploadInfo{
-			Key:       entry.key,
-			UploadID:  entry.uploadID,
-			Initiated: entry.created,
-		})
-		if int64(len(uploads)) == maxUploads {
-			break
-		}
-	}
-
-	// determine if truncated
-	isTruncated := len(entries) > len(uploads)
-	var nextKeyMarker, nextUploadIDMarker string
-	if isTruncated && len(uploads) > 0 {
-		last := uploads[len(uploads)-1]
-		nextKeyMarker = last.Key
-		nextUploadIDMarker = last.UploadID.String()
-	}
-
-	return &s3.ListMultipartUploadsResult{
-		Uploads:            uploads,
-		IsTruncated:        isTruncated,
-		NextKeyMarker:      nextKeyMarker,
-		NextUploadIDMarker: nextUploadIDMarker,
-	}, nil
-}
-
-// AbortMultipartUpload aborts an in-progress multipart upload and discards
-// any uploaded parts.
-func (b *MemoryBackend) AbortMultipartUpload(_ context.Context, accessKeyID, bucket, key string, uploadID s3.UploadID) error {
-	bkt, exists := b.buckets[bucket]
-	if !exists {
-		return s3errs.ErrNoSuchBucket
-	}
-	if bkt.owner != b.accessKeys[accessKeyID].owner {
-		return s3errs.ErrAccessDenied
-	}
-	upload, exists := b.multipartUploads[uploadID]
-	if !exists {
-		return s3errs.ErrNoSuchUpload
-	}
-	if upload.bucket != bucket || upload.key != key {
-		return s3errs.ErrNoSuchUpload
-	}
-	delete(b.multipartUploads, uploadID)
-	return nil
-}
-
-// UploadPart uploads a single part for a multipart upload.
-func (b *MemoryBackend) UploadPart(_ context.Context, accessKeyID, bucket, key string, uploadID s3.UploadID, r io.Reader, opts s3.UploadPartOptions) (*s3.UploadPartResult, error) {
-	bkt, exists := b.buckets[bucket]
-	if !exists {
-		return nil, s3errs.ErrNoSuchBucket
-	}
-	if bkt.owner != b.accessKeys[accessKeyID].owner {
-		return nil, s3errs.ErrAccessDenied
-	}
-	upload, exists := b.multipartUploads[uploadID]
-	if !exists {
-		return nil, s3errs.ErrNoSuchUpload
-	}
-	if upload.bucket != bucket || upload.key != key {
-		return nil, s3errs.ErrNoSuchUpload
-	}
-
-	data, err := io.ReadAll(r)
-	if err != nil {
-		return nil, err
-	}
-	if int64(len(data)) != opts.ContentLength {
-		return nil, s3errs.ErrIncompleteBody
-	}
-
-	contentMD5 := md5.Sum(data)
-	if opts.ContentMD5 != nil && *opts.ContentMD5 != contentMD5 {
-		return nil, s3errs.ErrBadDigest
-	}
-	contentSHA256 := sha256.Sum256(data)
-	if opts.ContentSHA256 != nil && *opts.ContentSHA256 != contentSHA256 {
-		return nil, s3errs.ErrBadDigest
-	}
-
-	upload.parts[opts.PartNumber] = &multipartPart{
-		data:         data,
-		contentMD5:   contentMD5,
-		lastModified: nowUTC(),
-	}
-
-	return &s3.UploadPartResult{
-		ContentMD5: contentMD5,
-	}, nil
-}
-
-// UploadPartCopy copies a single part from an existing object as part of a
-// multipart upload.
-func (b *MemoryBackend) UploadPartCopy(_ context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, uploadID s3.UploadID, opts s3.UploadPartCopyOptions) (*s3.UploadPartCopyResult, error) {
-	srcBkt, exists := b.buckets[srcBucket]
-	if !exists {
-		return nil, s3errs.ErrNoSuchBucket
-	}
-	if srcBkt.owner != b.accessKeys[accessKeyID].owner {
-		return nil, s3errs.ErrAccessDenied
-	}
-	srcObjct, exists := srcBkt.objects[srcObject]
-	if !exists {
-		return nil, s3errs.ErrNoSuchKey
-	}
-
-	dstBkt, exists := b.buckets[dstBucket]
-	if !exists {
-		return nil, s3errs.ErrNoSuchBucket
-	}
-	if dstBkt.owner != b.accessKeys[accessKeyID].owner {
-		return nil, s3errs.ErrAccessDenied
-	}
-	upload, exists := b.multipartUploads[uploadID]
-	if !exists {
-		return nil, s3errs.ErrNoSuchUpload
-	}
-	if upload.bucket != dstBucket || upload.key != dstObject {
-		return nil, s3errs.ErrNoSuchUpload
-	}
-
-	start := opts.Range.Start
-	length := opts.Range.Length
-	if start < 0 || length <= 0 || start+length > int64(len(srcObjct.data)) {
-		return nil, s3errs.ErrInvalidRange
-	}
-
-	partData := slices.Clone(srcObjct.data[start : start+length])
-	contentMD5 := md5.Sum(partData)
-
-	upload.parts[opts.PartNumber] = &multipartPart{
-		data:         partData,
-		contentMD5:   contentMD5,
-		lastModified: nowUTC(),
-	}
-
-	return &s3.UploadPartCopyResult{
-		ContentMD5:   contentMD5,
-		LastModified: srcObjct.lastModified,
-	}, nil
-}
-
-// ListParts lists uploaded parts for an in-progress multipart upload.
-func (b *MemoryBackend) ListParts(_ context.Context, accessKeyID, bucket, key string, uploadID s3.UploadID, page s3.ListPartsPage) (*s3.ListPartsResult, error) {
-	bkt, exists := b.buckets[bucket]
-	if !exists {
-		return nil, s3errs.ErrNoSuchBucket
-	}
-	if bkt.owner != b.accessKeys[accessKeyID].owner {
-		return nil, s3errs.ErrAccessDenied
-	}
-	upload, exists := b.multipartUploads[uploadID]
-	if !exists {
-		return nil, s3errs.ErrNoSuchUpload
-	}
-	if upload.bucket != bucket || upload.key != key {
-		return nil, s3errs.ErrNoSuchUpload
-	}
-
-	partNumbers := make([]int, 0, len(upload.parts))
-	for number := range upload.parts {
-		partNumbers = append(partNumbers, number)
-	}
-	sort.Ints(partNumbers)
-
-	result := &s3.ListPartsResult{
-		OwnerID:              bkt.owner,
-		InitiatorID:          "",
-		OwnerDisplayName:     "",
-		InitiatorDisplayName: "",
-	}
-
-	var listed int64
-	for _, number := range partNumbers {
-		if number <= page.PartNumberMarker {
-			continue
-		}
-		part := upload.parts[number]
-		if part == nil {
-			continue
-		}
-		if listed >= page.MaxParts {
-			result.IsTruncated = true
-			if len(result.Parts) > 0 {
-				last := result.Parts[len(result.Parts)-1].PartNumber
-				result.NextPartNumberMarker = strconv.Itoa(int(last))
-			}
-			break
-		}
-
-		result.Parts = append(result.Parts, s3.UploadPart{
-			PartNumber:   number,
-			LastModified: part.lastModified,
-			Size:         int64(len(part.data)),
-			ContentMD5:   part.contentMD5,
-		})
-		listed++
-	}
-
-	return result, nil
-}
-
-// CompleteMultipartUpload assembles the uploaded parts into the final object.
-func (b *MemoryBackend) CompleteMultipartUpload(_ context.Context, accessKeyID, bucket, key string, uploadID s3.UploadID, parts []s3.CompleteMultipartPart) (*s3.CompleteMultipartUploadResult, error) {
-	bkt, exists := b.buckets[bucket]
-	if !exists {
-		return nil, s3errs.ErrNoSuchBucket
-	}
-	if bkt.owner != b.accessKeys[accessKeyID].owner {
-		return nil, s3errs.ErrAccessDenied
-	}
-	upload, exists := b.multipartUploads[uploadID]
-	if !exists {
-		return nil, s3errs.ErrNoSuchUpload
-	}
-	if upload.bucket != bucket || upload.key != key {
-		return nil, s3errs.ErrNoSuchUpload
-	}
-
-	// validate parts
-	var totalSize int
-	for i, part := range parts {
-		uploaded, ok := upload.parts[part.PartNumber]
-		if !ok {
-			return nil, s3errs.ErrInvalidPart
-		}
-		totalSize += len(uploaded.data)
-		if s3.ParseETag(part.ETag) != uploaded.contentMD5 {
-			return nil, s3errs.ErrInvalidPart
-		}
-		lastPart := i == len(parts)-1
-		if !lastPart && int64(len(uploaded.data)) < s3.MinUploadPartSize {
-			return nil, s3errs.ErrEntityTooSmall
-		}
-	}
-
-	// validate part numbers
-	for i, part := range parts {
-		expectedPartNumber := i + 1
-		if part.PartNumber != expectedPartNumber {
-			return nil, s3errs.ErrInvalidPartOrder
-		}
-	}
-
-	// collect object data and parts info
-	objHash := md5.New()
-	objData := make([]byte, 0, totalSize)
-	objParts := make(map[int]objectMultipartPart, len(parts))
-	var offset int64
-	for _, part := range parts {
-		uploaded := upload.parts[part.PartNumber]
-		objData = append(objData, uploaded.data...)
-		objHash.Write(uploaded.contentMD5[:])
-		objParts[part.PartNumber] = objectMultipartPart{
-			offset:     offset,
-			length:     int64(len(uploaded.data)),
-			contentMD5: uploaded.contentMD5,
-		}
-		offset += int64(len(uploaded.data))
-	}
-
-	// compute final content MD5
-	var contentMD5 [16]byte
-	objMD5 := objHash.Sum(nil)
-	copy(contentMD5[:], objMD5)
-
-	// store the object
-	if bkt.objects == nil {
-		bkt.objects = make(map[string]*object)
-	}
-	bkt.objects[key] = &object{
-		name:         key,
-		data:         objData,
-		lastModified: nowUTC(),
-		metadata:     upload.metadata,
-		contentMD5:   contentMD5,
-		parts:        objParts,
-	}
-	delete(b.multipartUploads, uploadID)
-
-	return &s3.CompleteMultipartUploadResult{
-		ETag:       s3.FormatETag(contentMD5[:], len(parts)),
-		ContentMD5: contentMD5,
-	}, nil
-}
-
-// ListBuckets lists all available buckets.
-// https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListBuckets.html
-func (b *MemoryBackend) ListBuckets(ctx context.Context, accessKeyID string) ([]s3.BucketInfo, error) {
-	var buckets []s3.BucketInfo
-	for name, bucket := range b.buckets {
-		if bucket.owner == b.accessKeys[accessKeyID].owner {
-			buckets = append(buckets, s3.BucketInfo{
-				Name:         name,
-				CreationDate: s3.NewContentTime(nowUTC()),
-			})
-		}
-	}
-	return buckets, nil
-}
-
-// LoadSecret loads the secret access key for the given access key ID.
-func (b *MemoryBackend) LoadSecret(ctx context.Context, accessKeyID string) (auth.SecretAccessKey, error) {
-	if ak, exists := b.accessKeys[accessKeyID]; exists {
-		return slices.Clone(ak.secret), nil // return a copy to prevent modification
-	}
-	return nil, s3errs.ErrInvalidAccessKeyId
-}
-
-func (b *MemoryBackend) headOrGetObject(_ context.Context, accessKeyID *string, bucket, object string, requestedRange *s3.ObjectRangeRequest, partNumber *int32, head bool) (*s3.Object, error) {
-	bkt, exists := b.buckets[bucket]
-	if !exists {
-		return nil, s3errs.ErrNoSuchBucket
-	}
-	if accessKeyID == nil || bkt.owner != b.accessKeys[*accessKeyID].owner {
-		return nil, s3errs.ErrAccessDenied
-	}
-	obj, exists := bkt.objects[object]
-	if !exists {
-		return nil, s3errs.ErrNoSuchKey
-	}
-	size := int64(len(obj.data))
-	rnge, err := requestedRange.Range(size)
-	if err != nil {
-		return nil, err
-	} else if rnge != nil {
-		partNumber = nil // ignore part number when a range is requested
-	}
-
-	var partCount *int32
-	var contentMD5 [16]byte
-	if partNumber != nil {
-		if len(obj.parts) == 0 {
-			if *partNumber != 1 {
-				return nil, s3errs.ErrInvalidPart
-			}
-			pc := int32(1)
-			partCount = &pc
-			contentMD5 = obj.contentMD5
-		} else {
-			partInfo, exists := obj.parts[int(*partNumber)]
-			if !exists {
-				return nil, s3errs.ErrInvalidPart
-			}
-			rnge = &s3.ObjectRange{
-				Start:  partInfo.offset,
-				Length: partInfo.length,
-			}
-			contentMD5 = partInfo.contentMD5
-			pc := int32(len(obj.parts))
-			partCount = &pc
-		}
-	} else {
-		contentMD5 = obj.contentMD5
-	}
-
-	var body io.ReadCloser
-	if !head {
-		if rnge == nil {
-			body = io.NopCloser(bytes.NewReader(obj.data))
-		} else {
-			body = io.NopCloser(bytes.NewReader(obj.data[rnge.Start : rnge.Start+rnge.Length]))
-		}
-	}
-	return &s3.Object{
-		Body:         body,
-		ContentMD5:   contentMD5,
-		LastModified: obj.lastModified,
-		Metadata:     obj.metadata,
-		Range:        rnge,
-		Size:         size,
-		PartsCount:   partCount,
-	}, nil
-}
-
-// matches checks if the object matches the given ObjectID.
-//
-// NOTE: The LastModifiedTime comparison truncates to seconds, as the timestamp
-// is transmitted in http.TimeFormat which is truncated to seconds as well.
-func (o object) matches(oid s3.ObjectID) bool {
-	return o.name == oid.Key &&
-		(oid.ETag == nil || s3.FormatETag(o.contentMD5[:], 0) == *oid.ETag) &&
-		(oid.Size == nil || int64(len(o.data)) == *oid.Size) &&
-		(oid.LastModifiedTime == nil || o.lastModified.Equal(oid.LastModifiedTime.StdTime()))
-}
-
-// nowUTC returns the current time in UTC truncated to seconds.
-func nowUTC() time.Time {
-	return time.Now().UTC().Truncate(time.Second)
 }

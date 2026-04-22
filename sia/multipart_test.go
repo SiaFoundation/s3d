@@ -113,7 +113,7 @@ func TestMultipartAddPart(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
-	s3Tester := NewCustomTester(t, dir, store, NewMemorySDK(), zap.NewNop())
+	s3Tester := NewCustomTester(t, dir, store, testutil.NewMemorySDK(), zap.NewNop())
 
 	const (
 		unknownID = "001f6350ae92ef759626ac909dbc027e"
@@ -287,7 +287,7 @@ func TestCompleteMultipartUpload(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
-	s3Tester := NewCustomTester(t, dir, store, NewMemorySDK(), zap.NewNop())
+	s3Tester := NewCustomTester(t, dir, store, testutil.NewMemorySDK(), zap.NewNop())
 
 	const (
 		bucket = "complete-multipart-bucket"
@@ -470,7 +470,7 @@ func TestMultipartUploadPartCopy(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
-	s3Tester := NewCustomTester(t, dir, store, NewMemorySDK(), zap.NewNop())
+	s3Tester := NewCustomTester(t, dir, store, testutil.NewMemorySDK(), zap.NewNop())
 
 	const (
 		bucketSrc = "copy-src"

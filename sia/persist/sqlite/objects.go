@@ -133,11 +133,11 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, partNumber 
 	// part specified, return part info
 	var partObjID sql.Null[sqlHash256]
 	err = tx.QueryRow(`
-		SELECT o.object_id, o.metadata, o.updated_at, p.offset, p.content_length, p.content_md5
+		SELECT o.object_id, o.filename, o.metadata, o.updated_at, p.offset, p.content_length, p.content_md5
 		FROM object_parts p
 		JOIN objects o ON o.bucket_id = p.bucket_id AND o.name = p.name
 		WHERE o.bucket_id = $1 AND o.name = $2 AND p.part_number = $3
-	`, bid, name, *partNumber).Scan(&partObjID, (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Offset, &obj.Length, (*sqlMD5)(&obj.ContentMD5))
+	`, bid, name, *partNumber).Scan(&partObjID, &obj.FileName, (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Offset, &obj.Length, (*sqlMD5)(&obj.ContentMD5))
 	if partObjID.Valid {
 		obj.ID = (*types.Hash256)(&partObjID.V)
 	}
