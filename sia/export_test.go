@@ -4,5 +4,5 @@ import "context"
 
 // PackObjects runs a single packing cycle for testing.
 func (s *Sia) PackObjects(ctx context.Context) {
-	s.packObjects(ctx)
+	s.packObjectsIter(ctx)
 }

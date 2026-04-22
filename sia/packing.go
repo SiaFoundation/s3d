@@ -182,12 +182,12 @@ func (s *Sia) packingLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			s.packObjects(ctx)
+			s.packObjectsIter(ctx)
 		}
 	}
 }
 
-func (s *Sia) packObjects(ctx context.Context) {
+func (s *Sia) packObjectsIter(ctx context.Context) {
 	// fetch and prepare objects for packing
 	packs := s.preparePackedObjects()
 	if len(packs) == 0 {
