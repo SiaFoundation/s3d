@@ -61,6 +61,8 @@ func (s *MemorySDK) Download(ctx context.Context, w io.Writer, obj sdk.Object, r
 	return err
 }
 
+// TODO: Right now, all objects have the same ID. We'll need to expose something from
+// the SDK to be able to mock objects with different IDs.
 func (s *MemorySDK) Object(ctx context.Context, objectID types.Hash256) (sdk.Object, error) {
 	s.ObjectCallCount++
 	if s.Fail {
