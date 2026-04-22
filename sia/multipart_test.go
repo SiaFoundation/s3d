@@ -144,7 +144,19 @@ func TestMultipartAddPart(t *testing.T) {
 	} else if res2 == nil || res2.ETag == nil || *res2.ETag != s3.FormatETag(md5Sum[:], 1) {
 		t.Fatalf("unexpected upload part result: %+v", res2)
 	}
-	// TODO: assert various s3 errors for invalid part uploads
+	// assert [s3errs.ErrNoSuchBucket] for missing bucket
+	_, err = s3Tester.UploadPart(t.Context(), "nonexistent-bucket", object, uploadID, 1, part)
+	testutil.AssertS3Error(t, s3errs.ErrNoSuchBucket, err)
+
+	// assert [s3errs.ErrNoSuchUpload] for unknown upload ID
+	_, err = s3Tester.UploadPart(t.Context(), bucket, object, unknownID, 1, part)
+	testutil.AssertS3Error(t, s3errs.ErrNoSuchUpload, err)
+
+	// assert [s3errs.ErrInvalidArgument] for invalid part number
+	_, err = s3Tester.UploadPart(t.Context(), bucket, object, uploadID, 0, part)
+	testutil.AssertS3Error(t, s3errs.ErrInvalidArgument, err)
+	_, err = s3Tester.UploadPart(t.Context(), bucket, object, uploadID, s3.MaxUploadPartNumber+1, part)
+	testutil.AssertS3Error(t, s3errs.ErrInvalidArgument, err)
 
 	// verify part is on disk
 	entries, err := os.ReadDir(filepath.Join(dir, sia.UploadsDirectory, uploadID, "1"))
@@ -172,7 +184,23 @@ func TestMultipartAddPart(t *testing.T) {
 		t.Fatalf("expected 1 part file in directory after overwrite, got %d", len(entries))
 	}
 
-	// TODO: verify part metadata in the database
+	// verify part metadata in the database
+	uid, err := s3.ParseUploadID(uploadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts, err := store.MultipartParts(bucket, object, uid)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(parts) != 1 {
+		t.Fatalf("expected 1 part in database, got %d", len(parts))
+	} else if parts[0].PartNumber != 1 {
+		t.Fatalf("expected part number 1, got %d", parts[0].PartNumber)
+	} else if parts[0].Size != int64(len(part)) {
+		t.Fatalf("expected part size %d, got %d", len(part), parts[0].Size)
+	} else if parts[0].ContentMD5 != md5Sum {
+		t.Fatalf("expected content MD5 %x, got %x", md5Sum, parts[0].ContentMD5)
+	}
 
 	// assert multipart upload is aborted and part files are removed
 	if err := s3Tester.AbortMultipartUpload(t.Context(), bucket, object, uploadID); err != nil {
