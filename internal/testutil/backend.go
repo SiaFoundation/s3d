@@ -23,7 +23,7 @@ type UploadedObject struct {
 	Meta sdk.Object
 }
 
-// MemorySDK is an in-memory [sia.SDK] for testing.
+// MemorySDK is an in-memory SDK for testing.
 type MemorySDK struct {
 	AppKey  types.PrivateKey
 	Objects map[types.Hash256]UploadedObject
@@ -40,11 +40,13 @@ func NewMemorySDK() *MemorySDK {
 	}
 }
 
+// DeleteObject removes the object with the given ID.
 func (s *MemorySDK) DeleteObject(ctx context.Context, id types.Hash256) error {
 	delete(s.Objects, id)
 	return nil
 }
 
+// Download writes the stored data for obj to w, optionally limited to rnge.
 func (s *MemorySDK) Download(ctx context.Context, w io.Writer, obj sdk.Object, rnge *s3.ObjectRange) error {
 	uploaded, exists := s.Objects[obj.ID()]
 	if !exists {
@@ -61,8 +63,10 @@ func (s *MemorySDK) Download(ctx context.Context, w io.Writer, obj sdk.Object, r
 	return err
 }
 
-// TODO: Right now, all objects have the same ID. We'll need to expose something from
-// the SDK to be able to mock objects with different IDs.
+// Object returns the metadata for the object with the given ID.
+//
+// TODO: Right now, all objects have the same ID. We'll need to expose
+// something from the SDK to be able to mock objects with different IDs.
 func (s *MemorySDK) Object(ctx context.Context, objectID types.Hash256) (sdk.Object, error) {
 	s.ObjectCallCount++
 	if s.Fail {
@@ -75,6 +79,7 @@ func (s *MemorySDK) Object(ctx context.Context, objectID types.Hash256) (sdk.Obj
 	return obj.Meta, nil
 }
 
+// Upload stores the data from r as a new object and returns its metadata.
 func (s *MemorySDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error) {
 	data, err := io.ReadAll(r)
 	if err != nil {
@@ -88,10 +93,12 @@ func (s *MemorySDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
 	return obj, nil
 }
 
+// SealObject seals obj with the SDK's app key.
 func (s *MemorySDK) SealObject(obj sdk.Object) slabs.SealedObject {
 	return obj.Seal(s.AppKey).SealedObject
 }
 
+// UnsealObject returns the stored metadata for the given sealed object.
 func (s *MemorySDK) UnsealObject(sealed slabs.SealedObject) (sdk.Object, error) {
 	obj, exists := s.Objects[sealed.ID()]
 	if !exists {
@@ -100,6 +107,8 @@ func (s *MemorySDK) UnsealObject(sealed slabs.SealedObject) (sdk.Object, error) 
 	return obj.Meta, nil
 }
 
+// NewBackend returns a Sia backend wired up to an in-memory SDK and a
+// per-test SQLite store in a temporary directory.
 func NewBackend(tb testing.TB) *sia.Sia {
 	tb.Helper()
 	dir := tb.TempDir()
