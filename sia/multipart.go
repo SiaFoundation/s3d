@@ -199,11 +199,9 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object string
 	}
 
 	// sync parent directory
-	if dir, err := os.Open(partDir); errors.Is(err, os.ErrNotExist) {
+	if err := syncDir(partDir); errors.Is(err, os.ErrNotExist) {
 		return nil, s3errs.ErrNoSuchUpload
 	} else if err != nil {
-		return nil, fmt.Errorf("failed to open part directory: %w", err)
-	} else if err := errors.Join(dir.Sync(), dir.Close()); err != nil {
 		return nil, fmt.Errorf("failed to sync part directory: %w", err)
 	}
 
@@ -312,11 +310,9 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 	}
 
 	// sync parent directory
-	if dir, err := os.Open(partDir); errors.Is(err, os.ErrNotExist) {
+	if err := syncDir(partDir); errors.Is(err, os.ErrNotExist) {
 		return nil, s3errs.ErrNoSuchUpload
 	} else if err != nil {
-		return nil, fmt.Errorf("failed to open part directory: %w", err)
-	} else if err := errors.Join(dir.Sync(), dir.Close()); err != nil {
 		return nil, fmt.Errorf("failed to sync part directory: %w", err)
 	}
 
