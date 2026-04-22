@@ -85,15 +85,18 @@ func (p *uploadGroup) tryAdd(obj objects.ObjectForUpload) bool {
 		return false
 	}
 
-	// if we already meet the waste threshold, only accept the object if
-	// the resulting group still meets it
+	// once we meet the waste threshold, only accept objects that fit in
+	// the remaining space of the last slab or that reduce waste
 	if p.wastePct() < p.uploadWastePct {
-		remainder := newTotal % p.slabSize
-		if remainder != 0 {
+		var newWaste float64
+		if remainder := newTotal % p.slabSize; remainder != 0 {
 			waste := p.slabSize - remainder
-			if float64(waste)/float64(newTotal+waste) >= p.uploadWastePct {
-				return false
-			}
+			newWaste = float64(waste) / float64(newTotal+waste)
+		}
+		reducesWaste := newWaste < p.wastePct()
+		fitsLastSlab := obj.Length <= p.remainingSpace()
+		if !fitsLastSlab && !reducesWaste {
+			return false
 		}
 	}
 

@@ -13,75 +13,32 @@ import (
 )
 
 func TestUploadGroup(t *testing.T) {
-	const (
-		slabSize       = 256
-		uploadWastePct = 0.1
-	)
-	newGroup := func() uploadGroup {
-		return uploadGroup{
-			slabSize:       slabSize,
-			uploadWastePct: uploadWastePct,
-		}
-	}
-	p := newGroup()
-
-	// assert remaining space on empty group is a full slab
-	if p.remainingSpace() != slabSize {
-		t.Fatalf("expected %d, got %d", slabSize, p.remainingSpace())
+	p := uploadGroup{
+		slabSize:       100,
+		uploadWastePct: 0.1,
 	}
 
-	// assert 100% waste on empty group
-	if p.wastePct() != 1 {
-		t.Fatalf("expected 1, got %f", p.wastePct())
-	}
-
-	// assert tryAdd succeeds when waste is high
-	if !p.tryAdd(objects.ObjectForUpload{Length: 100, Name: "a"}) {
+	// objects are accepted freely while waste is above threshold
+	if !p.tryAdd(objects.ObjectForUpload{Length: 92, Name: "a"}) {
 		t.Fatal("expected tryAdd to succeed")
 	}
 
-	// assert remaining space decreased
-	if p.remainingSpace() != 156 {
-		t.Fatalf("expected 156, got %d", p.remainingSpace())
-	}
-
-	// assert filling to exact slab boundary succeeds
-	if !p.tryAdd(objects.ObjectForUpload{Length: 156, Name: "b"}) {
+	// after threshold is met, objects that fit in the last slab are accepted
+	if !p.tryAdd(objects.ObjectForUpload{Length: 5, Name: "b"}) {
 		t.Fatal("expected tryAdd to succeed")
 	}
 
-	// assert zero waste and zero remaining space on exact slab boundary
+	// objects that don't fit and don't reduce waste are rejected
+	if p.tryAdd(objects.ObjectForUpload{Length: 50, Name: "c"}) {
+		t.Fatal("expected tryAdd to fail")
+	}
+
+	// objects that don't fit but reduce waste are accepted
+	if !p.tryAdd(objects.ObjectForUpload{Length: 103, Name: "d"}) {
+		t.Fatal("expected tryAdd to succeed")
+	}
 	if p.wastePct() != 0 {
-		t.Fatalf("expected 0, got %f", p.wastePct())
-	}
-	if p.remainingSpace() != 0 {
-		t.Fatalf("expected 0, got %d", p.remainingSpace())
-	}
-
-	// assert any object is rejected when remaining space is zero
-	if p.tryAdd(objects.ObjectForUpload{Length: 1}) {
-		t.Fatal("expected tryAdd to fail at slab boundary")
-	}
-
-	// assert slab spanning object is rejected when waste is low
-	if p.tryAdd(objects.ObjectForUpload{Length: slabSize + 1}) {
-		t.Fatal("expected tryAdd to fail")
-	}
-
-	// start a new group with space left in the slab
-	p2 := newGroup()
-	if !p2.tryAdd(objects.ObjectForUpload{Length: 200, Name: "x"}) {
-		t.Fatal("expected tryAdd to succeed")
-	}
-
-	// assert object fitting in remaining space is accepted
-	if !p2.tryAdd(objects.ObjectForUpload{Length: 50, Name: "y"}) {
-		t.Fatal("expected tryAdd to succeed")
-	}
-
-	// assert object exceeding remaining space is rejected when waste is low
-	if p2.tryAdd(objects.ObjectForUpload{Length: p2.remainingSpace() + 1}) {
-		t.Fatal("expected tryAdd to fail")
+		t.Fatalf("expected 0 waste, got %f", p.wastePct())
 	}
 }
 
@@ -96,15 +53,14 @@ func (s *uploadStore) ObjectsForUpload() ([]objects.ObjectForUpload, error) {
 }
 
 func TestPrepareUploads(t *testing.T) {
-	// four objects sized so FFD puts 92+8 in one group and 85+42 in another,
-	// only the first group meets 10% waste, then gap fill reclaims 85 but
-	// not 42
+	// "a"(92) meets the 10% waste threshold on its own, then "b"(108)
+	// is accepted because it reduces waste to 0% by filling two slabs
+	// exactly, "c"(42) cannot reduce waste further and remains pending
 	store := &uploadStore{
 		objects: []objects.ObjectForUpload{
 			{Name: "a", Length: 92},
-			{Name: "b", Length: 85},
+			{Name: "b", Length: 108},
 			{Name: "c", Length: 42},
-			{Name: "d", Length: 8},
 		},
 	}
 	s := Sia{
@@ -116,22 +72,14 @@ func TestPrepareUploads(t *testing.T) {
 
 	ready := s.prepareUploads()
 
-	// assert single ready group with the three objects that fit
 	if len(ready) != 1 {
 		t.Fatalf("expected 1 ready group, got %d", len(ready))
 	}
-	if ready[0].totalSize != 185 {
-		t.Fatalf("expected totalSize 185, got %d", ready[0].totalSize)
+	if ready[0].totalSize != 200 {
+		t.Fatalf("expected totalSize 200, got %d", ready[0].totalSize)
 	}
-	if len(ready[0].objects) != 3 {
-		t.Fatalf("expected 3 objects, got %d", len(ready[0].objects))
-	}
-
-	// assert the 42 byte object was excluded
-	for _, obj := range ready[0].objects {
-		if obj.Name == "c" {
-			t.Fatal("42 byte object should have been excluded")
-		}
+	if len(ready[0].objects) != 2 {
+		t.Fatalf("expected 2 objects, got %d", len(ready[0].objects))
 	}
 }
 
