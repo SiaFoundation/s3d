@@ -2,7 +2,6 @@ package sia
 
 import (
 	"bytes"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -40,6 +39,37 @@ func TestUploadGroup(t *testing.T) {
 	}
 	if p.wastePct() != 0 {
 		t.Fatalf("expected 0 waste, got %f", p.wastePct())
+	}
+
+	// start a fresh group to test last slab filling and slab cap
+	p = uploadGroup{
+		slabSize:       100,
+		uploadWastePct: 0.1,
+	}
+
+	// add an object that creates waste in the last slab
+	// 550 bytes = 6 slabs, 50 bytes wasted, waste = 50/600 = 8.3%
+	if !p.tryAdd(objects.ObjectForUpload{Length: 550, Name: "e"}) {
+		t.Fatal("expected tryAdd to succeed")
+	}
+	if p.remainingSpace() != 50 {
+		t.Fatalf("expected 50 remaining, got %d", p.remainingSpace())
+	}
+
+	// fill the remaining 50 bytes in the last slab
+	if !p.tryAdd(objects.ObjectForUpload{Length: 50, Name: "f"}) {
+		t.Fatal("expected tryAdd to succeed")
+	}
+	if p.slabs() != maxSlabsPerUpload {
+		t.Fatalf("expected %d slabs, got %d", maxSlabsPerUpload, p.slabs())
+	}
+	if p.wastePct() != 0 {
+		t.Fatalf("expected 0 waste, got %f", p.wastePct())
+	}
+
+	// adding anything more exceeds maxSlabsPerUpload
+	if p.tryAdd(objects.ObjectForUpload{Length: 1, Name: "g"}) {
+		t.Fatal("expected tryAdd to fail due to slab cap")
 	}
 }
 
@@ -81,136 +111,6 @@ func TestPrepareUploads(t *testing.T) {
 	}
 	if len(ready[0].objects) != 2 {
 		t.Fatalf("expected 2 objects, got %d", len(ready[0].objects))
-	}
-}
-
-func TestTryAddComparison(t *testing.T) {
-	const (
-		slabSize       = 40 << 20 // 40 MiB
-		uploadWastePct = 0.10
-		numObjects     = 200
-	)
-
-	// generate a fixed set of random objects with sizes between 1 and 50 MiB
-	rng := frand.NewCustom(make([]byte, 32), 1024, 20)
-	var candidates []objects.ObjectForUpload
-	for i := range numObjects {
-		size := int64(1 + rng.Intn(50<<20))
-		candidates = append(candidates, objects.ObjectForUpload{
-			Name:   fmt.Sprintf("obj-%d", i),
-			Length: size,
-		})
-	}
-
-	type tryAddFunc func(p *uploadGroup, obj objects.ObjectForUpload) bool
-
-	runGrouping := func(tryAdd tryAddFunc) []uploadGroup {
-		newGroup := func(obj objects.ObjectForUpload) uploadGroup {
-			return uploadGroup{
-				slabSize:       slabSize,
-				uploadWastePct: uploadWastePct,
-				objects:        []objects.ObjectForUpload{obj},
-				totalSize:      obj.Length,
-			}
-		}
-
-		var groups []uploadGroup
-		for _, obj := range candidates {
-			var added bool
-			for i := range groups {
-				added = tryAdd(&groups[i], obj)
-				if added {
-					break
-				}
-			}
-			if !added {
-				groups = append(groups, newGroup(obj))
-			}
-		}
-
-		var ready []uploadGroup
-		var remaining []objects.ObjectForUpload
-		for _, g := range groups {
-			if g.wastePct() < uploadWastePct {
-				ready = append(ready, g)
-			} else {
-				remaining = append(remaining, g.objects...)
-			}
-		}
-
-		for _, obj := range remaining {
-			for i := range ready {
-				if tryAdd(&ready[i], obj) {
-					break
-				}
-			}
-		}
-		return ready
-	}
-
-	oldGroups := runGrouping(func(p *uploadGroup, obj objects.ObjectForUpload) bool {
-		return p.tryAddOld(obj)
-	})
-	newGroups := runGrouping(func(p *uploadGroup, obj objects.ObjectForUpload) bool {
-		return p.tryAdd(obj)
-	})
-
-	type stats struct {
-		packs         int
-		objectsPacked int
-		totalSlabs    int64
-		maxWaste      float64
-		totalWaste    float64
-		singleObject  int
-		maxSlabs      int64
-	}
-
-	collect := func(groups []uploadGroup) stats {
-		var s stats
-		s.packs = len(groups)
-		for _, g := range groups {
-			s.objectsPacked += len(g.objects)
-			s.totalSlabs += g.slabs()
-			w := g.wastePct()
-			s.totalWaste += w
-			if w > s.maxWaste {
-				s.maxWaste = w
-			}
-			if len(g.objects) == 1 {
-				s.singleObject++
-			}
-			if g.slabs() > s.maxSlabs {
-				s.maxSlabs = g.slabs()
-			}
-		}
-		return s
-	}
-
-	oldStats := collect(oldGroups)
-	newStats := collect(newGroups)
-
-	t.Logf("%-20s %10s %10s", "", "Old", "New")
-	t.Logf("%-20s %10d %10d", "Packs", oldStats.packs, newStats.packs)
-	t.Logf("%-20s %10d %10d", "Objects packed", oldStats.objectsPacked, newStats.objectsPacked)
-	t.Logf("%-20s %10d %10d", "Total slabs", oldStats.totalSlabs, newStats.totalSlabs)
-	t.Logf("%-20s %10.2f%% %9.2f%%", "Max waste", oldStats.maxWaste*100, newStats.maxWaste*100)
-	t.Logf("%-20s %10.2f%% %9.2f%%", "Avg waste", oldStats.totalWaste/float64(oldStats.packs)*100, newStats.totalWaste/float64(newStats.packs)*100)
-	t.Logf("%-20s %10d %10d", "Single-obj packs", oldStats.singleObject, newStats.singleObject)
-	t.Logf("%-20s %10d %10d", "Max slabs/pack", oldStats.maxSlabs, newStats.maxSlabs)
-
-	// the new algorithm should cap slabs per pack
-	if newStats.maxSlabs > maxSlabsPerUpload {
-		t.Errorf("new algorithm exceeded slab cap: %d > %d", newStats.maxSlabs, maxSlabsPerUpload)
-	}
-
-	// the new algorithm should have lower max waste
-	if newStats.maxWaste > oldStats.maxWaste {
-		t.Errorf("new algorithm has higher max waste: %.2f%% > %.2f%%", newStats.maxWaste*100, oldStats.maxWaste*100)
-	}
-
-	// the new algorithm should have fewer single-object packs
-	if newStats.singleObject > oldStats.singleObject {
-		t.Errorf("new algorithm has more single-object packs: %d > %d", newStats.singleObject, oldStats.singleObject)
 	}
 }
 

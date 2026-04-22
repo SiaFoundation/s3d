@@ -81,13 +81,11 @@ func (p *uploadGroup) tryAdd(obj objects.ObjectForUpload) bool {
 	newSlabs := (newTotal + p.slabSize - 1) / p.slabSize
 
 	// don't exceed the maximum number of slabs per upload
-	if newSlabs > maxSlabsPerUpload {
-		return false
-	}
+	maxSlabs := newSlabs > maxSlabsPerUpload
 
 	// once we meet the waste threshold, only accept objects that fit in
 	// the remaining space of the last slab or that reduce waste
-	if p.wastePct() < p.uploadWastePct {
+	if maxSlabs || p.wastePct() < p.uploadWastePct {
 		var newWaste float64
 		if remainder := newTotal % p.slabSize; remainder != 0 {
 			waste := p.slabSize - remainder
@@ -95,26 +93,15 @@ func (p *uploadGroup) tryAdd(obj objects.ObjectForUpload) bool {
 		}
 		reducesWaste := newWaste < p.wastePct()
 		fitsLastSlab := obj.Length <= p.remainingSpace()
-		if !fitsLastSlab && !reducesWaste {
+		if maxSlabs && !fitsLastSlab {
+			// max slabs exceeded and object doesn't fit in remaining space
+			return false
+		} else if !fitsLastSlab && !reducesWaste {
+			// neither fits in remaining space nor reduces waste
 			return false
 		}
 	}
 
-	p.objects = append(p.objects, obj)
-	p.totalSize += obj.Length
-	return true
-}
-
-func (p *uploadGroup) tryAddOld(obj objects.ObjectForUpload) bool {
-	// if we already meet the waste threshold, only allow small objects that
-	// fit in the remaining space
-	if p.wastePct() < p.uploadWastePct {
-		if obj.Length > p.slabSize {
-			return false
-		} else if obj.Length > p.remainingSpace() {
-			return false
-		}
-	}
 	p.objects = append(p.objects, obj)
 	p.totalSize += obj.Length
 	return true
