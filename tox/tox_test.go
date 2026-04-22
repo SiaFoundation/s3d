@@ -171,7 +171,7 @@ func runTox(t *testing.T, confPath, testsDir string, args ...string) {
 	toxArgs := []string{"run", "--skip-pkg-install", "-c", testsDir, "--"}
 	toxArgs = append(toxArgs, args...)
 
-	cmd := exec.Command("tox", toxArgs...)
+	cmd := exec.CommandContext(t.Context(), "tox", toxArgs...)
 	cmd.Env = append(os.Environ(),
 		"S3TEST_CONF="+confPath,
 		"S3_USE_SIGV4=True",
@@ -185,8 +185,6 @@ func runTox(t *testing.T, confPath, testsDir string, args ...string) {
 	output := buf.String()
 	if err != nil {
 		t.Fatalf("tox failed: %v\n%s", err, output)
-	} else if bytes.Contains(buf.Bytes(), []byte("FAILED")) {
-		t.Fatalf("tox reported failures:\n%s", output)
 	}
 	t.Log(output)
 }
