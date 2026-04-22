@@ -105,6 +105,21 @@ func (p *uploadGroup) tryAdd(obj objects.ObjectForUpload) bool {
 	return true
 }
 
+func (p *uploadGroup) tryAddOld(obj objects.ObjectForUpload) bool {
+	// if we already meet the waste threshold, only allow small objects that
+	// fit in the remaining space
+	if p.wastePct() < p.uploadWastePct {
+		if obj.Length > p.slabSize {
+			return false
+		} else if obj.Length > p.remainingSpace() {
+			return false
+		}
+	}
+	p.objects = append(p.objects, obj)
+	p.totalSize += obj.Length
+	return true
+}
+
 func (s *Sia) newUploadGroup(initial objects.ObjectForUpload) uploadGroup {
 	return uploadGroup{
 		slabSize:       s.slabSize,
