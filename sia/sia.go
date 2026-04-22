@@ -39,18 +39,18 @@ func WithLogger(logger *zap.Logger) Option {
 	}
 }
 
-// WithPackingWaste sets the maximum percentage of wasted space tolerated per
+// WithUploadWaste sets the maximum percentage of wasted space tolerated per
 // slab.
-func WithPackingWaste(pct float64) Option {
+func WithUploadWaste(pct float64) Option {
 	return func(s *Sia) {
-		s.packingWastePct = pct
+		s.uploadWastePct = pct
 	}
 }
 
-// WithPackingDisabled disables the background packing loop.
-func WithPackingDisabled() Option {
+// WithUploadDisabled disables the background upload loop.
+func WithUploadDisabled() Option {
 	return func(s *Sia) {
-		s.packingDisabled = true
+		s.uploadDisabled = true
 	}
 }
 
@@ -72,9 +72,9 @@ type Sia struct {
 	directory  string
 	accessKeys map[string]auth.SecretAccessKey
 
-	slabSize        int64
-	packingWastePct float64
-	packingDisabled bool
+	slabSize       int64
+	uploadWastePct float64
+	uploadDisabled bool
 
 	tg     *threadgroup.ThreadGroup
 	logger *zap.Logger
@@ -103,10 +103,10 @@ type Store interface {
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
 	ListObjects(accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error)
 	ObjectParts(bucket, name string) ([]objects.Part, error)
-	ObjectsForPacking() ([]objects.PackedObject, error)
+	ObjectsForUpload() ([]objects.ObjectForUpload, error)
 	OrphanedObjects(limit int) ([]types.Hash256, error)
 	PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string, updateModTime bool) error
-	MarkObjectUploaded(bucket, name, expectedFilename string, siaObject slabs.SealedObject) error
+	MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, siaObject slabs.SealedObject) error
 	UpdateSiaObject(siaObject slabs.SealedObject, cachedAt time.Time) error
 	RemoveOrphanedObject(objectID types.Hash256) error
 	AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) error
@@ -125,9 +125,9 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		sdk:   sdk,
 		store: store,
 
-		directory:       directory,
-		accessKeys:      make(map[string]auth.SecretAccessKey),
-		packingWastePct: DefaultPackingWastePct,
+		directory:      directory,
+		accessKeys:     make(map[string]auth.SecretAccessKey),
+		uploadWastePct: DefaultUploadWastePct,
 
 		logger: zap.NewNop(),
 		tg:     threadgroup.New(),
@@ -137,8 +137,8 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 	}
 	if len(sia.accessKeys) == 0 {
 		return nil, ErrNoAccessKey
-	} else if sia.packingWastePct <= 0 {
-		return nil, errors.New("packing waste percentage must be greater than 0")
+	} else if sia.uploadWastePct <= 0 {
+		return nil, errors.New("upload waste percentage must be greater than 0")
 	}
 
 	dir := filepath.Join(sia.directory, UploadsDirectory)
@@ -146,7 +146,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		return nil, fmt.Errorf("failed to create directory %q: %w", dir, err)
 	}
 
-	// initialize slab size if packing is enabled
+	// initialize slab size if the upload loop is enabled
 	slabSize, err := sia.sdk.SlabSize()
 	if err != nil {
 		return nil, fmt.Errorf("failed to determine slab size: %w", err)
@@ -165,14 +165,14 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		sia.processOrphansLoop(ctx)
 	}()
 
-	if !sia.packingDisabled {
+	if !sia.uploadDisabled {
 		ctx, cancel, err := sia.tg.AddContext(ctx)
 		if err != nil {
 			return nil, err
 		}
 		go func() {
 			defer cancel()
-			sia.packingLoop(ctx)
+			sia.uploadLoop(ctx)
 		}()
 	}
 

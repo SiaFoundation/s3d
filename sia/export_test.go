@@ -2,7 +2,7 @@ package sia
 
 import "context"
 
-// PackObjects runs a single packing cycle for testing.
-func (s *Sia) PackObjects(ctx context.Context) {
-	s.packObjectsIter(ctx)
+// UploadObjects runs a single upload cycle for testing.
+func (s *Sia) UploadObjects(ctx context.Context) {
+	s.uploadObjectsIter(ctx)
 }

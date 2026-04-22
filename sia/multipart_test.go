@@ -491,7 +491,7 @@ func TestCompleteMultipartUpload(t *testing.T) {
 	}
 }
 
-func TestMultipartPacking(t *testing.T) {
+func TestMultipartUpload(t *testing.T) {
 	log := zap.NewNop()
 	dir := t.TempDir()
 
@@ -502,7 +502,7 @@ func TestMultipartPacking(t *testing.T) {
 	t.Cleanup(func() { store.Close() })
 
 	memSDK := NewMemorySDK()
-	memSDK.SetSlabSize(24) // small slab so the test object meets the packing threshold
+	memSDK.SetSlabSize(24) // small slab so the test object meets the upload threshold
 	backend, err := sia.New(t.Context(), memSDK, store, dir,
 		sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
 		sia.WithLogger(log))
@@ -513,8 +513,8 @@ func TestMultipartPacking(t *testing.T) {
 	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
 
 	const (
-		bucket = "packing-multipart-bucket"
-		object = "packed"
+		bucket = "upload-multipart-bucket"
+		object = "uploaded"
 	)
 
 	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
@@ -522,7 +522,7 @@ func TestMultipartPacking(t *testing.T) {
 	}
 
 	// create a multipart upload with a single small part
-	partData := []byte("hello multipart packing")
+	partData := []byte("hello multipart upload")
 	res, err := s3Tester.CreateMultipartUpload(t.Context(), bucket, object, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -569,8 +569,8 @@ func TestMultipartPacking(t *testing.T) {
 		t.Fatal("data mismatch for completed multipart object")
 	}
 
-	// run the packing loop to upload the object to Sia
-	backend.PackObjects(t.Context())
+	// run the upload loop to upload the object to Sia
+	backend.UploadObjects(t.Context())
 
 	// verify the object is now on Sia
 	obj, err = store.GetObject(aws.String(testutil.AccessKeyID), bucket, object, nil)
@@ -578,18 +578,18 @@ func TestMultipartPacking(t *testing.T) {
 		t.Fatal(err)
 	}
 	if obj.FileName != nil {
-		t.Fatal("expected filename to be nil after packing")
+		t.Fatal("expected filename to be nil after upload")
 	}
 	if obj.ID == nil {
-		t.Fatal("expected object ID to be set after packing")
+		t.Fatal("expected object ID to be set after upload")
 	}
 	if obj.SiaObject == nil {
-		t.Fatal("expected sia object to be set after packing")
+		t.Fatal("expected sia object to be set after upload")
 	}
 
-	// verify upload directory is removed from disk after packing
+	// verify upload directory is removed from disk after upload
 	if _, err := os.Stat(uploadDir); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatal("expected upload directory to be removed after packing")
+		t.Fatal("expected upload directory to be removed after upload")
 	}
 
 	// verify GetObject still serves the correct data, now from Sia
@@ -602,7 +602,7 @@ func TestMultipartPacking(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(body, partData) {
-		t.Fatal("data mismatch after packing to Sia")
+		t.Fatal("data mismatch after upload to Sia")
 	}
 }
 

@@ -239,7 +239,7 @@ func TestPutObject(t *testing.T) {
 		test(t, s3Tester)
 	})
 
-	t.Run("packing", func(t *testing.T) {
+	t.Run("upload", func(t *testing.T) {
 		log := zaptest.NewLogger(t)
 		dir := t.TempDir()
 		store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
@@ -259,25 +259,25 @@ func TestPutObject(t *testing.T) {
 		t.Cleanup(func() { backend.Close() })
 		s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
 
-		const bucket = "packing-bucket"
+		const bucket = "upload-bucket"
 		if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 			t.Fatal(err)
 		}
 
-		// upload a small object that qualifies for packing, sized to nearly fill a slab
-		data := []byte("hello packing via put!!")
-		_, err = s3Tester.PutObject(t.Context(), bucket, "packed", bytes.NewReader(data), nil)
+		// upload a small object that qualifies for the upload loop, sized to nearly fill a slab
+		data := []byte("hello upload via put!!!")
+		_, err = s3Tester.PutObject(t.Context(), bucket, "pending", bytes.NewReader(data), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 
 		// verify the object is on disk
-		obj, err := store.GetObject(aws.String(testutil.AccessKeyID), bucket, "packed", nil)
+		obj, err := store.GetObject(aws.String(testutil.AccessKeyID), bucket, "pending", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if obj.FileName == nil {
-			t.Fatal("expected filename to be set for packed object")
+			t.Fatal("expected filename to be set for pending object")
 		}
 		uploadPath := filepath.Join(dir, sia.UploadsDirectory, *obj.FileName)
 		if _, err := os.Stat(uploadPath); err != nil {
@@ -285,7 +285,7 @@ func TestPutObject(t *testing.T) {
 		}
 
 		// verify GetObject serves correct data from disk
-		getObj, err := s3Tester.GetObject(t.Context(), bucket, "packed", nil)
+		getObj, err := s3Tester.GetObject(t.Context(), bucket, "pending", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -294,31 +294,31 @@ func TestPutObject(t *testing.T) {
 			t.Fatal(err)
 		}
 		if !bytes.Equal(body, data) {
-			t.Fatal("data mismatch before packing")
+			t.Fatal("data mismatch before upload")
 		}
 
-		// run the packing loop
-		backend.PackObjects(t.Context())
+		// run the upload loop
+		backend.UploadObjects(t.Context())
 
 		// verify the object is now on Sia
-		obj, err = store.GetObject(aws.String(testutil.AccessKeyID), bucket, "packed", nil)
+		obj, err = store.GetObject(aws.String(testutil.AccessKeyID), bucket, "pending", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if obj.FileName != nil {
-			t.Fatal("expected filename to be nil after packing")
+			t.Fatal("expected filename to be nil after upload")
 		}
 		if obj.SiaObject == nil {
-			t.Fatal("expected sia object to be set after packing")
+			t.Fatal("expected sia object to be set after upload")
 		}
 
 		// verify upload file is removed from disk
 		if _, err := os.Stat(uploadPath); !errors.Is(err, fs.ErrNotExist) {
-			t.Fatal("expected upload file to be removed after packing")
+			t.Fatal("expected upload file to be removed after upload")
 		}
 
 		// verify GetObject still serves correct data from Sia
-		getObj, err = s3Tester.GetObject(t.Context(), bucket, "packed", nil)
+		getObj, err = s3Tester.GetObject(t.Context(), bucket, "pending", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -327,7 +327,7 @@ func TestPutObject(t *testing.T) {
 			t.Fatal(err)
 		}
 		if !bytes.Equal(body, data) {
-			t.Fatal("data mismatch after packing")
+			t.Fatal("data mismatch after upload")
 		}
 	})
 }
@@ -784,7 +784,7 @@ func TestObjectMetadataCache(t *testing.T) {
 		t.Fatal("expected pending upload to have a filename")
 	}
 	sealed := memSDK.SealObject(siaObj)
-	if err := store.MarkObjectUploaded(bucket, object, *obj.FileName, sealed); err != nil {
+	if err := store.MarkObjectUploaded(bucket, object, obj.ContentMD5, sealed); err != nil {
 		t.Fatal(err)
 	}
 

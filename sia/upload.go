@@ -15,13 +15,14 @@ import (
 )
 
 const (
-	// DefaultPackingWastePct is the maximum percentage of wasted space that is tolerated
-	// before an object is packed. Objects whose upload would waste more than this percentage are
-	// written to disk and batched together with other small objects to fill slabs efficiently.
-	DefaultPackingWastePct = 0.1
+	// DefaultUploadWastePct is the maximum percentage of wasted space that is
+	// tolerated before an object is uploaded. Objects whose upload would waste
+	// more than this percentage are written to disk and batched together with
+	// other small objects to fill slabs efficiently.
+	DefaultUploadWastePct = 0.1
 
-	packedUploadThreads = 8
-	maxSlabsPerPack     = 6
+	numUploadThreads  = 8
+	maxSlabsPerUpload = 6
 )
 
 // PackedUpload defines the interface for a packed upload.
@@ -34,18 +35,18 @@ type PackedUpload interface {
 }
 
 type (
-	// packedObjects groups objects that will be uploaded together
+	// uploadGroup groups objects that will be uploaded together
 	// in a single packed upload.
-	packedObjects struct {
-		slabSize        int64
-		packingWastePct float64
+	uploadGroup struct {
+		slabSize       int64
+		uploadWastePct float64
 
-		objects   []objects.PackedObject
+		objects   []objects.ObjectForUpload
 		totalSize int64
 	}
 )
 
-func (p *packedObjects) remainingSpace() int64 {
+func (p *uploadGroup) remainingSpace() int64 {
 	if p.totalSize == 0 {
 		return p.slabSize
 	}
@@ -56,7 +57,7 @@ func (p *packedObjects) remainingSpace() int64 {
 	return p.slabSize - remainder
 }
 
-func (p *packedObjects) wastePct() float64 {
+func (p *uploadGroup) wastePct() float64 {
 	if p.totalSize == 0 {
 		return 1
 	}
@@ -68,29 +69,29 @@ func (p *packedObjects) wastePct() float64 {
 	return float64(waste) / float64(p.totalSize+waste)
 }
 
-func (p *packedObjects) slabs() int64 {
+func (p *uploadGroup) slabs() int64 {
 	if p.totalSize == 0 {
 		return 0
 	}
 	return (p.totalSize + p.slabSize - 1) / p.slabSize
 }
 
-func (p *packedObjects) tryAdd(obj objects.PackedObject) bool {
+func (p *uploadGroup) tryAdd(obj objects.ObjectForUpload) bool {
 	newTotal := p.totalSize + obj.Length
 	newSlabs := (newTotal + p.slabSize - 1) / p.slabSize
 
-	// don't exceed the maximum number of slabs per pack
-	if newSlabs > maxSlabsPerPack {
+	// don't exceed the maximum number of slabs per upload
+	if newSlabs > maxSlabsPerUpload {
 		return false
 	}
 
 	// if we already meet the waste threshold, only accept the object if
 	// the resulting group still meets it
-	if p.wastePct() < p.packingWastePct {
+	if p.wastePct() < p.uploadWastePct {
 		remainder := newTotal % p.slabSize
 		if remainder != 0 {
 			waste := p.slabSize - remainder
-			if float64(waste)/float64(newTotal+waste) >= p.packingWastePct {
+			if float64(waste)/float64(newTotal+waste) >= p.uploadWastePct {
 				return false
 			}
 		}
@@ -101,19 +102,19 @@ func (p *packedObjects) tryAdd(obj objects.PackedObject) bool {
 	return true
 }
 
-func (s *Sia) newPackedObject(initial objects.PackedObject) packedObjects {
-	return packedObjects{
-		slabSize:        s.slabSize,
-		packingWastePct: s.packingWastePct,
-		objects:         []objects.PackedObject{initial},
-		totalSize:       initial.Length,
+func (s *Sia) newUploadGroup(initial objects.ObjectForUpload) uploadGroup {
+	return uploadGroup{
+		slabSize:       s.slabSize,
+		uploadWastePct: s.uploadWastePct,
+		objects:        []objects.ObjectForUpload{initial},
+		totalSize:      initial.Length,
 	}
 }
 
-func (s *Sia) preparePackedObjects() []packedObjects {
-	candidates, err := s.store.ObjectsForPacking()
+func (s *Sia) prepareUploads() []uploadGroup {
+	candidates, err := s.store.ObjectsForUpload()
 	if err != nil {
-		s.logger.Error("failed to fetch objects for packing", zap.Error(err))
+		s.logger.Error("failed to fetch objects for upload", zap.Error(err))
 		return nil
 	} else if len(candidates) == 0 {
 		return nil
@@ -123,12 +124,12 @@ func (s *Sia) preparePackedObjects() []packedObjects {
 	for _, obj := range candidates {
 		totalSize += obj.Length
 	}
-	s.logger.Info("found objects for packing",
+	s.logger.Info("found objects for upload",
 		zap.Int("objects", len(candidates)),
 		zap.Int64("totalSize", totalSize))
 
 	// place each object in the first group where it fits
-	var groups []packedObjects
+	var groups []uploadGroup
 	for _, obj := range candidates {
 		var added bool
 		for i := range groups {
@@ -138,15 +139,15 @@ func (s *Sia) preparePackedObjects() []packedObjects {
 			}
 		}
 		if !added {
-			groups = append(groups, s.newPackedObject(obj))
+			groups = append(groups, s.newUploadGroup(obj))
 		}
 	}
 
 	// filter groups that meet the waste threshold
-	var ready []packedObjects
-	var remaining []objects.PackedObject
+	var ready []uploadGroup
+	var remaining []objects.ObjectForUpload
 	for _, g := range groups {
-		if g.wastePct() < s.packingWastePct {
+		if g.wastePct() < s.uploadWastePct {
 			ready = append(ready, g)
 		} else {
 			remaining = append(remaining, g.objects...)
@@ -163,7 +164,7 @@ func (s *Sia) preparePackedObjects() []packedObjects {
 	}
 
 	for _, g := range ready {
-		s.logger.Info("created pack",
+		s.logger.Info("created upload group",
 			zap.Int("objects", len(g.objects)),
 			zap.Int64("size", g.totalSize),
 			zap.Int64("slabs", g.slabs()),
@@ -173,7 +174,7 @@ func (s *Sia) preparePackedObjects() []packedObjects {
 	return ready
 }
 
-func (s *Sia) packingLoop(ctx context.Context) {
+func (s *Sia) uploadLoop(ctx context.Context) {
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
 
@@ -182,51 +183,51 @@ func (s *Sia) packingLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			s.packObjectsIter(ctx)
+			s.uploadObjectsIter(ctx)
 		}
 	}
 }
 
-func (s *Sia) packObjectsIter(ctx context.Context) {
-	// fetch and prepare objects for packing
-	packs := s.preparePackedObjects()
-	if len(packs) == 0 {
-		s.logger.Debug("packing loop tick")
+func (s *Sia) uploadObjectsIter(ctx context.Context) {
+	// fetch and prepare objects for upload
+	groups := s.prepareUploads()
+	if len(groups) == 0 {
+		s.logger.Debug("upload loop tick")
 		return
 	}
 
 	var wg sync.WaitGroup
-	uploadsCh := make(chan packedObjects, packedUploadThreads)
+	uploadsCh := make(chan uploadGroup, numUploadThreads)
 
 	// start upload workers
-	for range packedUploadThreads {
+	for range numUploadThreads {
 		wg.Go(func() {
-			for p := range uploadsCh {
-				s.logger.Info("uploading packed object",
-					zap.Int64("size", p.totalSize),
-					zap.Int64("slabs", p.slabs()),
-					zap.String("waste", fmt.Sprintf("%.2f%%", p.wastePct()*100)),
-					zap.Int("n", len(p.objects)),
+			for g := range uploadsCh {
+				s.logger.Info("uploading object group",
+					zap.Int64("size", g.totalSize),
+					zap.Int64("slabs", g.slabs()),
+					zap.String("waste", fmt.Sprintf("%.2f%%", g.wastePct()*100)),
+					zap.Int("n", len(g.objects)),
 				)
 
-				err := s.uploadPackedObjects(ctx, p)
+				err := s.uploadObjectGroup(ctx, g)
 				if err != nil {
-					s.logger.Error("failed to upload packed object", zap.Error(err))
+					s.logger.Error("failed to upload object group", zap.Error(err))
 				}
 			}
 		})
 	}
 
 	// send uploads to workers
-	for _, p := range packs {
-		uploadsCh <- p
+	for _, g := range groups {
+		uploadsCh <- g
 	}
 	close(uploadsCh)
 
 	wg.Wait()
 }
 
-func (s *Sia) uploadPackedObjects(ctx context.Context, pack packedObjects) error {
+func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 	upload, err := s.sdk.UploadPacked()
 	if err != nil {
 		return fmt.Errorf("failed to create packed upload: %w", err)
@@ -234,13 +235,10 @@ func (s *Sia) uploadPackedObjects(ctx context.Context, pack packedObjects) error
 	defer upload.Close()
 
 	var objIdx []int
-	for i, obj := range pack.objects {
-		rc, err := s.openUpload(obj.Bucket, obj.Name, &objects.Object{
-			FileName:   &obj.Filename,
-			PartsCount: obj.PartsCount,
-		}, 0)
+	for i, obj := range group.objects {
+		rc, err := s.openUpload(obj.Bucket, obj.Name, &obj.Filename, obj.Multipart, 0)
 		if err != nil {
-			s.logger.Error("failed to open upload for packing",
+			s.logger.Error("failed to open upload",
 				zap.String("bucket", obj.Bucket),
 				zap.String("name", obj.Name),
 				zap.String("filename", obj.Filename),
@@ -249,7 +247,7 @@ func (s *Sia) uploadPackedObjects(ctx context.Context, pack packedObjects) error
 		}
 		n, err := upload.Add(ctx, rc)
 		if err != nil {
-			s.logger.Error("failed to add object to packed upload",
+			s.logger.Error("failed to add object to upload",
 				zap.String("bucket", obj.Bucket),
 				zap.String("name", obj.Name),
 				zap.String("filename", obj.Filename),
@@ -257,14 +255,14 @@ func (s *Sia) uploadPackedObjects(ctx context.Context, pack packedObjects) error
 			rc.Close()
 			continue
 		} else if n != obj.Length {
-			s.logger.Warn("unexpected number of bytes added to packed upload",
+			s.logger.Warn("unexpected number of bytes added to upload",
 				zap.String("bucket", obj.Bucket),
 				zap.String("name", obj.Name),
 				zap.String("filename", obj.Filename),
 				zap.Int64("expected", obj.Length),
 				zap.Int64("got", n))
 			rc.Close()
-			return fmt.Errorf("packed upload short write for %s/%s: expected %d bytes, got %d", obj.Bucket, obj.Name, obj.Length, n)
+			return fmt.Errorf("upload short write for %s/%s: expected %d bytes, got %d", obj.Bucket, obj.Name, obj.Length, n)
 		}
 		rc.Close()
 		objIdx = append(objIdx, i)
@@ -273,7 +271,7 @@ func (s *Sia) uploadPackedObjects(ctx context.Context, pack packedObjects) error
 	// finalize upload
 	results, err := upload.Finalize(ctx)
 	if err != nil {
-		s.logger.Error("failed to finalize packed upload", zap.Error(err))
+		s.logger.Error("failed to finalize upload", zap.Error(err))
 		return err
 	} else if len(results) != len(objIdx) {
 		s.logger.Error("finalize returned unexpected number of results",
@@ -284,56 +282,56 @@ func (s *Sia) uploadPackedObjects(ctx context.Context, pack packedObjects) error
 
 	// pin object and finalize in store
 	for i, obj := range results {
-		packObj := pack.objects[objIdx[i]]
+		uploadObj := group.objects[objIdx[i]]
 		if err := s.sdk.PinObject(ctx, obj); err != nil {
-			s.logger.Error("failed to pin packed object",
-				zap.String("bucket", packObj.Bucket),
-				zap.String("name", packObj.Name),
+			s.logger.Error("failed to pin object",
+				zap.String("bucket", uploadObj.Bucket),
+				zap.String("name", uploadObj.Name),
 				zap.Error(err))
 			if delErr := s.sdk.DeleteObject(ctx, obj.ID()); delErr != nil {
 				s.logger.Error("failed to delete object after pin failure",
-					zap.String("bucket", packObj.Bucket),
-					zap.String("name", packObj.Name),
+					zap.String("bucket", uploadObj.Bucket),
+					zap.String("name", uploadObj.Name),
 					zap.Error(delErr))
 			}
 			continue
 		}
 
-		if err := s.store.MarkObjectUploaded(packObj.Bucket, packObj.Name, packObj.Filename, s.sdk.SealObject(obj)); err != nil {
-			if errors.Is(err, objects.ErrObjectModified) {
-				s.logger.Warn("object was modified during packing, skipping",
-					zap.String("bucket", packObj.Bucket),
-					zap.String("name", packObj.Name))
+		if err := s.store.MarkObjectUploaded(uploadObj.Bucket, uploadObj.Name, uploadObj.ContentMD5, s.sdk.SealObject(obj)); err != nil {
+			if errors.Is(err, objects.ErrObjectNotFound) {
+				s.logger.Warn("object was deleted during upload, skipping",
+					zap.String("bucket", uploadObj.Bucket),
+					zap.String("name", uploadObj.Name))
+			} else if errors.Is(err, objects.ErrObjectModified) {
+				s.logger.Warn("object was modified during upload, skipping",
+					zap.String("bucket", uploadObj.Bucket),
+					zap.String("name", uploadObj.Name))
 			} else {
-				s.logger.Error("failed to finalize packed object in store",
-					zap.String("bucket", packObj.Bucket),
-					zap.String("name", packObj.Name),
+				s.logger.Error("failed to finalize object in store",
+					zap.String("bucket", uploadObj.Bucket),
+					zap.String("name", uploadObj.Name),
 					zap.Error(err))
 			}
 
 			// delete pinned object
 			if err := s.sdk.DeleteObject(ctx, obj.ID()); err != nil {
 				s.logger.Error("failed to delete pinned object after finalize failure",
-					zap.String("bucket", packObj.Bucket),
-					zap.String("name", packObj.Name),
+					zap.String("bucket", uploadObj.Bucket),
+					zap.String("name", uploadObj.Name),
 					zap.Error(err))
 			}
 			continue
 		}
 
-		s.removeUploadQuiet(packObj.Filename)
-		s.logger.Debug("packed object uploaded to Sia",
-			zap.String("bucket", packObj.Bucket),
-			zap.String("name", packObj.Name))
+		if err := s.removeUpload(uploadObj.Filename); err != nil && !errors.Is(err, os.ErrNotExist) {
+			s.logger.Error("failed to remove file on disk",
+				zap.String("filename", uploadObj.Filename),
+				zap.Error(err))
+		}
+		s.logger.Debug("object uploaded to Sia",
+			zap.String("bucket", uploadObj.Bucket),
+			zap.String("name", uploadObj.Name))
 	}
 
 	return nil
-}
-
-func (s *Sia) removeUploadQuiet(fileName string) {
-	if err := s.removeUpload(fileName); err != nil && !errors.Is(err, os.ErrNotExist) {
-		s.logger.Error("failed to remove file on disk",
-			zap.String("filename", fileName),
-			zap.Error(err))
-	}
 }

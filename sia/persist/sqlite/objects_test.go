@@ -90,7 +90,7 @@ func TestGetObject(t *testing.T) {
 	// mark the object as uploaded
 	objSdkObj := sdk.Object{}
 	objSealed := objSdkObj.Seal(types.GeneratePrivateKey())
-	if err := store.MarkObjectUploaded(bucket, object, "", objSealed.SealedObject); err != nil {
+	if err := store.MarkObjectUploaded(bucket, object, obj.ContentMD5, objSealed.SealedObject); err != nil {
 		t.Fatal(err)
 	}
 
@@ -122,7 +122,7 @@ func TestGetObject(t *testing.T) {
 	// mark multipart object as uploaded
 	mpSdkObj := sdk.Object{}
 	mpSealed := mpSdkObj.Seal(types.GeneratePrivateKey())
-	if err := store.MarkObjectUploaded(bucket, multipart, multipartUploadID.String(), mpSealed.SealedObject); err != nil {
+	if err := store.MarkObjectUploaded(bucket, multipart, multipartMD5, mpSealed.SealedObject); err != nil {
 		t.Fatal(err)
 	}
 
@@ -761,10 +761,11 @@ func TestOrphanedObjects(t *testing.T) {
 	}
 
 	// put first object and mark it uploaded
-	if err := store.PutObject(accessKeyID, bucket, "a", frand.Entropy128(), nil, 1, new(string), true); err != nil {
+	md5a := frand.Entropy128()
+	if err := store.PutObject(accessKeyID, bucket, "a", md5a, nil, 1, new(string), true); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.MarkObjectUploaded(bucket, "a", "", sealed.SealedObject); err != nil {
+	if err := store.MarkObjectUploaded(bucket, "a", md5a, sealed.SealedObject); err != nil {
 		t.Fatal(err)
 	}
 
@@ -829,10 +830,11 @@ func TestPutObjectOrphan(t *testing.T) {
 	newID := newSealed.ID()
 
 	// put initial object and mark it uploaded
-	if err := store.PutObject(accessKeyID, bucket, "obj", frand.Entropy128(), nil, 1, new(string), true); err != nil {
+	md5old := frand.Entropy128()
+	if err := store.PutObject(accessKeyID, bucket, "obj", md5old, nil, 1, new(string), true); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.MarkObjectUploaded(bucket, "obj", "", oldSealed.SealedObject); err != nil {
+	if err := store.MarkObjectUploaded(bucket, "obj", md5old, oldSealed.SealedObject); err != nil {
 		t.Fatal(err)
 	}
 
@@ -844,7 +846,8 @@ func TestPutObjectOrphan(t *testing.T) {
 	}
 
 	// overwrite with a different object_id - old ID should be orphaned
-	if err := store.PutObject(accessKeyID, bucket, "obj", frand.Entropy128(), nil, 1, new(string), true); err != nil {
+	md5new := frand.Entropy128()
+	if err := store.PutObject(accessKeyID, bucket, "obj", md5new, nil, 1, new(string), true); err != nil {
 		t.Fatal(err)
 	}
 
@@ -861,7 +864,7 @@ func TestPutObjectOrphan(t *testing.T) {
 	}
 
 	// mark new upload and overwrite again with same object_id - should not orphan
-	if err := store.MarkObjectUploaded(bucket, "obj", "", newSealed.SealedObject); err != nil {
+	if err := store.MarkObjectUploaded(bucket, "obj", md5new, newSealed.SealedObject); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.PutObject(accessKeyID, bucket, "obj", frand.Entropy128(), nil, 2, new(string), true); err != nil {
@@ -890,15 +893,16 @@ func TestMarkObjectUploaded(t *testing.T) {
 
 	// create a pending upload
 	fileName := "test-file.obj"
-	if err := store.PutObject(accessKeyID, bucket, object, frand.Entropy128(), nil, 100, &fileName, true); err != nil {
+	contentMD5 := frand.Entropy128()
+	if err := store.PutObject(accessKeyID, bucket, object, contentMD5, nil, 100, &fileName, true); err != nil {
 		t.Fatal(err)
 	}
 
 	sdkObj := sdk.Object{}
 	sealed := sdkObj.Seal(types.GeneratePrivateKey())
 
-	// marking with the correct filename should succeed
-	if err := store.MarkObjectUploaded(bucket, object, fileName, sealed.SealedObject); err != nil {
+	// marking with the correct content MD5 should succeed
+	if err := store.MarkObjectUploaded(bucket, object, contentMD5, sealed.SealedObject); err != nil {
 		t.Fatal(err)
 	}
 
@@ -913,17 +917,17 @@ func TestMarkObjectUploaded(t *testing.T) {
 		t.Fatal("expected sia_object to be set after upload")
 	}
 
-	// marking again with the same filename should return ErrObjectModified
-	// since the first call already cleared it
+	// marking again should return ErrObjectNotFound since the object is
+	// already uploaded
 	sdkObj2 := sdk.Object{}
 	sealed2 := sdkObj2.Seal(types.GeneratePrivateKey())
-	err = store.MarkObjectUploaded(bucket, object, fileName, sealed2.SealedObject)
-	if !errors.Is(err, objects.ErrObjectModified) {
-		t.Fatalf("expected ErrObjectModified, got %v", err)
+	err = store.MarkObjectUploaded(bucket, object, contentMD5, sealed2.SealedObject)
+	if !errors.Is(err, objects.ErrObjectNotFound) {
+		t.Fatalf("expected ErrObjectNotFound, got %v", err)
 	}
 }
 
-func TestObjectsForPacking(t *testing.T) {
+func TestObjectsForUpload(t *testing.T) {
 	const (
 		accessKeyID = "test-accesskey"
 		bucket      = "test-bucket"
@@ -952,12 +956,13 @@ func TestObjectsForPacking(t *testing.T) {
 
 	// insert an object that has been uploaded to Sia, so filename is cleared
 	fn := "uploaded.obj"
-	if err := store.PutObject(accessKeyID, bucket, "uploaded", frand.Entropy128(), nil, 200, &fn, true); err != nil {
+	uploadedMD5 := frand.Entropy128()
+	if err := store.PutObject(accessKeyID, bucket, "uploaded", uploadedMD5, nil, 200, &fn, true); err != nil {
 		t.Fatal(err)
 	}
 	sealObj := sdk.Object{}
 	sealed := sealObj.Seal(types.GeneratePrivateKey())
-	if err := store.MarkObjectUploaded(bucket, "uploaded", fn, sealed.SealedObject); err != nil {
+	if err := store.MarkObjectUploaded(bucket, "uploaded", uploadedMD5, sealed.SealedObject); err != nil {
 		t.Fatal(err)
 	}
 
@@ -977,41 +982,40 @@ func TestObjectsForPacking(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	packed, err := store.ObjectsForPacking()
+	objects, err := store.ObjectsForUpload()
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// "uploaded" should be excluded since its filename was cleared
-	if len(packed) != 4 {
-		t.Fatalf("expected 4 objects, got %d", len(packed))
+	if len(objects) != 4 {
+		t.Fatalf("expected 4 objects, got %d", len(objects))
 	}
 
 	// verify descending size order
-	for i := 1; i < len(packed); i++ {
-		if packed[i].Length > packed[i-1].Length {
+	for i := 1; i < len(objects); i++ {
+		if objects[i].Length > objects[i-1].Length {
 			t.Fatalf("expected descending order, but %s (%d) > %s (%d)",
-				packed[i].Name, packed[i].Length, packed[i-1].Name, packed[i-1].Length)
+				objects[i].Name, objects[i].Length, objects[i-1].Name, objects[i-1].Length)
 		}
 	}
 
-	// verify the multipart object has the correct parts count
-	// and that regular objects have 0
-	for _, obj := range packed {
+	// verify the multipart property is set correctly
+	for _, obj := range objects {
 		if obj.Name == "multipart" {
-			if obj.PartsCount != 2 {
-				t.Fatalf("expected 2 parts for multipart object, got %d", obj.PartsCount)
+			if !obj.Multipart {
+				t.Fatalf("expected multipart object, got non-multipart")
 			}
 			if obj.Length != mpSize {
 				t.Fatalf("expected multipart size %d, got %d", mpSize, obj.Length)
 			}
-		} else if obj.PartsCount != 0 {
-			t.Fatalf("expected 0 parts for %s, got %d", obj.Name, obj.PartsCount)
+		} else if obj.Multipart {
+			t.Fatalf("expected non-multipart object, got multipart for %s", obj.Name)
 		}
 	}
 
 	// verify all returned objects have a filename set
-	for _, obj := range packed {
+	for _, obj := range objects {
 		if obj.Filename == "" {
 			t.Fatalf("expected non-empty filename for %s", obj.Name)
 		}

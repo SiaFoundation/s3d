@@ -161,25 +161,29 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte,
 
 // MarkObjectUploaded transitions a pending upload to a Sia-backed object by
 // setting the object_id, sia_object and cached_at fields while clearing
-// filename. The update only proceeds if the current filename matches
-// expectedFilename, returning ErrObjectModified when zero rows are affected.
-func (s *Store) MarkObjectUploaded(bucket, name, expectedFilename string, siaObject slabs.SealedObject) error {
+// filename. The update targets any pending object matching the bucket and name,
+// returning ErrObjectNotFound if no pending object exists or ErrObjectModified
+// if the stored content MD5 does not match the provided contentMD5.
+func (s *Store) MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, siaObject slabs.SealedObject) error {
 	return s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
+
 		objID := siaObject.ID()
-		res, err := tx.Exec(`
+		var storedMD5 [16]byte
+		err = tx.QueryRow(`
 			UPDATE objects
 			SET object_id = $1, sia_object = $2, filename = NULL, cached_at = $3
-			WHERE bucket_id = $4 AND name = $5 AND filename = $6
-		`, sqlHash256(objID), sqlSiaObject(siaObject), sqlTime(time.Now()), bid, name, expectedFilename)
-		if err != nil {
+			WHERE bucket_id = $4 AND name = $5 AND object_id IS NULL
+			RETURNING content_md5
+		`, sqlHash256(objID), sqlSiaObject(siaObject), sqlTime(time.Now()), bid, name).Scan((*sqlMD5)(&storedMD5))
+		if errors.Is(err, sql.ErrNoRows) {
+			return objects.ErrObjectNotFound
+		} else if err != nil {
 			return err
-		} else if n, err := res.RowsAffected(); err != nil {
-			return err
-		} else if n == 0 {
+		} else if storedMD5 != contentMD5 {
 			return objects.ErrObjectModified
 		}
 		return nil
@@ -303,18 +307,16 @@ func (s *Store) RemoveOrphanedObject(objectID types.Hash256) error {
 	})
 }
 
-// ObjectsForPacking returns all objects stored on disk, ordered by size
-// descending for greedy best-fit slab packing.
-func (s *Store) ObjectsForPacking() ([]objects.PackedObject, error) {
-	var objs []objects.PackedObject
+// ObjectsForUpload returns all objects stored on disk, ordered by size
+// descending for greedy best-fit slab filling.
+func (s *Store) ObjectsForUpload() ([]objects.ObjectForUpload, error) {
+	var objs []objects.ObjectForUpload
 	if err := s.transaction(func(tx *txn) error {
 		rows, err := tx.Query(`
-			SELECT b.name, o.name, o.filename, o.size, COUNT(p.part_number)
+			SELECT b.name, o.name, o.filename, o.content_md5, o.size, EXISTS(SELECT 1 FROM object_parts p WHERE p.bucket_id = o.bucket_id AND p.name = o.name) AS has_parts
 			FROM objects o
 			JOIN buckets b ON b.id = o.bucket_id
-			LEFT JOIN object_parts p ON p.bucket_id = o.bucket_id AND p.name = o.name
 			WHERE o.filename IS NOT NULL
-			GROUP BY o.bucket_id, o.name
 			ORDER BY o.size DESC
 		`)
 		if err != nil {
@@ -323,8 +325,8 @@ func (s *Store) ObjectsForPacking() ([]objects.PackedObject, error) {
 		defer rows.Close()
 
 		for rows.Next() {
-			var obj objects.PackedObject
-			if err := rows.Scan(&obj.Bucket, &obj.Name, &obj.Filename, &obj.Length, &obj.PartsCount); err != nil {
+			var obj objects.ObjectForUpload
+			if err := rows.Scan(&obj.Bucket, &obj.Name, &obj.Filename, (*sqlMD5)(&obj.ContentMD5), &obj.Length, &obj.Multipart); err != nil {
 				return err
 			}
 			objs = append(objs, obj)
