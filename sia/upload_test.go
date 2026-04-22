@@ -71,6 +71,32 @@ func TestUploadGroup(t *testing.T) {
 	if p.tryAdd(objects.ObjectForUpload{Length: 1, Name: "g"}) {
 		t.Fatal("expected tryAdd to fail due to slab cap")
 	}
+
+	// start a fresh group with an object that exceeds maxSlabsPerUpload
+	// 810 bytes = 9 slabs, 90 bytes wasted in the last slab
+	p = uploadGroup{
+		slabSize:       100,
+		uploadWastePct: 0.1,
+
+		objects:   []objects.ObjectForUpload{{Length: 810, Name: "h"}},
+		totalSize: 810,
+	}
+
+	// small objects that fit in the last slab should be accepted
+	if !p.tryAdd(objects.ObjectForUpload{Length: 40, Name: "i"}) {
+		t.Fatal("expected tryAdd to succeed for object fitting last slab")
+	}
+	if !p.tryAdd(objects.ObjectForUpload{Length: 50, Name: "j"}) {
+		t.Fatal("expected tryAdd to succeed for object fitting last slab")
+	}
+	if p.slabs() != 9 {
+		t.Fatalf("expected 9 slabs, got %d", p.slabs())
+	}
+
+	// object that does not fit in remaining space should be rejected
+	if p.tryAdd(objects.ObjectForUpload{Length: 1, Name: "k"}) {
+		t.Fatal("expected tryAdd to fail")
+	}
 }
 
 // uploadStore is a minimal Store stub for testing prepareUploads.
