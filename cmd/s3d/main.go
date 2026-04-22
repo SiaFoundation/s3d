@@ -24,15 +24,14 @@ import (
 )
 
 const (
-	recoveryPhraseEnv = "S3D_RECOVERY_PHRASE"
-
-	configFileEnvVar = "S3D_CONFIG_FILE"
-	dataDirEnvVar    = "S3D_DATA_DIR"
+	recoveryPhraseEnvVar = "S3D_RECOVERY_PHRASE"
+	configFileEnvVar     = "S3D_CONFIG_FILE"
+	dataDirEnvVar        = "S3D_DATA_DIR"
 )
 
 var cfg = Config{
 	ApiAddress:     "127.0.0.1:8000",
-	RecoveryPhrase: os.Getenv(recoveryPhraseEnv),
+	RecoveryPhrase: os.Getenv(recoveryPhraseEnvVar),
 	Directory:      os.Getenv(dataDirEnvVar),
 	Log: Log{
 		File: FileLog{
