@@ -901,6 +901,13 @@ func TestMarkObjectUploaded(t *testing.T) {
 	sdkObj := sdk.Object{}
 	sealed := sdkObj.Seal(types.GeneratePrivateKey())
 
+	// marking with a different content MD5 should return ErrObjectModified
+	wrongMD5 := frand.Entropy128()
+	err := store.MarkObjectUploaded(bucket, object, wrongMD5, sealed.SealedObject)
+	if !errors.Is(err, objects.ErrObjectModified) {
+		t.Fatalf("expected ErrObjectModified, got %v", err)
+	}
+
 	// marking with the correct content MD5 should succeed
 	if err := store.MarkObjectUploaded(bucket, object, contentMD5, sealed.SealedObject); err != nil {
 		t.Fatal(err)

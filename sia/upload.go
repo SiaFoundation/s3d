@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"sync"
 	"time"
 
+	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
@@ -153,26 +153,14 @@ func (s *Sia) prepareUploads() []uploadGroup {
 	}
 
 	// filter groups that meet the waste threshold
-	var ready []uploadGroup
-	var remaining []objects.ObjectForUpload
+	filtered := groups[:0]
 	for _, g := range groups {
 		if g.wastePct() < s.uploadWastePct {
-			ready = append(ready, g)
-		} else {
-			remaining = append(remaining, g.objects...)
+			filtered = append(filtered, g)
 		}
 	}
 
-	// try and fill gaps with remaining objects
-	for _, obj := range remaining {
-		for i := range ready {
-			if ready[i].tryAdd(obj) {
-				break
-			}
-		}
-	}
-
-	for _, g := range ready {
+	for _, g := range filtered {
 		s.logger.Info("created upload group",
 			zap.Int("objects", len(g.objects)),
 			zap.Int64("size", g.totalSize),
@@ -180,7 +168,7 @@ func (s *Sia) prepareUploads() []uploadGroup {
 			zap.String("waste", fmt.Sprintf("%.2f%%", g.wastePct()*100)))
 	}
 
-	return ready
+	return filtered
 }
 
 func (s *Sia) uploadLoop(ctx context.Context) {
@@ -332,14 +320,27 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 			continue
 		}
 
-		if err := s.removeUpload(uploadObj.Filename); err != nil && !errors.Is(err, os.ErrNotExist) {
-			s.logger.Error("failed to remove file on disk",
-				zap.String("filename", uploadObj.Filename),
-				zap.Error(err))
-		}
 		s.logger.Debug("object uploaded to Sia",
 			zap.String("bucket", uploadObj.Bucket),
 			zap.String("name", uploadObj.Name))
+
+		if uploadObj.Multipart {
+			if uploadID, err := s3.ParseUploadID(uploadObj.Filename); err != nil {
+				s.logger.Warn("failed to parse multipart upload ID",
+					zap.String("uploadID", uploadObj.Filename),
+					zap.Error(err))
+			} else if err := s.removeMultipartUploadDir(uploadID); err != nil {
+				s.logger.Error("failed to remove multipart upload directory",
+					zap.String("uploadID", uploadObj.Filename),
+					zap.Error(err))
+			}
+		} else {
+			if err := s.removeUpload(uploadObj.Filename); err != nil {
+				s.logger.Error("failed to remove file on disk",
+					zap.String("filename", uploadObj.Filename),
+					zap.Error(err))
+			}
+		}
 	}
 
 	return nil
