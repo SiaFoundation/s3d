@@ -1,8 +1,6 @@
 package sia
 
 import (
-	"bytes"
-	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -134,9 +132,8 @@ func TestPrepareUploads(t *testing.T) {
 	}
 }
 
-// TestOpenAndRemoveUpload tests that an upload file can be removed while it is
-// still open, and the open handle can still be read from and matches the
-// original data.
+// TestOpenAndRemoveUpload tests the locking mechanism that defers file
+// deletion until all locks are released.
 func TestOpenAndRemoveUpload(t *testing.T) {
 	dir := t.TempDir()
 	uploadsDir := filepath.Join(dir, UploadsDirectory)
@@ -144,34 +141,61 @@ func TestOpenAndRemoveUpload(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := &Sia{directory: dir}
+	s := &Sia{directory: dir, lockedUploads: make(map[string]*lockedUpload)}
 
 	// write random data to an upload file
 	data := frand.Bytes(256)
 	fileName := "test-upload"
-	if err := os.WriteFile(filepath.Join(uploadsDir, fileName), data, 0600); err != nil {
+	filePath := filepath.Join(uploadsDir, fileName)
+	if err := os.WriteFile(filePath, data, 0600); err != nil {
 		t.Fatal(err)
 	}
 
-	// open the upload
-	rc, err := s.openUpload("bucket", "name", &fileName, false, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// acquire a lock on the upload
+	unlock := s.lockUpload(fileName)
 
-	// remove the upload while the file handle is still open
+	// removeUpload while the lock is held should mark deleted but not
+	// remove the file from disk
 	if err := s.removeUpload(fileName); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := os.Stat(filePath); err != nil {
+		t.Fatal("file should still exist on disk while lock is held:", err)
+	}
 
-	// read from the still open handle and compare
-	got, err := io.ReadAll(rc)
-	if err != nil {
+	// acquiring a second lock should also work
+	unlock2 := s.lockUpload(fileName)
+
+	// releasing the first lock should not remove the file yet because the
+	// second lock is still held
+	unlock()
+	if _, err := os.Stat(filePath); err != nil {
+		t.Fatal("file should still exist on disk while second lock is held:", err)
+	}
+
+	// releasing the second lock should trigger the deferred removal
+	unlock2()
+	if _, err := os.Stat(filePath); !os.IsNotExist(err) {
+		t.Fatal("file should have been removed after all locks were released")
+	}
+
+	// verify the lockedUploads map is cleaned up
+	s.lockedUploadsMu.Lock()
+	if _, ok := s.lockedUploads[fileName]; ok {
+		t.Fatal("lockedUploads entry should have been cleaned up")
+	}
+	s.lockedUploadsMu.Unlock()
+
+	// removing a file without any lock should delete it immediately
+	fileName2 := "test-upload-2"
+	filePath2 := filepath.Join(uploadsDir, fileName2)
+	if err := os.WriteFile(filePath2, data, 0600); err != nil {
 		t.Fatal(err)
 	}
-	rc.Close()
-
-	if !bytes.Equal(got, data) {
-		t.Fatal("data read from open handle does not match original")
+	if err := s.removeUpload(fileName2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filePath2); !os.IsNotExist(err) {
+		t.Fatal("file should have been removed immediately when no lock is held")
 	}
 }
