@@ -62,10 +62,10 @@ type Sia struct {
 type SDK interface {
 	DeleteObject(ctx context.Context, id types.Hash256) error
 	Download(ctx context.Context, w io.Writer, obj sdk.Object, rnge *s3.ObjectRange) error
-	Object(ctx context.Context, id types.Hash256) (sdk.Object, error)
+	ObjectEvents(ctx context.Context, cursor sdk.ObjectsCursor, limit int) ([]sdk.ObjectEvent, error)
 	Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
-	SealObject(obj sdk.Object) slabs.SealedObject
-	UnsealObject(sealed slabs.SealedObject) (sdk.Object, error)
+	SealObject(obj sdk.Object) objects.SiaObject
+	UnsealObject(siaObject objects.SiaObject) (sdk.Object, error)
 }
 
 // Store represents the storage backend used by the Sia backend.
@@ -76,13 +76,15 @@ type Store interface {
 	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (*string, error)
 	GetObject(accessKeyID *string, bucket, object string, partNumber *int32) (*objects.Object, error)
 	HeadBucket(accessKeyID, bucket string) error
+	ObjectsCursor() (sdk.ObjectsCursor, error)
+	SetObjectsCursor(cursor sdk.ObjectsCursor) error
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
 	ListObjects(accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error)
 	ObjectParts(bucket, name string) ([]objects.Part, error)
 	OrphanedObjects(limit int) ([]types.Hash256, error)
 	PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string, updateModTime bool) error
-	MarkObjectUploaded(bucket, name string, siaObject slabs.SealedObject) error
-	UpdateSiaObject(siaObject slabs.SealedObject, cachedAt time.Time) error
+	MarkObjectUploaded(bucket, name string, siaObject objects.SiaObject) error
+	UpdateSiaObject(siaObject objects.SiaObject) (bool, error)
 	RemoveOrphanedObject(objectID types.Hash256) error
 	AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) error
 	AddMultipartPart(bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (string, error)
@@ -120,6 +122,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 	// directory on startup
 
 	go sia.processOrphansLoop(ctx)
+	go sia.syncMetadataLoop(ctx)
 
 	return sia, nil
 }
@@ -195,4 +198,81 @@ func (s *Sia) LoadSecret(ctx context.Context, accessKeyID string) (auth.SecretAc
 		return nil, s3errs.ErrInvalidAccessKeyId
 	}
 	return slices.Clone(secret), nil
+}
+
+// syncMetadataLoop periodically syncs object metadata from the indexer.
+func (s *Sia) syncMetadataLoop(ctx context.Context) {
+	t := time.NewTicker(5 * time.Minute)
+	defer t.Stop()
+
+	// sync once on startup
+	s.syncMetadataIter(ctx)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.syncMetadataIter(ctx)
+		}
+	}
+}
+
+// syncMetadataIter fetches object events from the indexer since the last sync
+// and applies metadata updates to local objects.
+func (s *Sia) syncMetadataIter(ctx context.Context) {
+	const batchSize = 100
+
+	// fetch the cursor
+	cursor, err := s.store.ObjectsCursor()
+	if err != nil {
+		s.logger.Error("failed to get objects cursor", zap.Error(err))
+		return
+	}
+
+	// fetch and apply events
+	var synced int
+	for ctx.Err() == nil {
+		events, err := s.sdk.ObjectEvents(ctx, cursor, batchSize)
+		if err != nil {
+			s.logger.Error("failed to fetch object events", zap.Error(err))
+			break
+		} else if len(events) == 0 {
+			break
+		}
+
+		var failed bool
+		for _, ev := range events {
+			if ev.Deleted || ev.Object == nil {
+				continue
+			}
+
+			sealed := s.sdk.SealObject(*ev.Object)
+			updated, err := s.store.UpdateSiaObject(sealed)
+			if err != nil {
+				s.logger.Error("failed to update Sia object in store",
+					zap.Stringer("objectID", ev.Object.ID()),
+					zap.Error(err))
+				failed = true
+				break
+			} else if updated {
+				synced++
+			}
+		}
+		if failed {
+			break
+		}
+
+		// advance the cursor to the last event
+		last := events[len(events)-1]
+		cursor = sdk.ObjectsCursor{After: last.UpdatedAt, Key: last.Key}
+		if err := s.store.SetObjectsCursor(cursor); err != nil {
+			s.logger.Error("failed to update objects cursor", zap.Error(err))
+			break
+		}
+	}
+
+	if synced > 0 {
+		s.logger.Info("synced object metadata", zap.Int("synced", synced))
+	}
 }

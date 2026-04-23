@@ -12,6 +12,7 @@ import (
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"github.com/SiaFoundation/s3d/sia/objects"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"go.sia.tech/core/types"
@@ -89,8 +90,8 @@ func TestGetObject(t *testing.T) {
 	obj, err := store.GetObject(aws.String(accessKeyID), bucket, object, nil)
 	if err != nil {
 		t.Fatal(err)
-	} else if obj.ID != nil {
-		t.Fatalf("expected nil object ID, got %v", obj.ID)
+	} else if obj.SiaObject != nil {
+		t.Fatalf("expected nil SiaObject, got %v", obj.SiaObject)
 	} else if obj.Length != int64(objLength) {
 		t.Fatalf("expected object length %d, got %d", objLength, obj.Length)
 	} else if obj.ContentMD5 != objMD5 {
@@ -100,7 +101,7 @@ func TestGetObject(t *testing.T) {
 	}
 
 	// mark the object as uploaded
-	if err := store.MarkObjectUploaded(bucket, object, objSealed.SealedObject); err != nil {
+	if err := store.MarkObjectUploaded(bucket, object, objects.SiaObject{ID: objID, Sealed: objSealed.SealedObject}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -108,16 +109,14 @@ func TestGetObject(t *testing.T) {
 	obj, err = store.GetObject(&accessKeyID, bucket, object, nil)
 	if err != nil {
 		t.Fatal(err)
-	} else if obj.ID == nil || *obj.ID != objID {
-		t.Fatalf("expected object ID %v, got %v", objID, obj.ID)
+	} else if obj.SiaObject == nil || obj.SiaObject.ID != objID {
+		t.Fatalf("expected object ID %v, got %v", objID, obj.SiaObject)
 	}
 
 	// get object with part number 1
 	objPart1, err := store.GetObject(&accessKeyID, bucket, object, aws.Int32(1))
 	if err != nil {
 		t.Fatal(err)
-	} else if objPart1.ID == nil || *objPart1.ID != objID {
-		t.Fatalf("expected object ID %v, got %v", objID, objPart1.ID)
 	} else if objPart1.Offset != 0 {
 		t.Fatalf("expected object offset 0, got %d", objPart1.Offset)
 	} else if objPart1.Length != int64(objLength) {
@@ -129,7 +128,7 @@ func TestGetObject(t *testing.T) {
 	}
 
 	// mark multipart object as uploaded
-	if err := store.MarkObjectUploaded(bucket, multipart, multipartSealed.SealedObject); err != nil {
+	if err := store.MarkObjectUploaded(bucket, multipart, objects.SiaObject{ID: multipartID, Sealed: multipartSealed.SealedObject}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -137,8 +136,6 @@ func TestGetObject(t *testing.T) {
 	multipartPart2, err := store.GetObject(aws.String(accessKeyID), bucket, multipart, aws.Int32(2))
 	if err != nil {
 		t.Fatal(err)
-	} else if multipartPart2.ID == nil || *multipartPart2.ID != multipartID {
-		t.Fatalf("expected object ID %v, got %v", multipartID, multipartPart2.ID)
 	} else if multipartPart2.Offset != int64(s3.MinUploadPartSize) {
 		t.Fatalf("expected object offset %d, got %d", s3.MinUploadPartSize, multipartPart2.Offset)
 	} else if multipartPart2.Length != 2 {
@@ -620,8 +617,8 @@ func BenchmarkListObjects(b *testing.B) {
 						layer4 := filepath.Join(layer3, name)
 
 						_, err = tx.Exec(`
-			INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at, sia_object, cached_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, bid, layer4, sqlHash256(objID), sqlMD5(contentMD5), []byte{}, size, sqlTime(now), sqlSiaObject(sealed.SealedObject), sqlTime(now))
+			INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at, sia_object)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, bid, layer4, sqlHash256(objID), sqlMD5(contentMD5), []byte{}, size, sqlTime(now), sqlSiaObject(sealed.SealedObject))
 					}
 				}
 			}
@@ -770,7 +767,7 @@ func TestOrphanedObjects(t *testing.T) {
 	if err := store.PutObject(accessKeyID, bucket, "a", frand.Entropy128(), nil, 1, new(string), true); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.MarkObjectUploaded(bucket, "a", sealed.SealedObject); err != nil {
+	if err := store.MarkObjectUploaded(bucket, "a", objects.SiaObject{ID: objID, Sealed: sealed.SealedObject}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -838,7 +835,7 @@ func TestPutObjectOrphan(t *testing.T) {
 	if err := store.PutObject(accessKeyID, bucket, "obj", frand.Entropy128(), nil, 1, new(string), true); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.MarkObjectUploaded(bucket, "obj", oldSealed.SealedObject); err != nil {
+	if err := store.MarkObjectUploaded(bucket, "obj", objects.SiaObject{ID: oldID, Sealed: oldSealed.SealedObject}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -867,7 +864,7 @@ func TestPutObjectOrphan(t *testing.T) {
 	}
 
 	// mark new upload and overwrite again with same object_id - should not orphan
-	if err := store.MarkObjectUploaded(bucket, "obj", newSealed.SealedObject); err != nil {
+	if err := store.MarkObjectUploaded(bucket, "obj", objects.SiaObject{ID: newID, Sealed: newSealed.SealedObject}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.PutObject(accessKeyID, bucket, "obj", frand.Entropy128(), nil, 2, new(string), true); err != nil {
@@ -879,5 +876,118 @@ func TestPutObjectOrphan(t *testing.T) {
 		t.Fatal(err)
 	} else if len(orphans) != 1 || orphans[0] != newID {
 		t.Fatalf("expected orphaned ID %v, got %v", newID, orphans)
+	}
+}
+
+func TestObjectsCursor(t *testing.T) {
+	store := initTestDB(t, zaptest.NewLogger(t))
+
+	// cursor should start at epoch zero
+	cursor, err := store.ObjectsCursor()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cursor.After.Unix() != 0 {
+		t.Fatalf("expected unix epoch cursor time, got %v", cursor.After)
+	}
+	if cursor.Key != (types.Hash256{}) {
+		t.Fatalf("expected zero cursor key, got %v", cursor.Key)
+	}
+
+	// set cursor and verify it persists
+	now := time.Now().Truncate(time.Second)
+	key := types.Hash256{1, 2, 3}
+	if err := store.SetObjectsCursor(sdk.ObjectsCursor{After: now, Key: key}); err != nil {
+		t.Fatal(err)
+	}
+	cursor, err = store.ObjectsCursor()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cursor.After.Equal(now) {
+		t.Fatalf("expected cursor at %v, got %v", now, cursor.After)
+	}
+	if cursor.Key != key {
+		t.Fatalf("expected cursor key %v, got %v", key, cursor.Key)
+	}
+
+	// overwrite with a new cursor
+	later := now.Add(5 * time.Minute)
+	key2 := types.Hash256{4, 5, 6}
+	if err := store.SetObjectsCursor(sdk.ObjectsCursor{After: later, Key: key2}); err != nil {
+		t.Fatal(err)
+	}
+	cursor, err = store.ObjectsCursor()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cursor.After.Equal(later) {
+		t.Fatalf("expected cursor at %v, got %v", later, cursor.After)
+	}
+	if cursor.Key != key2 {
+		t.Fatalf("expected cursor key %v, got %v", key2, cursor.Key)
+	}
+}
+
+func TestUpdateSiaObject(t *testing.T) {
+	const (
+		accessKeyID = "test-accesskey"
+		bucket      = "test-bucket"
+	)
+
+	store := initTestDB(t, zaptest.NewLogger(t))
+	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	sealKey := types.GeneratePrivateKey()
+	sdkObj := sdk.NewEmptyObject()
+	sealed := sdkObj.Seal(sealKey)
+	siaObj := objects.SiaObject{ID: sealed.ID(), Sealed: sealed.SealedObject}
+
+	// updating a non-existent object should return false
+	updated, err := store.UpdateSiaObject(siaObj)
+	if err != nil {
+		t.Fatal(err)
+	} else if updated {
+		t.Fatal("expected no update for non-existent object")
+	}
+
+	// put and mark an object as uploaded
+	if err := store.PutObject(accessKeyID, bucket, "obj", frand.Entropy128(), nil, 1, new(string), true); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkObjectUploaded(bucket, "obj", siaObj); err != nil {
+		t.Fatal(err)
+	}
+
+	// verify the stored sia_object matches
+	aki := accessKeyID
+	before, err := store.GetObject(&aki, bucket, "obj", nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if before.SiaObject == nil {
+		t.Fatal("expected sia_object to be set")
+	} else if before.SiaObject.ID != siaObj.ID {
+		t.Fatal("unexpected object ID")
+	}
+
+	// updating with a matching object ID should succeed
+	updated, err = store.UpdateSiaObject(siaObj)
+	if err != nil {
+		t.Fatal(err)
+	} else if !updated {
+		t.Fatal("expected update for existing object")
+	}
+
+	// after removing the object, updating should return false again
+	if _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "obj"}); err != nil {
+		t.Fatal(err)
+	}
+	updated, err = store.UpdateSiaObject(siaObj)
+	if err != nil {
+		t.Fatal(err)
+	} else if updated {
+		t.Fatal("expected no update after object deleted")
 	}
 }

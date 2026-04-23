@@ -103,8 +103,8 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 		// the upload_id serves as the filename since parts are stored
 		// under the upload directory
 		_, err = tx.Exec(`
-			INSERT INTO objects (bucket_id, name, content_md5, metadata, size, updated_at, filename, cached_at)
-			SELECT bucket_id, name, $1, metadata, $2, $3, $4, 0
+			INSERT INTO objects (bucket_id, name, content_md5, metadata, size, updated_at, filename)
+			SELECT bucket_id, name, $1, metadata, $2, $3, $4
 			FROM multipart_uploads
 			WHERE upload_id = $5
 			ON CONFLICT(bucket_id, name) DO UPDATE SET
@@ -114,8 +114,7 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 				size = excluded.size,
 				updated_at = excluded.updated_at,
 				filename = excluded.filename,
-				sia_object = NULL,
-				cached_at = 0
+				sia_object = NULL
 		`, sqlMD5(contentMD5), contentLength, sqlTime(time.Now()), uploadID.String(), sqlUploadID(uploadID))
 		if err != nil {
 			return err

@@ -33,8 +33,6 @@ CREATE TABLE objects (
     updated_at INTEGER NOT NULL,
     filename TEXT,
     sia_object BLOB,
-    cached_at INTEGER NOT NULL,
-    -- file is either stored on disk or on Sia
     CHECK ((sia_object IS NULL AND object_id IS NULL AND filename IS NOT NULL) OR (sia_object IS NOT NULL AND object_id IS NOT NULL AND filename IS NULL) OR (object_id IS NULL AND filename IS NULL AND size = 0)),
     PRIMARY KEY (bucket_id, name)
 ) WITHOUT ROWID;
@@ -81,7 +79,9 @@ CREATE TABLE orphaned_objects (
 CREATE TABLE global_settings (
 	id INTEGER PRIMARY KEY NOT NULL DEFAULT 0 CHECK (id = 0), -- enforce a single row
 	db_version INTEGER NOT NULL, -- used for migrations
-	app_key BLOB
+	app_key BLOB,
+	objects_cursor_at INTEGER NOT NULL DEFAULT 0,
+	objects_cursor_key BLOB NOT NULL DEFAULT X'0000000000000000000000000000000000000000000000000000000000000000'
 );
 
 -- initialize the global settings table
