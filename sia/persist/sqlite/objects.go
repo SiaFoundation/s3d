@@ -132,12 +132,20 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, partNumber 
 	}
 
 	// part specified, return part info
+	var objectID sql.Null[sqlHash256]
+	var siaObj sql.Null[sqlSiaObject]
 	err = tx.QueryRow(`
-		SELECT o.metadata, o.updated_at, p.offset, p.content_length, p.content_md5
+		SELECT o.filename, o.sia_object_id, o.sia_object, o.metadata, o.updated_at, p.offset, p.content_length, p.content_md5
 		FROM object_parts p
 		JOIN objects o ON o.bucket_id = p.bucket_id AND o.name = p.name
 		WHERE o.bucket_id = $1 AND o.name = $2 AND p.part_number = $3
-	`, bid, name, *partNumber).Scan((*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Offset, &obj.Length, (*sqlMD5)(&obj.ContentMD5))
+	`, bid, name, *partNumber).Scan(&obj.FileName, &objectID, &siaObj, (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Offset, &obj.Length, (*sqlMD5)(&obj.ContentMD5))
+	if objectID.Valid && siaObj.Valid {
+		obj.SiaObject = &objects.SiaObject{
+			ID:     types.Hash256(objectID.V),
+			Sealed: slabs.SealedObject(siaObj.V),
+		}
+	}
 	return err
 }
 
@@ -183,9 +191,8 @@ func (s *Store) MarkObjectUploaded(bucket, name string, siaObject objects.SiaObj
 
 // UpdateSiaObject refreshes the sealed object for all uploaded objects with the
 // corresponding object ID. Returns false if no matching object exists locally.
-func (s *Store) UpdateSiaObject(siaObject objects.SiaObject) (bool, error) {
-	var updated bool
-	return updated, s.transaction(func(tx *txn) error {
+func (s *Store) UpdateSiaObject(siaObject objects.SiaObject) (updated bool, err error) {
+	err = s.transaction(func(tx *txn) error {
 		res, err := tx.Exec(`
 			UPDATE objects SET sia_object = $1
 			WHERE sia_object_id = $2
@@ -200,6 +207,7 @@ func (s *Store) UpdateSiaObject(siaObject objects.SiaObject) (bool, error) {
 		updated = n > 0
 		return nil
 	})
+	return
 }
 
 // CopyObject atomically reads the source object and writes it to the

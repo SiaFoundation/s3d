@@ -153,6 +153,65 @@ func TestGetObject(t *testing.T) {
 	}
 }
 
+func TestGetObjectPartFields(t *testing.T) {
+	const (
+		accessKeyID = "test-accesskey"
+		bucket      = "test-bucket"
+		name        = "multipart-obj"
+	)
+
+	store := initTestDB(t, zaptest.NewLogger(t))
+	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	uploadID := s3.NewUploadID()
+	if err := store.CreateMultipartUpload(bucket, name, uploadID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AddMultipartPart(bucket, name, uploadID, "part-1", 1, frand.Entropy128(), s3.MinUploadPartSize); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AddMultipartPart(bucket, name, uploadID, "part-2", 2, frand.Entropy128(), 64); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteMultipartUpload(bucket, name, uploadID, frand.Entropy128(), s3.MinUploadPartSize+64); err != nil {
+		t.Fatal(err)
+	}
+
+	// pending multipart: fetching part 1 should populate FileName
+	aki := accessKeyID
+	obj, err := store.GetObject(&aki, bucket, name, aws.Int32(1))
+	if err != nil {
+		t.Fatal(err)
+	} else if obj.FileName == nil {
+		t.Fatal("expected FileName to be set for pending multipart part")
+	} else if obj.SiaObject != nil {
+		t.Fatal("expected nil SiaObject for pending multipart part")
+	}
+
+	// mark as uploaded to Sia
+	sealKey := types.GeneratePrivateKey()
+	sdkObj := sdk.NewEmptyObject()
+	sealed := sdkObj.Seal(sealKey)
+	siaObj := objects.SiaObject{ID: sealed.ID(), Sealed: sealed.SealedObject}
+	if err := store.MarkObjectUploaded(bucket, name, siaObj); err != nil {
+		t.Fatal(err)
+	}
+
+	// after upload: fetching part 2 should populate SiaObject
+	obj, err = store.GetObject(&aki, bucket, name, aws.Int32(2))
+	if err != nil {
+		t.Fatal(err)
+	} else if obj.FileName != nil {
+		t.Fatal("expected nil FileName after upload")
+	} else if obj.SiaObject == nil {
+		t.Fatal("expected SiaObject to be set after upload")
+	} else if obj.SiaObject.ID != siaObj.ID {
+		t.Fatalf("expected SiaObject ID %v, got %v", siaObj.ID, obj.SiaObject.ID)
+	}
+}
+
 func TestListObjects(t *testing.T) {
 	log := zaptest.NewLogger(t)
 	fp := filepath.Join(t.TempDir(), "s3d.sqlite3")
@@ -617,7 +676,7 @@ func BenchmarkListObjects(b *testing.B) {
 						layer4 := filepath.Join(layer3, name)
 
 						_, err = tx.Exec(`
-			INSERT INTO objects (bucket_id, name, sia_sia_object_id, content_md5, metadata, size, updated_at, sia_object)
+			INSERT INTO objects (bucket_id, name, sia_object_id, content_md5, metadata, size, updated_at, sia_object)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, bid, layer4, sqlHash256(objID), sqlMD5(contentMD5), []byte{}, size, sqlTime(now), sqlSiaObject(sealed.SealedObject))
 					}
 				}

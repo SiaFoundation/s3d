@@ -198,14 +198,17 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 		rc, err := s.openUpload(bucket, object, obj, offset)
 		if errors.Is(err, fs.ErrNotExist) {
 			// the upload loop moved the file to Sia between our GetObject
-			// and file open, re-fetch to get the updated metadata
+			// and file open, re-fetch to get the updated metadata and retry
 			obj, err = s.store.GetObject(accessKeyID, bucket, object, partNumber)
 			if err != nil {
 				return nil, err
+			} else if obj.FileName != nil {
+				rc, err = s.openUpload(bucket, object, obj, offset)
 			}
-		} else if err != nil {
+		}
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return nil, fmt.Errorf("failed to open pending upload file: %w", err)
-		} else {
+		} else if rc != nil {
 			if resp.Range != nil {
 				resp.Body = readCloser{Reader: io.LimitReader(rc, resp.Range.Length), Closer: rc}
 			} else {
@@ -216,8 +219,7 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 	}
 
 	if obj.SiaObject == nil {
-		// under normal circumstances, this
-		return nil, fmt.Errorf("object has no Sia metadata")
+		return nil, fmt.Errorf("object cannot be found on disk or in Sia")
 	}
 	siaObj, err := s.sdk.UnsealObject(*obj.SiaObject)
 	if err != nil {

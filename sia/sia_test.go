@@ -1,11 +1,13 @@
 package sia_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 
@@ -71,10 +73,18 @@ func (s *MemorySDK) ObjectEvents(_ context.Context, cursor sdk.ObjectsCursor, li
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	sorted := slices.Clone(s.events)
+	slices.SortFunc(sorted, func(a, b sdk.ObjectEvent) int {
+		if c := a.UpdatedAt.Compare(b.UpdatedAt); c != 0 {
+			return c
+		}
+		return bytes.Compare(a.Key[:], b.Key[:])
+	})
+
 	var filtered []sdk.ObjectEvent
-	for _, ev := range s.events {
+	for _, ev := range sorted {
 		after := ev.UpdatedAt.After(cursor.After) ||
-			(ev.UpdatedAt.Equal(cursor.After) && ev.Key != cursor.Key)
+			(ev.UpdatedAt.Equal(cursor.After) && bytes.Compare(ev.Key[:], cursor.Key[:]) > 0)
 		if !after {
 			continue
 		}
