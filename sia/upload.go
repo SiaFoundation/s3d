@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
@@ -325,11 +324,7 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 			zap.String("name", uploadObj.Name))
 
 		if uploadObj.Multipart {
-			if uploadID, err := s3.ParseUploadID(uploadObj.Filename); err != nil {
-				s.logger.Warn("failed to parse multipart upload ID",
-					zap.String("uploadID", uploadObj.Filename),
-					zap.Error(err))
-			} else if err := s.removeMultipartUploadDir(uploadID); err != nil {
+			if err := s.removeMultipartUploadDir(uploadObj.Filename); err != nil {
 				s.logger.Error("failed to remove multipart upload directory",
 					zap.String("uploadID", uploadObj.Filename),
 					zap.Error(err))
