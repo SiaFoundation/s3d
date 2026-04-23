@@ -105,7 +105,7 @@ func TestGetObject(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// re-fetch and verify the object_id is now set
+	// re-fetch and verify the sia_object_id is now set
 	obj, err = store.GetObject(&accessKeyID, bucket, object, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -617,7 +617,7 @@ func BenchmarkListObjects(b *testing.B) {
 						layer4 := filepath.Join(layer3, name)
 
 						_, err = tx.Exec(`
-			INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at, sia_object)
+			INSERT INTO objects (bucket_id, name, sia_sia_object_id, content_md5, metadata, size, updated_at, sia_object)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, bid, layer4, sqlHash256(objID), sqlMD5(contentMD5), []byte{}, size, sqlTime(now), sqlSiaObject(sealed.SealedObject))
 					}
 				}
@@ -846,7 +846,7 @@ func TestPutObjectOrphan(t *testing.T) {
 		t.Fatal("first put should not orphan anything")
 	}
 
-	// overwrite with a different object_id - old ID should be orphaned
+	// overwrite with a different sia_object_id - old ID should be orphaned
 	if err := store.PutObject(accessKeyID, bucket, "obj", frand.Entropy128(), nil, 1, new(string), true); err != nil {
 		t.Fatal(err)
 	}
@@ -863,7 +863,7 @@ func TestPutObjectOrphan(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// mark new upload and overwrite again with same object_id - should not orphan
+	// mark new upload and overwrite again with same sia_object_id - should not orphan
 	if err := store.MarkObjectUploaded(bucket, "obj", objects.SiaObject{ID: newID, Sealed: newSealed.SealedObject}); err != nil {
 		t.Fatal(err)
 	}

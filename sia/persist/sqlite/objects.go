@@ -35,7 +35,7 @@ func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (
 		var updatedAt time.Time
 		err = tx.QueryRow(`
 			DELETE FROM objects WHERE bucket_id = $1 AND name = $2
-			RETURNING filename, object_id, content_md5, size, updated_at
+			RETURNING filename, sia_object_id, content_md5, size, updated_at
 		`, bid, objectID.Key).Scan(&fileName, &deletedID, (*sqlMD5)(&contentMD5), &size, (*sqlTime)(&updatedAt))
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil // object doesn't exist, nothing to delete
@@ -113,7 +113,7 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, partNumber 
 		var objectID sql.Null[sqlHash256]
 		var siaObj sql.Null[sqlSiaObject]
 		err := tx.QueryRow(`
-			SELECT filename, object_id, metadata, updated_at, size, content_md5, sia_object
+			SELECT filename, sia_object_id, metadata, updated_at, size, content_md5, sia_object
 			FROM objects
 			WHERE bucket_id = $1 AND name = $2
 		`, bid, name).Scan(&obj.FileName, &objectID, (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Length, (*sqlMD5)(&obj.ContentMD5), &siaObj)
@@ -157,8 +157,8 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte,
 }
 
 // MarkObjectUploaded transitions a pending upload to a Sia-backed object by
-// setting the object_id and sia_object fields while clearing filename.
-// Fails if the object already has an object_id.
+// setting the sia_object_id and sia_object columns while clearing filename.
+// Fails if the object already has a sia_object_id.
 func (s *Store) MarkObjectUploaded(bucket, name string, siaObject objects.SiaObject) error {
 	return s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
@@ -167,15 +167,15 @@ func (s *Store) MarkObjectUploaded(bucket, name string, siaObject objects.SiaObj
 		}
 		res, err := tx.Exec(`
 			UPDATE objects
-			SET object_id = $1, sia_object = $2, filename = NULL
-			WHERE bucket_id = $3 AND name = $4 AND object_id IS NULL
+			SET sia_object_id = $1, sia_object = $2, filename = NULL
+			WHERE bucket_id = $3 AND name = $4 AND sia_object_id IS NULL
 		`, sqlHash256(siaObject.ID), sqlSiaObject(siaObject.Sealed), bid, name)
 		if err != nil {
 			return err
 		} else if n, err := res.RowsAffected(); err != nil {
 			return err
 		} else if n == 0 {
-			return fmt.Errorf("object already has an object ID or does not exist")
+			return fmt.Errorf("object already has a sia_object_id or does not exist")
 		}
 		return err
 	})
@@ -188,7 +188,7 @@ func (s *Store) UpdateSiaObject(siaObject objects.SiaObject) (bool, error) {
 	return updated, s.transaction(func(tx *txn) error {
 		res, err := tx.Exec(`
 			UPDATE objects SET sia_object = $1
-			WHERE object_id = $2
+			WHERE sia_object_id = $2
 		`, sqlSiaObject(siaObject.Sealed), sqlHash256(siaObject.ID))
 		if err != nil {
 			return err
@@ -292,7 +292,7 @@ func (s *Store) SetObjectsCursor(cursor sdk.ObjectsCursor) error {
 // OrphanedObjects returns up to limit object IDs from the orphaned_objects table.
 func (s *Store) OrphanedObjects(limit int) (ids []types.Hash256, err error) {
 	err = s.transaction(func(tx *txn) error {
-		rows, err := tx.Query("SELECT object_id FROM orphaned_objects LIMIT $1", limit)
+		rows, err := tx.Query("SELECT sia_object_id FROM orphaned_objects LIMIT $1", limit)
 		if err != nil {
 			return err
 		}
@@ -312,7 +312,7 @@ func (s *Store) OrphanedObjects(limit int) (ids []types.Hash256, err error) {
 // RemoveOrphanedObject removes an object ID from the orphaned_objects table.
 func (s *Store) RemoveOrphanedObject(objectID types.Hash256) error {
 	return s.transaction(func(tx *txn) error {
-		_, err := tx.Exec("DELETE FROM orphaned_objects WHERE object_id = $1", sqlHash256(objectID))
+		_, err := tx.Exec("DELETE FROM orphaned_objects WHERE sia_object_id = $1", sqlHash256(objectID))
 		return err
 	})
 }
@@ -335,10 +335,10 @@ func putObject(tx *txn, bid int64, name string, contentMD5 [16]byte, meta map[st
 	}
 
 	_, err = tx.Exec(`
-		INSERT INTO objects (bucket_id, name, object_id, content_md5, metadata, size, updated_at, filename, sia_object)
+		INSERT INTO objects (bucket_id, name, sia_object_id, content_md5, metadata, size, updated_at, filename, sia_object)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		ON CONFLICT(bucket_id, name) DO UPDATE SET
-			object_id = excluded.object_id,
+			sia_object_id = excluded.sia_object_id,
 			content_md5 = excluded.content_md5,
 			metadata = excluded.metadata,
 			size = excluded.size,
@@ -355,7 +355,7 @@ func putObject(tx *txn, bid int64, name string, contentMD5 [16]byte, meta map[st
 	// clear any stale orphan entry for the new object ID, in case it was
 	// previously orphaned and is now referenced again
 	if siaObject != nil {
-		if _, err := tx.Exec("DELETE FROM orphaned_objects WHERE object_id = $1", sqlHash256(siaObject.ID)); err != nil {
+		if _, err := tx.Exec("DELETE FROM orphaned_objects WHERE sia_object_id = $1", sqlHash256(siaObject.ID)); err != nil {
 			return err
 		}
 	}
@@ -366,11 +366,11 @@ func putObject(tx *txn, bid int64, name string, contentMD5 [16]byte, meta map[st
 	return nil
 }
 
-// previousObjectID returns the object_id currently stored for the given bucket
+// previousObjectID returns the sia_object_id currently stored for the given bucket
 // and name, or nil if no row exists.
 func previousObjectID(tx *txn, bid int64, name string) (*types.Hash256, error) {
 	var id sql.Null[sqlHash256]
-	err := tx.QueryRow("SELECT object_id FROM objects WHERE bucket_id = $1 AND name = $2", bid, name).
+	err := tx.QueryRow("SELECT sia_object_id FROM objects WHERE bucket_id = $1 AND name = $2", bid, name).
 		Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -390,13 +390,13 @@ func insertOrphan(tx *txn, objectID types.Hash256) error {
 		return nil // skip zero-value (empty objects)
 	}
 	var referenced bool
-	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM objects WHERE object_id = $1)", sqlHash256(objectID)).Scan(&referenced); err != nil {
+	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM objects WHERE sia_object_id = $1)", sqlHash256(objectID)).Scan(&referenced); err != nil {
 		return err
 	}
 	if referenced {
 		return nil
 	}
-	_, err := tx.Exec("INSERT OR IGNORE INTO orphaned_objects (object_id) VALUES ($1)", sqlHash256(objectID))
+	_, err := tx.Exec("INSERT OR IGNORE INTO orphaned_objects (sia_object_id) VALUES ($1)", sqlHash256(objectID))
 	return err
 }
 

@@ -860,13 +860,13 @@ func TestDeleteObjectUnpin(t *testing.T) {
 		t.Fatalf("expected 1 pinned object, got %d", len(memSDK.objects))
 	}
 
-	// copy A to B (shares same object_id)
+	// copy A to B (shares same sia_object_id)
 	_, err = s3Tester.CopyObject(t.Context(), bucket, "A", bucket, "B", types.MetadataDirectiveCopy, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// delete A - should NOT unpin since B still references the same object_id
+	// delete A - should NOT unpin since B still references the same sia_object_id
 	if err := s3Tester.DeleteObject(t.Context(), bucket, "A"); err != nil {
 		t.Fatal(err)
 	}
@@ -911,7 +911,7 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	if len(memSDK.objects) != 1 {
 		t.Fatalf("expected 1 pinned object, got %d", len(memSDK.objects))
 	}
-	// overwrite with different data (different object_id)
+	// overwrite with different data (different sia_object_id)
 	_, err = s3Tester.PutObject(t.Context(), bucket, "C", bytes.NewReader(data2), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -923,7 +923,7 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	}
 
 	// test re-reference before orphan sweep: delete last reference to create
-	// an orphan, then re-reference the same object_id via PutObject before
+	// an orphan, then re-reference the same sia_object_id via PutObject before
 	// calling ProcessOrphans — the object should NOT be unpinned.
 	if err := s3Tester.DeleteObject(t.Context(), bucket, "C"); err != nil {
 		t.Fatal(err)
@@ -936,7 +936,7 @@ func TestDeleteObjectUnpin(t *testing.T) {
 		t.Fatalf("expected 1 orphan, got %d", len(orphans))
 	}
 	orphanID := orphans[0]
-	// re-reference the orphaned object_id by inserting a new object row
+	// re-reference the orphaned sia_object_id by inserting a new object row
 	if err := store.PutObject(testutil.AccessKeyID, bucket, "D", [16]byte{}, nil, 1, new(string), true); err != nil {
 		t.Fatal(err)
 	}

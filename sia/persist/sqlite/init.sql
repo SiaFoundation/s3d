@@ -13,18 +13,20 @@ CREATE TABLE buckets (
 CREATE TABLE objects (
     bucket_id INTEGER REFERENCES buckets(id) NOT NULL,
     name TEXT NOT NULL,
-    object_id BLOB,
     content_md5 BLOB NOT NULL,
     metadata TEXT NOT NULL,
     size INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     filename TEXT, -- name of file for regular uploads or dir for multipart uploads
+    sia_object_id BLOB,
     sia_object BLOB,
-    -- file is either stored on disk, on Sia or empty.
-    CHECK ((sia_object IS NULL AND object_id IS NULL AND filename IS NOT NULL) OR (sia_object IS NOT NULL AND object_id IS NOT NULL AND filename IS NULL) OR (object_id IS NULL AND filename IS NULL AND size = 0)),
+    -- sia_object_id and sia_object are always set or nulled together
+    CHECK ((sia_object_id IS NULL AND sia_object IS NULL) OR (sia_object_id IS NOT NULL AND sia_object IS NOT NULL)),
+    -- object is either on disk, on Sia, or empty
+    CHECK ((filename IS NOT NULL AND sia_object_id IS NULL) OR (filename IS NULL AND sia_object_id IS NOT NULL) OR (filename IS NULL AND sia_object_id IS NULL AND size = 0)),
     PRIMARY KEY (bucket_id, name)
 ) WITHOUT ROWID;
-CREATE INDEX objects_object_id_idx ON objects(object_id);
+CREATE INDEX objects_sia_object_id_idx ON objects(sia_object_id);
 
 CREATE TABLE multipart_uploads (
     upload_id BLOB PRIMARY KEY,
@@ -61,7 +63,7 @@ CREATE TABLE object_parts (
 );
 
 CREATE TABLE orphaned_objects (
-    object_id BLOB PRIMARY KEY
+    sia_object_id BLOB PRIMARY KEY
 );
 
 CREATE TABLE global_settings (

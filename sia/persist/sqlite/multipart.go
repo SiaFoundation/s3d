@@ -108,7 +108,7 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 			FROM multipart_uploads
 			WHERE upload_id = $5
 			ON CONFLICT(bucket_id, name) DO UPDATE SET
-				object_id = NULL,
+				sia_object_id = NULL,
 				content_md5 = excluded.content_md5,
 				metadata = excluded.metadata,
 				size = excluded.size,
