@@ -30,28 +30,20 @@ func randObjectName() string {
 	return fmt.Sprintf("%x.obj", uuid[:])
 }
 
-func (s *Sia) multipartUploadDir(uploadDir string) string {
-	return filepath.Join(s.directory, UploadsDirectory, uploadDir)
+func (s *Sia) multipartUploadPath(uploadID string) string {
+	return filepath.Join(s.directory, UploadsDirectory, uploadID)
 }
 
-func (s *Sia) createMultipartUploadDir(uploadID s3.UploadID) (string, error) {
-	uploadDir := s.multipartUploadDir(uploadID.String())
+func (s *Sia) createMultipartUploadDir(uploadID string) (string, error) {
+	uploadDir := s.multipartUploadPath(uploadID)
 	if err := os.Mkdir(uploadDir, 0700); err != nil {
 		return "", fmt.Errorf("failed to create upload directory: %w", err)
 	}
 	return uploadDir, nil
 }
 
-// TODO: when we start calling this after completing an upload, we need to make
-// sure we don't delete the dir while potentially still serving the data from
-// disk. That's because unlike with 'removeUpload', multipart uploads don't open
-// all file handles beforehand.
-func (s *Sia) removeMultipartUploadDir(uploadDir string) error {
-	return os.RemoveAll(s.multipartUploadDir(uploadDir))
-}
-
 func (s *Sia) multipartPartPath(uploadID s3.UploadID, partNumber int) string {
-	return filepath.Join(s.multipartUploadDir(uploadID.String()), fmt.Sprintf("%d", partNumber))
+	return filepath.Join(s.multipartUploadPath(uploadID.String()), fmt.Sprintf("%d", partNumber))
 }
 
 func (s *Sia) ensureMultipartPartDir(uploadID s3.UploadID, partNumber int) (string, error) {
@@ -71,7 +63,7 @@ func (s *Sia) CreateMultipartUpload(ctx context.Context, accessKeyID, bucket, ob
 
 	// create multipart upload directory
 	uploadID := s3.NewUploadID()
-	if _, err := s.createMultipartUploadDir(uploadID); err != nil {
+	if _, err := s.createMultipartUploadDir(uploadID.String()); err != nil {
 		return nil, err
 	}
 
@@ -114,7 +106,7 @@ func (s *Sia) AbortMultipartUpload(ctx context.Context, accessKeyID, bucket, obj
 	}
 
 	// remove multipart upload directory
-	if err := s.removeMultipartUploadDir(uploadID.String()); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := s.removeUpload(uploadID.String()); err != nil && !errors.Is(err, os.ErrNotExist) {
 		s.logger.Error("failed to remove multipart upload directory",
 			zap.Stringer("uploadID", uploadID),
 			zap.Error(err))
@@ -246,7 +238,7 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 	// open a reader for the requested range of the source object
 	var src io.ReadCloser
 	if obj.FileName != nil {
-		src, err = s.openUpload(srcBucket, srcObject, obj.FileName, obj.IsMultipart(), opts.Range.Start)
+		src, err = s.openUpload(srcBucket, srcObject, obj.FileName, obj.IsMultipart(), &opts.Range)
 		if err != nil {
 			return nil, fmt.Errorf("failed to open source upload: %w", err)
 		}
@@ -386,7 +378,7 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 	}
 
 	// assert the upload directory exists
-	uploadDir := s.multipartUploadDir(uploadID.String())
+	uploadDir := s.multipartUploadPath(uploadID.String())
 	if _, err := os.Stat(uploadDir); err != nil {
 		return nil, fmt.Errorf("failed to stat upload directory: %w", err)
 	}
