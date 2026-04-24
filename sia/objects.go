@@ -24,17 +24,42 @@ import (
 
 const metadataCacheLifetime = 24 * time.Hour
 
+func (s *Sia) diskUsage() (uint64, error) {
+	s.diskUsageMu.Lock()
+	defer s.diskUsageMu.Unlock()
+
+	if time.Since(s.diskUsageUpdated) < time.Minute {
+		return s.diskUsageCached, nil
+	}
+	usage, err := s.store.DiskUsage()
+	if err != nil {
+		return 0, err
+	}
+	s.diskUsageCached = usage
+	s.diskUsageUpdated = time.Now()
+	return usage, nil
+}
+
 func (s *Sia) checkDiskUsage(size int64) error {
 	if s.diskUsageLimit == 0 {
 		return nil
 	}
-	usage, err := s.store.DiskUsage()
-	if err != nil {
-		return fmt.Errorf("failed to check disk usage: %w", err)
+
+	s.diskUsageMu.Lock()
+	defer s.diskUsageMu.Unlock()
+
+	if time.Since(s.diskUsageUpdated) >= time.Minute {
+		usage, err := s.store.DiskUsage()
+		if err != nil {
+			return fmt.Errorf("failed to check disk usage: %w", err)
+		}
+		s.diskUsageCached = usage
+		s.diskUsageUpdated = time.Now()
 	}
-	if usage+uint64(size) > s.diskUsageLimit {
+	if s.diskUsageCached+uint64(size) > s.diskUsageLimit {
 		return s3errs.ErrStorageLimitExceeded
 	}
+	s.diskUsageCached += uint64(size)
 	return nil
 }
 

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
@@ -86,6 +87,10 @@ type Sia struct {
 	uploadWastePct float64
 	uploadDisabled bool
 	diskUsageLimit uint64
+
+	diskUsageMu      sync.Mutex
+	diskUsageCached  uint64
+	diskUsageUpdated time.Time
 
 	tg     *threadgroup.ThreadGroup
 	logger *zap.Logger
