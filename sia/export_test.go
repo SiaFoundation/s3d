@@ -2,7 +2,9 @@ package sia
 
 import "context"
 
-// SyncMetadata exports syncMetadataIter for testing.
+// SyncMetadata exports syncMetadata for testing.
+//
+//nolint:revive // test export intentionally shadows unexported method
 func (s *Sia) SyncMetadata(ctx context.Context) {
-	s.syncMetadataIter(ctx)
+	s.syncMetadata(ctx)
 }

@@ -283,7 +283,7 @@ func (s *Store) ObjectParts(bucket, name string) ([]objects.Part, error) {
 // ObjectsCursor returns the cursor for resuming object event syncing.
 func (s *Store) ObjectsCursor() (cursor sdk.ObjectsCursor, err error) {
 	err = s.transaction(func(tx *txn) error {
-		return tx.QueryRow(`SELECT objects_cursor_at, objects_cursor_key FROM global_settings LIMIT 1`).
+		return tx.QueryRow(`SELECT last_sync_at, last_sync_key FROM global_settings LIMIT 1`).
 			Scan((*sqlTime)(&cursor.After), (*sqlHash256)(&cursor.Key))
 	})
 	return
@@ -292,7 +292,7 @@ func (s *Store) ObjectsCursor() (cursor sdk.ObjectsCursor, err error) {
 // SetObjectsCursor updates the cursor for resuming object event syncing.
 func (s *Store) SetObjectsCursor(cursor sdk.ObjectsCursor) error {
 	return s.transaction(func(tx *txn) error {
-		_, err := tx.Exec("UPDATE global_settings SET objects_cursor_at = $1, objects_cursor_key = $2", sqlTime(cursor.After), sqlHash256(cursor.Key))
+		_, err := tx.Exec("UPDATE global_settings SET last_sync_at = $1, last_sync_key = $2", sqlTime(cursor.After), sqlHash256(cursor.Key))
 		return err
 	})
 }

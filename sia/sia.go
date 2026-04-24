@@ -202,25 +202,27 @@ func (s *Sia) LoadSecret(ctx context.Context, accessKeyID string) (auth.SecretAc
 
 // syncMetadataLoop periodically syncs object metadata from the indexer.
 func (s *Sia) syncMetadataLoop(ctx context.Context) {
-	t := time.NewTicker(5 * time.Minute)
+	t := time.NewTicker(24 * time.Hour)
 	defer t.Stop()
 
 	// sync once on startup
-	s.syncMetadataIter(ctx)
+	s.syncMetadata(ctx)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			s.syncMetadataIter(ctx)
+			s.syncMetadata(ctx)
 		}
 	}
 }
 
-// syncMetadataIter fetches object events from the indexer since the last sync
+// syncMetadata fetches object events from the indexer since the last sync
 // and applies metadata updates to local objects.
-func (s *Sia) syncMetadataIter(ctx context.Context) {
+//
+//nolint:revive // capitalization clash with test export is intentional
+func (s *Sia) syncMetadata(ctx context.Context) {
 	const batchSize = 100
 
 	// fetch the cursor
