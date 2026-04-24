@@ -1092,30 +1092,4 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	if len(memSDK.objects) != 1 {
 		t.Fatalf("expected 1 pinned object after overwrite, got %d", len(memSDK.objects))
 	}
-
-	// test re-reference before orphan sweep: delete last reference to create
-	// an orphan, then re-reference the same object_id via PutObject before
-	// calling ProcessOrphans — the object should NOT be unpinned.
-	if err := s3Tester.DeleteObject(t.Context(), bucket, "C"); err != nil {
-		t.Fatal(err)
-	}
-	orphans, err := store.OrphanedObjects(100)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(orphans) != 1 {
-		t.Fatalf("expected 1 orphan, got %d", len(orphans))
-	}
-	orphanID := orphans[0]
-	// re-reference the orphaned object_id by inserting a new object row
-	if err := store.PutObject(testutil.AccessKeyID, bucket, "D", [16]byte{}, nil, 1, new(string), true); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.MarkObjectUploaded(bucket, "D", [16]byte{}, memSDK.SealedObject(orphanID)); err != nil {
-		t.Fatal(err)
-	}
-	siaBackend.ProcessOrphans(t.Context())
-	if _, ok := memSDK.objects[orphanID]; !ok {
-		t.Fatal("re-referenced object should NOT have been unpinned")
-	}
 }

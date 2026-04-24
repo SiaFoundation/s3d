@@ -159,13 +159,6 @@ func (s *MemorySDK) SealObject(obj sdk.Object) slabs.SealedObject {
 	return obj.Seal(s.appKey).SealedObject
 }
 
-func (s *MemorySDK) SealedObject(id types.Hash256) slabs.SealedObject {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	obj := s.objects[id].meta
-	return obj.Seal(s.appKey).SealedObject
-}
-
 func (s *MemorySDK) UnsealObject(sealed slabs.SealedObject) (sdk.Object, error) {
 	obj, exists := s.objects[sealed.ID()]
 	if !exists {

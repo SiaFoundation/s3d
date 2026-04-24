@@ -186,7 +186,7 @@ func (s *Store) MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, sia
 		} else if storedMD5 != contentMD5 {
 			return objects.ErrObjectModified
 		}
-		return removeOrphan(tx, objID)
+		return nil
 	})
 }
 
@@ -302,7 +302,8 @@ func (s *Store) OrphanedObjects(limit int) (ids []types.Hash256, err error) {
 // RemoveOrphanedObject removes an object ID from the orphaned_objects table.
 func (s *Store) RemoveOrphanedObject(objectID types.Hash256) error {
 	return s.transaction(func(tx *txn) error {
-		return removeOrphan(tx, objectID)
+		_, err := tx.Exec("DELETE FROM orphaned_objects WHERE object_id = $1", sqlHash256(objectID))
+		return err
 	})
 }
 
@@ -366,14 +367,6 @@ func putObject(tx *txn, bid int64, name string, id *types.Hash256, contentMD5 [1
 		return err
 	}
 
-	// clear any stale orphan entry for the new object ID, in case it was
-	// previously orphaned and is now referenced again
-	if id != nil {
-		if err := removeOrphan(tx, *id); err != nil {
-			return err
-		}
-	}
-
 	if oldID != nil && (id == nil || *oldID != *id) {
 		return insertOrphan(tx, *oldID)
 	}
@@ -411,12 +404,6 @@ func insertOrphan(tx *txn, objectID types.Hash256) error {
 		return nil
 	}
 	_, err := tx.Exec("INSERT OR IGNORE INTO orphaned_objects (object_id) VALUES ($1)", sqlHash256(objectID))
-	return err
-}
-
-// removeOrphan deletes objectID from the orphaned_objects table.
-func removeOrphan(tx *txn, objectID types.Hash256) error {
-	_, err := tx.Exec("DELETE FROM orphaned_objects WHERE object_id = $1", sqlHash256(objectID))
 	return err
 }
 
