@@ -14,6 +14,25 @@ import (
 	"go.sia.tech/indexd/slabs"
 )
 
+// DiskUsage returns the total number of bytes stored on disk pending upload to
+// Sia. This includes both regular object uploads and in-progress multipart
+// parts.
+func (s *Store) DiskUsage() (uint64, error) {
+	var usage uint64
+	err := s.transaction(func(tx *txn) error {
+		var objectsSize, partsSize uint64
+		if err := tx.QueryRow(`SELECT COALESCE(SUM(size), 0) FROM (SELECT MAX(size) AS size FROM objects WHERE filename IS NOT NULL GROUP BY filename)`).Scan(&objectsSize); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(`SELECT COALESCE(SUM(content_length), 0) FROM multipart_parts`).Scan(&partsSize); err != nil {
+			return err
+		}
+		usage = objectsSize + partsSize
+		return nil
+	})
+	return usage, err
+}
+
 // DeleteObject deletes the object with the given bucket and name if it exists
 // and all provided preconditions match. If the deleted object's ID has no
 // remaining references, it is inserted into the orphaned_objects table. If the

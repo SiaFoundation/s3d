@@ -130,6 +130,10 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object string
 		return nil, err
 	}
 
+	if err := s.checkDiskUsage(opts.ContentLength); err != nil {
+		return nil, err
+	}
+
 	// create part directory
 	partDir, err := s.ensureMultipartPartDir(uploadID, opts.PartNumber)
 	if errors.Is(err, os.ErrNotExist) {
@@ -241,6 +245,10 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 		return nil, s3errs.ErrInvalidRange
 	} else if opts.Range.Length > s3.MaxUploadPartSize {
 		return nil, s3errs.ErrEntityTooLarge
+	}
+
+	if err := s.checkDiskUsage(opts.Range.Length); err != nil {
+		return nil, err
 	}
 
 	// open a reader for the requested range of the source object

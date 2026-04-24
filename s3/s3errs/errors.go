@@ -151,6 +151,7 @@ var (
 	ErrServiceUnavailable                             = Error{"ServiceUnavailable", "Service is unable to handle the request.", http.StatusServiceUnavailable}
 	ErrSignatureDoesNotMatch                          = Error{"SignatureDoesNotMatch", "Server-calculated signature does not match the provided signature.", http.StatusForbidden}
 	ErrSlowDown                                       = Error{"SlowDown", "Please reduce your request rate.", http.StatusServiceUnavailable}
+	ErrStorageLimitExceeded                           = Error{"StorageLimitExceeded", "The local disk usage limit has been reached. Try again after pending data has been offloaded.", http.StatusServiceUnavailable}
 	ErrTagPolicyException                             = Error{"TagPolicyException", "Tag policy does not allow the specified value for the tag key.", http.StatusBadRequest}
 	ErrTemporaryRedirect                              = Error{"TemporaryRedirect", "You are being redirected while DNS is being updated.", http.StatusTemporaryRedirect}
 	ErrTokenCodeInvalidError                          = Error{"TokenCodeInvalidError", "Provided serial number and/or token code is not valid.", http.StatusBadRequest}

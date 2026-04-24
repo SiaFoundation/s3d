@@ -22,6 +22,91 @@ import (
 	"lukechampine.com/frand"
 )
 
+func TestDiskUsage(t *testing.T) {
+	const (
+		accessKeyID = "test-accesskey"
+		bucket      = "test-bucket"
+	)
+
+	store := initTestDB(t, zaptest.NewLogger(t))
+	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// initially zero
+	usage, err := store.DiskUsage()
+	if err != nil {
+		t.Fatal(err)
+	} else if usage != 0 {
+		t.Fatalf("expected 0 disk usage, got %d", usage)
+	}
+
+	// add pending objects
+	fn := "a.obj"
+	if err := store.PutObject(accessKeyID, bucket, "a", frand.Entropy128(), nil, 100, &fn, true); err != nil {
+		t.Fatal(err)
+	}
+	fn = "b.obj"
+	if err := store.PutObject(accessKeyID, bucket, "b", frand.Entropy128(), nil, 250, &fn, true); err != nil {
+		t.Fatal(err)
+	}
+
+	usage, err = store.DiskUsage()
+	if err != nil {
+		t.Fatal(err)
+	} else if usage != 350 {
+		t.Fatalf("expected 350, got %d", usage)
+	}
+
+	// add in-progress multipart parts
+	uid := s3.NewUploadID()
+	if err := store.CreateMultipartUpload(bucket, "multipart", uid, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AddMultipartPart(bucket, "multipart", uid, "p1", 1, frand.Entropy128(), 500); err != nil {
+		t.Fatal(err)
+	}
+
+	usage, err = store.DiskUsage()
+	if err != nil {
+		t.Fatal(err)
+	} else if usage != 850 {
+		t.Fatalf("expected 850, got %d", usage)
+	}
+
+	// copy object "a"
+	// should not double-count
+	if _, err := store.CopyObject(bucket, "a", bucket, "a-copy", nil, false); err != nil {
+		t.Fatal(err)
+	}
+
+	usage, err = store.DiskUsage()
+	if err != nil {
+		t.Fatal(err)
+	} else if usage != 850 {
+		t.Fatalf("expected 850 (shared filename not double-counted), got %d", usage)
+	}
+
+	// mark one object as uploaded
+	// its size should no longer count
+	contentMD5 := frand.Entropy128()
+	if err := store.PutObject(accessKeyID, bucket, "uploaded", contentMD5, nil, 200, new(string), true); err != nil {
+		t.Fatal(err)
+	}
+	sealObj := sdk.Object{}
+	sealed := sealObj.Seal(types.GeneratePrivateKey())
+	if err := store.MarkObjectUploaded(bucket, "uploaded", contentMD5, sealed.SealedObject); err != nil {
+		t.Fatal(err)
+	}
+
+	usage, err = store.DiskUsage()
+	if err != nil {
+		t.Fatal(err)
+	} else if usage != 850 {
+		t.Fatalf("expected 850 (uploaded object excluded), got %d", usage)
+	}
+}
+
 func TestGetObject(t *testing.T) {
 	var (
 		accessKeyID = "test-accesskey"

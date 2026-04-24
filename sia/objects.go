@@ -24,6 +24,45 @@ import (
 
 const metadataCacheLifetime = 24 * time.Hour
 
+func (s *Sia) diskUsage() (uint64, error) {
+	s.diskUsageMu.Lock()
+	defer s.diskUsageMu.Unlock()
+
+	if time.Since(s.diskUsageUpdated) < time.Minute {
+		return s.diskUsageCached, nil
+	}
+	usage, err := s.store.DiskUsage()
+	if err != nil {
+		return 0, err
+	}
+	s.diskUsageCached = usage
+	s.diskUsageUpdated = time.Now()
+	return usage, nil
+}
+
+func (s *Sia) checkDiskUsage(size int64) error {
+	if s.diskUsageLimit == 0 {
+		return nil
+	}
+
+	s.diskUsageMu.Lock()
+	defer s.diskUsageMu.Unlock()
+
+	if time.Since(s.diskUsageUpdated) >= time.Minute {
+		usage, err := s.store.DiskUsage()
+		if err != nil {
+			return fmt.Errorf("failed to check disk usage: %w", err)
+		}
+		s.diskUsageCached = usage
+		s.diskUsageUpdated = time.Now()
+	}
+	if s.diskUsageCached+uint64(size) > s.diskUsageLimit {
+		return s3errs.ErrStorageLimitExceeded
+	}
+	s.diskUsageCached += uint64(size)
+	return nil
+}
+
 type readCloser struct {
 	io.Reader
 	io.Closer
@@ -304,6 +343,10 @@ func (s *Sia) ListObjects(ctx context.Context, accessKeyID *string, bucket strin
 func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object string, r io.Reader, opts s3.PutObjectOptions) (_ *s3.PutObjectResult, err error) {
 	// quick check if the bucket exists
 	if err := s.store.HeadBucket(accessKeyID, bucket); err != nil {
+		return nil, err
+	}
+
+	if err := s.checkDiskUsage(opts.ContentLength); err != nil {
 		return nil, err
 	}
 
