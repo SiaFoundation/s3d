@@ -9,7 +9,7 @@ import (
 
 // Object represents a stored object with its metadata.
 type Object struct {
-	ID           *types.Hash256
+	SiaObject    *SiaObject
 	FileName     *string
 	Name         string
 	PartsCount   int32
@@ -18,9 +18,12 @@ type Object struct {
 	Length       int64
 	ContentMD5   [16]byte
 	LastModified time.Time
+}
 
-	SiaObject *slabs.SealedObject // sealed Sia object for downloads (must be unsealed before use)
-	CachedAt  time.Time           // zero if not cached
+// SiaObject pairs a Sia object ID with its sealed metadata.
+type SiaObject struct {
+	ID     types.Hash256
+	Sealed slabs.SealedObject
 }
 
 // Part represents a single part of a multipart upload.

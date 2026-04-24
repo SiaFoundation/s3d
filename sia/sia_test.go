@@ -1,19 +1,22 @@
 package sia_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
+	"slices"
+	"sync"
 	"testing"
 
 	"github.com/SiaFoundation/s3d/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/sia"
+	"github.com/SiaFoundation/s3d/sia/objects"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"go.sia.tech/core/types"
-	"go.sia.tech/indexd/slabs"
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
@@ -25,11 +28,10 @@ type uploadedObject struct {
 }
 
 type MemorySDK struct {
+	mu      sync.Mutex
 	appKey  types.PrivateKey
 	objects map[types.Hash256]uploadedObject
-
-	objectCallCount int
-	fail            bool // when true, Object() will return an error
+	events  []sdk.ObjectEvent
 }
 
 func NewMemorySDK() *MemorySDK {
@@ -60,18 +62,38 @@ func (s *MemorySDK) Download(ctx context.Context, w io.Writer, obj sdk.Object, r
 	return err
 }
 
-// TODO: Right now, all objects have the same ID. We'll need to expose something from
-// the SDK to be able to mock objects with different IDs.
-func (s *MemorySDK) Object(ctx context.Context, objectID types.Hash256) (sdk.Object, error) {
-	s.objectCallCount++
-	if s.fail {
-		return sdk.Object{}, errors.New("indexer error")
+// SetEvents replaces the events returned by ObjectEvents.
+func (s *MemorySDK) SetEvents(events []sdk.ObjectEvent) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = events
+}
+
+func (s *MemorySDK) ObjectEvents(_ context.Context, cursor sdk.ObjectsCursor, limit int) ([]sdk.ObjectEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sorted := slices.Clone(s.events)
+	slices.SortFunc(sorted, func(a, b sdk.ObjectEvent) int {
+		if c := a.UpdatedAt.Compare(b.UpdatedAt); c != 0 {
+			return c
+		}
+		return bytes.Compare(a.Key[:], b.Key[:])
+	})
+
+	var filtered []sdk.ObjectEvent
+	for _, ev := range sorted {
+		after := ev.UpdatedAt.After(cursor.After) ||
+			(ev.UpdatedAt.Equal(cursor.After) && bytes.Compare(ev.Key[:], cursor.Key[:]) > 0)
+		if !after {
+			continue
+		}
+		filtered = append(filtered, ev)
+		if len(filtered) >= limit {
+			break
+		}
 	}
-	obj, exists := s.objects[objectID]
-	if !exists {
-		return sdk.Object{}, errors.New("object not found")
-	}
-	return obj.meta, nil
+	return filtered, nil
 }
 
 func (s *MemorySDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error) {
@@ -79,7 +101,7 @@ func (s *MemorySDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
 	if err != nil {
 		return sdk.Object{}, err
 	}
-	obj := sdk.Object{}
+	obj := sdk.NewEmptyObject()
 	s.objects[obj.ID()] = uploadedObject{
 		data: data,
 		meta: obj,
@@ -87,12 +109,16 @@ func (s *MemorySDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
 	return obj, nil
 }
 
-func (s *MemorySDK) SealObject(obj sdk.Object) slabs.SealedObject {
-	return obj.Seal(s.appKey).SealedObject
+func (s *MemorySDK) SealObject(obj sdk.Object) objects.SiaObject {
+	sealed := obj.Seal(s.appKey)
+	return objects.SiaObject{
+		ID:     sealed.ID(),
+		Sealed: sealed.SealedObject,
+	}
 }
 
-func (s *MemorySDK) UnsealObject(sealed slabs.SealedObject) (sdk.Object, error) {
-	obj, exists := s.objects[sealed.ID()]
+func (s *MemorySDK) UnsealObject(siaObject objects.SiaObject) (sdk.Object, error) {
+	obj, exists := s.objects[siaObject.ID]
 	if !exists {
 		return sdk.Object{}, errors.New("object not found")
 	}
@@ -117,7 +143,7 @@ func NewTester(t testing.TB, opts ...testutil.TesterOption) *testutil.S3Tester {
 }
 
 func NewCustomTester(t testing.TB, dir string, store sia.Store, sdk sia.SDK, log *zap.Logger, opts ...testutil.TesterOption) *testutil.S3Tester {
-	backend, err := sia.New(context.Background(), sdk, store, dir, sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
+	backend, err := sia.New(t.Context(), sdk, store, dir, sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
 		sia.WithLogger(log))
 	if err != nil {
 		t.Fatal(err)

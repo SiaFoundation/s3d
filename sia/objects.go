@@ -12,17 +12,13 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"github.com/aws/aws-sdk-go-v2/aws"
-	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
 )
-
-const metadataCacheLifetime = 24 * time.Hour
 
 type readCloser struct {
 	io.Reader
@@ -201,17 +197,18 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 		}
 		rc, err := s.openUpload(bucket, object, obj, offset)
 		if errors.Is(err, fs.ErrNotExist) {
-			// possible race, check if the object was uploaded to Sia in the
-			// meantime
+			// the upload loop moved the file to Sia between our GetObject
+			// and file open, re-fetch to get the updated metadata and retry
 			obj, err = s.store.GetObject(accessKeyID, bucket, object, partNumber)
 			if err != nil {
 				return nil, err
-			} else if obj.SiaObject == nil {
-				return nil, fmt.Errorf("pending upload file disappeared and object is not on Sia")
+			} else if obj.FileName != nil {
+				rc, err = s.openUpload(bucket, object, obj, offset)
 			}
-		} else if err != nil {
+		}
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return nil, fmt.Errorf("failed to open pending upload file: %w", err)
-		} else {
+		} else if rc != nil {
 			if resp.Range != nil {
 				resp.Body = readCloser{Reader: io.LimitReader(rc, resp.Range.Length), Closer: rc}
 			} else {
@@ -221,10 +218,12 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 		}
 	}
 
-	// object is on Sia, refresh cached object metadata if needed
-	siaObj, err := s.refreshSiaObject(ctx, bucket, object, obj)
+	if obj.SiaObject == nil {
+		return nil, fmt.Errorf("object cannot be found on disk or in Sia")
+	}
+	siaObj, err := s.sdk.UnsealObject(*obj.SiaObject)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to unseal object: %w", err)
 	}
 
 	// otherwise, we download the body
@@ -241,45 +240,6 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 
 	resp.Body = pr
 	return resp, nil
-}
-
-// refreshSiaObject refreshes the object's cached Sia object if it is missing
-// or stale. Returns the unsealed sdk.Object for use in downloads.
-func (s *Sia) refreshSiaObject(ctx context.Context, bucket, objectKey string, obj *objects.Object) (siaObj sdk.Object, err error) {
-	if obj.ID == nil || obj.SiaObject == nil {
-		return sdk.Object{}, fmt.Errorf("object hasn't been uploaded yet") // should never happen
-	}
-	cached := !obj.CachedAt.IsZero()
-
-	// if cache is fresh, unseal and return
-	cachedUntil := obj.CachedAt.Add(metadataCacheLifetime)
-	if time.Now().Before(cachedUntil) {
-		siaObj, err = s.sdk.UnsealObject(*obj.SiaObject)
-		if err != nil {
-			s.logger.Warn("failed to unseal cached object, will fetch from indexer", zap.Error(err))
-			cached = false
-		} else {
-			return siaObj, nil
-		}
-	}
-
-	// fetch from indexer
-	fetched, err := s.sdk.Object(ctx, *obj.ID)
-	if err != nil {
-		if cached {
-			s.logger.Warn("failed to fetch object from indexer, using stale metadata", zap.Error(err))
-			// try to unseal the stale cached object
-			return s.sdk.UnsealObject(*obj.SiaObject)
-		}
-		return sdk.Object{}, fmt.Errorf("failed to fetch object from indexer: %w", err)
-	}
-
-	// seal the fetched object for storage
-	sealed := s.sdk.SealObject(fetched)
-	if err := s.store.UpdateSiaObject(sealed, time.Now()); err != nil {
-		s.logger.Warn("failed to update object metadata cache", zap.Error(err))
-	}
-	return fetched, nil
 }
 
 // ListObjects lists objects in the specified bucket for the user identified

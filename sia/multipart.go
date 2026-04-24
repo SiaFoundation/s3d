@@ -251,9 +251,12 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 			return nil, fmt.Errorf("failed to open source upload: %w", err)
 		}
 	} else {
-		pinnedObj, err := s.sdk.Object(ctx, *obj.ID)
+		if obj.SiaObject == nil {
+			return nil, fmt.Errorf("object has no Sia metadata")
+		}
+		pinnedObj, err := s.sdk.UnsealObject(*obj.SiaObject)
 		if err != nil {
-			return nil, fmt.Errorf("failed to fetch object from indexer: %w", err)
+			return nil, fmt.Errorf("failed to unseal object: %w", err)
 		}
 		pr, pw := io.Pipe()
 		go func() {
