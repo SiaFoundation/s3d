@@ -24,15 +24,14 @@ import (
 )
 
 const (
-	recoveryPhraseEnv = "S3D_RECOVERY_PHRASE"
-
-	configFileEnvVar = "S3D_CONFIG_FILE"
-	dataDirEnvVar    = "S3D_DATA_DIR"
+	recoveryPhraseEnvVar = "S3D_RECOVERY_PHRASE"
+	configFileEnvVar     = "S3D_CONFIG_FILE"
+	dataDirEnvVar        = "S3D_DATA_DIR"
 )
 
 var cfg = Config{
 	ApiAddress:     "127.0.0.1:8000",
-	RecoveryPhrase: os.Getenv(recoveryPhraseEnv),
+	RecoveryPhrase: os.Getenv(recoveryPhraseEnvVar),
 	Directory:      os.Getenv(dataDirEnvVar),
 	Log: Log{
 		File: FileLog{
@@ -213,6 +212,7 @@ func main() {
 	for _, kp := range cfg.Sia.KeyPairs {
 		siaOpts = append(siaOpts, sia.WithKeyPair(kp.AccessKey, kp.SecretKey))
 	}
+	siaOpts = append(siaOpts, sia.WithLogger(log.Named("backend")))
 
 	backend, err := sia.New(ctx, sia.NewSDK(sdkClient), store, cfg.Directory, siaOpts...)
 	if errors.Is(err, sia.ErrNoAccessKey) {
@@ -220,6 +220,7 @@ func main() {
 	} else if err != nil {
 		checkFatalError("failed to create Sia backend", err)
 	}
+	defer backend.Close()
 
 	s3Handler := s3.New(backend, s3.WithHostBucketBases(cfg.S3.HostBases),
 		s3.WithLogger(log))

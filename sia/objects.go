@@ -33,19 +33,19 @@ func (s *Sia) uploadDir() string {
 	return filepath.Join(s.directory, UploadsDirectory)
 }
 
-func (s *Sia) openUpload(bucket, name string, obj *objects.Object, offset int64) (io.ReadCloser, error) {
-	if obj.FileName == nil {
+func (s *Sia) openUpload(bucket, name string, filename *string, multipart bool, offset int64) (io.ReadCloser, error) {
+	if filename == nil {
 		return nil, os.ErrNotExist
 	}
-	if obj.PartsCount > 0 {
+	if multipart {
 		parts, err := s.store.ObjectParts(bucket, name)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get object parts: %w", err)
 		}
-		uploadDir := filepath.Join(s.uploadDir(), *obj.FileName)
+		uploadDir := filepath.Join(s.uploadDir(), *filename)
 		return objects.NewReader(uploadDir, parts, offset)
 	}
-	f, err := os.Open(filepath.Join(s.uploadDir(), *obj.FileName))
+	f, err := os.Open(filepath.Join(s.uploadDir(), *filename))
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +199,7 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 		if resp.Range != nil {
 			offset = resp.Range.Start
 		}
-		rc, err := s.openUpload(bucket, object, obj, offset)
+		rc, err := s.openUpload(bucket, object, obj.FileName, obj.IsMultipart(), offset)
 		if errors.Is(err, fs.ErrNotExist) {
 			// possible race, check if the object was uploaded to Sia in the
 			// meantime
@@ -222,7 +222,7 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 	}
 
 	// object is on Sia, refresh cached object metadata if needed
-	siaObj, err := s.refreshSiaObject(ctx, bucket, object, obj)
+	siaObj, err := s.refreshSiaObject(ctx, obj)
 	if err != nil {
 		return nil, err
 	}
@@ -245,7 +245,7 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 
 // refreshSiaObject refreshes the object's cached Sia object if it is missing
 // or stale. Returns the unsealed sdk.Object for use in downloads.
-func (s *Sia) refreshSiaObject(ctx context.Context, bucket, objectKey string, obj *objects.Object) (siaObj sdk.Object, err error) {
+func (s *Sia) refreshSiaObject(ctx context.Context, obj *objects.Object) (siaObj sdk.Object, err error) {
 	if obj.ID == nil || obj.SiaObject == nil {
 		return sdk.Object{}, fmt.Errorf("object hasn't been uploaded yet") // should never happen
 	}

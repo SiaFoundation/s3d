@@ -161,27 +161,32 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte,
 
 // MarkObjectUploaded transitions a pending upload to a Sia-backed object by
 // setting the object_id, sia_object and cached_at fields while clearing
-// filename. Fails if the object already has an object_id.
-func (s *Store) MarkObjectUploaded(bucket, name string, siaObject slabs.SealedObject) error {
+// filename. The update targets any pending object matching the bucket and name,
+// returning ErrObjectNotFound if no pending object exists or ErrObjectModified
+// if the stored content MD5 does not match the provided contentMD5.
+func (s *Store) MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, siaObject slabs.SealedObject) error {
 	return s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
+
 		objID := siaObject.ID()
-		res, err := tx.Exec(`
+		var storedMD5 [16]byte
+		err = tx.QueryRow(`
 			UPDATE objects
 			SET object_id = $1, sia_object = $2, filename = NULL, cached_at = $3
 			WHERE bucket_id = $4 AND name = $5 AND object_id IS NULL
-		`, sqlHash256(objID), sqlSiaObject(siaObject), sqlTime(time.Now()), bid, name)
-		if err != nil {
+			RETURNING content_md5
+		`, sqlHash256(objID), sqlSiaObject(siaObject), sqlTime(time.Now()), bid, name).Scan((*sqlMD5)(&storedMD5))
+		if errors.Is(err, sql.ErrNoRows) {
+			return objects.ErrObjectNotFound
+		} else if err != nil {
 			return err
-		} else if n, err := res.RowsAffected(); err != nil {
-			return err
-		} else if n == 0 {
-			return fmt.Errorf("object already has an object ID or does not exist")
+		} else if storedMD5 != contentMD5 {
+			return objects.ErrObjectModified
 		}
-		return err
+		return nil
 	})
 }
 
@@ -302,6 +307,37 @@ func (s *Store) RemoveOrphanedObject(objectID types.Hash256) error {
 	})
 }
 
+// ObjectsForUpload returns all objects stored on disk, ordered by size
+// descending for greedy best-fit slab filling.
+func (s *Store) ObjectsForUpload() ([]objects.ObjectForUpload, error) {
+	var objs []objects.ObjectForUpload
+	if err := s.transaction(func(tx *txn) error {
+		rows, err := tx.Query(`
+			SELECT b.name, o.name, o.filename, o.content_md5, o.size, EXISTS(SELECT 1 FROM object_parts p WHERE p.bucket_id = o.bucket_id AND p.name = o.name) AS has_parts
+			FROM objects o
+			JOIN buckets b ON b.id = o.bucket_id
+			WHERE o.filename IS NOT NULL
+			ORDER BY o.size DESC
+		`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var obj objects.ObjectForUpload
+			if err := rows.Scan(&obj.Bucket, &obj.Name, &obj.Filename, (*sqlMD5)(&obj.ContentMD5), &obj.Length, &obj.Multipart); err != nil {
+				return err
+			}
+			objs = append(objs, obj)
+		}
+		return rows.Err()
+	}); err != nil {
+		return nil, err
+	}
+	return objs, nil
+}
+
 func putObject(tx *txn, bid int64, name string, id *types.Hash256, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string, siaObject *slabs.SealedObject, cachedAt time.Time, updateModTime bool) error {
 	if meta == nil {
 		meta = make(map[string]string) // force '{}' instead of 'null' in JSON
@@ -329,14 +365,6 @@ func putObject(tx *txn, bid int64, name string, id *types.Hash256, contentMD5 [1
 		fileName, (*sqlSiaObject)(siaObject), sqlTime(cachedAt), updateModTime)
 	if err != nil {
 		return err
-	}
-
-	// clear any stale orphan entry for the new object ID, in case it was
-	// previously orphaned and is now referenced again
-	if id != nil {
-		if _, err := tx.Exec("DELETE FROM orphaned_objects WHERE object_id = $1", sqlHash256(*id)); err != nil {
-			return err
-		}
 	}
 
 	if oldID != nil && (id == nil || *oldID != *id) {
