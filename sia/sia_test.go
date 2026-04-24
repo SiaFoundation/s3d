@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
+	"unsafe"
 
 	"github.com/SiaFoundation/s3d/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3"
@@ -18,6 +20,7 @@ import (
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
+	"lukechampine.com/frand"
 )
 
 type uploadedObject struct {
@@ -68,8 +71,6 @@ func (s *MemorySDK) Download(ctx context.Context, w io.Writer, obj sdk.Object, r
 	return err
 }
 
-// TODO: Right now, all objects have the same ID. We'll need to expose something from
-// the SDK to be able to mock objects with different IDs.
 func (s *MemorySDK) Object(ctx context.Context, objectID types.Hash256) (sdk.Object, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -91,7 +92,7 @@ func (s *MemorySDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
 	if err != nil {
 		return sdk.Object{}, err
 	}
-	obj := sdk.NewEmptyObject()
+	obj := newTestObject()
 	s.mu.Lock()
 	s.objects[obj.ID()] = uploadedObject{
 		data: data,
@@ -127,7 +128,7 @@ func (u *memoryPackedUpload) Add(ctx context.Context, r io.Reader) (int64, error
 	if err != nil {
 		return 0, err
 	}
-	obj := sdk.NewEmptyObject()
+	obj := newTestObject()
 	u.objects = append(u.objects, uploadedObject{
 		data: data,
 		meta: obj,
@@ -155,6 +156,13 @@ func (u *memoryPackedUpload) Finalize(ctx context.Context) ([]sdk.Object, error)
 func (u *memoryPackedUpload) Close() error { return nil }
 
 func (s *MemorySDK) SealObject(obj sdk.Object) slabs.SealedObject {
+	return obj.Seal(s.appKey).SealedObject
+}
+
+func (s *MemorySDK) SealedObject(id types.Hash256) slabs.SealedObject {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	obj := s.objects[id].meta
 	return obj.Seal(s.appKey).SealedObject
 }
 
@@ -197,4 +205,13 @@ func NewCustomTester(t testing.TB, dir string, store sia.Store, sdk sia.SDK, log
 	mergedOpts = append(mergedOpts, testutil.WithBackend(backend))
 	mergedOpts = append(mergedOpts, opts...)
 	return testutil.NewTester(t, mergedOpts...)
+}
+
+func newTestObject() sdk.Object {
+	obj := sdk.NewEmptyObject()
+	ss := []slabs.SlabSlice{{EncryptionKey: frand.Entropy256(), Length: 1}}
+	v := reflect.ValueOf(&obj).Elem()
+	f := v.FieldByName("slabs")
+	reflect.NewAt(f.Type(), unsafe.Pointer(f.UnsafeAddr())).Elem().Set(reflect.ValueOf(ss))
+	return obj
 }

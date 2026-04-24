@@ -994,10 +994,8 @@ func TestCopyAndDeleteObject(t *testing.T) {
 }
 
 func TestDeleteObjectUnpin(t *testing.T) {
-	// TODO: add back once background uploads to Sia are implemented
-	t.SkipNow()
-
 	memSDK := NewMemorySDK()
+	memSDK.SetSlabSize(32)
 	log := zaptest.NewLogger(t)
 	dir := t.TempDir()
 	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
@@ -1025,6 +1023,7 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	siaBackend.UploadObjects(t.Context())
 
 	// verify SDK has the object pinned
 	if len(memSDK.objects) != 1 {
@@ -1078,7 +1077,7 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	siaBackend.ProcessOrphans(t.Context())
+	siaBackend.UploadObjects(t.Context())
 	if len(memSDK.objects) != 1 {
 		t.Fatalf("expected 1 pinned object, got %d", len(memSDK.objects))
 	}
@@ -1087,6 +1086,7 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	siaBackend.UploadObjects(t.Context())
 	siaBackend.ProcessOrphans(t.Context())
 	// old object should be unpinned, new one pinned
 	if len(memSDK.objects) != 1 {
@@ -1109,6 +1109,9 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	orphanID := orphans[0]
 	// re-reference the orphaned object_id by inserting a new object row
 	if err := store.PutObject(testutil.AccessKeyID, bucket, "D", [16]byte{}, nil, 1, new(string), true); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkObjectUploaded(bucket, "D", [16]byte{}, memSDK.SealedObject(orphanID)); err != nil {
 		t.Fatal(err)
 	}
 	siaBackend.ProcessOrphans(t.Context())

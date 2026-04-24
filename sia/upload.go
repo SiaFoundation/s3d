@@ -179,12 +179,12 @@ func (s *Sia) uploadLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			s.uploadObjectsIter(ctx)
+			s.uploadObjects(ctx)
 		}
 	}
 }
 
-func (s *Sia) uploadObjectsIter(ctx context.Context) {
+func (s *Sia) uploadObjects(ctx context.Context) { //nolint:revive
 	// fetch and prepare objects for upload
 	groups := s.prepareUploads()
 	if len(groups) == 0 {
