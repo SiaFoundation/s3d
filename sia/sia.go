@@ -54,6 +54,16 @@ func WithUploadDisabled() Option {
 	}
 }
 
+// WithDiskUsageLimit sets the maximum number of bytes that can be stored on
+// disk pending upload to Sia. When the limit is reached, new uploads are
+// rejected until existing data has been offloaded. A value of 0 disables the
+// limit.
+func WithDiskUsageLimit(limit uint64) Option {
+	return func(s *Sia) {
+		s.diskUsageLimit = limit
+	}
+}
+
 // WithKeyPair adds a key pair to the Sia backend.
 func WithKeyPair(accessKeyID, secretKey string) func(*Sia) {
 	return func(mb *Sia) {
@@ -75,6 +85,7 @@ type Sia struct {
 	slabSize       int64
 	uploadWastePct float64
 	uploadDisabled bool
+	diskUsageLimit uint64
 
 	tg     *threadgroup.ThreadGroup
 	logger *zap.Logger
@@ -98,6 +109,7 @@ type Store interface {
 	CreateBucket(accessKeyID, bucket string) error
 	DeleteBucket(accessKeyID, bucket string) error
 	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (*string, error)
+	DiskUsage() (uint64, error)
 	GetObject(accessKeyID *string, bucket, object string, partNumber *int32) (*objects.Object, error)
 	HeadBucket(accessKeyID, bucket string) error
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)

@@ -993,6 +993,43 @@ func TestCopyAndDeleteObject(t *testing.T) {
 	}
 }
 
+func TestDiskUsageLimit(t *testing.T) {
+	log := zaptest.NewLogger(t)
+	dir := t.TempDir()
+	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	const limit = 500
+	backend, err := sia.New(t.Context(), NewMemorySDK(), store, dir,
+		sia.WithUploadDisabled(),
+		sia.WithDiskUsageLimit(limit),
+		sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
+		sia.WithLogger(log))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { backend.Close() })
+	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
+
+	const bucket = "bucket"
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// upload under the limit succeeds
+	_, err = s3Tester.PutObject(t.Context(), bucket, "a", bytes.NewReader(frand.Bytes(400)), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// upload that would exceed the limit fails
+	_, err = s3Tester.PutObject(t.Context(), bucket, "b", bytes.NewReader(frand.Bytes(200)), nil)
+	testutil.AssertS3Error(t, s3errs.ErrStorageLimitExceeded, err)
+}
+
 func TestDeleteObjectUnpin(t *testing.T) {
 	memSDK := NewMemorySDK()
 	memSDK.SetSlabSize(32)
