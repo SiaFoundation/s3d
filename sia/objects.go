@@ -63,7 +63,11 @@ func (s *Sia) lockUpload(filename string) func() {
 		defer s.lockedUploadsMu.Unlock()
 
 		lu.refCount--
-		if lu.refCount == 0 {
+		if lu.refCount <= 0 {
+			_, locked := s.lockedUploads[filename]
+			if !locked {
+				panic(fmt.Sprintf("unlock called for filename %s that is not locked", filename))
+			}
 			delete(s.lockedUploads, filename)
 			if lu.deleted {
 				if err := os.RemoveAll(filepath.Join(s.uploadDir(), filename)); err != nil {
@@ -73,16 +77,19 @@ func (s *Sia) lockUpload(filename string) func() {
 				}
 			}
 		}
-		return
 	}
 }
 
-func (s *Sia) openUpload(bucket, name string, filename *string, multipart bool, r *s3.ObjectRange) (io.ReadCloser, error) {
+func (s *Sia) openUpload(bucket, name string, filename *string, multipart bool, r *s3.ObjectRange) (_ io.ReadCloser, err error) {
 	if filename == nil {
 		return nil, os.ErrNotExist
 	}
 	unlock := s.lockUpload(*filename)
-	defer unlock()
+	defer func() {
+		if err != nil {
+			unlock()
+		}
+	}()
 
 	var offset int64
 	if r != nil {
