@@ -193,8 +193,8 @@ func (s *Store) MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, sea
 	})
 }
 
-// UpdateSiaObject refreshes the sealed object for all uploaded objects with the
-// corresponding object ID. Returns false if no matching object exists locally.
+// UpdateSiaObject updates the object's metadata in the database. 
+// It returns a boolean that indicates whether the object was updated.
 func (s *Store) UpdateSiaObject(siaObject objects.SiaObject) (updated bool, err error) {
 	err = s.transaction(func(tx *txn) error {
 		res, err := tx.Exec(`

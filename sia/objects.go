@@ -219,7 +219,7 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 	}
 
 	if obj.SiaObject == nil {
-		return nil, fmt.Errorf("object cannot be found on disk or in Sia")
+		return nil, fmt.Errorf("object cannot neither be found on disk or on Sia")
 	}
 	siaObj, err := s.sdk.UnsealObject(obj.SiaObject.Sealed)
 	if err != nil {

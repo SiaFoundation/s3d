@@ -299,7 +299,11 @@ func (s *Sia) syncMetadata(ctx context.Context) {
 
 		var failed bool
 		for _, ev := range events {
-			if ev.Deleted || ev.Object == nil {
+			if ev.Deleted {
+				s.logger.Debug("skipping deleted object event", zap.Stringer("objectID", &ev.Key))
+				continue
+			} else if ev.Object == nil {
+				s.logger.Warn("skipping event with nil object", zap.Stringer("objectID", &ev.Key))
 				continue
 			}
 
