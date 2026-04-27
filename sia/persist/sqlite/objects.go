@@ -193,7 +193,7 @@ func (s *Store) MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, sea
 	})
 }
 
-// UpdateSiaObject updates the object's metadata in the database. 
+// UpdateSiaObject updates the object's metadata in the database.
 // It returns a boolean that indicates whether the object was updated.
 func (s *Store) UpdateSiaObject(siaObject objects.SiaObject) (updated bool, err error) {
 	err = s.transaction(func(tx *txn) error {
