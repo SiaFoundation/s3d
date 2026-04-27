@@ -15,7 +15,7 @@ bucket addressing, multipart uploads, and upload packing for small objects.
 `s3d` is built on top of the [Sia Storage SDK](https://pkg.go.dev/go.sia.tech/siastorage).
 All data is encrypted client-side by the SDK and distributed across the Sia
 network. The server stores lightweight metadata in a local SQLite database.
-Small objects may be temporarily buffered on disk before being uploaded to Sia;
+Objects are buffered on disk before being uploaded to Sia in the background;
 see [Upload Packing](#upload-packing) for details.
 
 To build your own app on Sia, take a look at the
@@ -114,13 +114,11 @@ Sia stores data in fixed-size slabs made up of 4 MiB sectors. Uploading small
 objects individually wastes storage because the unused remainder of each slab
 sits empty.
 
-`s3d` uses a waste threshold to decide whether an object should be packed. When
-uploading an object directly would waste more than the configured percentage of
-slab space (default 10%), the object is written to a local packing directory
-instead. A background loop periodically collects buffered objects and packs them
-together using a bin-packing algorithm, uploading the result as a single
-operation. Objects that fit slabs efficiently bypass packing and stream directly
-to Sia.
+All objects are first written to a local uploads directory on disk. A background
+loop periodically collects pending objects and groups them together using a
+bin-packing algorithm. A group is uploaded to Sia once its waste falls below the
+configured threshold (default 10%). This ensures objects are packed efficiently
+into slabs regardless of size, minimizing wasted space on the network.
 
 ## Multipart Uploads
 
