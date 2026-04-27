@@ -29,19 +29,19 @@ func (s *Sia) uploadDir() string {
 	return filepath.Join(s.directory, UploadsDirectory)
 }
 
-func (s *Sia) openUpload(bucket, name string, obj *objects.Object, offset int64) (io.ReadCloser, error) {
-	if obj.FileName == nil {
+func (s *Sia) openUpload(bucket, name string, filename *string, multipart bool, offset int64) (io.ReadCloser, error) {
+	if filename == nil {
 		return nil, os.ErrNotExist
 	}
-	if obj.PartsCount > 0 {
+	if multipart {
 		parts, err := s.store.ObjectParts(bucket, name)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get object parts: %w", err)
 		}
-		uploadDir := filepath.Join(s.uploadDir(), *obj.FileName)
+		uploadDir := filepath.Join(s.uploadDir(), *filename)
 		return objects.NewReader(uploadDir, parts, offset)
 	}
-	f, err := os.Open(filepath.Join(s.uploadDir(), *obj.FileName))
+	f, err := os.Open(filepath.Join(s.uploadDir(), *filename))
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +195,7 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 		if resp.Range != nil {
 			offset = resp.Range.Start
 		}
-		rc, err := s.openUpload(bucket, object, obj, offset)
+		rc, err := s.openUpload(bucket, object, obj.FileName, obj.IsMultipart(), offset)
 		if errors.Is(err, fs.ErrNotExist) {
 			// the upload loop moved the file to Sia between our GetObject
 			// and file open, re-fetch to get the updated metadata and retry
@@ -203,7 +203,7 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 			if err != nil {
 				return nil, err
 			} else if obj.FileName != nil {
-				rc, err = s.openUpload(bucket, object, obj, offset)
+				rc, err = s.openUpload(bucket, object, obj.FileName, obj.IsMultipart(), offset)
 			}
 		}
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -221,7 +221,7 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 	if obj.SiaObject == nil {
 		return nil, fmt.Errorf("object cannot be found on disk or in Sia")
 	}
-	siaObj, err := s.sdk.UnsealObject(*obj.SiaObject)
+	siaObj, err := s.sdk.UnsealObject(obj.SiaObject.Sealed)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unseal object: %w", err)
 	}

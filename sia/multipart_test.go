@@ -491,6 +491,121 @@ func TestCompleteMultipartUpload(t *testing.T) {
 	}
 }
 
+func TestMultipartUpload(t *testing.T) {
+	log := zap.NewNop()
+	dir := t.TempDir()
+
+	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	memSDK := NewMemorySDK()
+	memSDK.SetSlabSize(24) // small slab so the test object meets the upload threshold
+	backend, err := sia.New(t.Context(), memSDK, store, dir,
+		sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
+		sia.WithLogger(log))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { backend.Close() })
+	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
+
+	const (
+		bucket = "upload-multipart-bucket"
+		object = "uploaded"
+	)
+
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// create a multipart upload with a single small part
+	partData := []byte("hello multipart upload")
+	res, err := s3Tester.CreateMultipartUpload(t.Context(), bucket, object, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uploadID := *res.UploadId
+
+	up, err := s3Tester.UploadPart(t.Context(), bucket, object, uploadID, 1, partData)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = s3Tester.CompleteMultipartUpload(t.Context(), bucket, object, uploadID, []s3Types.CompletedPart{
+		{PartNumber: aws.Int32(1), ETag: up.ETag},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// verify the completed object references the upload directory
+	obj, err := store.GetObject(aws.String(testutil.AccessKeyID), bucket, object, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obj.FileName == nil {
+		t.Fatal("expected filename to be set for completed multipart object")
+	}
+
+	// verify the upload directory still exists on disk
+	uploadDir := filepath.Join(dir, sia.UploadsDirectory, *obj.FileName)
+	if _, err := os.Stat(uploadDir); err != nil {
+		t.Fatal("expected upload directory to exist on disk:", err)
+	}
+
+	// verify GetObject serves the correct data from disk
+	getObj, err := s3Tester.GetObject(t.Context(), bucket, object, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(getObj.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(body, partData) {
+		t.Fatal("data mismatch for completed multipart object")
+	}
+
+	// run the upload loop to upload the object to Sia
+	backend.UploadObjects(t.Context())
+
+	// verify the object is now on Sia
+	obj, err = store.GetObject(aws.String(testutil.AccessKeyID), bucket, object, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obj.FileName != nil {
+		t.Fatal("expected filename to be nil after upload")
+	}
+	if obj.SiaObject == nil {
+		t.Fatal("expected object ID to be set after upload")
+	}
+	if obj.SiaObject == nil {
+		t.Fatal("expected sia object to be set after upload")
+	}
+
+	// verify upload directory is removed from disk after upload
+	if _, err := os.Stat(uploadDir); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatal("expected upload directory to be removed after upload")
+	}
+
+	// verify GetObject still serves the correct data, now from Sia
+	getObj, err = s3Tester.GetObject(t.Context(), bucket, object, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err = io.ReadAll(getObj.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(body, partData) {
+		t.Fatal("data mismatch after upload to Sia")
+	}
+}
+
 func TestMultipartUploadPartCopy(t *testing.T) {
 	dir := t.TempDir()
 	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), zap.NewNop())

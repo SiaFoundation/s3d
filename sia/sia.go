@@ -15,13 +15,14 @@ import (
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.sia.tech/core/types"
+	"go.sia.tech/coreutils/threadgroup"
 	"go.sia.tech/indexd/slabs"
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
 )
 
 const (
-	//  UploadsDirectory is the directory name used for storing pending uploads.
+	// UploadsDirectory is the directory name used for storing pending uploads.
 	UploadsDirectory = "uploads"
 )
 
@@ -31,10 +32,25 @@ var ErrNoAccessKey = errors.New("sia backend requires at least one access key")
 // Option is a configuration option for the S3 API handler.
 type Option func(*Sia)
 
-// WithLogger sets the logger for the S3 API handler.
+// WithLogger sets the logger for the Sia backend.
 func WithLogger(logger *zap.Logger) Option {
 	return func(s *Sia) {
 		s.logger = logger.Named("sia")
+	}
+}
+
+// WithUploadWaste sets the maximum percentage of wasted space tolerated per
+// slab.
+func WithUploadWaste(pct float64) Option {
+	return func(s *Sia) {
+		s.uploadWastePct = pct
+	}
+}
+
+// WithUploadDisabled disables the background upload loop.
+func WithUploadDisabled() Option {
+	return func(s *Sia) {
+		s.uploadDisabled = true
 	}
 }
 
@@ -50,12 +66,18 @@ func WithKeyPair(accessKeyID, secretKey string) func(*Sia) {
 
 // Sia implements the s3.Backend interface for storing data on Sia.
 type Sia struct {
-	sdk    SDK
-	logger *zap.Logger
-	store  Store
+	sdk   SDK
+	store Store
 
 	directory  string
 	accessKeys map[string]auth.SecretAccessKey
+
+	slabSize       int64
+	uploadWastePct float64
+	uploadDisabled bool
+
+	tg     *threadgroup.ThreadGroup
+	logger *zap.Logger
 }
 
 // SDK describes the SDK used to interact with Sia.
@@ -63,9 +85,11 @@ type SDK interface {
 	DeleteObject(ctx context.Context, id types.Hash256) error
 	Download(ctx context.Context, w io.Writer, obj sdk.Object, rnge *s3.ObjectRange) error
 	ObjectEvents(ctx context.Context, cursor sdk.ObjectsCursor, limit int) ([]sdk.ObjectEvent, error)
-	Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
-	SealObject(obj sdk.Object) objects.SiaObject
-	UnsealObject(siaObject objects.SiaObject) (sdk.Object, error)
+	SlabSize() (int64, error)
+	UploadPacked() (PackedUpload, error)
+	PinObject(ctx context.Context, obj sdk.Object) error
+	SealObject(obj sdk.Object) sdk.SealedObject
+	UnsealObject(sealed sdk.SealedObject) (sdk.Object, error)
 }
 
 // Store represents the storage backend used by the Sia backend.
@@ -81,9 +105,10 @@ type Store interface {
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
 	ListObjects(accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error)
 	ObjectParts(bucket, name string) ([]objects.Part, error)
+	ObjectsForUpload() ([]objects.ObjectForUpload, error)
 	OrphanedObjects(limit int) ([]types.Hash256, error)
 	PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string, updateModTime bool) error
-	MarkObjectUploaded(bucket, name string, siaObject objects.SiaObject) error
+	MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, sealed sdk.SealedObject) error
 	UpdateSiaObject(siaObject objects.SiaObject) (bool, error)
 	RemoveOrphanedObject(objectID types.Hash256) error
 	AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) error
@@ -99,18 +124,23 @@ type Store interface {
 // New creates a new Sia backend instance.
 func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Option) (*Sia, error) {
 	sia := &Sia{
-		logger: zap.NewNop(),
-		sdk:    sdk,
-		store:  store,
+		sdk:   sdk,
+		store: store,
 
-		directory:  directory,
-		accessKeys: make(map[string]auth.SecretAccessKey),
+		directory:      directory,
+		accessKeys:     make(map[string]auth.SecretAccessKey),
+		uploadWastePct: DefaultUploadWastePct,
+
+		logger: zap.NewNop(),
+		tg:     threadgroup.New(),
 	}
 	for _, opt := range opts {
 		opt(sia)
 	}
 	if len(sia.accessKeys) == 0 {
 		return nil, ErrNoAccessKey
+	} else if sia.uploadWastePct <= 0 {
+		return nil, errors.New("upload waste percentage must be greater than 0")
 	}
 
 	dir := filepath.Join(sia.directory, UploadsDirectory)
@@ -118,13 +148,39 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		return nil, fmt.Errorf("failed to create directory %q: %w", dir, err)
 	}
 
+	// initialize slab size if the upload loop is enabled
+	slabSize, err := sia.sdk.SlabSize()
+	if err != nil {
+		return nil, fmt.Errorf("failed to determine slab size: %w", err)
+	}
+	sia.slabSize = slabSize
+
 	// TODO: clean up orphaned uploads and multipart uploads in uploads
 	// directory on startup
 
-	go sia.processOrphansLoop(ctx)
-	go sia.syncMetadataLoop(ctx)
+	launchBgLoop := func(loopFn func(context.Context)) error {
+		ctx, cancel, err := sia.tg.AddContext(ctx)
+		if err != nil {
+			return err
+		}
+		go func() {
+			defer cancel()
+			loopFn(ctx)
+		}()
+		return nil
+	}
+
+	launchBgLoop(sia.processOrphansLoop)
+	launchBgLoop(sia.syncMetadataLoop)
+	launchBgLoop(sia.uploadLoop)
 
 	return sia, nil
+}
+
+// Close shuts down the Sia backend and waits for background goroutines.
+func (s *Sia) Close() error {
+	s.tg.Stop()
+	return nil
 }
 
 // processOrphansLoop periodically processes orphaned objects.
@@ -220,8 +276,6 @@ func (s *Sia) syncMetadataLoop(ctx context.Context) {
 
 // syncMetadata fetches object events from the indexer since the last sync
 // and applies metadata updates to local objects.
-//
-//nolint:revive // capitalization clash with test export is intentional
 func (s *Sia) syncMetadata(ctx context.Context) {
 	const batchSize = 100
 
@@ -250,7 +304,7 @@ func (s *Sia) syncMetadata(ctx context.Context) {
 			}
 
 			sealed := s.sdk.SealObject(*ev.Object)
-			updated, err := s.store.UpdateSiaObject(sealed)
+			updated, err := s.store.UpdateSiaObject(objects.SiaObject{ID: sealed.ID(), Sealed: sealed})
 			if err != nil {
 				s.logger.Error("failed to update Sia object in store",
 					zap.Stringer("objectID", ev.Object.ID()),

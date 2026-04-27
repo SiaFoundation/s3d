@@ -11,7 +11,6 @@ import (
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.sia.tech/core/types"
-	"go.sia.tech/indexd/slabs"
 	sdk "go.sia.tech/siastorage"
 )
 
@@ -120,7 +119,7 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, partNumber 
 		if objectID.Valid && siaObj.Valid {
 			obj.SiaObject = &objects.SiaObject{
 				ID:     types.Hash256(objectID.V),
-				Sealed: slabs.SealedObject(siaObj.V),
+				Sealed: sdk.SealedObject(siaObj.V),
 			}
 		}
 		return err
@@ -143,7 +142,7 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, partNumber 
 	if objectID.Valid && siaObj.Valid {
 		obj.SiaObject = &objects.SiaObject{
 			ID:     types.Hash256(objectID.V),
-			Sealed: slabs.SealedObject(siaObj.V),
+			Sealed: sdk.SealedObject(siaObj.V),
 		}
 	}
 	return err
@@ -165,27 +164,32 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte,
 }
 
 // MarkObjectUploaded transitions a pending upload to a Sia-backed object by
-// setting the sia_object_id and sia_object columns while clearing filename.
-// Fails if the object already has a sia_object_id.
-func (s *Store) MarkObjectUploaded(bucket, name string, siaObject objects.SiaObject) error {
+// setting the object_id, sia_object and cached_at fields while clearing
+// filename. The update targets any pending object matching the bucket and name,
+// returning ErrObjectNotFound if no pending object exists or ErrObjectModified
+// if the stored content MD5 does not match the provided contentMD5.
+func (s *Store) MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, sealed sdk.SealedObject) error {
 	return s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
-		res, err := tx.Exec(`
+
+		var storedMD5 [16]byte
+		err = tx.QueryRow(`
 			UPDATE objects
 			SET sia_object_id = $1, sia_object = $2, filename = NULL
-			WHERE bucket_id = $3 AND name = $4 AND sia_object_id IS NULL
-		`, sqlHash256(siaObject.ID), sqlSiaObject(siaObject.Sealed), bid, name)
-		if err != nil {
+			WHERE bucket_id = $4 AND name = $5 AND sia_object_id IS NULL
+			RETURNING content_md5
+		`, sqlHash256(sealed.ID()), sqlSiaObject(sealed), bid, name).Scan((*sqlMD5)(&storedMD5))
+		if errors.Is(err, sql.ErrNoRows) {
+			return objects.ErrObjectNotFound
+		} else if err != nil {
 			return err
-		} else if n, err := res.RowsAffected(); err != nil {
-			return err
-		} else if n == 0 {
-			return fmt.Errorf("object already has a sia_object_id or does not exist")
+		} else if storedMD5 != contentMD5 {
+			return objects.ErrObjectModified
 		}
-		return err
+		return nil
 	})
 }
 
@@ -325,6 +329,37 @@ func (s *Store) RemoveOrphanedObject(objectID types.Hash256) error {
 	})
 }
 
+// ObjectsForUpload returns all objects stored on disk, ordered by size
+// descending for greedy best-fit slab filling.
+func (s *Store) ObjectsForUpload() ([]objects.ObjectForUpload, error) {
+	var objs []objects.ObjectForUpload
+	if err := s.transaction(func(tx *txn) error {
+		rows, err := tx.Query(`
+			SELECT b.name, o.name, o.filename, o.content_md5, o.size, EXISTS(SELECT 1 FROM object_parts p WHERE p.bucket_id = o.bucket_id AND p.name = o.name) AS has_parts
+			FROM objects o
+			JOIN buckets b ON b.id = o.bucket_id
+			WHERE o.filename IS NOT NULL
+			ORDER BY o.size DESC
+		`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var obj objects.ObjectForUpload
+			if err := rows.Scan(&obj.Bucket, &obj.Name, &obj.Filename, (*sqlMD5)(&obj.ContentMD5), &obj.Length, &obj.Multipart); err != nil {
+				return err
+			}
+			objs = append(objs, obj)
+		}
+		return rows.Err()
+	}); err != nil {
+		return nil, err
+	}
+	return objs, nil
+}
+
 func putObject(tx *txn, bid int64, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string, siaObject *objects.SiaObject, updateModTime bool) error {
 	if meta == nil {
 		meta = make(map[string]string) // force '{}' instead of 'null' in JSON
@@ -358,14 +393,6 @@ func putObject(tx *txn, bid int64, name string, contentMD5 [16]byte, meta map[st
 		fileName, sealed, updateModTime)
 	if err != nil {
 		return err
-	}
-
-	// clear any stale orphan entry for the new object ID, in case it was
-	// previously orphaned and is now referenced again
-	if siaObject != nil {
-		if _, err := tx.Exec("DELETE FROM orphaned_objects WHERE sia_object_id = $1", sqlHash256(siaObject.ID)); err != nil {
-			return err
-		}
 	}
 
 	if oldID != nil && (siaObject == nil || *oldID != siaObject.ID) {
