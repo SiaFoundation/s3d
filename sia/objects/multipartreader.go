@@ -25,18 +25,37 @@ type MultipartReader struct {
 	currPart Part
 }
 
-// NewReader creates a new Reader for the given multipart upload.
-func NewReader(partsDir string, parts []Part) (*MultipartReader, error) {
+// NewReader creates a new Reader for the given multipart upload starting at
+// the given byte offset. Parts that fall entirely before the offset are
+// skipped, and within the first relevant part the file is seeked past the
+// remaining bytes.
+func NewReader(partsDir string, parts []Part, offset int64) (*MultipartReader, error) {
 	for _, part := range parts {
 		partPath := filepath.Join(partsDir, fmt.Sprintf("%d", part.PartNumber), part.Filename)
 		if _, err := os.Stat(partPath); err != nil {
 			return nil, fmt.Errorf("failed to stat part file %d: %w", part.PartNumber, err)
 		}
 	}
-	return &MultipartReader{
+
+	// skip whole parts before offset
+	for len(parts) > 0 && offset >= parts[0].Size {
+		offset -= parts[0].Size
+		parts = parts[1:]
+	}
+
+	r := &MultipartReader{
 		remainingParts: parts,
 		partsDir:       partsDir,
-	}, nil
+	}
+
+	// discard remaining bytes within the first part so the hasher stays correct
+	if offset > 0 && len(parts) > 0 {
+		if _, err := io.CopyN(io.Discard, r, offset); err != nil {
+			r.Close()
+			return nil, fmt.Errorf("failed to skip to offset: %w", err)
+		}
+	}
+	return r, nil
 }
 
 // Read reads data from the multipart upload parts sequentially.
