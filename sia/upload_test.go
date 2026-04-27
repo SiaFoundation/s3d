@@ -179,6 +179,16 @@ func TestOpenAndRemoveUpload(t *testing.T) {
 		t.Fatal("file should have been removed after all locks were released")
 	}
 
+	// unlocking an unlocked file should panic
+	func() {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Fatal("expected panic when unlocking an unlocked file")
+			}
+		}()
+		unlock2()
+	}()
+
 	// verify the lockedUploads map is cleaned up
 	s.lockedUploadsMu.Lock()
 	if _, ok := s.lockedUploads[fileName]; ok {
