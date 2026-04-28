@@ -175,9 +175,13 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		return nil
 	}
 
-	launchBgLoop(sia.processOrphansLoop)
-	launchBgLoop(sia.syncMetadataLoop)
-	launchBgLoop(sia.uploadLoop)
+	if err := errors.Join(
+		launchBgLoop(sia.processOrphansLoop),
+		launchBgLoop(sia.syncMetadataLoop),
+		launchBgLoop(sia.uploadLoop),
+	); err != nil {
+		return nil, err
+	}
 
 	return sia, nil
 }
