@@ -109,14 +109,20 @@ func TestGetObject(t *testing.T) {
 		t.Fatal(err)
 	} else if objPart1.ID == nil || *objPart1.ID != objID {
 		t.Fatalf("expected object ID %v, got %v", objID, objPart1.ID)
+	} else if objPart1.PartsCount != 0 {
+		t.Fatalf("expected parts count 0, got %d", objPart1.PartsCount)
 	} else if objPart1.Offset != 0 {
 		t.Fatalf("expected object offset 0, got %d", objPart1.Offset)
 	} else if objPart1.Length != int64(objLength) {
 		t.Fatalf("expected object length %d, got %d", objLength, objPart1.Length)
+	} else if objPart1.Size != int64(objLength) {
+		t.Fatalf("expected object size %d, got %d", objLength, objPart1.Size)
 	} else if objPart1.ContentMD5 != objMD5 {
 		t.Fatalf("expected object MD5 %v, got %v", objMD5, objPart1.ContentMD5)
 	} else if len(objPart1.Meta) != len(objMeta) || objPart1.Meta["foo"] != "bar" {
 		t.Fatalf("expected object metadata %v, got %v", objMeta, objPart1.Meta)
+	} else if objPart1.SiaObject == nil {
+		t.Fatal("expected sia object to be set")
 	}
 
 	// mark multipart object as uploaded
@@ -137,10 +143,14 @@ func TestGetObject(t *testing.T) {
 		t.Fatalf("expected object offset %d, got %d", s3.MinUploadPartSize, multipartPart2.Offset)
 	} else if multipartPart2.Length != 2 {
 		t.Fatalf("expected object length %d, got %d", 2, multipartPart2.Length)
+	} else if multipartPart2.Size != totalSize {
+		t.Fatalf("expected object size %d, got %d", totalSize, multipartPart2.Size)
 	} else if multipartPart2.ContentMD5 != part2MD5 {
 		t.Fatalf("expected object MD5 %v, got %v", part2MD5, multipartPart2.ContentMD5)
 	} else if len(multipartPart2.Meta) != len(multipartMeta) || multipartPart2.Meta["baz"] != "qux" {
 		t.Fatalf("expected object metadata %v, got %v", multipartMeta, multipartPart2.Meta)
+	} else if multipartPart2.SiaObject == nil {
+		t.Fatal("expected sia object to be set")
 	}
 
 	// get object with invalid part number
