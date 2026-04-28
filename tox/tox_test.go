@@ -26,6 +26,12 @@ func TestS3(t *testing.T) {
 	log := zap.NewNop()
 	dir := t.TempDir()
 
+	// resolve the s3-tests directory
+	testsDir := os.Getenv("S3_TESTS_DIR")
+	if testsDir == "" {
+		t.Skip("S3_TESTS_DIR not set")
+	}
+
 	// create a Sia cluster with 30 hosts
 	cluster := testutils.NewCluster(t, testutils.WithLogger(log), testutils.WithHosts(30))
 
@@ -43,7 +49,7 @@ func TestS3(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create SDK: %v", err)
 	}
-	defer sdkClient.Close()
+	t.Cleanup(func() { sdkClient.Close() })
 
 	// create store
 	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
@@ -63,12 +69,12 @@ func TestS3(t *testing.T) {
 	seen := make(map[string]bool)
 	for _, section := range toxConf.Sections() {
 		ak := section.Key("access_key").String()
-		sk := section.Key("secret_key").String()
-		if ak == "" || sk == "" || seen[ak] {
+		ssk := section.Key("secret_key").String()
+		if ak == "" || ssk == "" || seen[ak] {
 			continue
 		}
 		seen[ak] = true
-		siaOpts = append(siaOpts, sia.WithKeyPair(ak, sk))
+		siaOpts = append(siaOpts, sia.WithKeyPair(ak, ssk))
 	}
 	backend, err := sia.New(t.Context(), sia.NewSDK(sdkClient), store, dir, siaOpts...)
 	if err != nil {
@@ -102,12 +108,6 @@ func TestS3(t *testing.T) {
 	confPath := filepath.Join(t.TempDir(), "s3tests.conf")
 	if err := toxConf.SaveTo(confPath); err != nil {
 		t.Fatalf("failed to write s3tests.conf: %v", err)
-	}
-
-	// resolve the s3-tests directory
-	testsDir := os.Getenv("S3_TESTS_DIR")
-	if testsDir == "" {
-		t.Skip("S3_TESTS_DIR not set")
 	}
 
 	// we ignore the following tests
