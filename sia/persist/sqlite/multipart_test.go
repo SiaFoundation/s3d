@@ -154,7 +154,7 @@ func TestHasMultipartUpload(t *testing.T) {
 	}
 
 	// assert [s3errs.ErrNoSuchUpload] for unknown upload ID
-	if err := store.HasMultipartUpload(bucket, object, s3.NewUploadID()); !errors.Is(err, s3errs.ErrNoSuchUpload) {
+	if _, err := store.HasMultipartUpload(bucket, object, s3.NewUploadID()); !errors.Is(err, s3errs.ErrNoSuchUpload) {
 		t.Fatal(err)
 	}
 
@@ -165,9 +165,21 @@ func TestHasMultipartUpload(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// assert no error for existing upload
-	if err := store.HasMultipartUpload(bucket, object, uid); err != nil {
+	// assert no error and no parts for existing upload
+	if hasParts, err := store.HasMultipartUpload(bucket, object, uid); err != nil {
 		t.Fatal(err)
+	} else if hasParts {
+		t.Fatal("expected no parts")
+	}
+
+	// add a part and assert hasParts is true
+	if _, err := store.AddMultipartPart(bucket, object, uid, "p1", 1, [16]byte{}, 100); err != nil {
+		t.Fatal(err)
+	}
+	if hasParts, err := store.HasMultipartUpload(bucket, object, uid); err != nil {
+		t.Fatal(err)
+	} else if !hasParts {
+		t.Fatal("expected parts")
 	}
 }
 
@@ -276,7 +288,7 @@ func TestCompleteMultipartUpload(t *testing.T) {
 
 	contentMD5 := frand.Entropy128()
 	totalSize := s3.MinUploadPartSize + 5 // part1 + part2
-	if err := store.CompleteMultipartUpload(bucket, object, uid, contentMD5, int64(totalSize)); err != nil {
+	if _, err := store.CompleteMultipartUpload(bucket, object, uid, contentMD5, int64(totalSize)); err != nil {
 		t.Fatal(err)
 	}
 

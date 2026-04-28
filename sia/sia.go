@@ -55,6 +55,15 @@ func WithUploadDisabled() Option {
 	}
 }
 
+// WithDiskUsageLimit sets the maximum number of bytes that can be stored on
+// disk pending upload to Sia. When the limit is reached, new uploads block
+// until existing data has been offloaded. A value of 0 disables the limit.
+func WithDiskUsageLimit(limit uint64) Option {
+	return func(s *Sia) {
+		s.diskUsageLimit = limit
+	}
+}
+
 // WithKeyPair adds a key pair to the Sia backend.
 func WithKeyPair(accessKeyID, secretKey string) func(*Sia) {
 	return func(mb *Sia) {
@@ -76,6 +85,11 @@ type Sia struct {
 	slabSize       int64
 	uploadWastePct float64
 	uploadDisabled bool
+	diskUsageLimit uint64
+
+	diskUsageMu   sync.Mutex
+	diskUsageWake chan struct{}
+	diskUsage     uint64
 
 	lockedUploadsMu sync.Mutex
 	lockedUploads   map[string]*lockedUpload
@@ -98,10 +112,11 @@ type SDK interface {
 
 // Store represents the storage backend used by the Sia backend.
 type Store interface {
-	CopyObject(srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool) (*objects.Object, error)
+	CopyObject(srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool) (*objects.Object, *string, error)
 	CreateBucket(accessKeyID, bucket string) error
 	DeleteBucket(accessKeyID, bucket string) error
 	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (*string, error)
+	DiskUsage() (uint64, error)
 	GetObject(accessKeyID *string, bucket, object string, partNumber *int32) (*objects.Object, error)
 	HeadBucket(accessKeyID, bucket string) error
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
@@ -109,15 +124,15 @@ type Store interface {
 	ObjectParts(bucket, name string) ([]objects.Part, error)
 	ObjectsForUpload() ([]objects.ObjectForUpload, error)
 	OrphanedObjects(limit int) ([]types.Hash256, error)
-	PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string, updateModTime bool) error
+	PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string, updateModTime bool) (*string, error)
 	MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, siaObject slabs.SealedObject) error
 	UpdateSiaObject(siaObject slabs.SealedObject, cachedAt time.Time) error
 	RemoveOrphanedObject(objectID types.Hash256) error
 	AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) error
 	AddMultipartPart(bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (string, error)
 	CreateMultipartUpload(bucket, name string, uploadID s3.UploadID, meta map[string]string) error
-	CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64) error
-	HasMultipartUpload(bucket, name string, uploadID s3.UploadID) error
+	CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64) (*string, error)
+	HasMultipartUpload(bucket, name string, uploadID s3.UploadID) (hasParts bool, err error)
 	ListMultipartUploads(bucket string, prefix s3.Prefix, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error)
 	ListParts(bucket, name string, uploadID s3.UploadID, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error)
 	MultipartParts(bucket, name string, uploadID s3.UploadID) ([]objects.Part, error)
@@ -137,6 +152,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		logger: zap.NewNop(),
 		tg:     threadgroup.New(),
 	}
+	sia.diskUsageWake = make(chan struct{})
 	for _, opt := range opts {
 		opt(sia)
 	}
@@ -150,6 +166,11 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create directory %q: %w", dir, err)
 	}
+	diskUsage, err := sia.store.DiskUsage()
+	if err != nil {
+		return nil, fmt.Errorf("failed to determine disk usage: %w", err)
+	}
+	sia.diskUsage = diskUsage
 
 	// initialize slab size if the upload loop is enabled
 	slabSize, err := sia.sdk.SlabSize()
