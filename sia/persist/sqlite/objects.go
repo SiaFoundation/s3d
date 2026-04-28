@@ -103,11 +103,8 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, partNumber 
 
 	// return full object if no part specified
 	if partNumber == nil || obj.PartsCount == 0 {
-		if obj.PartsCount == 0 && partNumber != nil {
-			if *partNumber != 1 {
-				return s3errs.ErrInvalidPart
-			}
-			obj.PartsCount = *partNumber
+		if obj.PartsCount == 0 && partNumber != nil && *partNumber != 1 {
+			return s3errs.ErrInvalidPart
 		}
 		var objectID sql.Null[sqlHash256]
 		var siaObj sql.Null[sqlSiaObject]
@@ -126,20 +123,24 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, partNumber 
 	}
 
 	// return error if part number is invalid
-	if partNumber != nil && obj.PartsCount > 0 && *partNumber > int32(obj.PartsCount) {
+	if *partNumber > int32(obj.PartsCount) {
 		return s3errs.ErrInvalidPart
 	}
 
 	// part specified, return part info
 	var partObjID sql.Null[sqlHash256]
+	var siaObj sql.Null[sqlSiaObject]
 	err = tx.QueryRow(`
-		SELECT o.object_id, o.metadata, o.updated_at, p.offset, p.content_length, p.content_md5
+		SELECT o.object_id, o.filename, o.metadata, o.updated_at, p.offset, p.content_length, p.content_md5, o.sia_object, o.cached_at
 		FROM object_parts p
 		JOIN objects o ON o.bucket_id = p.bucket_id AND o.name = p.name
 		WHERE o.bucket_id = $1 AND o.name = $2 AND p.part_number = $3
-	`, bid, name, *partNumber).Scan(&partObjID, (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Offset, &obj.Length, (*sqlMD5)(&obj.ContentMD5))
+	`, bid, name, *partNumber).Scan(&partObjID, &obj.FileName, (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Offset, &obj.Length, (*sqlMD5)(&obj.ContentMD5), &siaObj, (*sqlTime)(&obj.CachedAt))
 	if partObjID.Valid {
 		obj.ID = (*types.Hash256)(&partObjID.V)
+	}
+	if siaObj.Valid {
+		obj.SiaObject = (*slabs.SealedObject)(&siaObj.V)
 	}
 	return err
 }
