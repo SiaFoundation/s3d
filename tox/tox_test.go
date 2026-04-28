@@ -49,14 +49,12 @@ func TestS3(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create SDK: %v", err)
 	}
-	t.Cleanup(func() { sdkClient.Close() })
 
 	// create store
 	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
 	if err != nil {
 		t.Fatalf("failed to open database: %v", err)
 	}
-	t.Cleanup(func() { store.Close() })
 
 	// parse tox conf
 	ini.DefaultHeader = true
@@ -97,6 +95,10 @@ func TestS3(t *testing.T) {
 	}()
 	t.Cleanup(func() {
 		server.Close()
+		backend.Close()
+		sdkClient.Close()
+		store.Close()
+		cluster.Close()
 		if err := <-errCh; err != nil {
 			t.Errorf("server error: %v", err)
 		}

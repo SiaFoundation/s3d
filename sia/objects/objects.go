@@ -27,6 +27,7 @@ type Object struct {
 	Meta         map[string]string
 	Offset       int64
 	Length       int64
+	Size         int64
 	ContentMD5   [16]byte
 	LastModified time.Time
 
