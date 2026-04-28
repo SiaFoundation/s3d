@@ -1,12 +1,14 @@
 package sia_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sync"
 	"testing"
 	"unsafe"
@@ -32,6 +34,7 @@ type MemorySDK struct {
 	mu       sync.Mutex
 	appKey   types.PrivateKey
 	objects  map[types.Hash256]uploadedObject
+	events   []sdk.ObjectEvent
 	slabSize int64
 
 	objectCallCount int
@@ -71,18 +74,38 @@ func (s *MemorySDK) Download(ctx context.Context, w io.Writer, obj sdk.Object, r
 	return err
 }
 
-func (s *MemorySDK) Object(ctx context.Context, objectID types.Hash256) (sdk.Object, error) {
+// SetEvents replaces the events returned by ObjectEvents.
+func (s *MemorySDK) SetEvents(events []sdk.ObjectEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.objectCallCount++
-	if s.fail {
-		return sdk.Object{}, errors.New("indexer error")
+	s.events = events
+}
+
+func (s *MemorySDK) ObjectEvents(_ context.Context, cursor slabs.Cursor, limit int) ([]sdk.ObjectEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sorted := slices.Clone(s.events)
+	slices.SortFunc(sorted, func(a, b sdk.ObjectEvent) int {
+		if c := a.UpdatedAt.Compare(b.UpdatedAt); c != 0 {
+			return c
+		}
+		return bytes.Compare(a.Key[:], b.Key[:])
+	})
+
+	var filtered []sdk.ObjectEvent
+	for _, ev := range sorted {
+		after := ev.UpdatedAt.After(cursor.After) ||
+			(ev.UpdatedAt.Equal(cursor.After) && bytes.Compare(ev.Key[:], cursor.Key[:]) > 0)
+		if !after {
+			continue
+		}
+		filtered = append(filtered, ev)
+		if len(filtered) >= limit {
+			break
+		}
 	}
-	obj, exists := s.objects[objectID]
-	if !exists {
-		return sdk.Object{}, errors.New("object not found")
-	}
-	return obj.meta, nil
+	return filtered, nil
 }
 
 // Upload stores an object in memory. It is not part of the SDK interface but
@@ -155,11 +178,11 @@ func (u *memoryPackedUpload) Finalize(ctx context.Context) ([]sdk.Object, error)
 
 func (u *memoryPackedUpload) Close() error { return nil }
 
-func (s *MemorySDK) SealObject(obj sdk.Object) slabs.SealedObject {
-	return obj.Seal(s.appKey).SealedObject
+func (s *MemorySDK) SealObject(obj sdk.Object) sdk.SealedObject {
+	return obj.Seal(s.appKey)
 }
 
-func (s *MemorySDK) UnsealObject(sealed slabs.SealedObject) (sdk.Object, error) {
+func (s *MemorySDK) UnsealObject(sealed sdk.SealedObject) (sdk.Object, error) {
 	obj, exists := s.objects[sealed.ID()]
 	if !exists {
 		return sdk.Object{}, errors.New("object not found")
@@ -185,7 +208,7 @@ func NewTester(t testing.TB, opts ...testutil.TesterOption) *testutil.S3Tester {
 }
 
 func NewCustomTester(t testing.TB, dir string, store sia.Store, sdk sia.SDK, log *zap.Logger, opts ...testutil.TesterOption) *testutil.S3Tester {
-	backend, err := sia.New(context.Background(), sdk, store, dir,
+	backend, err := sia.New(t.Context(), sdk, store, dir,
 		sia.WithUploadDisabled(),
 		sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
 		sia.WithLogger(log))

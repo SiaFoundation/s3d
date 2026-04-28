@@ -88,12 +88,12 @@ type Sia struct {
 type SDK interface {
 	DeleteObject(ctx context.Context, id types.Hash256) error
 	Download(ctx context.Context, w io.Writer, obj sdk.Object, rnge *s3.ObjectRange) error
-	Object(ctx context.Context, id types.Hash256) (sdk.Object, error)
+	ObjectEvents(ctx context.Context, cursor slabs.Cursor, limit int) ([]sdk.ObjectEvent, error)
 	SlabSize() (int64, error)
 	UploadPacked() (PackedUpload, error)
 	PinObject(ctx context.Context, obj sdk.Object) error
-	SealObject(obj sdk.Object) slabs.SealedObject
-	UnsealObject(sealed slabs.SealedObject) (sdk.Object, error)
+	SealObject(obj sdk.Object) sdk.SealedObject
+	UnsealObject(sealed sdk.SealedObject) (sdk.Object, error)
 }
 
 // Store represents the storage backend used by the Sia backend.
@@ -104,14 +104,16 @@ type Store interface {
 	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (*string, error)
 	GetObject(accessKeyID *string, bucket, object string, partNumber *int32) (*objects.Object, error)
 	HeadBucket(accessKeyID, bucket string) error
+	ObjectsCursor() (slabs.Cursor, error)
+	SetObjectsCursor(cursor slabs.Cursor) error
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
 	ListObjects(accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error)
 	ObjectParts(bucket, name string) ([]objects.Part, error)
 	ObjectsForUpload() ([]objects.ObjectForUpload, error)
 	OrphanedObjects(limit int) ([]types.Hash256, error)
 	PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string, updateModTime bool) error
-	MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, siaObject slabs.SealedObject) error
-	UpdateSiaObject(siaObject slabs.SealedObject, cachedAt time.Time) error
+	MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, sealed sdk.SealedObject) error
+	UpdateSiaObject(siaObject objects.SiaObject) (bool, error)
 	RemoveOrphanedObject(objectID types.Hash256) error
 	AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) error
 	AddMultipartPart(bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (string, error)
@@ -161,24 +163,24 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 	// TODO: clean up orphaned uploads and multipart uploads in uploads
 	// directory on startup
 
-	ctx, cancel, err := sia.tg.AddContext(ctx)
-	if err != nil {
-		return nil, err
-	}
-	go func() {
-		defer cancel()
-		sia.processOrphansLoop(ctx)
-	}()
-
-	if !sia.uploadDisabled {
+	launchBgLoop := func(loopFn func(context.Context)) error {
 		ctx, cancel, err := sia.tg.AddContext(ctx)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		go func() {
 			defer cancel()
-			sia.uploadLoop(ctx)
+			loopFn(ctx)
 		}()
+		return nil
+	}
+
+	if err := errors.Join(
+		launchBgLoop(sia.processOrphansLoop),
+		launchBgLoop(sia.syncMetadataLoop),
+		launchBgLoop(sia.uploadLoop),
+	); err != nil {
+		return nil, err
 	}
 
 	return sia, nil
@@ -261,4 +263,85 @@ func (s *Sia) LoadSecret(ctx context.Context, accessKeyID string) (auth.SecretAc
 		return nil, s3errs.ErrInvalidAccessKeyId
 	}
 	return slices.Clone(secret), nil
+}
+
+// syncMetadataLoop periodically syncs object metadata from the indexer.
+func (s *Sia) syncMetadataLoop(ctx context.Context) {
+	t := time.NewTicker(24 * time.Hour)
+	defer t.Stop()
+
+	// sync once on startup
+	s.syncMetadata(ctx)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.syncMetadata(ctx)
+		}
+	}
+}
+
+// syncMetadata fetches object events from the indexer since the last sync
+// and applies metadata updates to local objects.
+func (s *Sia) syncMetadata(ctx context.Context) { //nolint:revive
+	const batchSize = 100
+
+	// fetch the cursor
+	cursor, err := s.store.ObjectsCursor()
+	if err != nil {
+		s.logger.Error("failed to get objects cursor", zap.Error(err))
+		return
+	}
+
+	// fetch and apply events
+	var synced int
+	for ctx.Err() == nil {
+		events, err := s.sdk.ObjectEvents(ctx, cursor, batchSize)
+		if err != nil {
+			s.logger.Error("failed to fetch object events", zap.Error(err))
+			break
+		} else if len(events) == 0 {
+			break
+		}
+
+		var failed bool
+		for _, ev := range events {
+			if ev.Deleted {
+				s.logger.Debug("skipping deleted object event", zap.Stringer("objectID", &ev.Key))
+				continue
+			} else if ev.Object == nil {
+				s.logger.Warn("skipping event with nil object", zap.Stringer("objectID", &ev.Key))
+				continue
+			}
+
+			sealed := s.sdk.SealObject(*ev.Object)
+			updated, err := s.store.UpdateSiaObject(objects.SiaObject{ID: sealed.ID(), Sealed: sealed})
+			if err != nil {
+				s.logger.Error("failed to update Sia object in store",
+					zap.Stringer("objectID", ev.Object.ID()),
+					zap.Error(err))
+				failed = true
+				break
+			} else if updated {
+				synced++
+			}
+		}
+		if failed {
+			break
+		}
+
+		// advance the cursor to the last event
+		last := events[len(events)-1]
+		cursor = slabs.Cursor{After: last.UpdatedAt, Key: last.Key}
+		if err := s.store.SetObjectsCursor(cursor); err != nil {
+			s.logger.Error("failed to update objects cursor", zap.Error(err))
+			break
+		}
+	}
+
+	if synced > 0 {
+		s.logger.Info("synced object metadata", zap.Int("synced", synced))
+	}
 }

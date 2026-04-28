@@ -171,6 +171,10 @@ func (s *Sia) prepareUploads() []uploadGroup {
 }
 
 func (s *Sia) uploadLoop(ctx context.Context) {
+	if s.uploadDisabled {
+		return
+	}
+
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
 
