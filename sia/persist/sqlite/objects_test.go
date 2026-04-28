@@ -158,6 +158,7 @@ func TestListObjects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { store.Close() })
 
 	// prepare a bucket
 	bucket := "foo"
@@ -369,6 +370,7 @@ func TestListObjectsMatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { store.Close() })
 
 	// prepare a bucket
 	bucket := "foo"
@@ -477,6 +479,7 @@ func TestListObjectsWalk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { store.Close() })
 
 	// prepare a bucket
 	bucket := "foo"
@@ -573,6 +576,7 @@ func BenchmarkListObjects(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
+	b.Cleanup(func() { store.Close() })
 
 	// prepare a bucket
 	bucket := "foo"
