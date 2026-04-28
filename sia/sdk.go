@@ -58,16 +58,25 @@ func (s *IndexdSDK) Download(ctx context.Context, w io.Writer, obj sdk.Object, r
 	return s.inner.Download(ctx, w, obj, opts...)
 }
 
-// Upload uploads an object to indexd and saves it.
-func (s *IndexdSDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error) {
-	obj := sdk.NewEmptyObject()
-	if err := s.inner.Upload(ctx, &obj, r, s.ulOpts...); err != nil {
-		return sdk.Object{}, err
+// SlabSize returns the slab size by creating a temporary packed upload and
+// reading its capacity.
+func (s *IndexdSDK) SlabSize() (int64, error) {
+	pu, err := s.inner.UploadPacked(s.ulOpts...)
+	if err != nil {
+		return 0, err
 	}
-	if err := s.inner.PinObject(ctx, obj); err != nil {
-		return sdk.Object{}, err
-	}
-	return obj, nil
+	defer pu.Close()
+	return pu.SlabSize(), nil
+}
+
+// UploadPacked creates a new packed upload.
+func (s *IndexdSDK) UploadPacked() (PackedUpload, error) {
+	return s.inner.UploadPacked(s.ulOpts...)
+}
+
+// PinObject pins the given object in the indexer.
+func (s *IndexdSDK) PinObject(ctx context.Context, obj sdk.Object) error {
+	return s.inner.PinObject(ctx, obj)
 }
 
 // DeleteObject deletes the object with the given key from the indexer.

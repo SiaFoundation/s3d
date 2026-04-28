@@ -212,6 +212,7 @@ func main() {
 	for _, kp := range cfg.Sia.KeyPairs {
 		siaOpts = append(siaOpts, sia.WithKeyPair(kp.AccessKey, kp.SecretKey))
 	}
+	siaOpts = append(siaOpts, sia.WithLogger(log.Named("backend")))
 
 	backend, err := sia.New(ctx, sia.NewSDK(sdkClient), store, cfg.Directory, siaOpts...)
 	if errors.Is(err, sia.ErrNoAccessKey) {
@@ -219,6 +220,7 @@ func main() {
 	} else if err != nil {
 		checkFatalError("failed to create Sia backend", err)
 	}
+	defer backend.Close()
 
 	s3Handler := s3.New(backend, s3.WithHostBucketBases(cfg.S3.HostBases),
 		s3.WithLogger(log))

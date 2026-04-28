@@ -24,46 +24,120 @@ import (
 
 const metadataCacheLifetime = 24 * time.Hour
 
-type readCloser struct {
-	io.Reader
-	io.Closer
+type (
+	lockedUpload struct {
+		deleted  bool
+		refCount int
+	}
+
+	lockedUploadReader struct {
+		io.Reader
+		c      io.Closer
+		unlock func()
+	}
+)
+
+func (lr *lockedUploadReader) Close() error {
+	err := lr.c.Close()
+	lr.unlock()
+	return err
 }
 
 func (s *Sia) uploadDir() string {
 	return filepath.Join(s.directory, UploadsDirectory)
 }
 
-func (s *Sia) openUpload(bucket, name string, obj *objects.Object, offset int64) (io.ReadCloser, error) {
-	if obj.FileName == nil {
+func (s *Sia) lockUpload(filename string) func() {
+	s.lockedUploadsMu.Lock()
+	defer s.lockedUploadsMu.Unlock()
+
+	lu, ok := s.lockedUploads[filename]
+	if !ok {
+		lu = &lockedUpload{}
+		s.lockedUploads[filename] = lu
+	}
+	lu.refCount++
+
+	return func() {
+		s.lockedUploadsMu.Lock()
+		defer s.lockedUploadsMu.Unlock()
+
+		lu.refCount--
+		if lu.refCount <= 0 {
+			_, locked := s.lockedUploads[filename]
+			if !locked {
+				panic(fmt.Sprintf("unlock called for filename %s that is not locked", filename))
+			}
+			delete(s.lockedUploads, filename)
+			if lu.deleted {
+				if err := os.RemoveAll(filepath.Join(s.uploadDir(), filename)); err != nil {
+					s.logger.Error("failed to remove upload upon unlock",
+						zap.String("filename", filename),
+						zap.Error(err))
+				}
+			}
+		}
+	}
+}
+
+func (s *Sia) openUpload(bucket, name string, filename *string, multipart bool, r *s3.ObjectRange) (_ io.ReadCloser, err error) {
+	if filename == nil {
 		return nil, os.ErrNotExist
 	}
-	if obj.PartsCount > 0 {
+	unlock := s.lockUpload(*filename)
+	defer func() {
+		if err != nil {
+			unlock()
+		}
+	}()
+
+	var offset int64
+	if r != nil {
+		offset = r.Start
+	}
+
+	var reader io.Reader
+	var closer io.Closer
+	if multipart {
 		parts, err := s.store.ObjectParts(bucket, name)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get object parts: %w", err)
 		}
-		uploadDir := filepath.Join(s.uploadDir(), *obj.FileName)
-		return objects.NewReader(uploadDir, parts, offset)
-	}
-	f, err := os.Open(filepath.Join(s.uploadDir(), *obj.FileName))
-	if err != nil {
-		return nil, err
-	}
-	if offset > 0 {
-		if _, err := f.Seek(offset, io.SeekStart); err != nil {
-			f.Close()
+		uploadDir := filepath.Join(s.uploadDir(), *filename)
+		r, err := objects.NewReader(uploadDir, parts, offset)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create multipart reader: %w", err)
+		}
+		reader, closer = r, r
+	} else {
+		f, err := os.Open(filepath.Join(s.uploadDir(), *filename))
+		if err != nil {
 			return nil, err
 		}
+		if offset > 0 {
+			if _, err := f.Seek(offset, io.SeekStart); err != nil {
+				f.Close()
+				return nil, err
+			}
+		}
+		reader, closer = f, f
 	}
-	return f, nil
+
+	if r != nil {
+		reader = io.LimitReader(reader, r.Length)
+	}
+	return &lockedUploadReader{Reader: reader, c: closer, unlock: unlock}, nil
 }
 
 func (s *Sia) removeUpload(fileName string) error {
-	// We use RemoveAll here since RemoveAll uses
-	// FILE_DISPOSITION_POSIX_SEMANTICS on supported Windows versions, which
-	// allows us to delete files that are currently being served without an error.
-	// Remove would fail on Windows which would lead to an unnecessary orphaned
-	// file.
+	s.lockedUploadsMu.Lock()
+	defer s.lockedUploadsMu.Unlock()
+
+	lu, ok := s.lockedUploads[fileName]
+	if ok {
+		lu.deleted = true
+		return nil
+	}
 	return os.RemoveAll(filepath.Join(s.uploadDir(), fileName))
 }
 
@@ -195,11 +269,7 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 
 	// read from disk if the object hasn't been uploaded yet
 	if obj.FileName != nil {
-		var offset int64
-		if resp.Range != nil {
-			offset = resp.Range.Start
-		}
-		rc, err := s.openUpload(bucket, object, obj, offset)
+		rc, err := s.openUpload(bucket, object, obj.FileName, obj.IsMultipart(), resp.Range)
 		if errors.Is(err, fs.ErrNotExist) {
 			// possible race, check if the object was uploaded to Sia in the
 			// meantime
@@ -212,17 +282,13 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 		} else if err != nil {
 			return nil, fmt.Errorf("failed to open pending upload file: %w", err)
 		} else {
-			if resp.Range != nil {
-				resp.Body = readCloser{Reader: io.LimitReader(rc, resp.Range.Length), Closer: rc}
-			} else {
-				resp.Body = rc
-			}
+			resp.Body = rc
 			return resp, nil
 		}
 	}
 
 	// object is on Sia, refresh cached object metadata if needed
-	siaObj, err := s.refreshSiaObject(ctx, bucket, object, obj)
+	siaObj, err := s.refreshSiaObject(ctx, obj)
 	if err != nil {
 		return nil, err
 	}
@@ -245,7 +311,7 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 
 // refreshSiaObject refreshes the object's cached Sia object if it is missing
 // or stale. Returns the unsealed sdk.Object for use in downloads.
-func (s *Sia) refreshSiaObject(ctx context.Context, bucket, objectKey string, obj *objects.Object) (siaObj sdk.Object, err error) {
+func (s *Sia) refreshSiaObject(ctx context.Context, obj *objects.Object) (siaObj sdk.Object, err error) {
 	if obj.ID == nil || obj.SiaObject == nil {
 		return sdk.Object{}, fmt.Errorf("object hasn't been uploaded yet") // should never happen
 	}
