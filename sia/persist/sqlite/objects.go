@@ -11,6 +11,7 @@ import (
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.sia.tech/core/types"
+	"go.sia.tech/indexd/slabs"
 	sdk "go.sia.tech/siastorage"
 )
 
@@ -285,7 +286,7 @@ func (s *Store) ObjectParts(bucket, name string) ([]objects.Part, error) {
 }
 
 // ObjectsCursor returns the cursor for resuming object event syncing.
-func (s *Store) ObjectsCursor() (cursor sdk.ObjectsCursor, err error) {
+func (s *Store) ObjectsCursor() (cursor slabs.Cursor, err error) {
 	err = s.transaction(func(tx *txn) error {
 		return tx.QueryRow(`SELECT last_sync_at, last_sync_key FROM global_settings LIMIT 1`).
 			Scan((*sqlTime)(&cursor.After), (*sqlHash256)(&cursor.Key))
@@ -294,7 +295,7 @@ func (s *Store) ObjectsCursor() (cursor sdk.ObjectsCursor, err error) {
 }
 
 // SetObjectsCursor updates the cursor for resuming object event syncing.
-func (s *Store) SetObjectsCursor(cursor sdk.ObjectsCursor) error {
+func (s *Store) SetObjectsCursor(cursor slabs.Cursor) error {
 	return s.transaction(func(tx *txn) error {
 		_, err := tx.Exec("UPDATE global_settings SET last_sync_at = $1, last_sync_key = $2", sqlTime(cursor.After), sqlHash256(cursor.Key))
 		return err

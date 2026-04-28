@@ -16,6 +16,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"go.sia.tech/core/types"
+	"go.sia.tech/indexd/slabs"
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
@@ -955,7 +956,7 @@ func TestObjectsCursor(t *testing.T) {
 	// set cursor and verify it persists
 	now := time.Now().Truncate(time.Second)
 	key := types.Hash256{1, 2, 3}
-	if err := store.SetObjectsCursor(sdk.ObjectsCursor{After: now, Key: key}); err != nil {
+	if err := store.SetObjectsCursor(slabs.Cursor{After: now, Key: key}); err != nil {
 		t.Fatal(err)
 	}
 	cursor, err = store.ObjectsCursor()
@@ -972,7 +973,7 @@ func TestObjectsCursor(t *testing.T) {
 	// overwrite with a new cursor
 	later := now.Add(5 * time.Minute)
 	key2 := types.Hash256{4, 5, 6}
-	if err := store.SetObjectsCursor(sdk.ObjectsCursor{After: later, Key: key2}); err != nil {
+	if err := store.SetObjectsCursor(slabs.Cursor{After: later, Key: key2}); err != nil {
 		t.Fatal(err)
 	}
 	cursor, err = store.ObjectsCursor()

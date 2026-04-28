@@ -88,7 +88,7 @@ type Sia struct {
 type SDK interface {
 	DeleteObject(ctx context.Context, id types.Hash256) error
 	Download(ctx context.Context, w io.Writer, obj sdk.Object, rnge *s3.ObjectRange) error
-	ObjectEvents(ctx context.Context, cursor sdk.ObjectsCursor, limit int) ([]sdk.ObjectEvent, error)
+	ObjectEvents(ctx context.Context, cursor slabs.Cursor, limit int) ([]sdk.ObjectEvent, error)
 	SlabSize() (int64, error)
 	UploadPacked() (PackedUpload, error)
 	PinObject(ctx context.Context, obj sdk.Object) error
@@ -104,8 +104,8 @@ type Store interface {
 	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (*string, error)
 	GetObject(accessKeyID *string, bucket, object string, partNumber *int32) (*objects.Object, error)
 	HeadBucket(accessKeyID, bucket string) error
-	ObjectsCursor() (sdk.ObjectsCursor, error)
-	SetObjectsCursor(cursor sdk.ObjectsCursor) error
+	ObjectsCursor() (slabs.Cursor, error)
+	SetObjectsCursor(cursor slabs.Cursor) error
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
 	ListObjects(accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error)
 	ObjectParts(bucket, name string) ([]objects.Part, error)
@@ -281,7 +281,7 @@ func (s *Sia) syncMetadataLoop(ctx context.Context) {
 
 // syncMetadata fetches object events from the indexer since the last sync
 // and applies metadata updates to local objects.
-func (s *Sia) syncMetadata(ctx context.Context) {
+func (s *Sia) syncMetadata(ctx context.Context) { //nolint:revive
 	const batchSize = 100
 
 	// fetch the cursor
@@ -330,7 +330,7 @@ func (s *Sia) syncMetadata(ctx context.Context) {
 
 		// advance the cursor to the last event
 		last := events[len(events)-1]
-		cursor = sdk.ObjectsCursor{After: last.UpdatedAt, Key: last.Key}
+		cursor = slabs.Cursor{After: last.UpdatedAt, Key: last.Key}
 		if err := s.store.SetObjectsCursor(cursor); err != nil {
 			s.logger.Error("failed to update objects cursor", zap.Error(err))
 			break

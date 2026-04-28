@@ -7,6 +7,7 @@ import (
 
 	"github.com/SiaFoundation/s3d/s3"
 	"go.sia.tech/core/types"
+	"go.sia.tech/indexd/slabs"
 	sdk "go.sia.tech/siastorage"
 )
 
@@ -85,7 +86,7 @@ func (s *IndexdSDK) DeleteObject(ctx context.Context, id types.Hash256) error {
 
 // ObjectEvents returns object events from the indexer, starting from the
 // given cursor, up to the given limit.
-func (s *IndexdSDK) ObjectEvents(ctx context.Context, cursor sdk.ObjectsCursor, limit int) ([]sdk.ObjectEvent, error) {
+func (s *IndexdSDK) ObjectEvents(ctx context.Context, cursor slabs.Cursor, limit int) ([]sdk.ObjectEvent, error) {
 	return s.inner.ObjectEvents(ctx, cursor, limit)
 }
 

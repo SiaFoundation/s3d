@@ -98,6 +98,8 @@ go.sia.tech/siastorage v0.0.4-0.20260427095316-5667a912b787 h1:NrAZ4k15GIQgKxYMV
 go.sia.tech/siastorage v0.0.4-0.20260427095316-5667a912b787/go.mod h1:YdU2Aj62sC6aH/Kc7V2zW5kZDu1bTPz36jftb8HbxAE=
 go.sia.tech/siastorage v0.0.4-0.20260428093233-a06df3edd479 h1:mh+RIIWxUNN+GeGv0b6XoYMwsf1bl2sNzoyxf3PVn2M=
 go.sia.tech/siastorage v0.0.4-0.20260428093233-a06df3edd479/go.mod h1:YdU2Aj62sC6aH/Kc7V2zW5kZDu1bTPz36jftb8HbxAE=
+go.sia.tech/siastorage v0.0.4-0.20260428094523-1a2a05005015 h1:HCvtM+YFj5N+iYU+FZswAXIvM4rl6QAvmCqTozCLQPY=
+go.sia.tech/siastorage v0.0.4-0.20260428094523-1a2a05005015/go.mod h1:YdU2Aj62sC6aH/Kc7V2zW5kZDu1bTPz36jftb8HbxAE=
 go.uber.org/goleak v1.3.0 h1:2K3zAYmnTNqV73imy9J1T3WC+gmCePx2hEGkimedGto=
 go.uber.org/goleak v1.3.0/go.mod h1:CoHD4mav9JJNrW/WLlf7HGZPjdw8EucARQHekz1X6bE=
 go.uber.org/mock v0.5.2 h1:LbtPTcP8A5k9WPXj54PPPbjcI4Y6lhyOZXn+VS7wNko=

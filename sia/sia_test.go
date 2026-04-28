@@ -81,7 +81,7 @@ func (s *MemorySDK) SetEvents(events []sdk.ObjectEvent) {
 	s.events = events
 }
 
-func (s *MemorySDK) ObjectEvents(_ context.Context, cursor sdk.ObjectsCursor, limit int) ([]sdk.ObjectEvent, error) {
+func (s *MemorySDK) ObjectEvents(_ context.Context, cursor slabs.Cursor, limit int) ([]sdk.ObjectEvent, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
