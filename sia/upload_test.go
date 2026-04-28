@@ -1,12 +1,15 @@
 package sia
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
 
 	"github.com/SiaFoundation/s3d/sia/objects"
+	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
 	"lukechampine.com/frand"
 )
@@ -133,8 +136,9 @@ func TestPrepareUploads(t *testing.T) {
 	}
 }
 
-// TestOpenAndRemoveUpload tests the locking mechanism that defers file
-// deletion until all locks are released.
+// TestOpenAndRemoveUpload tests that openUpload acquires a lock that is
+// released on ReadCloser.Close, and that removeUpload defers file deletion
+// until all open readers are closed.
 func TestOpenAndRemoveUpload(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows does not allow deleting open files")
@@ -146,7 +150,7 @@ func TestOpenAndRemoveUpload(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := &Sia{directory: dir, lockedUploads: make(map[string]*lockedUpload)}
+	s := &Sia{directory: dir, lockedUploads: make(map[string]*lockedUpload), logger: zap.NewNop()}
 
 	// write random data to an upload file
 	data := frand.Bytes(256)
@@ -156,33 +160,62 @@ func TestOpenAndRemoveUpload(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// acquire a lock on the upload
-	unlock := s.lockUpload(fileName)
+	// open the upload through the real entry point; this should acquire the lock
+	rc, err := s.openUpload("", "", &fileName, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	// removeUpload while the lock is held should mark deleted but not
+	// the reader should return the file contents
+	got, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatal(err)
+	} else if !bytes.Equal(got, data) {
+		t.Fatal("read data does not match written data")
+	}
+
+	// removeUpload while the reader is open should mark deleted but not
 	// remove the file from disk
 	if err := s.removeUpload(fileName); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filePath); err != nil {
-		t.Fatal("file should still exist on disk while lock is held:", err)
+		t.Fatal("file should still exist on disk while reader is open:", err)
 	}
 
-	// acquiring a second lock should also work
-	unlock2 := s.lockUpload(fileName)
+	// open a second reader on the same file; the deferred deletion should
+	// not fire until both are closed
+	rc2, err := s.openUpload("", "", &fileName, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	// releasing the first lock should not remove the file yet because the
-	// second lock is still held
-	unlock()
+	// closing the first reader should not remove the file yet because the
+	// second reader is still open
+	if err := rc.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := os.Stat(filePath); err != nil {
-		t.Fatal("file should still exist on disk while second lock is held:", err)
+		t.Fatal("file should still exist on disk while second reader is open:", err)
 	}
 
-	// releasing the second lock should trigger the deferred removal
-	unlock2()
-	if _, err := os.Stat(filePath); !os.IsNotExist(err) {
-		t.Fatal("file should have been removed after all locks were released")
+	// closing the second reader should trigger the deferred removal
+	if err := rc2.Close(); err != nil {
+		t.Fatal(err)
 	}
+	if _, err := os.Stat(filePath); !os.IsNotExist(err) {
+		t.Fatal("file should have been removed after all readers were closed")
+	}
+
+	// closing a reader twice should panic (matches lockUpload's double-unlock contract)
+	func() {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Fatal("expected panic when closing an already-closed reader")
+			}
+		}()
+		_ = rc2.Close()
+	}()
 
 	// verify the lockedUploads map is cleaned up
 	s.lockedUploadsMu.Lock()
@@ -191,7 +224,7 @@ func TestOpenAndRemoveUpload(t *testing.T) {
 	}
 	s.lockedUploadsMu.Unlock()
 
-	// removing a file without any lock should delete it immediately
+	// removing a file without any open reader should delete it immediately
 	fileName2 := "test-upload-2"
 	filePath2 := filepath.Join(uploadsDir, fileName2)
 	if err := os.WriteFile(filePath2, data, 0600); err != nil {
@@ -201,6 +234,6 @@ func TestOpenAndRemoveUpload(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filePath2); !os.IsNotExist(err) {
-		t.Fatal("file should have been removed immediately when no lock is held")
+		t.Fatal("file should have been removed immediately when no reader is open")
 	}
 }
