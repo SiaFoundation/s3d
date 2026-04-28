@@ -241,7 +241,7 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 			LastModified: obj.LastModified,
 			Metadata:     obj.Meta,
 			Range:        &s3.ObjectRange{Start: obj.Offset, Length: obj.Length},
-			Size:         obj.Length,
+			Size:         obj.Size,
 			PartsCount:   aws.Int32(partsCount),
 		}
 	} else {

@@ -113,6 +113,7 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, partNumber 
 			FROM objects
 			WHERE bucket_id = $1 AND name = $2
 		`, bid, name).Scan(&obj.FileName, &objectID, (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Length, (*sqlMD5)(&obj.ContentMD5), &siaObj, (*sqlTime)(&obj.CachedAt))
+		obj.Size = obj.Length
 		if objectID.Valid {
 			obj.ID = (*types.Hash256)(&objectID.V)
 		}
@@ -131,11 +132,11 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, partNumber 
 	var partObjID sql.Null[sqlHash256]
 	var siaObj sql.Null[sqlSiaObject]
 	err = tx.QueryRow(`
-		SELECT o.object_id, o.filename, o.metadata, o.updated_at, p.offset, p.content_length, p.content_md5, o.sia_object, o.cached_at
+		SELECT o.object_id, o.filename, o.metadata, o.updated_at, o.size, p.offset, p.content_length, p.content_md5, o.sia_object, o.cached_at
 		FROM object_parts p
 		JOIN objects o ON o.bucket_id = p.bucket_id AND o.name = p.name
 		WHERE o.bucket_id = $1 AND o.name = $2 AND p.part_number = $3
-	`, bid, name, *partNumber).Scan(&partObjID, &obj.FileName, (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Offset, &obj.Length, (*sqlMD5)(&obj.ContentMD5), &siaObj, (*sqlTime)(&obj.CachedAt))
+	`, bid, name, *partNumber).Scan(&partObjID, &obj.FileName, (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Size, &obj.Offset, &obj.Length, (*sqlMD5)(&obj.ContentMD5), &siaObj, (*sqlTime)(&obj.CachedAt))
 	if partObjID.Valid {
 		obj.ID = (*types.Hash256)(&partObjID.V)
 	}
