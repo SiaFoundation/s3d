@@ -236,7 +236,7 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 
 	var objIdx []int
 	for i, obj := range group.objects {
-		rc, err := s.openUpload(obj.Bucket, obj.Name, &obj.Filename, obj.Multipart, 0)
+		rc, err := s.openUpload(obj.Bucket, obj.Name, &obj.Filename, obj.Multipart, nil)
 		if err != nil {
 			s.logger.Error("failed to open upload",
 				zap.String("bucket", obj.Bucket),
@@ -327,15 +327,13 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 			zap.String("bucket", uploadObj.Bucket),
 			zap.String("name", uploadObj.Name))
 
-		if uploadObj.Multipart {
-			if err := s.removeMultipartUploadDir(uploadObj.Filename); err != nil {
+		if err := s.removeUpload(uploadObj.Filename); err != nil {
+			if uploadObj.Multipart {
 				s.logger.Error("failed to remove multipart upload directory",
 					zap.String("uploadID", uploadObj.Filename),
 					zap.Error(err))
-			}
-		} else {
-			if err := s.removeUpload(uploadObj.Filename); err != nil {
-				s.logger.Error("failed to remove file on disk",
+			} else {
+				s.logger.Error("failed to remove upload from disk",
 					zap.String("filename", uploadObj.Filename),
 					zap.Error(err))
 			}

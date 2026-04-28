@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/SiaFoundation/s3d/sia/objects"
+	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
 	"lukechampine.com/frand"
 )
@@ -134,9 +135,9 @@ func TestPrepareUploads(t *testing.T) {
 	}
 }
 
-// TestOpenAndRemoveUpload tests that an upload file can be removed while it is
-// still open, and the open handle can still be read from and matches the
-// original data.
+// TestOpenAndRemoveUpload tests that openUpload acquires a lock that is
+// released on ReadCloser.Close, and that removeUpload defers file deletion
+// until all open readers are closed.
 func TestOpenAndRemoveUpload(t *testing.T) {
 	dir := t.TempDir()
 	uploadsDir := filepath.Join(dir, UploadsDirectory)
@@ -144,34 +145,90 @@ func TestOpenAndRemoveUpload(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := &Sia{directory: dir}
+	s := &Sia{directory: dir, lockedUploads: make(map[string]*lockedUpload), logger: zap.NewNop()}
 
 	// write random data to an upload file
 	data := frand.Bytes(256)
 	fileName := "test-upload"
-	if err := os.WriteFile(filepath.Join(uploadsDir, fileName), data, 0600); err != nil {
+	filePath := filepath.Join(uploadsDir, fileName)
+	if err := os.WriteFile(filePath, data, 0600); err != nil {
 		t.Fatal(err)
 	}
 
-	// open the upload
-	rc, err := s.openUpload("bucket", "name", &fileName, false, 0)
+	// open the upload through the real entry point; this should acquire the lock
+	rc, err := s.openUpload("", "", &fileName, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// remove the upload while the file handle is still open
-	if err := s.removeUpload(fileName); err != nil {
-		t.Fatal(err)
-	}
-
-	// read from the still open handle and compare
+	// the reader should return the file contents
 	got, err := io.ReadAll(rc)
 	if err != nil {
 		t.Fatal(err)
+	} else if !bytes.Equal(got, data) {
+		t.Fatal("read data does not match written data")
 	}
-	rc.Close()
 
-	if !bytes.Equal(got, data) {
-		t.Fatal("data read from open handle does not match original")
+	// removeUpload while the reader is open should mark deleted but not
+	// remove the file from disk
+	if err := s.removeUpload(fileName); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filePath); err != nil {
+		t.Fatal("file should still exist on disk while reader is open:", err)
+	}
+
+	// open a second reader on the same file; the deferred deletion should
+	// not fire until both are closed
+	rc2, err := s.openUpload("", "", &fileName, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// closing the first reader should not remove the file yet because the
+	// second reader is still open
+	if err := rc.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filePath); err != nil {
+		t.Fatal("file should still exist on disk while second reader is open:", err)
+	}
+
+	// closing the second reader should trigger the deferred removal
+	if err := rc2.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filePath); !os.IsNotExist(err) {
+		t.Fatal("file should have been removed after all readers were closed")
+	}
+
+	// closing a reader twice should panic (matches lockUpload's double-unlock contract)
+	func() {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Fatal("expected panic when closing an already-closed reader")
+			}
+		}()
+		_ = rc2.Close()
+	}()
+
+	// verify the lockedUploads map is cleaned up
+	s.lockedUploadsMu.Lock()
+	if _, ok := s.lockedUploads[fileName]; ok {
+		t.Fatal("lockedUploads entry should have been cleaned up")
+	}
+	s.lockedUploadsMu.Unlock()
+
+	// removing a file without any open reader should delete it immediately
+	fileName2 := "test-upload-2"
+	filePath2 := filepath.Join(uploadsDir, fileName2)
+	if err := os.WriteFile(filePath2, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.removeUpload(fileName2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filePath2); !os.IsNotExist(err) {
+		t.Fatal("file should have been removed immediately when no reader is open")
 	}
 }

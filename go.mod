@@ -6,12 +6,12 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.41.6
 	github.com/aws/aws-sdk-go-v2/config v1.32.16
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.15
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.99.1
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.100.0
 	github.com/mattn/go-sqlite3 v1.14.42
-	go.sia.tech/core v0.19.1
-	go.sia.tech/coreutils v0.21.2
-	go.sia.tech/indexd v0.1.1-0.20260410081129-29ab0c1887a1
-	go.sia.tech/siastorage v0.0.4-0.20260422085341-e099028d6370
+	go.sia.tech/core v0.20.0
+	go.sia.tech/coreutils v0.21.3
+	go.sia.tech/indexd v0.1.1-0.20260427082954-673d103938dc
+	go.sia.tech/siastorage v0.0.4-0.20260428093233-a06df3edd479
 	go.uber.org/zap v1.27.1
 	golang.org/x/term v0.42.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -42,7 +42,7 @@ require (
 	github.com/oschwald/maxminddb-golang v1.13.1 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.59.0 // indirect
-	github.com/quic-go/webtransport-go v0.10.0 // indirect
+	github.com/quic-go/webtransport-go v0.10.1-0.20260312060737-05fe5253a73c // indirect
 	go.sia.tech/jape v0.14.1 // indirect
 	go.sia.tech/mux v1.5.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect

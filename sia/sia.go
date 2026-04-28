@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
@@ -76,6 +77,9 @@ type Sia struct {
 	uploadWastePct float64
 	uploadDisabled bool
 
+	lockedUploadsMu sync.Mutex
+	lockedUploads   map[string]*lockedUpload
+
 	tg     *threadgroup.ThreadGroup
 	logger *zap.Logger
 }
@@ -130,6 +134,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		directory:      directory,
 		accessKeys:     make(map[string]auth.SecretAccessKey),
 		uploadWastePct: DefaultUploadWastePct,
+		lockedUploads:  make(map[string]*lockedUpload),
 
 		logger: zap.NewNop(),
 		tg:     threadgroup.New(),
