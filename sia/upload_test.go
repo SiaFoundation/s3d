@@ -5,7 +5,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/SiaFoundation/s3d/sia/objects"
@@ -140,10 +139,6 @@ func TestPrepareUploads(t *testing.T) {
 // released on ReadCloser.Close, and that removeUpload defers file deletion
 // until all open readers are closed.
 func TestOpenAndRemoveUpload(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Windows does not allow deleting open files")
-	}
-
 	dir := t.TempDir()
 	uploadsDir := filepath.Join(dir, UploadsDirectory)
 	if err := os.MkdirAll(uploadsDir, 0700); err != nil {
