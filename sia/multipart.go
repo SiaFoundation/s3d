@@ -409,6 +409,7 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 }
 
 func syncDir(path string) error {
+	// windows does not support fsync on directories
 	if runtime.GOOS == "windows" {
 		return nil
 	}
