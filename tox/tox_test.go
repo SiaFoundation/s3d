@@ -16,8 +16,8 @@ import (
 	"github.com/SiaFoundation/s3d/sia"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"go.sia.tech/core/types"
-	sdk "go.sia.tech/siastorage"
 	"go.sia.tech/indexd/testutils"
+	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
 	"gopkg.in/ini.v1"
 )
@@ -53,6 +53,7 @@ func TestS3(t *testing.T) {
 	t.Cleanup(func() { store.Close() })
 
 	// parse tox conf
+	ini.DefaultHeader = true
 	toxConf, err := ini.Load("tox.conf")
 	if err != nil {
 		t.Fatalf("failed to load tox.conf: %v", err)
