@@ -115,6 +115,8 @@ func TestGetObject(t *testing.T) {
 		t.Fatalf("expected object offset 0, got %d", objPart1.Offset)
 	} else if objPart1.Length != int64(objLength) {
 		t.Fatalf("expected object length %d, got %d", objLength, objPart1.Length)
+	} else if objPart1.Size != int64(objLength) {
+		t.Fatalf("expected object size %d, got %d", objLength, objPart1.Size)
 	} else if objPart1.ContentMD5 != objMD5 {
 		t.Fatalf("expected object MD5 %v, got %v", objMD5, objPart1.ContentMD5)
 	} else if len(objPart1.Meta) != len(objMeta) || objPart1.Meta["foo"] != "bar" {
@@ -141,6 +143,8 @@ func TestGetObject(t *testing.T) {
 		t.Fatalf("expected object offset %d, got %d", s3.MinUploadPartSize, multipartPart2.Offset)
 	} else if multipartPart2.Length != 2 {
 		t.Fatalf("expected object length %d, got %d", 2, multipartPart2.Length)
+	} else if multipartPart2.Size != totalSize {
+		t.Fatalf("expected object size %d, got %d", totalSize, multipartPart2.Size)
 	} else if multipartPart2.ContentMD5 != part2MD5 {
 		t.Fatalf("expected object MD5 %v, got %v", part2MD5, multipartPart2.ContentMD5)
 	} else if len(multipartPart2.Meta) != len(multipartMeta) || multipartPart2.Meta["baz"] != "qux" {
