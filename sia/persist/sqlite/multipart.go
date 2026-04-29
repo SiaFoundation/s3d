@@ -38,9 +38,11 @@ func (s *Store) CreateMultipartUpload(bucket, name string, uploadID s3.UploadID,
 // CompleteMultipartUpload finalizes a multipart upload by creating the object
 // and transferring parts from the upload to the object. If the overwritten
 // object's ID has no remaining references, it is inserted into the
-// orphaned_objects table.
-func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64) error {
-	return s.transaction(func(tx *txn) error {
+// orphaned_objects table. If the overwrite leaves a previously pending file
+// unreferenced, its filename is returned so the caller can remove it from disk.
+func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64) (*string, error) {
+	var orphaned *string
+	err := s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
@@ -88,7 +90,7 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 			return fmt.Errorf("found %d parts smaller than minimum size (%d bytes)", smallParts, s3.MinUploadPartSize)
 		}
 
-		oldID, err := previousObjectID(tx, bid, name)
+		oldID, oldFilename, err := previousObject(tx, bid, name)
 		if err != nil {
 			return err
 		}
@@ -142,9 +144,14 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 		}
 
 		// delete the multipart upload
-		_, err = tx.Exec(`DELETE FROM multipart_uploads WHERE upload_id = $1`, sqlUploadID(uploadID))
+		if _, err := tx.Exec(`DELETE FROM multipart_uploads WHERE upload_id = $1`, sqlUploadID(uploadID)); err != nil {
+			return err
+		}
+
+		orphaned, err = orphanedFilename(tx, oldFilename)
 		return err
 	})
+	return orphaned, err
 }
 
 // AbortMultipartUpload removes a multipart upload from the store.
@@ -210,17 +217,20 @@ func (s *Store) AddMultipartPart(bucket, name string, uploadID s3.UploadID, file
 	return prevFilename, nil
 }
 
-// HasMultipartUpload checks if a multipart upload exists.
-func (s *Store) HasMultipartUpload(bucket, name string, uploadID s3.UploadID) error {
-	return s.transaction(func(tx *txn) error {
+// HasMultipartUpload checks if a multipart upload exists and reports whether
+// any parts have been uploaded for it.
+func (s *Store) HasMultipartUpload(bucket, name string, uploadID s3.UploadID) (hasParts bool, err error) {
+	err = s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
 
 		var exists bool
-		err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM multipart_uploads WHERE upload_id = $1 AND bucket_id = $2 AND name = $3)`,
-			sqlUploadID(uploadID), bid, name).Scan(&exists)
+		err = tx.QueryRow(`
+			SELECT EXISTS(SELECT 1 FROM multipart_uploads WHERE upload_id = $1 AND bucket_id = $2 AND name = $3),
+			       EXISTS(SELECT 1 FROM multipart_parts WHERE upload_id = $1)
+		`, sqlUploadID(uploadID), bid, name).Scan(&exists, &hasParts)
 		if err != nil {
 			return err
 		}
@@ -229,6 +239,7 @@ func (s *Store) HasMultipartUpload(bucket, name string, uploadID s3.UploadID) er
 		}
 		return nil
 	})
+	return
 }
 
 // MultipartParts returns the parts belonging to the specified multipart upload.

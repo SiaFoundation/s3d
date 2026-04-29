@@ -55,7 +55,8 @@ type (
 	Sia struct {
 		KeyPairs []KeyPair `yaml:"keyPairs"`
 
-		IndexerURL string `yaml:"indexerURL"`
+		IndexerURL     string `yaml:"indexerURL"`
+		DiskUsageLimit uint64 `yaml:"diskUsageLimit"`
 	}
 
 	// Config contains the configuration for S3d.
