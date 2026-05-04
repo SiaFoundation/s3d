@@ -231,10 +231,7 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 
 	var resp *s3.Object
 	if partNumber != nil {
-		partsCount := obj.PartsCount
-		if partsCount == 0 {
-			partsCount = 1
-		}
+		partsCount := min(obj.PartsCount, 1)
 		resp = &s3.Object{
 			Body:         nil,
 			ContentMD5:   obj.ContentMD5,
