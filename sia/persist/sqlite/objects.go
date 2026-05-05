@@ -194,22 +194,30 @@ func (s *Store) MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, sea
 	})
 }
 
-// UpdateSiaObject updates the object's metadata in the database.
-// It returns a boolean that indicates whether the object was updated.
-func (s *Store) UpdateSiaObject(siaObject objects.SiaObject) (updated bool, err error) {
+// UpdateSiaObjects batch updates object metadata in the database within a
+// single transaction. It returns the number of rows that were updated.
+func (s *Store) UpdateSiaObjects(siaObjects []objects.SiaObject) (updated int64, err error) {
 	err = s.transaction(func(tx *txn) error {
-		res, err := tx.Exec(`
+		stmt, err := tx.Prepare(`
 			UPDATE objects SET sia_object = $1
 			WHERE sia_object_id = $2
-		`, sqlSiaObject(siaObject.Sealed), sqlHash256(siaObject.ID))
+		`)
 		if err != nil {
 			return err
 		}
-		n, err := res.RowsAffected()
-		if err != nil {
-			return err
+		defer stmt.Close()
+
+		for _, obj := range siaObjects {
+			res, err := stmt.Exec(sqlSiaObject(obj.Sealed), sqlHash256(obj.ID))
+			if err != nil {
+				return err
+			}
+			n, err := res.RowsAffected()
+			if err != nil {
+				return err
+			}
+			updated += n
 		}
-		updated = n > 0
 		return nil
 	})
 	return

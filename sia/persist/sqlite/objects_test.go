@@ -2,7 +2,9 @@ package sqlite
 
 import (
 	"errors"
+	"reflect"
 	"testing"
+	"unsafe"
 
 	"fmt"
 	"path/filepath"
@@ -988,7 +990,7 @@ func TestObjectsCursor(t *testing.T) {
 	}
 }
 
-func TestUpdateSiaObject(t *testing.T) {
+func TestUpdateSiaObjects(t *testing.T) {
 	const (
 		accessKeyID = "test-accesskey"
 		bucket      = "test-bucket"
@@ -999,55 +1001,81 @@ func TestUpdateSiaObject(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sealKey := types.GeneratePrivateKey()
-	sdkObj := sdk.NewEmptyObject()
-	sealed := sdkObj.Seal(sealKey)
-
-	// updating a non-existent object should return false
-	updated, err := store.UpdateSiaObject(objects.SiaObject{ID: sealed.ID(), Sealed: sealed})
+	// empty slice should be a no-op
+	updated, err := store.UpdateSiaObjects(nil)
 	if err != nil {
 		t.Fatal(err)
-	} else if updated {
-		t.Fatal("expected no update for non-existent object")
+	} else if updated != 0 {
+		t.Fatal("expected 0 updates for empty slice", updated)
 	}
 
-	// put and mark an object as uploaded
-	contentMD5 := frand.Entropy128()
-	if err := store.PutObject(accessKeyID, bucket, "obj", contentMD5, nil, 1, new(string), true); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.MarkObjectUploaded(bucket, "obj", contentMD5, sealed); err != nil {
-		t.Fatal(err)
-	}
-
-	// verify the stored sia_object matches
-	aki := accessKeyID
-	before, err := store.GetObject(&aki, bucket, "obj", nil)
+	// update a non-existent object, should return 0 updates
+	updated, err = store.UpdateSiaObjects([]objects.SiaObject{{ID: frand.Entropy256(), Sealed: sdk.SealedObject{}}})
 	if err != nil {
 		t.Fatal(err)
-	} else if before.SiaObject == nil {
+	} else if updated != 0 {
+		t.Fatal("expected 0 updates for non-existent object", updated)
+	}
+
+	// addTestObject adds an object to the store
+	addTestObject := func(key string) sdk.SealedObject {
+		t.Helper()
+
+		obj := newTestObject()
+		sealed := obj.Seal(types.GeneratePrivateKey())
+		contentMD5 := frand.Entropy128()
+		if err := store.PutObject(accessKeyID, bucket, key, contentMD5, nil, 1, new(string), true); err != nil {
+			t.Fatal(err)
+		} else if err := store.MarkObjectUploaded(bucket, key, contentMD5, sealed); err != nil {
+			t.Fatal(err)
+		}
+		return sealed
+	}
+
+	// add two objects to the store
+	sealed1 := addTestObject("obj1")
+	sealed2 := addTestObject("obj2")
+	missing := newTestObject()
+
+	// batch update objects, should only update 2 objects
+	updated, err = store.UpdateSiaObjects([]objects.SiaObject{
+		{ID: sealed1.ID(), Sealed: sealed1},
+		{ID: sealed2.ID(), Sealed: sealed2},
+		{ID: missing.ID(), Sealed: missing.Seal(types.GeneratePrivateKey())},
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if updated != 2 {
+		t.Fatal("expected 2 updates", updated)
+	}
+
+	// delete the first object
+	if _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "obj1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// batch update objects, should only update 1 object
+	now := time.Now().Round(time.Second)
+	sealed2.UpdatedAt = now
+	updated, err = store.UpdateSiaObjects([]objects.SiaObject{
+		{ID: sealed1.ID(), Sealed: sealed1},
+		{ID: sealed2.ID(), Sealed: sealed2},
+		{ID: missing.ID(), Sealed: missing.Seal(types.GeneratePrivateKey())},
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if updated != 1 {
+		t.Fatal("expected 1 update", updated)
+	}
+
+	// verify the second object was updated
+	obj, err := store.GetObject(nil, bucket, "obj2", nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if obj.SiaObject == nil {
 		t.Fatal("expected sia_object to be set")
-	} else if before.SiaObject.ID != sealed.ID() {
-		t.Fatal("unexpected object ID")
-	}
-
-	// updating with a matching object ID should succeed
-	updated, err = store.UpdateSiaObject(objects.SiaObject{ID: sealed.ID(), Sealed: sealed})
-	if err != nil {
-		t.Fatal(err)
-	} else if !updated {
-		t.Fatal("expected update for existing object")
-	}
-
-	// after removing the object, updating should return false again
-	if _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "obj"}); err != nil {
-		t.Fatal(err)
-	}
-	updated, err = store.UpdateSiaObject(objects.SiaObject{ID: sealed.ID(), Sealed: sealed})
-	if err != nil {
-		t.Fatal(err)
-	} else if updated {
-		t.Fatal("expected no update after object deleted")
+	} else if !obj.SiaObject.Sealed.UpdatedAt.Equal(now) {
+		t.Fatalf("expected UpdatedAt %v, got %v", now, obj.SiaObject.Sealed.UpdatedAt)
 	}
 }
 
@@ -1199,4 +1227,13 @@ func TestObjectsForUpload(t *testing.T) {
 			t.Fatalf("expected non-empty filename for %s", obj.Name)
 		}
 	}
+}
+
+func newTestObject() sdk.Object {
+	obj := sdk.NewEmptyObject()
+	ss := []slabs.SlabSlice{{EncryptionKey: frand.Entropy256(), Length: 1}}
+	v := reflect.ValueOf(&obj).Elem()
+	f := v.FieldByName("slabs")
+	reflect.NewAt(f.Type(), unsafe.Pointer(f.UnsafeAddr())).Elem().Set(reflect.ValueOf(ss))
+	return obj
 }

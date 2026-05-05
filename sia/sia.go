@@ -113,7 +113,7 @@ type Store interface {
 	OrphanedObjects(limit int) ([]types.Hash256, error)
 	PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string, updateModTime bool) error
 	MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, sealed sdk.SealedObject) error
-	UpdateSiaObject(siaObject objects.SiaObject) (bool, error)
+	UpdateSiaObjects(siaObjects []objects.SiaObject) (int64, error)
 	RemoveOrphanedObject(objectID types.Hash256) error
 	AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) error
 	AddMultipartPart(bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (string, error)
@@ -306,7 +306,7 @@ func (s *Sia) syncMetadata(ctx context.Context) { //nolint:revive
 			break
 		}
 
-		var failed bool
+		var batch []objects.SiaObject
 		for _, ev := range events {
 			if ev.Deleted {
 				s.logger.Debug("skipping deleted object event", zap.Stringer("objectID", &ev.Key))
@@ -317,19 +317,16 @@ func (s *Sia) syncMetadata(ctx context.Context) { //nolint:revive
 			}
 
 			sealed := s.sdk.SealObject(*ev.Object)
-			updated, err := s.store.UpdateSiaObject(objects.SiaObject{ID: sealed.ID(), Sealed: sealed})
-			if err != nil {
-				s.logger.Error("failed to update Sia object in store",
-					zap.Stringer("objectID", ev.Object.ID()),
-					zap.Error(err))
-				failed = true
-				break
-			} else if updated {
-				synced++
-			}
+			batch = append(batch, objects.SiaObject{ID: sealed.ID(), Sealed: sealed})
 		}
-		if failed {
-			break
+
+		if len(batch) > 0 {
+			n, err := s.store.UpdateSiaObjects(batch)
+			if err != nil {
+				s.logger.Error("failed to batch update Sia objects", zap.Error(err))
+				break
+			}
+			synced += int(n)
 		}
 
 		// advance the cursor to the last event

@@ -12,7 +12,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
@@ -20,8 +19,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"go.uber.org/zap"
 )
-
-const metadataCacheLifetime = 24 * time.Hour
 
 type (
 	lockedUpload struct {
