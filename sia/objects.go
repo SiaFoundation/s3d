@@ -227,14 +227,15 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 
 	var resp *s3.Object
 	if partNumber != nil {
+		partsCount := min(obj.PartsCount, 1)
 		resp = &s3.Object{
 			Body:         nil,
 			ContentMD5:   obj.ContentMD5,
 			LastModified: obj.LastModified,
 			Metadata:     obj.Meta,
 			Range:        &s3.ObjectRange{Start: obj.Offset, Length: obj.Length},
-			Size:         obj.Length,
-			PartsCount:   aws.Int32(obj.PartsCount),
+			Size:         obj.Size,
+			PartsCount:   aws.Int32(partsCount),
 		}
 	} else {
 		rnge, err := requestedRange.Range(obj.Length)

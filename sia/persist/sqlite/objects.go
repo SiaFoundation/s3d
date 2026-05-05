@@ -104,11 +104,8 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, partNumber 
 
 	// return full object if no part specified
 	if partNumber == nil || obj.PartsCount == 0 {
-		if obj.PartsCount == 0 && partNumber != nil {
-			if *partNumber != 1 {
-				return s3errs.ErrInvalidPart
-			}
-			obj.PartsCount = *partNumber
+		if obj.PartsCount == 0 && partNumber != nil && *partNumber != 1 {
+			return s3errs.ErrInvalidPart
 		}
 		var objectID sql.Null[sqlHash256]
 		var siaObj sql.Null[sqlSiaObject]
@@ -117,6 +114,7 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, partNumber 
 			FROM objects
 			WHERE bucket_id = $1 AND name = $2
 		`, bid, name).Scan(&obj.FileName, &objectID, (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Length, (*sqlMD5)(&obj.ContentMD5), &siaObj)
+		obj.Size = obj.Length
 		if objectID.Valid && siaObj.Valid {
 			obj.SiaObject = &objects.SiaObject{
 				ID:     types.Hash256(objectID.V),
@@ -127,22 +125,22 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, partNumber 
 	}
 
 	// return error if part number is invalid
-	if partNumber != nil && obj.PartsCount > 0 && *partNumber > int32(obj.PartsCount) {
+	if *partNumber > int32(obj.PartsCount) {
 		return s3errs.ErrInvalidPart
 	}
 
 	// part specified, return part info
-	var objectID sql.Null[sqlHash256]
+	var partObjID sql.Null[sqlHash256]
 	var siaObj sql.Null[sqlSiaObject]
 	err = tx.QueryRow(`
-		SELECT o.filename, o.sia_object_id, o.sia_object, o.metadata, o.updated_at, p.offset, p.content_length, p.content_md5
+		SELECT o.filename, o.sia_object_id, o.sia_object, o.metadata, o.updated_at, o.size, p.offset, p.content_length, p.content_md5, o.sia_object
 		FROM object_parts p
 		JOIN objects o ON o.bucket_id = p.bucket_id AND o.name = p.name
 		WHERE o.bucket_id = $1 AND o.name = $2 AND p.part_number = $3
-	`, bid, name, *partNumber).Scan(&obj.FileName, &objectID, &siaObj, (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Offset, &obj.Length, (*sqlMD5)(&obj.ContentMD5))
-	if objectID.Valid && siaObj.Valid {
+	`, bid, name, *partNumber).Scan(&obj.FileName, &partObjID, &siaObj, (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Size, &obj.Offset, &obj.Length, (*sqlMD5)(&obj.ContentMD5), &siaObj)
+	if partObjID.Valid && siaObj.Valid {
 		obj.SiaObject = &objects.SiaObject{
-			ID:     types.Hash256(objectID.V),
+			ID:     types.Hash256(partObjID.V),
 			Sealed: sdk.SealedObject(siaObj.V),
 		}
 	}

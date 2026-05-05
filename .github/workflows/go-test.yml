@@ -2,6 +2,12 @@ name: Lint & Test
 on:
   pull_request:
   workflow_call:
+  push:
+    branches:
+      - master
+
+env:
+  CGO_ENABLED: 1
 
 jobs:
   lint:
@@ -9,9 +15,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      pull-requests: read
     steps:
       - name: Configure git
-        run: git config --global core.autocrlf false # required on Windows
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v5
         with:
@@ -20,16 +27,4 @@ jobs:
         with:
           skip-cache: true
   test:
-    name: Test
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-      - name: Test
-        uses: n8maninger/action-golang-test@v2
-        with:
-          args: -race;-failfast
+    uses: SiaFoundation/workflows/.github/workflows/go-test.yml@master
