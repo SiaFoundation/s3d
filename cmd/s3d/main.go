@@ -30,9 +30,7 @@ const (
 )
 
 var cfg = Config{
-	ApiAddress:     "127.0.0.1:8000",
-	RecoveryPhrase: os.Getenv(recoveryPhraseEnvVar),
-	Directory:      os.Getenv(dataDirEnvVar),
+	ApiAddress: "127.0.0.1:8000",
 	Log: Log{
 		File: FileLog{
 			Level:   zap.NewAtomicLevelAt(zapcore.InfoLevel),
@@ -61,12 +59,16 @@ func main() {
 	versionCmd := flagg.New("version", ``)
 	configCmd := flagg.New("config", ``)
 
-	// attempt to load the config, command line flags will override any values
-	// set in the config file
+	// attempt to load the config file
 	configPath := tryLoadConfig()
 
-	// determine the data directory
-	cfg.Directory = dataDirectory(cfg.Directory)
+	// apply environment variable overrides
+	applyEnvVars(&cfg)
+
+	// fall back to default directory if not set by now
+	if cfg.Directory == "" {
+		cfg.Directory = applicationDirectoryOS()
+	}
 
 	cmd := flagg.Parse(flagg.Tree{
 		Cmd: rootCmd,
@@ -264,13 +266,7 @@ func checkFatalError(context string, err error) {
 	os.Exit(1)
 }
 
-func dataDirectory(fp string) string {
-	// use the provided path if it's not empty
-	if fp != "" {
-		return fp
-	}
-
-	// default to the operating system's application directory
+func applicationDirectoryOS() string {
 	switch runtime.GOOS {
 	case "windows":
 		return filepath.Join(os.Getenv("APPDATA"), "s3d")
@@ -378,4 +374,16 @@ func humanEncoder(showColors bool) zapcore.Encoder {
 	cfg.StacktraceKey = ""
 	cfg.CallerKey = ""
 	return zapcore.NewConsoleEncoder(cfg)
+}
+
+// applyEnvVars overrides config values with environment variables. This is
+// called after the config file and CLI flags have been applied so that
+// environment variables take the highest precedence.
+func applyEnvVars(cfg *Config) {
+	if v := os.Getenv(dataDirEnvVar); v != "" {
+		cfg.Directory = v
+	}
+	if v := os.Getenv(recoveryPhraseEnvVar); v != "" {
+		cfg.RecoveryPhrase = v
+	}
 }
