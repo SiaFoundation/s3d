@@ -84,17 +84,18 @@ func (s *IndexdSDK) DeleteObject(ctx context.Context, id types.Hash256) error {
 	return s.inner.DeleteObject(ctx, id)
 }
 
-// Object retrieves the object with the given key.
-func (s *IndexdSDK) Object(ctx context.Context, objectKey types.Hash256) (sdk.Object, error) {
-	return s.inner.Object(ctx, objectKey)
+// ObjectEvents returns object events from the indexer, starting from the
+// given cursor, up to the given limit.
+func (s *IndexdSDK) ObjectEvents(ctx context.Context, cursor slabs.Cursor, limit int) ([]sdk.ObjectEvent, error) {
+	return s.inner.ObjectEvents(ctx, cursor, limit)
 }
 
 // SealObject seals the object using the app key.
-func (s *IndexdSDK) SealObject(obj sdk.Object) slabs.SealedObject {
-	return obj.Seal(s.inner.AppKey()).SealedObject
+func (s *IndexdSDK) SealObject(obj sdk.Object) sdk.SealedObject {
+	return obj.Seal(s.inner.AppKey())
 }
 
-// UnsealObject unseals a sealed object using the app key.
-func (s *IndexdSDK) UnsealObject(sealed slabs.SealedObject) (sdk.Object, error) {
-	return (&sdk.SealedObject{SealedObject: sealed}).Open(s.inner.AppKey())
+// UnsealObject unseals an object using the app key.
+func (s *IndexdSDK) UnsealObject(sealed sdk.SealedObject) (sdk.Object, error) {
+	return sealed.Open(s.inner.AppKey())
 }

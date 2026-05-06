@@ -245,7 +245,7 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 		if obj.SiaObject == nil {
 			return nil, fmt.Errorf("object missing metadata")
 		}
-		pinnedObj, err := s.sdk.UnsealObject(*obj.SiaObject)
+		pinnedObj, err := s.sdk.UnsealObject(obj.SiaObject.Sealed)
 		if err != nil {
 			return nil, fmt.Errorf("failed to unseal object: %w", err)
 		}

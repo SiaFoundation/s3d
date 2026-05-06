@@ -580,7 +580,7 @@ func TestMultipartUpload(t *testing.T) {
 	if obj.FileName != nil {
 		t.Fatal("expected filename to be nil after upload")
 	}
-	if obj.ID == nil {
+	if obj.SiaObject == nil {
 		t.Fatal("expected object ID to be set after upload")
 	}
 	if obj.SiaObject == nil {
