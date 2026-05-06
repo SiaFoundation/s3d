@@ -245,6 +245,44 @@ func TestGetAndHeadObjectPart(t *testing.T) {
 			assertObject(t, obj, false, tc.part)
 		})
 	}
+
+	// non-multipart object with part number
+	regular := "regular"
+	regularData := frand.Bytes(100)
+	regularHash := md5.Sum(regularData)
+	if _, err := s3Tester.PutObject(t.Context(), bucket, regular, bytes.NewReader(regularData), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// head part 1
+	obj, err := s3Tester.HeadObjectPart(t.Context(), bucket, regular, 1)
+	if err != nil {
+		t.Fatal(err)
+	} else if obj.PartsCount == nil || *obj.PartsCount != 1 {
+		t.Fatalf("expected parts count 1, got %v", obj.PartsCount)
+	} else if obj.ContentMD5 != regularHash {
+		t.Fatalf("expected MD5 %x, got %x", regularHash, obj.ContentMD5)
+	} else if obj.Size != int64(len(regularData)) {
+		t.Fatalf("expected size %d, got %d", len(regularData), obj.Size)
+	}
+
+	// get part 1
+	obj, err = s3Tester.GetObjectPart(t.Context(), bucket, regular, 1)
+	if err != nil {
+		t.Fatal(err)
+	} else if obj.PartsCount == nil || *obj.PartsCount != 1 {
+		t.Fatalf("expected parts count 1, got %v", obj.PartsCount)
+	}
+	content, err := io.ReadAll(obj.Body)
+	if err != nil {
+		t.Fatal(err)
+	} else if !bytes.Equal(content, regularData) {
+		t.Fatal("data mismatch")
+	}
+
+	// invalid part number
+	_, err = s3Tester.GetObjectPart(t.Context(), bucket, regular, 2)
+	testutil.AssertS3Error(t, s3errs.ErrInvalidPart, err)
 }
 
 func TestPutObject(t *testing.T) {
