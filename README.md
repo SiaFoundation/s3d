@@ -212,8 +212,13 @@ generate one.
 
 ### Environment Variables
 
-The following environment variables may be used to seed default values. If a
-config file is found, its settings will take precedence over these variables.
+Environment variables take the highest precedence, overriding both the config
+file and CLI flags. The order of precedence from lowest to highest is:
+
+1. Code defaults
+2. Config file (`s3d.yml`)
+3. CLI flags
+4. Environment variables
 
 | Variable | Description |
 |----------|-------------|
