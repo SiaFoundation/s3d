@@ -1,6 +1,8 @@
 name: S3 Compatibility Tests
 
 on:
+  push:
+    branches: [master]
   pull_request:
   workflow_dispatch:
 
@@ -128,4 +130,134 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: s3d-logs
+          path: s3d.log
+
+  test-production:
+    name: Tox (Production)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v3
+        timeout-minutes: 2
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-client-secret: ${{ secrets.TS_OAUTH_CLIENT_SECRET }}
+          tags: tag:ci
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+
+      - name: Upgrade pip + install tox (v4)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "tox>=4"
+
+      - name: Clone test repo
+        run: git clone https://github.com/SiaFoundation/s3-tests.git
+
+      - name: Setup test suite (create envs only)
+        env:
+          S3TEST_CONF: ${{ github.workspace }}/s3tests.conf
+        run: tox run -vv --notest -c ./s3-tests
+
+      - name: Build s3d
+        run: go build -o s3d ./cmd/s3d
+
+      - name: Seed database and write config
+        env:
+          S3D_APP_KEY: ${{ secrets.S3D_APP_KEY }}
+          S3D_INDEXER_URL: ${{ secrets.S3D_INDEXER_URL }}
+        run: |
+          DATA_DIR=$(mktemp -d)
+          echo "DATA_DIR=$DATA_DIR" >> "$GITHUB_ENV"
+
+          printf '%s' "$S3D_APP_KEY" | grep -qE '^[0-9a-fA-F]+$' || { echo "S3D_APP_KEY is not valid hex"; exit 1; }
+
+          sqlite3 "$DATA_DIR/s3d.db" < sia/persist/sqlite/init.sql
+          sqlite3 "$DATA_DIR/s3d.db" "UPDATE global_settings SET db_version = 1, app_key = x'${S3D_APP_KEY}';"
+
+          cat > "$DATA_DIR/s3d.yml" <<EOF
+          apiAddress: "127.0.0.1:8000"
+          directory: "$DATA_DIR"
+          log:
+            stdout:
+              enabled: true
+              level: info
+              format: human
+              enableANSI: false
+            file:
+              enabled: false
+          sia:
+            indexerURL: "$S3D_INDEXER_URL"
+            keyPairs:
+              - accessKey: "0555b35654ad1656d804"
+                secretKey: "h7GhxuBLTrlhVUyxSPUKUV8r/2EI4ngqJxD7iBdBYLhwluN30JaT3Q=="
+              - accessKey: "NOPQRSTUVWXYZABCDEFG"
+                secretKey: "nopqrstuvwxyzabcdefghijklmnabcdefghijklm"
+              - accessKey: "HIJKLMNOPQRSTUVWXYZA"
+                secretKey: "opqrstuvwxyzabcdefghijklmnopqrstuvwxyzab"
+          s3:
+            hostBases:
+              - "localhost"
+          EOF
+
+      - name: Launch s3d
+        env:
+          S3D_CONFIG_FILE: ${{ env.DATA_DIR }}/s3d.yml
+        run: |
+          nohup ./s3d > s3d.log 2>&1 &
+          echo $! > s3d.pid
+
+          for i in {1..30}; do
+            if nc -z localhost 8000 2>/dev/null; then
+              echo "s3d is ready"
+              break
+            fi
+            sleep 1
+          done
+
+          if ! nc -z localhost 8000 2>/dev/null; then
+            echo "s3d failed to start within 30s"
+            cat s3d.log
+            exit 1
+          fi
+
+      - name: Run test_headers.py
+        env:
+          S3TEST_CONF: ${{ github.workspace }}/s3tests.conf
+          S3_USE_SIGV4: "True"
+        run: |
+          tox run --skip-pkg-install -c ./s3-tests -- s3tests/functional/test_headers.py \
+            -m "not auth_aws2 and not fails_on_rgw" \
+            -k "not _create_bad_expect_ and not _acl"
+
+      - name: Run test_s3.py
+        env:
+          S3TEST_CONF: ${{ github.workspace }}/s3tests.conf
+          S3_USE_SIGV4: "True"
+        run: |
+          tox run --skip-pkg-install -c ./s3-tests -- s3tests/functional/test_s3.py \
+            -m "(copy or delete or list_objects or multipart) and not s3d_not_implemented and not s3d_not_supported and not s3d_not_delimiter_alt and not bucket_logging"
+
+      - name: Kill s3d
+        if: always()
+        run: |
+          kill $(cat s3d.pid) || true
+
+      - name: Upload s3d logs as artifact
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: s3d-production-logs
           path: s3d.log
