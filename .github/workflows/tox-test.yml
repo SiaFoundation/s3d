@@ -1,8 +1,6 @@
 name: S3 Compatibility Tests
 
 on:
-  push:
-    branches: [master]
   pull_request:
   workflow_dispatch:
 
@@ -133,9 +131,8 @@ jobs:
           path: s3d.log
 
   test-production:
-    name: Tox (Production)
+    name: Tox Production
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     permissions:
       contents: read
 
