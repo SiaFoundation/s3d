@@ -25,6 +25,10 @@ import (
 const (
 	// UploadsDirectory is the directory name used for storing pending uploads.
 	UploadsDirectory = "uploads"
+
+	// orphanedUploadThreshold is how old an unreferenced upload file must
+	// be before it is deleted.
+	orphanedUploadThreshold = 6 * time.Hour
 )
 
 // ErrNoAccessKey is returned when no access key is provided to the Sia backend.
@@ -98,6 +102,7 @@ type SDK interface {
 
 // Store represents the storage backend used by the Sia backend.
 type Store interface {
+	AllFilenames() (map[string]struct{}, error)
 	CopyObject(srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool) (*objects.Object, error)
 	CreateBucket(accessKeyID, bucket string) error
 	DeleteBucket(accessKeyID, bucket string) error
@@ -160,9 +165,6 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 	}
 	sia.slabSize = slabSize
 
-	// TODO: clean up orphaned uploads and multipart uploads in uploads
-	// directory on startup
-
 	launchBgLoop := func(loopFn func(context.Context)) error {
 		ctx, cancel, err := sia.tg.AddContext(ctx)
 		if err != nil {
@@ -179,6 +181,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		launchBgLoop(sia.processOrphansLoop),
 		launchBgLoop(sia.syncMetadataLoop),
 		launchBgLoop(sia.uploadLoop),
+		launchBgLoop(sia.deleteOrphansLoop),
 	); err != nil {
 		return nil, err
 	}
@@ -252,6 +255,71 @@ func (s *Sia) ProcessOrphans(ctx context.Context) {
 	}
 	if totalUnpinned > 0 {
 		s.logger.Info("processed orphaned objects", zap.Int("unpinned", totalUnpinned))
+	}
+}
+
+// deleteOrphansLoop periodically removes unreferenced files from disk.
+func (s *Sia) deleteOrphansLoop(ctx context.Context) {
+	t := time.NewTicker(6 * time.Hour)
+	defer t.Stop()
+
+	s.DeleteOrphanedUploads()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.DeleteOrphanedUploads()
+		}
+	}
+}
+
+// DeleteOrphanedUploads removes unreferenced files from the uploads directory
+// that are older than the threshold.
+func (s *Sia) DeleteOrphanedUploads() {
+	// fetch all files on disk
+	entries, err := os.ReadDir(s.uploadDir())
+	if err != nil {
+		s.logger.Error("failed to read uploads directory", zap.Error(err))
+		return
+	}
+
+	// fetch all filenames from store
+	referenced, err := s.store.AllFilenames()
+	if err != nil {
+		s.logger.Error("failed to fetch filenames", zap.Error(err))
+		return
+	}
+
+	// remove unreferenced files older than the threshold
+	var removed int
+	for _, entry := range entries {
+		if _, ok := referenced[entry.Name()]; ok {
+			continue
+		}
+
+		info, err := entry.Info()
+		if err != nil {
+			s.logger.Error("failed to stat upload entry", zap.String("name", entry.Name()), zap.Error(err))
+			continue
+		}
+
+		age := time.Since(info.ModTime())
+		if age < orphanedUploadThreshold {
+			continue
+		}
+
+		s.logger.Warn("removing orphaned upload", zap.String("name", entry.Name()), zap.Duration("age", age))
+		if err := s.removeUpload(entry.Name()); err != nil {
+			s.logger.Error("failed to remove orphaned upload", zap.String("name", entry.Name()), zap.Error(err))
+			continue
+		}
+		removed++
+	}
+
+	if removed > 0 {
+		s.logger.Info("cleaned up orphaned uploads", zap.Int("removed", removed))
 	}
 }
 

@@ -25,6 +25,79 @@ import (
 	"lukechampine.com/frand"
 )
 
+func TestAllFilenames(t *testing.T) {
+	const (
+		accessKeyID = "test-accesskey"
+		bucket      = "test-bucket"
+	)
+
+	store := initTestDB(t, zaptest.NewLogger(t))
+	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// assert empty store returns no filenames
+	refs, err := store.AllFilenames()
+	if err != nil {
+		t.Fatal(err)
+	} else if len(refs) != 0 {
+		t.Fatal("expected no filenames", len(refs))
+	}
+
+	// add a pending upload
+	fn := "regular.obj"
+	if err := store.PutObject(accessKeyID, bucket, "obj1", frand.Entropy128(), nil, 100, &fn, true); err != nil {
+		t.Fatal(err)
+	}
+
+	// assert regular upload filename is returned
+	refs, err = store.AllFilenames()
+	if err != nil {
+		t.Fatal(err)
+	} else if len(refs) != 1 {
+		t.Fatal("expected 1 filename", len(refs))
+	} else if _, ok := refs["regular.obj"]; !ok {
+		t.Fatal("expected regular.obj in filenames")
+	}
+
+	// add an in-progress multipart upload
+	uid := s3.NewUploadID()
+	if err := store.CreateMultipartUpload(bucket, "mp1", uid, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// assert multipart upload ID is included
+	refs, err = store.AllFilenames()
+	if err != nil {
+		t.Fatal(err)
+	} else if len(refs) != 2 {
+		t.Fatal("expected 2 filenames", len(refs))
+	} else if _, ok := refs[uid.String()]; !ok {
+		t.Fatal("expected multipart upload ID in filenames")
+	}
+
+	// mark the regular upload as uploaded to Sia
+	obj := sdk.Object{}
+	sealed := obj.Seal(types.GeneratePrivateKey())
+	md5 := frand.Entropy128()
+	if err := store.PutObject(accessKeyID, bucket, "obj1", md5, nil, 100, &fn, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkObjectUploaded(bucket, "obj1", md5, sealed); err != nil {
+		t.Fatal(err)
+	}
+
+	// assert only the multipart upload remains
+	refs, err = store.AllFilenames()
+	if err != nil {
+		t.Fatal(err)
+	} else if len(refs) != 1 {
+		t.Fatal("expected 1 filename after upload", len(refs))
+	} else if _, ok := refs[uid.String()]; !ok {
+		t.Fatal("expected multipart upload ID in filenames")
+	}
+}
+
 func TestGetObject(t *testing.T) {
 	var (
 		accessKeyID = "test-accesskey"

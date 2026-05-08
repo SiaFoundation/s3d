@@ -308,6 +308,44 @@ func (s *Store) SetObjectsCursor(cursor slabs.Cursor) error {
 	})
 }
 
+// AllFilenames returns the set of all filenames from the objects table and
+// in-progress multipart uploads.
+func (s *Store) AllFilenames() (map[string]struct{}, error) {
+	refs := make(map[string]struct{})
+	err := s.transaction(func(tx *txn) error {
+		objects, err := tx.Query(`SELECT DISTINCT filename FROM objects WHERE filename IS NOT NULL`)
+		if err != nil {
+			return err
+		}
+		defer objects.Close()
+		for objects.Next() {
+			var name string
+			if err := objects.Scan(&name); err != nil {
+				return err
+			}
+			refs[name] = struct{}{}
+		}
+		if err := objects.Err(); err != nil {
+			return err
+		}
+
+		multiparts, err := tx.Query(`SELECT upload_id FROM multipart_uploads`)
+		if err != nil {
+			return err
+		}
+		defer multiparts.Close()
+		for multiparts.Next() {
+			var id s3.UploadID
+			if err := multiparts.Scan((*sqlUploadID)(&id)); err != nil {
+				return err
+			}
+			refs[id.String()] = struct{}{}
+		}
+		return multiparts.Err()
+	})
+	return refs, err
+}
+
 // OrphanedObjects returns up to limit object IDs from the orphaned_objects table.
 func (s *Store) OrphanedObjects(limit int) (ids []types.Hash256, err error) {
 	err = s.transaction(func(tx *txn) error {

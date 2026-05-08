@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.uber.org/zap"
@@ -230,5 +231,91 @@ func TestOpenAndRemoveUpload(t *testing.T) {
 	}
 	if _, err := os.Stat(filePath2); !os.IsNotExist(err) {
 		t.Fatal("file should have been removed immediately when no reader is open")
+	}
+}
+
+// orphanStore is a minimal Store stub for testing DeleteOrphanedUploads.
+type orphanStore struct {
+	Store
+	referenced map[string]struct{}
+}
+
+func (s *orphanStore) AllFilenames() (map[string]struct{}, error) {
+	return s.referenced, nil
+}
+
+func TestDeleteOrphanedUploads(t *testing.T) {
+	dir := t.TempDir()
+	uploadsDir := filepath.Join(dir, UploadsDirectory)
+	if err := os.MkdirAll(uploadsDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	log := zaptest.NewLogger(t)
+	store := &orphanStore{referenced: map[string]struct{}{
+		"referenced.obj": {},
+	}}
+	s := &Sia{
+		directory:     dir,
+		store:         store,
+		lockedUploads: make(map[string]*lockedUpload),
+		logger:        log.Named("sia"),
+	}
+
+	// create a referenced file
+	referencedPath := filepath.Join(uploadsDir, "referenced.obj")
+	if err := os.WriteFile(referencedPath, []byte("data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// create an orphaned file older than the grace period
+	oldOrphanPath := filepath.Join(uploadsDir, "old-orphan.obj")
+	if err := os.WriteFile(oldOrphanPath, []byte("stale"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	past := time.Now().Add(-7 * time.Hour)
+	if err := os.Chtimes(oldOrphanPath, past, past); err != nil {
+		t.Fatal(err)
+	}
+
+	// create an orphaned multipart directory older than the grace period
+	oldOrphanDir := filepath.Join(uploadsDir, "old-orphan-multipart")
+	if err := os.MkdirAll(filepath.Join(oldOrphanDir, "1"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(oldOrphanDir, "1", "abc.part"), []byte("part"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(oldOrphanDir, past, past); err != nil {
+		t.Fatal(err)
+	}
+
+	// create a fresh orphaned file within the grace period
+	freshOrphanPath := filepath.Join(uploadsDir, "fresh-orphan.obj")
+	if err := os.WriteFile(freshOrphanPath, []byte("new"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// run cleanup
+	s.DeleteOrphanedUploads()
+
+	// assert referenced file is kept
+	if _, err := os.Stat(referencedPath); err != nil {
+		t.Fatal("referenced file should not be removed")
+	}
+
+	// assert old orphaned file is removed
+	if _, err := os.Stat(oldOrphanPath); !os.IsNotExist(err) {
+		t.Fatal("old orphaned file should be removed")
+	}
+
+	// assert old orphaned multipart directory is removed
+	if _, err := os.Stat(oldOrphanDir); !os.IsNotExist(err) {
+		t.Fatal("old orphaned multipart directory should be removed")
+	}
+
+	// assert fresh orphaned file is kept
+	if _, err := os.Stat(freshOrphanPath); err != nil {
+		t.Fatal("fresh orphaned file should not be removed")
 	}
 }
