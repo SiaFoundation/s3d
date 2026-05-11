@@ -180,10 +180,7 @@ func main() {
 	} else if errors.Is(err, sqlite.ErrNoAppKey) {
 		// register app
 		if cfg.RecoveryPhrase == "" {
-			cfg.RecoveryPhrase = sdk.NewSeedPhrase()
-			fmt.Println("No recovery phrase found. Generated new recovery phrase...")
-			fmt.Println("IMPORTANT: Store this recovery phrase in a safe place. It is required to recover your S3d account and data:")
-			fmt.Println(cfg.RecoveryPhrase)
+			checkFatalError("no recovery phrase configured, run 's3d config' or set the S3D_RECOVERY_PHRASE environment variable", errors.New("missing recovery phrase"))
 		}
 		respURL, err := builder.RequestConnection(ctx)
 		if err != nil {
