@@ -250,7 +250,7 @@ func setKeypairs() {
 				fmt.Printf("  Access Key: %s\n", kp.AccessKey)
 				fmt.Printf("  Secret Key: %s\n", kp.SecretKey)
 				fmt.Println("")
-				fmt.Println(ansiStyle("33", "Save these credentials. The secret key will not be shown again."))
+				fmt.Println(ansiStyle("33", "Save these credentials. The secret key is stored in the config file."))
 				break
 			} else if len(kp.AccessKey) >= 16 && len(kp.AccessKey) <= 128 {
 				break
