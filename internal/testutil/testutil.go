@@ -60,6 +60,7 @@ func (t *S3Tester) ChangeAccessKey(tb testing.TB, accessKeyID, secretKey string)
 	}
 }
 
+// Client returns the tester's S3 client.
 func (t *S3Tester) Client() *service.Client {
 	return t.client
 }
