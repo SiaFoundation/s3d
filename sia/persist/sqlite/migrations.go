@@ -9,7 +9,7 @@ import (
 // match the schema in init.sql.
 var migrations = []func(tx *txn, log *zap.Logger) error{
 	func(tx *txn, log *zap.Logger) error {
-		_, err := tx.Exec(`CREATE INDEX objects_filename_idx ON objects(filename) WHERE filename IS NOT NULL`)
+		_, err := tx.Exec(`CREATE INDEX IF NOT EXISTS objects_filename_idx ON objects(filename) WHERE filename IS NOT NULL`)
 		return err
 	},
 }

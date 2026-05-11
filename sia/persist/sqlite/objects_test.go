@@ -96,6 +96,40 @@ func TestAllFilenames(t *testing.T) {
 	} else if _, ok := refs[uid.String()]; !ok {
 		t.Fatal("expected multipart upload ID in filenames")
 	}
+
+	// complete the multipart upload
+	if _, err := store.AddMultipartPart(bucket, "mp1", uid, "p1", 1, frand.Entropy128(), s3.MinUploadPartSize); err != nil {
+		t.Fatal(err)
+	}
+	mpMD5 := frand.Entropy128()
+	if err := store.CompleteMultipartUpload(bucket, "mp1", uid, mpMD5, s3.MinUploadPartSize); err != nil {
+		t.Fatal(err)
+	}
+
+	// assert completed multipart object has a filename
+	refs, err = store.AllFilenames()
+	if err != nil {
+		t.Fatal(err)
+	} else if len(refs) != 1 {
+		t.Fatal("expected 1 filename after completing multipart", len(refs))
+	} else if _, ok := refs[uid.String()]; !ok {
+		t.Fatal("expected upload ID as filename for completed multipart")
+	}
+
+	// mark the completed multipart as uploaded to Sia
+	mpObj := sdk.Object{}
+	mpSealed := mpObj.Seal(types.GeneratePrivateKey())
+	if err := store.MarkObjectUploaded(bucket, "mp1", mpMD5, mpSealed); err != nil {
+		t.Fatal(err)
+	}
+
+	// assert no filenames remain
+	refs, err = store.AllFilenames()
+	if err != nil {
+		t.Fatal(err)
+	} else if len(refs) != 0 {
+		t.Fatal("expected no filenames after upload", len(refs))
+	}
 }
 
 func TestGetObject(t *testing.T) {

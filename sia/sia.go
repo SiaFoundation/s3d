@@ -260,7 +260,7 @@ func (s *Sia) ProcessOrphans(ctx context.Context) {
 
 // deleteOrphansLoop periodically removes unreferenced files from disk.
 func (s *Sia) deleteOrphansLoop(ctx context.Context) {
-	t := time.NewTicker(6 * time.Hour)
+	t := time.NewTicker(orphanedUploadThreshold)
 	defer t.Stop()
 
 	s.DeleteOrphanedUploads()
