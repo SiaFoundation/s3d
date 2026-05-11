@@ -953,6 +953,7 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 
 	etag := FormatETag(obj.ContentMD5[:], 0)
 	w.Header().Set("ETag", etag)
+	w.Header().Set("Last-Modified", obj.LastModified.UTC().Format(http.TimeFormat))
 
 	if r.Header.Get("If-None-Match") == etag {
 		return s3errs.ErrNotModified
@@ -974,7 +975,6 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 	} else {
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", obj.Size))
 	}
-	w.Header().Set("Last-Modified", obj.LastModified.UTC().Format(http.TimeFormat))
 
 	return nil
 }
