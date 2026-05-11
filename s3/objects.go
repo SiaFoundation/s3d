@@ -962,9 +962,8 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 		w.Header().Set("x-amz-mp-parts-count", fmt.Sprintf("%d", *obj.PartsCount))
 	}
 
-	lastModified, _ := time.Parse(http.TimeFormat, obj.Metadata["Last-Modified"])
 	ifModifiedSince, _ := time.Parse(http.TimeFormat, r.Header.Get("If-Modified-Since"))
-	if !lastModified.IsZero() && !ifModifiedSince.Before(lastModified) {
+	if !ifModifiedSince.IsZero() && !ifModifiedSince.Before(obj.LastModified) {
 		return s3errs.ErrNotModified
 	}
 

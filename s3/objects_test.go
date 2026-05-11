@@ -15,6 +15,7 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	service "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"lukechampine.com/frand"
 )
@@ -141,6 +142,51 @@ func TestGetAndHeadObject(t *testing.T) {
 			}
 			assertObject(t, obj, false, tc.rnge)
 		})
+	}
+
+	// if-modified-since with a time in the past should return 200
+	getResp, err := s3Tester.Client().GetObject(t.Context(), &service.GetObjectInput{
+		Bucket:          aws.String(bucket),
+		Key:             aws.String(object),
+		IfModifiedSince: aws.Time(time.Now().Add(-time.Hour)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	getResp.Body.Close()
+
+	// if-modified-since with a time in the future should return 304
+	_, err = s3Tester.Client().GetObject(t.Context(), &service.GetObjectInput{
+		Bucket:          aws.String(bucket),
+		Key:             aws.String(object),
+		IfModifiedSince: aws.Time(time.Now().Add(time.Hour)),
+	})
+	testutil.AssertS3StatusCode(t, s3errs.ErrNotModified, err)
+
+	// if-modified-since equal to last-modified should return 304
+	_, err = s3Tester.Client().GetObject(t.Context(), &service.GetObjectInput{
+		Bucket:          aws.String(bucket),
+		Key:             aws.String(object),
+		IfModifiedSince: getResp.LastModified,
+	})
+	testutil.AssertS3StatusCode(t, s3errs.ErrNotModified, err)
+
+	// head with if-modified-since in the future should return 304
+	_, err = s3Tester.Client().HeadObject(t.Context(), &service.HeadObjectInput{
+		Bucket:          aws.String(bucket),
+		Key:             aws.String(object),
+		IfModifiedSince: aws.Time(time.Now().Add(time.Hour)),
+	})
+	testutil.AssertS3StatusCode(t, s3errs.ErrNotModified, err)
+
+	// head with if-modified-since in the past should return 200
+	_, err = s3Tester.Client().HeadObject(t.Context(), &service.HeadObjectInput{
+		Bucket:          aws.String(bucket),
+		Key:             aws.String(object),
+		IfModifiedSince: aws.Time(time.Now().Add(-time.Hour)),
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
