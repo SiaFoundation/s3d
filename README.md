@@ -2,7 +2,9 @@
 
 [![GoDoc](https://pkg.go.dev/badge/github.com/SiaFoundation/s3d)](https://pkg.go.dev/github.com/SiaFoundation/s3d)
 
-An S3-compatible gateway for the [Sia](https://sia.tech) network.
+A lightweight, S3-compatible Renter for the Sia network
+
+⚠️ Work in Progress — This project is not yet ready for use. Breaking changes should be expected.
 
 ## Overview
 
@@ -142,40 +144,54 @@ AWS Signature V4 exclusively. Both path-style (`s3.example.com/bucket/object`)
 and virtual-hosted-style (`bucket.s3.example.com/object`) addressing are
 supported.
 
-### Supported Operations
+### Operations
 
 | Operation | Status |
 |-----------|--------|
 | **Buckets** | |
-| CreateBucket | Supported |
-| DeleteBucket | Supported |
-| HeadBucket | Supported |
-| ListBuckets | Supported |
-| GetBucketLocation | Supported |
+| CreateBucket | ✓ |
+| DeleteBucket | ✓ |
+| HeadBucket | ✓ |
+| ListBuckets | ✓ |
+| GetBucketLocation | ✓ |
+| GetBucketVersioning | ✗ |
+| PutBucketVersioning | ✗ |
+| GetBucketAcl | ✗ |
+| PutBucketAcl | ✗ |
+| GetBucketPolicy | ✗ |
+| PutBucketPolicy | ✗ |
+| GetBucketLifecycle | ✗ |
+| PutBucketLifecycle | ✗ |
+| GetBucketCors | ✗ |
+| PutBucketCors | ✗ |
+| GetBucketTagging | ✗ |
+| PutBucketTagging | ✗ |
+| GetBucketEncryption | ✗ |
+| PutBucketEncryption | ✗ |
 | **Objects** | |
-| PutObject | Supported |
-| GetObject | Supported |
-| HeadObject | Supported |
-| DeleteObject | Supported |
-| DeleteObjects | Supported |
-| CopyObject | Supported |
-| ListObjects (v1) | Supported |
-| ListObjects (v2) | Supported |
+| PutObject | ✓ |
+| GetObject | ✓ |
+| HeadObject | ✓ |
+| DeleteObject | ✓ |
+| DeleteObjects | ✓ |
+| CopyObject | ✓ |
+| ListObjects (v1) | ✓ |
+| ListObjects (v2) | ✓ |
+| GetObjectAcl | ✗ |
+| PutObjectAcl | ✗ |
+| GetObjectTagging | ✗ |
+| PutObjectTagging | ✗ |
+| GetObjectLock | ✗ |
+| PutObjectLock | ✗ |
+| SelectObjectContent | ✗ |
 | **Multipart** | |
-| CreateMultipartUpload | Supported |
-| UploadPart | Supported |
-| UploadPartCopy | Supported |
-| CompleteMultipartUpload | Supported |
-| AbortMultipartUpload | Supported |
-| ListParts | Supported |
-| ListMultipartUploads | Supported |
-
-### Not Supported
-
-Versioning, ACLs, bucket policies, lifecycle rules, object locking, tagging,
-server-side encryption configuration, CORS configuration, website hosting,
-replication, inventory, analytics, metrics, event notifications, and select
-object content.
+| CreateMultipartUpload | ✓ |
+| UploadPart | ✓ |
+| UploadPartCopy | ✓ |
+| CompleteMultipartUpload | ✓ |
+| AbortMultipartUpload | ✓ |
+| ListParts | ✓ |
+| ListMultipartUploads | ✓ |
 
 ## Configuration
 
@@ -244,7 +260,8 @@ log:
     format: json # log format (human, json)
     path: /var/log/s3d/s3d.log # log file path (defaults to <directory>/s3d.log)
 s3:
-  hostBases: [] # virtual-hosted-style bucket bases (e.g. ["s3.example.com"])
+  hostBases:
+    - s3.example.com
 sia:
   indexerURL: https://sia.storage # Sia indexer URL
   keyPairs:
