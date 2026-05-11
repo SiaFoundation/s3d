@@ -60,6 +60,10 @@ func (t *S3Tester) ChangeAccessKey(tb testing.TB, accessKeyID, secretKey string)
 	}
 }
 
+func (t *S3Tester) Client() *service.Client {
+	return t.client
+}
+
 // AddObject adds an object to the in-memory S3 backend.
 func (t *S3Tester) AddObject(bucket, object string, data []byte, metadata map[string]string) error {
 	_, err := t.backend.PutObject(context.Background(), AccessKeyID, bucket, object, bytes.NewReader(data), s3.PutObjectOptions{
