@@ -294,6 +294,7 @@ func (s *Sia) DeleteOrphanedUploads() {
 
 	// remove unreferenced files older than the threshold
 	var removed int
+	threshold := time.Now().Add(-orphanedUploadThreshold)
 	for _, entry := range entries {
 		if _, ok := referenced[entry.Name()]; ok {
 			continue
@@ -305,12 +306,12 @@ func (s *Sia) DeleteOrphanedUploads() {
 			continue
 		}
 
-		age := time.Since(info.ModTime())
-		if age < orphanedUploadThreshold {
+		mt := info.ModTime()
+		if mt.After(threshold) {
 			continue
 		}
 
-		s.logger.Warn("removing orphaned upload", zap.String("name", entry.Name()), zap.Duration("age", age))
+		s.logger.Warn("removing orphaned upload", zap.String("name", entry.Name()), zap.Time("modTime", mt))
 		if err := s.removeUpload(entry.Name()); err != nil {
 			s.logger.Error("failed to remove orphaned upload", zap.String("name", entry.Name()), zap.Error(err))
 			continue
