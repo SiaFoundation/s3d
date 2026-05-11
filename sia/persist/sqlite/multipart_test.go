@@ -276,7 +276,7 @@ func TestCompleteMultipartUpload(t *testing.T) {
 
 	contentMD5 := frand.Entropy128()
 	totalSize := s3.MinUploadPartSize + 5 // part1 + part2
-	if err := store.CompleteMultipartUpload(bucket, object, uid, contentMD5, int64(totalSize)); err != nil {
+	if _, err := store.CompleteMultipartUpload(bucket, object, uid, contentMD5, int64(totalSize)); err != nil {
 		t.Fatal(err)
 	}
 

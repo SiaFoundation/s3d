@@ -395,8 +395,18 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 	}
 
 	// complete the multipart upload in the database
-	if err := s.store.CompleteMultipartUpload(bucket, object, uploadID, contentMD5, contentLength); err != nil {
+	orphaned, err := s.store.CompleteMultipartUpload(bucket, object, uploadID, contentMD5, contentLength)
+	if err != nil {
 		return nil, fmt.Errorf("failed to complete multipart upload in store: %w", err)
+	}
+	if orphaned != nil {
+		if err := s.removeUpload(*orphaned); err != nil {
+			s.logger.Warn("failed to remove pending upload file",
+				zap.String("bucket", bucket),
+				zap.String("object", object),
+				zap.String("filename", *orphaned),
+				zap.Error(err))
+		}
 	}
 
 	// calculate ETag
