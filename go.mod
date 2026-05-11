@@ -8,12 +8,12 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.16
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.101.0
 	github.com/mattn/go-sqlite3 v1.14.44
-	go.sia.tech/core v0.20.0
+	go.sia.tech/core v0.21.0
 	go.sia.tech/coreutils v0.21.3
 	go.sia.tech/indexd v0.2.0
 	go.sia.tech/siastorage v0.0.4-0.20260428134956-8039d0326806
 	go.uber.org/zap v1.28.0
-	golang.org/x/term v0.42.0
+	golang.org/x/term v0.43.0
 	gopkg.in/ini.v1 v1.67.2
 	gopkg.in/yaml.v3 v3.0.1
 	lukechampine.com/flagg v1.1.1
@@ -57,7 +57,7 @@ require (
 	golang.org/x/crypto v0.50.0 // indirect
 	golang.org/x/net v0.53.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.43.0 // indirect
+	golang.org/x/sys v0.44.0 // indirect
 	golang.org/x/text v0.36.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	golang.org/x/tools v0.44.0 // indirect
