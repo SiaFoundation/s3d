@@ -90,15 +90,18 @@ func (s *Sia) releaseDiskUsage(size int64) {
 }
 
 // removeAndRelease removes path and releases its bytes from the reserved
-// disk usage.
+// disk usage. The release only happens if the removal succeeds so that a
+// failed removal does not undercount disk usage.
 func (s *Sia) removeAndRelease(path string) error {
-	usage, usageErr := diskUsage(path)
-	err := os.RemoveAll(path)
-	s.releaseDiskUsage(usage)
+	usage, err := diskUsage(path)
 	if err != nil {
 		return err
 	}
-	return usageErr
+	if err := os.RemoveAll(path); err != nil {
+		return err
+	}
+	s.releaseDiskUsage(usage)
+	return nil
 }
 
 // diskUsage returns the total size of all files at path, treating a missing
@@ -456,10 +459,11 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 			return
 		}
 		if objPath != "" {
-			if err := os.Remove(objPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			if removeErr := os.Remove(objPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 				s.logger.Error("failed to remove pending upload file after error",
 					zap.String("path", objPath),
-					zap.Error(err))
+					zap.Error(removeErr))
+				return
 			}
 		}
 		s.releaseDiskUsage(opts.ContentLength)

@@ -131,10 +131,20 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object string
 	if err := s.addDiskUsage(ctx, opts.ContentLength, allowExcess); err != nil {
 		return nil, err
 	}
+	var partPath string
 	defer func() {
-		if err != nil {
-			s.releaseDiskUsage(opts.ContentLength)
+		if err == nil {
+			return
 		}
+		if partPath != "" {
+			if removeErr := os.Remove(partPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				s.logger.Error("failed to remove part file after upload failure",
+					zap.String("path", partPath),
+					zap.Error(removeErr))
+				return
+			}
+		}
+		s.releaseDiskUsage(opts.ContentLength)
 	}()
 
 	// create part directory
@@ -146,23 +156,12 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object string
 	}
 
 	// create part file
-	partPath := filepath.Join(partDir, randPartName())
+	partPath = filepath.Join(partDir, randPartName())
 	partFile, err := os.Create(partPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create part file: %w", err)
 	}
 	defer partFile.Close()
-
-	// defer cleanup on error
-	defer func() {
-		if err != nil {
-			if removeErr := os.Remove(partPath); removeErr != nil {
-				s.logger.Error("failed to remove part file after upload failure",
-					zap.String("path", partPath),
-					zap.Error(removeErr))
-			}
-		}
-	}()
 
 	// prepare writers
 	md5Hash := md5.New()
@@ -259,10 +258,20 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 	if err := s.addDiskUsage(ctx, opts.Range.Length, allowExcess); err != nil {
 		return nil, err
 	}
+	var partPath string
 	defer func() {
-		if err != nil {
-			s.releaseDiskUsage(opts.Range.Length)
+		if err == nil {
+			return
 		}
+		if partPath != "" {
+			if removeErr := os.Remove(partPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				s.logger.Error("failed to remove part file after upload failure",
+					zap.String("path", partPath),
+					zap.Error(removeErr))
+				return
+			}
+		}
+		s.releaseDiskUsage(opts.Range.Length)
 	}()
 
 	// open a reader for the requested range of the source object
@@ -300,23 +309,12 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 	}
 
 	// create part file
-	partPath := filepath.Join(partDir, randPartName())
+	partPath = filepath.Join(partDir, randPartName())
 	partFile, err := os.Create(partPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create part file: %w", err)
 	}
 	defer partFile.Close()
-
-	// defer cleanup on error
-	defer func() {
-		if err != nil {
-			if removeErr := os.Remove(partPath); removeErr != nil {
-				s.logger.Error("failed to remove part file after upload failure",
-					zap.String("path", partPath),
-					zap.Error(removeErr))
-			}
-		}
-	}()
 
 	// copy the requested range to the part file
 	md5Hash := md5.New()
