@@ -25,10 +25,6 @@ import (
 const (
 	// UploadsDirectory is the directory name used for storing pending uploads.
 	UploadsDirectory = "uploads"
-
-	// orphanedUploadThreshold is how old an unreferenced upload file must
-	// be before it is deleted.
-	orphanedUploadThreshold = 6 * time.Hour
 )
 
 // ErrNoAccessKey is returned when no access key is provided to the Sia backend.
@@ -102,7 +98,7 @@ type SDK interface {
 
 // Store represents the storage backend used by the Sia backend.
 type Store interface {
-	AllFilenames() (map[string]struct{}, error)
+	AllFilenames() ([]string, error)
 	CopyObject(srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool) (*objects.Object, error)
 	CreateBucket(accessKeyID, bucket string) error
 	DeleteBucket(accessKeyID, bucket string) error
@@ -158,6 +154,9 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		return nil, fmt.Errorf("failed to create directory %q: %w", dir, err)
 	}
 
+	// clean up any orphaned uploads on startup
+	sia.deleteOrphanedUploads()
+
 	// initialize slab size if the upload loop is enabled
 	slabSize, err := sia.sdk.SlabSize()
 	if err != nil {
@@ -181,7 +180,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		launchBgLoop(sia.processOrphansLoop),
 		launchBgLoop(sia.syncMetadataLoop),
 		launchBgLoop(sia.uploadLoop),
-		launchBgLoop(sia.deleteOrphansLoop),
+		launchBgLoop(sia.processOrphansLoop),
 	); err != nil {
 		return nil, err
 	}
@@ -258,72 +257,6 @@ func (s *Sia) ProcessOrphans(ctx context.Context) {
 	}
 }
 
-// deleteOrphansLoop periodically removes unreferenced files from disk.
-func (s *Sia) deleteOrphansLoop(ctx context.Context) {
-	t := time.NewTicker(orphanedUploadThreshold)
-	defer t.Stop()
-
-	s.DeleteOrphanedUploads()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			s.DeleteOrphanedUploads()
-		}
-	}
-}
-
-// DeleteOrphanedUploads removes unreferenced files from the uploads directory
-// that are older than the threshold.
-func (s *Sia) DeleteOrphanedUploads() {
-	// fetch all files on disk
-	entries, err := os.ReadDir(s.uploadDir())
-	if err != nil {
-		s.logger.Error("failed to read uploads directory", zap.Error(err))
-		return
-	}
-
-	// fetch all filenames from store
-	referenced, err := s.store.AllFilenames()
-	if err != nil {
-		s.logger.Error("failed to fetch filenames", zap.Error(err))
-		return
-	}
-
-	// remove unreferenced files older than the threshold
-	var removed int
-	threshold := time.Now().Add(-orphanedUploadThreshold)
-	for _, entry := range entries {
-		if _, ok := referenced[entry.Name()]; ok {
-			continue
-		}
-
-		info, err := entry.Info()
-		if err != nil {
-			s.logger.Error("failed to stat upload entry", zap.String("name", entry.Name()), zap.Error(err))
-			continue
-		}
-
-		mt := info.ModTime()
-		if mt.After(threshold) {
-			continue
-		}
-
-		s.logger.Warn("removing orphaned upload", zap.String("name", entry.Name()), zap.Time("modTime", mt))
-		if err := s.removeUpload(entry.Name()); err != nil {
-			s.logger.Error("failed to remove orphaned upload", zap.String("name", entry.Name()), zap.Error(err))
-			continue
-		}
-		removed++
-	}
-
-	if removed > 0 {
-		s.logger.Info("cleaned up orphaned uploads", zap.Int("removed", removed))
-	}
-}
-
 // LoadSecret loads the secret key for the given access key ID. If the access
 // key wasn't found, the error s3errs.ErrInvalidAccessKeyID is returned.
 func (s *Sia) LoadSecret(ctx context.Context, accessKeyID string) (auth.SecretAccessKey, error) {
@@ -332,6 +265,44 @@ func (s *Sia) LoadSecret(ctx context.Context, accessKeyID string) (auth.SecretAc
 		return nil, s3errs.ErrInvalidAccessKeyId
 	}
 	return slices.Clone(secret), nil
+}
+
+func (s *Sia) deleteOrphanedUploads() {
+	// fetch all files on disk
+	entries, err := os.ReadDir(s.uploadDir())
+	if err != nil {
+		s.logger.Error("failed to read uploads directory", zap.Error(err))
+		return
+	}
+
+	// fetch all filenames from store
+	filenames, err := s.store.AllFilenames()
+	if err != nil {
+		s.logger.Error("failed to fetch filenames from store", zap.Error(err))
+		return
+	}
+
+	// build lookup table
+	lookup := make(map[string]struct{})
+	for _, filename := range filenames {
+		lookup[filename] = struct{}{}
+	}
+
+	// remove unreferenced files older than the threshold
+	var removed int
+	for _, entry := range entries {
+		if _, ok := lookup[entry.Name()]; !ok {
+			s.logger.Warn("removing orphaned upload", zap.String("name", entry.Name()))
+			if err := s.removeUpload(entry.Name()); err != nil {
+				s.logger.Error("failed to remove orphaned upload", zap.String("name", entry.Name()), zap.Error(err))
+				continue
+			}
+			removed++
+		}
+	}
+	if removed > 0 {
+		s.logger.Info("removed orphaned uploads", zap.Int("removed", removed))
+	}
 }
 
 // syncMetadataLoop periodically syncs object metadata from the indexer.

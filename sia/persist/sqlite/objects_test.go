@@ -56,7 +56,7 @@ func TestAllFilenames(t *testing.T) {
 		t.Fatal(err)
 	} else if len(refs) != 1 {
 		t.Fatal("expected 1 filename", len(refs))
-	} else if _, ok := refs["regular.obj"]; !ok {
+	} else if !slices.Contains(refs, "regular.obj") {
 		t.Fatal("expected regular.obj in filenames")
 	}
 
@@ -72,7 +72,7 @@ func TestAllFilenames(t *testing.T) {
 		t.Fatal(err)
 	} else if len(refs) != 2 {
 		t.Fatal("expected 2 filenames", len(refs))
-	} else if _, ok := refs[uid.String()]; !ok {
+	} else if !slices.Contains(refs, uid.String()) {
 		t.Fatal("expected multipart upload ID in filenames")
 	}
 
@@ -93,7 +93,7 @@ func TestAllFilenames(t *testing.T) {
 		t.Fatal(err)
 	} else if len(refs) != 1 {
 		t.Fatal("expected 1 filename after upload", len(refs))
-	} else if _, ok := refs[uid.String()]; !ok {
+	} else if !slices.Contains(refs, uid.String()) {
 		t.Fatal("expected multipart upload ID in filenames")
 	}
 
@@ -112,7 +112,7 @@ func TestAllFilenames(t *testing.T) {
 		t.Fatal(err)
 	} else if len(refs) != 1 {
 		t.Fatal("expected 1 filename after completing multipart", len(refs))
-	} else if _, ok := refs[uid.String()]; !ok {
+	} else if !slices.Contains(refs, uid.String()) {
 		t.Fatal("expected upload ID as filename for completed multipart")
 	}
 

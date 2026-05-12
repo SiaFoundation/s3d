@@ -308,22 +308,21 @@ func (s *Store) SetObjectsCursor(cursor slabs.Cursor) error {
 	})
 }
 
-// AllFilenames returns the set of all filenames from the objects table and
-// in-progress multipart uploads.
-func (s *Store) AllFilenames() (map[string]struct{}, error) {
-	refs := make(map[string]struct{})
-	err := s.transaction(func(tx *txn) error {
+// AllFilenames returns all filenames from the objects table and in-progress
+// multipart uploads.
+func (s *Store) AllFilenames() (filenames []string, err error) {
+	err = s.transaction(func(tx *txn) error {
 		objects, err := tx.Query(`SELECT DISTINCT filename FROM objects WHERE filename IS NOT NULL`)
 		if err != nil {
 			return err
 		}
 		defer objects.Close()
 		for objects.Next() {
-			var name string
-			if err := objects.Scan(&name); err != nil {
+			var filename string
+			if err := objects.Scan(&filename); err != nil {
 				return err
 			}
-			refs[name] = struct{}{}
+			filenames = append(filenames, filename)
 		}
 		if err := objects.Err(); err != nil {
 			return err
@@ -339,11 +338,11 @@ func (s *Store) AllFilenames() (map[string]struct{}, error) {
 			if err := multiparts.Scan((*sqlUploadID)(&id)); err != nil {
 				return err
 			}
-			refs[id.String()] = struct{}{}
+			filenames = append(filenames, id.String())
 		}
 		return multiparts.Err()
 	})
-	return refs, err
+	return
 }
 
 // OrphanedObjects returns up to limit object IDs from the orphaned_objects table.
