@@ -240,7 +240,6 @@ file and CLI flags. The order of precedence from lowest to highest is:
 |----------|-------------|
 | `S3D_CONFIG_FILE` | Override the config file path |
 | `S3D_DATA_DIR` | Override the data directory |
-| `S3D_RECOVERY_PHRASE` | Set the wallet recovery phrase |
 
 ### Example Config
 
