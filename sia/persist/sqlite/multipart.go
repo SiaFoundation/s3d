@@ -203,17 +203,20 @@ func (s *Store) AddMultipartPart(bucket, name string, uploadID s3.UploadID, file
 	return prevFilename, nil
 }
 
-// HasMultipartUpload checks if a multipart upload exists.
-func (s *Store) HasMultipartUpload(bucket, name string, uploadID s3.UploadID) error {
-	return s.transaction(func(tx *txn) error {
+// HasMultipartUpload checks if a multipart upload exists and reports whether
+// any parts have been uploaded for it.
+func (s *Store) HasMultipartUpload(bucket, name string, uploadID s3.UploadID) (hasParts bool, err error) {
+	err = s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
 
 		var exists bool
-		err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM multipart_uploads WHERE upload_id = $1 AND bucket_id = $2 AND name = $3)`,
-			sqlUploadID(uploadID), bid, name).Scan(&exists)
+		err = tx.QueryRow(`
+			SELECT EXISTS(SELECT 1 FROM multipart_uploads WHERE upload_id = $1 AND bucket_id = $2 AND name = $3),
+			       EXISTS(SELECT 1 FROM multipart_parts WHERE upload_id = $1)
+		`, sqlUploadID(uploadID), bid, name).Scan(&exists, &hasParts)
 		if err != nil {
 			return err
 		}
@@ -222,6 +225,7 @@ func (s *Store) HasMultipartUpload(bucket, name string, uploadID s3.UploadID) er
 		}
 		return nil
 	})
+	return
 }
 
 // MultipartParts returns the parts belonging to the specified multipart upload.

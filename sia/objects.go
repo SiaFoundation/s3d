@@ -20,6 +20,110 @@ import (
 	"go.uber.org/zap"
 )
 
+// addDiskUsage reserves size bytes against the disk usage limit, blocking
+// until enough space is available. If allowExcess returns true the
+// reservation bypasses the limit; it is re-evaluated each time
+// notifyDiskUsage is called.
+func (s *Sia) addDiskUsage(ctx context.Context, size int64, allowExcess func() (bool, error)) error {
+	if size <= 0 || s.diskUsageLimit == 0 {
+		return nil
+	}
+	for {
+		s.diskUsageMu.Lock()
+		wake := s.diskUsageWake
+		if s.diskUsage < s.diskUsageLimit {
+			s.diskUsage += uint64(size)
+			s.diskUsageMu.Unlock()
+			return nil
+		}
+		s.diskUsageMu.Unlock()
+
+		if allowExcess != nil {
+			allow, err := allowExcess()
+			if err != nil {
+				return err
+			} else if allow {
+				s.diskUsageMu.Lock()
+				s.diskUsage += uint64(size)
+				s.diskUsageMu.Unlock()
+				return nil
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-wake:
+		}
+	}
+}
+
+// notifyDiskUsage wakes waiters in addDiskUsage so they can re-evaluate
+// their allowExcess predicate after a state change that doesn't free space.
+func (s *Sia) notifyDiskUsage() {
+	if s.diskUsageLimit == 0 {
+		return
+	}
+	s.diskUsageMu.Lock()
+	close(s.diskUsageWake)
+	s.diskUsageWake = make(chan struct{})
+	s.diskUsageMu.Unlock()
+}
+
+// releaseDiskUsage releases size bytes previously reserved by addDiskUsage.
+func (s *Sia) releaseDiskUsage(size int64) {
+	if s.diskUsageLimit == 0 {
+		return
+	}
+
+	s.diskUsageMu.Lock()
+	defer s.diskUsageMu.Unlock()
+	if size > 0 {
+		if uint64(size) > s.diskUsage {
+			s.diskUsage = 0
+		} else {
+			s.diskUsage -= uint64(size)
+		}
+	}
+	close(s.diskUsageWake)
+	s.diskUsageWake = make(chan struct{})
+}
+
+// removeAndRelease removes path and releases its bytes from the reserved
+// disk usage.
+func (s *Sia) removeAndRelease(path string) error {
+	usage, usageErr := diskUsage(path)
+	err := os.RemoveAll(path)
+	s.releaseDiskUsage(usage)
+	if err != nil {
+		return err
+	}
+	return usageErr
+}
+
+// diskUsage returns the total size of all files at path, treating a missing
+// path as zero.
+func diskUsage(path string) (usage int64, err error) {
+	err = filepath.WalkDir(path, func(_ string, d fs.DirEntry, err error) error {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		} else if err != nil {
+			return err
+		} else if d.IsDir() {
+			return nil
+		}
+		info, err := d.Info()
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		} else if err != nil {
+			return err
+		}
+		usage += info.Size()
+		return nil
+	})
+	return usage, err
+}
+
 type (
 	lockedUpload struct {
 		deleted  bool
@@ -66,7 +170,7 @@ func (s *Sia) lockUpload(filename string) func() {
 			}
 			delete(s.lockedUploads, filename)
 			if lu.deleted {
-				if err := os.RemoveAll(filepath.Join(s.uploadDir(), filename)); err != nil {
+				if err := s.removeAndRelease(filepath.Join(s.uploadDir(), filename)); err != nil {
 					s.logger.Error("failed to remove upload upon unlock",
 						zap.String("filename", filename),
 						zap.Error(err))
@@ -127,14 +231,14 @@ func (s *Sia) openUpload(bucket, name string, filename *string, multipart bool, 
 
 func (s *Sia) removeUpload(fileName string) error {
 	s.lockedUploadsMu.Lock()
-	defer s.lockedUploadsMu.Unlock()
-
-	lu, ok := s.lockedUploads[fileName]
-	if ok {
+	if lu, ok := s.lockedUploads[fileName]; ok {
 		lu.deleted = true
+		s.lockedUploadsMu.Unlock()
 		return nil
 	}
-	return os.RemoveAll(filepath.Join(s.uploadDir(), fileName))
+	s.lockedUploadsMu.Unlock()
+
+	return s.removeAndRelease(filepath.Join(s.uploadDir(), fileName))
 }
 
 // CopyObject copies an object from the source bucket and object key to the
@@ -343,6 +447,24 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 		return nil, err
 	}
 
+	if err := s.addDiskUsage(ctx, opts.ContentLength, nil); err != nil {
+		return nil, err
+	}
+	var objPath string
+	defer func() {
+		if err == nil {
+			return
+		}
+		if objPath != "" {
+			if err := os.Remove(objPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+				s.logger.Error("failed to remove pending upload file after error",
+					zap.String("path", objPath),
+					zap.Error(err))
+			}
+		}
+		s.releaseDiskUsage(opts.ContentLength)
+	}()
+
 	// compute md5 checksum for the etag
 	md5Hash := md5.New()
 	r = io.TeeReader(r, md5Hash)
@@ -355,7 +477,6 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	}
 
 	// handle empty object case
-	var objPath string
 	var fileName *string
 	var size int64
 	if opts.ContentLength == 0 {
@@ -383,12 +504,6 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 			return nil, fmt.Errorf("failed to close object file: %w", err)
 		}
 	}
-
-	defer func() {
-		if err != nil && objPath != "" {
-			_ = os.Remove(objPath)
-		}
-	}()
 
 	// check content length
 	if opts.ContentLength != size {

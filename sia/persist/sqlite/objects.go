@@ -15,6 +15,28 @@ import (
 	sdk "go.sia.tech/siastorage"
 )
 
+// DiskUsage returns the total bytes pending upload to Sia, across pending
+// objects and in-progress multipart parts. Pending objects sharing a filename
+// (e.g. via CopyObject) are counted once.
+func (s *Store) DiskUsage() (usage uint64, err error) {
+	err = s.transaction(func(tx *txn) error {
+		var objectsSize, partsSize uint64
+		err := tx.QueryRow(`
+			SELECT COALESCE(SUM(size), 0)
+			FROM (SELECT MAX(size) AS size FROM objects WHERE filename IS NOT NULL GROUP BY filename)
+		`).Scan(&objectsSize)
+		if err != nil {
+			return err
+		}
+		if err := tx.QueryRow(`SELECT COALESCE(SUM(content_length), 0) FROM multipart_parts`).Scan(&partsSize); err != nil {
+			return err
+		}
+		usage = objectsSize + partsSize
+		return nil
+	})
+	return
+}
+
 // DeleteObject deletes the object with the given bucket and name if it exists
 // and all provided preconditions match. If the deleted object's ID has no
 // remaining references, it is inserted into the orphaned_objects table. If the

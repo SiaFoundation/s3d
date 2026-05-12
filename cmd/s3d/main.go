@@ -47,7 +47,8 @@ var cfg = Config{
 		},
 	},
 	Sia: Sia{
-		IndexerURL: "https://sia.storage",
+		IndexerURL:     "https://sia.storage",
+		DiskUsageLimit: 10 * (1 << 30), // 10 GiB
 	},
 	S3: S3{},
 }
@@ -213,6 +214,7 @@ func main() {
 		siaOpts = append(siaOpts, sia.WithKeyPair(kp.AccessKey, kp.SecretKey))
 	}
 	siaOpts = append(siaOpts, sia.WithLogger(log.Named("backend")))
+	siaOpts = append(siaOpts, sia.WithDiskUsageLimit(cfg.Sia.DiskUsageLimit))
 
 	backend, err := sia.New(ctx, sia.NewSDK(sdkClient), store, cfg.Directory, siaOpts...)
 	if errors.Is(err, sia.ErrNoAccessKey) {
