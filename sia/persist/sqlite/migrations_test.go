@@ -38,7 +38,6 @@ CREATE TABLE objects (
     PRIMARY KEY (bucket_id, name)
 ) WITHOUT ROWID;
 CREATE INDEX objects_sia_object_id_idx ON objects(sia_object_id);
-CREATE INDEX objects_filename_idx ON objects(filename) WHERE filename IS NOT NULL;
 
 CREATE TABLE multipart_uploads (
     upload_id BLOB PRIMARY KEY,
