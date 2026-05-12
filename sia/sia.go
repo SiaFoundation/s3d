@@ -266,7 +266,7 @@ func (s *Sia) LoadSecret(ctx context.Context, accessKeyID string) (auth.SecretAc
 	return slices.Clone(secret), nil
 }
 
-func (s *Sia) deleteOrphanedUploads() {
+func (s *Sia) deleteOrphanedUploads() { //nolint:revive
 	// fetch all files on disk
 	entries, err := os.ReadDir(s.uploadDir())
 	if err != nil {
