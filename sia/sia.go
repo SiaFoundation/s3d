@@ -154,15 +154,15 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		return nil, fmt.Errorf("failed to create directory %q: %w", dir, err)
 	}
 
-	// clean up any orphaned uploads on startup
-	sia.deleteOrphanedUploads()
-
 	// initialize slab size if the upload loop is enabled
 	slabSize, err := sia.sdk.SlabSize()
 	if err != nil {
 		return nil, fmt.Errorf("failed to determine slab size: %w", err)
 	}
 	sia.slabSize = slabSize
+
+	// clean up any orphaned uploads on startup
+	sia.deleteOrphanedUploads()
 
 	launchBgLoop := func(loopFn func(context.Context)) error {
 		ctx, cancel, err := sia.tg.AddContext(ctx)
@@ -180,7 +180,6 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		launchBgLoop(sia.processOrphansLoop),
 		launchBgLoop(sia.syncMetadataLoop),
 		launchBgLoop(sia.uploadLoop),
-		launchBgLoop(sia.processOrphansLoop),
 	); err != nil {
 		return nil, err
 	}

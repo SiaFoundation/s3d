@@ -37,11 +37,11 @@ func TestAllFilenames(t *testing.T) {
 	}
 
 	// assert empty store returns no filenames
-	refs, err := store.AllFilenames()
+	filenames, err := store.AllFilenames()
 	if err != nil {
 		t.Fatal(err)
-	} else if len(refs) != 0 {
-		t.Fatal("expected no filenames", len(refs))
+	} else if len(filenames) != 0 {
+		t.Fatal("expected no filenames", len(filenames))
 	}
 
 	// add a pending upload
@@ -51,12 +51,12 @@ func TestAllFilenames(t *testing.T) {
 	}
 
 	// assert regular upload filename is returned
-	refs, err = store.AllFilenames()
+	filenames, err = store.AllFilenames()
 	if err != nil {
 		t.Fatal(err)
-	} else if len(refs) != 1 {
-		t.Fatal("expected 1 filename", len(refs))
-	} else if !slices.Contains(refs, "regular.obj") {
+	} else if len(filenames) != 1 {
+		t.Fatal("expected 1 filename", len(filenames))
+	} else if !slices.Contains(filenames, "regular.obj") {
 		t.Fatal("expected regular.obj in filenames")
 	}
 
@@ -67,12 +67,12 @@ func TestAllFilenames(t *testing.T) {
 	}
 
 	// assert multipart upload ID is included
-	refs, err = store.AllFilenames()
+	filenames, err = store.AllFilenames()
 	if err != nil {
 		t.Fatal(err)
-	} else if len(refs) != 2 {
-		t.Fatal("expected 2 filenames", len(refs))
-	} else if !slices.Contains(refs, uid.String()) {
+	} else if len(filenames) != 2 {
+		t.Fatal("expected 2 filenames", len(filenames))
+	} else if !slices.Contains(filenames, uid.String()) {
 		t.Fatal("expected multipart upload ID in filenames")
 	}
 
@@ -88,12 +88,12 @@ func TestAllFilenames(t *testing.T) {
 	}
 
 	// assert only the multipart upload remains
-	refs, err = store.AllFilenames()
+	filenames, err = store.AllFilenames()
 	if err != nil {
 		t.Fatal(err)
-	} else if len(refs) != 1 {
-		t.Fatal("expected 1 filename after upload", len(refs))
-	} else if !slices.Contains(refs, uid.String()) {
+	} else if len(filenames) != 1 {
+		t.Fatal("expected 1 filename after upload", len(filenames))
+	} else if !slices.Contains(filenames, uid.String()) {
 		t.Fatal("expected multipart upload ID in filenames")
 	}
 
@@ -107,12 +107,12 @@ func TestAllFilenames(t *testing.T) {
 	}
 
 	// assert completed multipart object has a filename
-	refs, err = store.AllFilenames()
+	filenames, err = store.AllFilenames()
 	if err != nil {
 		t.Fatal(err)
-	} else if len(refs) != 1 {
-		t.Fatal("expected 1 filename after completing multipart", len(refs))
-	} else if !slices.Contains(refs, uid.String()) {
+	} else if len(filenames) != 1 {
+		t.Fatal("expected 1 filename after completing multipart", len(filenames))
+	} else if !slices.Contains(filenames, uid.String()) {
 		t.Fatal("expected upload ID as filename for completed multipart")
 	}
 
@@ -124,11 +124,11 @@ func TestAllFilenames(t *testing.T) {
 	}
 
 	// assert no filenames remain
-	refs, err = store.AllFilenames()
+	filenames, err = store.AllFilenames()
 	if err != nil {
 		t.Fatal(err)
-	} else if len(refs) != 0 {
-		t.Fatal("expected no filenames after upload", len(refs))
+	} else if len(filenames) != 0 {
+		t.Fatal("expected no filenames after upload", len(filenames))
 	}
 }
 

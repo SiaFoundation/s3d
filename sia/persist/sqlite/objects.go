@@ -312,35 +312,23 @@ func (s *Store) SetObjectsCursor(cursor slabs.Cursor) error {
 // multipart uploads.
 func (s *Store) AllFilenames() (filenames []string, err error) {
 	err = s.transaction(func(tx *txn) error {
-		objects, err := tx.Query(`SELECT DISTINCT filename FROM objects WHERE filename IS NOT NULL`)
+		rows, err := tx.Query(`
+			SELECT filename FROM objects WHERE filename IS NOT NULL
+			UNION ALL
+			SELECT LOWER(HEX(upload_id)) FROM multipart_uploads`)
 		if err != nil {
 			return err
 		}
-		defer objects.Close()
-		for objects.Next() {
-			var filename string
-			if err := objects.Scan(&filename); err != nil {
-				return err
-			}
-			filenames = append(filenames, filename)
-		}
-		if err := objects.Err(); err != nil {
-			return err
-		}
+		defer rows.Close()
 
-		multiparts, err := tx.Query(`SELECT upload_id FROM multipart_uploads`)
-		if err != nil {
-			return err
-		}
-		defer multiparts.Close()
-		for multiparts.Next() {
-			var id s3.UploadID
-			if err := multiparts.Scan((*sqlUploadID)(&id)); err != nil {
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
 				return err
 			}
-			filenames = append(filenames, id.String())
+			filenames = append(filenames, name)
 		}
-		return multiparts.Err()
+		return rows.Err()
 	})
 	return
 }

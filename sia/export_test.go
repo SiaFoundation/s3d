@@ -12,7 +12,7 @@ func (s *Sia) UploadObjects(ctx context.Context) { //nolint:revive
 	s.uploadObjects(ctx)
 }
 
-// CleanOrphanedUploads exports deleteOrphanedUploads for testing.
-func (s *Sia) CleanOrphanedUploads() { //nolint:revive
+// DeleteOrphanedUploads exports deleteOrphanedUploads for testing.
+func (s *Sia) DeleteOrphanedUploads() { //nolint:revive
 	s.deleteOrphanedUploads()
 }

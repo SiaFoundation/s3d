@@ -317,7 +317,7 @@ func TestDeleteOrphanedUploads(t *testing.T) {
 	createMultipart(uid2, false)
 
 	// run cleanup
-	backend.CleanOrphanedUploads()
+	backend.DeleteOrphanedUploads()
 
 	// assert referenced entries are kept
 	assertExists(obj1)
