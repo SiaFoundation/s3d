@@ -406,7 +406,7 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	}
 
 	// store the object in the database
-	orphaned, err := s.store.PutObject(accessKeyID, bucket, object, contentMD5, opts.Meta, size, fileName, true)
+	orphaned, err := s.store.PutObject(accessKeyID, bucket, object, contentMD5, opts.Meta, size, fileName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to store object metadata: %w", err)
 	}

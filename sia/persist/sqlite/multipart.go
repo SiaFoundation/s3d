@@ -90,18 +90,13 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 			return fmt.Errorf("found %d parts smaller than minimum size (%d bytes)", smallParts, s3.MinUploadPartSize)
 		}
 
-		oldID, oldFilename, err := previousObject(tx, bid, name)
+		// delete any existing upload at this key
+		oldID, oldFilename, err := deleteObject(tx, bid, name)
 		if err != nil {
 			return err
 		}
 
-		// delete any existing parts for the object
-		_, err = tx.Exec(`DELETE FROM object_parts WHERE bucket_id = $1 AND name = $2`, bid, name)
-		if err != nil {
-			return err
-		}
-
-		// upsert object with metadata from multipart upload
+		// insert object with metadata from multipart upload
 		// the upload_id serves as the filename since parts are stored
 		// under the upload directory
 		_, err = tx.Exec(`
@@ -109,14 +104,6 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 			SELECT bucket_id, name, $1, metadata, $2, $3, $4
 			FROM multipart_uploads
 			WHERE upload_id = $5
-			ON CONFLICT(bucket_id, name) DO UPDATE SET
-				content_md5 = excluded.content_md5,
-				metadata = excluded.metadata,
-				size = excluded.size,
-				updated_at = excluded.updated_at,
-				filename = excluded.filename,
-				sia_object_id = NULL,
-				sia_object = NULL
 		`, sqlMD5(contentMD5), contentLength, sqlTime(time.Now()), uploadID.String(), sqlUploadID(uploadID))
 		if err != nil {
 			return err
