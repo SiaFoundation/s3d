@@ -24,9 +24,8 @@ import (
 )
 
 const (
-	recoveryPhraseEnvVar = "S3D_RECOVERY_PHRASE"
-	configFileEnvVar     = "S3D_CONFIG_FILE"
-	dataDirEnvVar        = "S3D_DATA_DIR"
+	configFileEnvVar = "S3D_CONFIG_FILE"
+	dataDirEnvVar    = "S3D_DATA_DIR"
 )
 
 var cfg = Config{
@@ -182,11 +181,9 @@ func main() {
 	} else if errors.Is(err, sqlite.ErrNoAppKey) {
 		// register app
 		if cfg.RecoveryPhrase == "" {
-			cfg.RecoveryPhrase = sdk.NewSeedPhrase()
-			fmt.Println("No recovery phrase found. Generated new recovery phrase...")
-			fmt.Println("IMPORTANT: Store this recovery phrase in a safe place. It is required to recover your S3d account and data:")
-			fmt.Println(cfg.RecoveryPhrase)
+			checkFatalError("Please provide a recovery phrase. You can do so by updating the config file or running the 'config' command", errors.New("no recovery phrase configured"))
 		}
+
 		respURL, err := builder.RequestConnection(ctx)
 		if err != nil {
 			log.Fatal("failed to request app connection", zap.Error(err))
@@ -382,8 +379,5 @@ func humanEncoder(showColors bool) zapcore.Encoder {
 func applyEnvVars(cfg *Config) {
 	if v := os.Getenv(dataDirEnvVar); v != "" {
 		cfg.Directory = v
-	}
-	if v := os.Getenv(recoveryPhraseEnvVar); v != "" {
-		cfg.RecoveryPhrase = v
 	}
 }
