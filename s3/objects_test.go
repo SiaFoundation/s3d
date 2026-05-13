@@ -188,6 +188,19 @@ func TestGetAndHeadObject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	// if-modified-since should be ignored when if-none-match is present per
+	// RFC 7232, even if if-modified-since alone would return 304
+	resp, err := s3Tester.Client().GetObject(t.Context(), &service.GetObjectInput{
+		Bucket:          aws.String(bucket),
+		Key:             aws.String(object),
+		IfModifiedSince: aws.Time(time.Now().Add(time.Hour)),
+		IfNoneMatch:     aws.String("\"nonexistent\""),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
 }
 
 func TestGetAndHeadObjectPart(t *testing.T) {
