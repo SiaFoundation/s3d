@@ -46,7 +46,7 @@ which will guide you through an interactive configuration process and generate a
 config file. For more information on configuration options, see the
 [Configuration](#configuration) section below.
 
-Once configured, log in to register `s3d` with the Sia indexer with
+Once configured, log in to register `s3d` with the Sia indexer:
 
 ```sh
 s3d login
@@ -62,7 +62,7 @@ first.
 Once logged in, start `s3d` with
 
 ```sh
-./s3d
+s3d
 ```
 
 ## Docker
