@@ -27,7 +27,7 @@ func newSDKBuilder() *sdk.Builder {
 		Name:        "S3d",
 		Description: "A S3-compatible storage service backed by Sia",
 		LogoURL:     "https://example.com/logo.png",
-		ServiceURL:  "https://github.com/Siafoundation/s3d",
+		ServiceURL:  "https://github.com/SiaFoundation/s3d",
 	})
 }
 
