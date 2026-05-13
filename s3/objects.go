@@ -963,9 +963,11 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 		w.Header().Set("x-amz-mp-parts-count", fmt.Sprintf("%d", *obj.PartsCount))
 	}
 
-	ifModifiedSince, _ := time.Parse(http.TimeFormat, r.Header.Get("If-Modified-Since"))
-	if !ifModifiedSince.IsZero() && !ifModifiedSince.Before(obj.LastModified) {
-		return s3errs.ErrNotModified
+	if r.Header.Get("If-None-Match") == "" {
+		ifModifiedSince, _ := time.Parse(http.TimeFormat, r.Header.Get("If-Modified-Since"))
+		if !ifModifiedSince.IsZero() && !ifModifiedSince.Before(obj.LastModified) {
+			return s3errs.ErrNotModified
+		}
 	}
 
 	w.Header().Set("Accept-Ranges", "bytes")
