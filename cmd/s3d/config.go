@@ -118,14 +118,14 @@ func runConfigCmd(fp string) {
 
 	fmt.Println("")
 	if cfg.RecoveryPhrase != "" {
-		fmt.Println(ansiStyle("33", "A seed phrase is already configured."))
-		fmt.Println("If you change your seed phrase, you will have to re-register the app.")
-		if promptYesNo("Would you like to change your seed phrase?") {
+		fmt.Println(ansiStyle("33", "A recovery phrase is already configured."))
+		fmt.Println("If you change your recovery phrase, you will have to re-register the app.")
+		if promptYesNo("Would you like to change your recovery phrase?") {
 			cfg.RecoveryPhrase = ""
-			setSeedPhrase()
+			setRecoveryPhrase()
 		}
 	} else {
-		setSeedPhrase()
+		setRecoveryPhrase()
 	}
 
 	fmt.Println("")
@@ -309,28 +309,29 @@ func setListenAddress(context string, value *string) {
 	}
 }
 
-func setSeedPhrase() {
-	fmt.Println("Type in your 12-word seed phrase and press enter. If you do not have a seed phrase yet, type 'seed' to generate one.")
+func setRecoveryPhrase() {
+	fmt.Println("Enter your 12-word recovery phrase.")
+	fmt.Println("(Leave blank to generate a new one.)")
 
 	var phrase string
 	for {
-		input := readPasswordInput("Enter seed phrase")
-		if strings.EqualFold(input, "seed") {
+		input := readPasswordInput("Enter recovery phrase")
+		if input == "" {
 			phrase = wallet.NewSeedPhrase()
 
 			fmt.Println("")
-			fmt.Println("A new seed phrase has been generated below. " + ansiStyle("1", "Write it down and keep it safe."))
-			fmt.Println("Your seed phrase is used to register your app with the indexer.")
+			fmt.Println("A new recovery phrase has been generated below. " + ansiStyle("1", "Write it down and keep it safe."))
+			fmt.Println("Your recovery phrase is used to register your app with the indexer.")
 			fmt.Println("")
-			fmt.Println("  Seed Phrase: " + ansiStyle("34;1", phrase))
+			fmt.Println("  Recovery Phrase: " + ansiStyle("34;1", phrase))
 			fmt.Println("")
 
 			for {
-				confirm := readPasswordInput("Confirm seed phrase")
+				confirm := readPasswordInput("Confirm recovery phrase")
 				if confirm == phrase {
 					break
 				}
-				fmt.Println(ansiStyle("31", "Seed phrases do not match!"))
+				fmt.Println(ansiStyle("31", "Recovery phrases do not match!"))
 				fmt.Println(ansiStyle("31", fmt.Sprintf("Expected: %q", phrase)))
 				fmt.Println(ansiStyle("31", fmt.Sprintf("Entered:  %q", confirm)))
 				fmt.Println("")
@@ -340,7 +341,7 @@ func setSeedPhrase() {
 
 		var seed [32]byte
 		if err := wallet.SeedFromPhrase(&seed, input); err != nil {
-			fmt.Println(ansiStyle("31", fmt.Sprintf("Invalid seed phrase: %s", err.Error())))
+			fmt.Println(ansiStyle("31", fmt.Sprintf("Invalid recovery phrase: %s", err.Error())))
 			fmt.Println("")
 			continue
 		}
