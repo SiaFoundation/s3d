@@ -46,16 +46,24 @@ which will guide you through an interactive configuration process and generate a
 config file. For more information on configuration options, see the
 [Configuration](#configuration) section below.
 
-Once configured, start `s3d` with
+Once configured, log in to register `s3d` with the Sia indexer with
+
+```sh
+s3d login
+```
+
+`s3d login` will prompt for your 12-word recovery phrase (or generate a new one
+if you leave it blank) and print a URL to approve the app connection. Visit the
+URL in your browser to complete setup.
+
+If no config file exists yet, `s3d login` will run the configuration wizard
+first.
+
+Once logged in, start `s3d` with
 
 ```sh
 ./s3d
 ```
-
-On first launch, `s3d` will register itself with the Sia indexer and print a URL
-to approve the app connection. Visit the URL in your browser to complete setup.
-If no recovery phrase is configured, a new one will be generated automatically.
-Store it in a safe place as it is required to recover your account and data.
 
 ## Docker
 
@@ -89,19 +97,18 @@ Run the configuration wizard to generate a config file.
 docker compose run --rm s3d config
 ```
 
-### 3. Start `s3d`
+### 3. Log in
+
+Register `s3d` with the indexer.  `s3d` will print a URL that must be visited to approve the connection to the indexer.
+
+```sh
+docker compose run --rm s3d login
+```
+
+### 4. Start `s3d`
 
 ```sh
 docker compose up -d
-```
-
-### 4. Approve the app connection
-
-On first run, `s3d` will print a URL that must be visited to approve the
-connection to the indexer.
-
-```sh
-docker compose logs -f s3d
 ```
 
 ### Building the image
@@ -210,6 +217,7 @@ generate one.
 |---------|-------------|
 | `version` | Print the version, commit hash, and build date |
 | `config` | Launch the interactive configuration wizard |
+| `login` | Prompts for recovery phrase and registers `s3d` with the Sia indexer |
 
 ### Default Ports
 
@@ -246,7 +254,6 @@ file and CLI flags. The order of precedence from lowest to highest is:
 ```yaml
 apiAddress: 127.0.0.1:8000
 directory: /var/lib/s3d
-recoveryPhrase: your twelve word recovery phrase goes right here in this field
 log:
   stdout:
     enabled: true # enable logging to stdout
