@@ -953,6 +953,7 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 
 	etag := FormatETag(obj.ContentMD5[:], 0)
 	w.Header().Set("ETag", etag)
+	w.Header().Set("Last-Modified", obj.LastModified.UTC().Format(http.TimeFormat))
 
 	if r.Header.Get("If-None-Match") == etag {
 		return s3errs.ErrNotModified
@@ -962,10 +963,11 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 		w.Header().Set("x-amz-mp-parts-count", fmt.Sprintf("%d", *obj.PartsCount))
 	}
 
-	lastModified, _ := time.Parse(http.TimeFormat, obj.Metadata["Last-Modified"])
-	ifModifiedSince, _ := time.Parse(http.TimeFormat, r.Header.Get("If-Modified-Since"))
-	if !lastModified.IsZero() && !ifModifiedSince.Before(lastModified) {
-		return s3errs.ErrNotModified
+	if r.Header.Get("If-None-Match") == "" {
+		ifModifiedSince, _ := time.Parse(http.TimeFormat, r.Header.Get("If-Modified-Since"))
+		if !ifModifiedSince.IsZero() && !ifModifiedSince.Before(obj.LastModified) {
+			return s3errs.ErrNotModified
+		}
 	}
 
 	w.Header().Set("Accept-Ranges", "bytes")
@@ -975,7 +977,6 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 	} else {
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", obj.Size))
 	}
-	w.Header().Set("Last-Modified", obj.LastModified.UTC().Format(http.TimeFormat))
 
 	return nil
 }
