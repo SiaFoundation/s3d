@@ -107,7 +107,7 @@ func (s *Sia) AbortMultipartUpload(ctx context.Context, accessKeyID, bucket, obj
 	}
 
 	// remove multipart upload directory
-	if err := s.removeAndRelease(s.multipartUploadPath(uploadID.String())); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := s.removeUpload(uploadID.String()); err != nil && !errors.Is(err, os.ErrNotExist) {
 		s.logger.Error("failed to remove multipart upload directory",
 			zap.Stringer("uploadID", uploadID),
 			zap.Error(err))

@@ -80,6 +80,9 @@ func (s *Sia) releaseDiskUsage(size int64) {
 	defer s.diskUsageMu.Unlock()
 	if size > 0 {
 		if uint64(size) > s.diskUsage {
+			s.logger.Warn("disk usage release exceeds tracked amount; resetting to 0",
+				zap.Int64("size", size),
+				zap.Uint64("diskUsage", s.diskUsage))
 			s.diskUsage = 0
 		} else {
 			s.diskUsage -= uint64(size)
