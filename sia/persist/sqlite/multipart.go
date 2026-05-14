@@ -38,9 +38,11 @@ func (s *Store) CreateMultipartUpload(bucket, name string, uploadID s3.UploadID,
 // CompleteMultipartUpload finalizes a multipart upload by creating the object
 // and transferring parts from the upload to the object. If the overwritten
 // object's ID has no remaining references, it is inserted into the
-// orphaned_objects table.
-func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64) error {
-	return s.transaction(func(tx *txn) error {
+// orphaned_objects table. If the overwrite leaves a previously pending file
+// unreferenced, its filename is returned so the caller can remove it from disk.
+func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64) (*string, error) {
+	var orphaned *string
+	err := s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
@@ -88,18 +90,13 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 			return fmt.Errorf("found %d parts smaller than minimum size (%d bytes)", smallParts, s3.MinUploadPartSize)
 		}
 
-		oldID, err := previousObjectID(tx, bid, name)
+		// delete any existing upload at this key
+		oldID, oldFilename, err := deleteObject(tx, bid, name)
 		if err != nil {
 			return err
 		}
 
-		// delete any existing parts for the object
-		_, err = tx.Exec(`DELETE FROM object_parts WHERE bucket_id = $1 AND name = $2`, bid, name)
-		if err != nil {
-			return err
-		}
-
-		// upsert object with metadata from multipart upload
+		// insert object with metadata from multipart upload
 		// the upload_id serves as the filename since parts are stored
 		// under the upload directory
 		_, err = tx.Exec(`
@@ -107,14 +104,6 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 			SELECT bucket_id, name, $1, metadata, $2, $3, $4
 			FROM multipart_uploads
 			WHERE upload_id = $5
-			ON CONFLICT(bucket_id, name) DO UPDATE SET
-				content_md5 = excluded.content_md5,
-				metadata = excluded.metadata,
-				size = excluded.size,
-				updated_at = excluded.updated_at,
-				filename = excluded.filename,
-				sia_object_id = NULL,
-				sia_object = NULL
 		`, sqlMD5(contentMD5), contentLength, sqlTime(time.Now()), uploadID.String(), sqlUploadID(uploadID))
 		if err != nil {
 			return err
@@ -141,9 +130,14 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 		}
 
 		// delete the multipart upload
-		_, err = tx.Exec(`DELETE FROM multipart_uploads WHERE upload_id = $1`, sqlUploadID(uploadID))
+		if _, err := tx.Exec(`DELETE FROM multipart_uploads WHERE upload_id = $1`, sqlUploadID(uploadID)); err != nil {
+			return err
+		}
+
+		orphaned, err = orphanedFilename(tx, oldFilename)
 		return err
 	})
+	return orphaned, err
 }
 
 // AbortMultipartUpload removes a multipart upload from the store.

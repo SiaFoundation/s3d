@@ -142,9 +142,18 @@ func (s *Sia) removeUpload(fileName string) error {
 // metadata that should be merged into the copied object except for the
 // x-amz-acl header.
 func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, replace bool, meta map[string]string) (*s3.CopyObjectResult, error) {
-	obj, err := s.store.CopyObject(srcBucket, srcObject, dstBucket, dstObject, meta, replace)
+	obj, orphaned, err := s.store.CopyObject(srcBucket, srcObject, dstBucket, dstObject, meta, replace)
 	if err != nil {
 		return nil, err
+	}
+	if orphaned != nil {
+		if err := s.removeUpload(*orphaned); err != nil {
+			s.logger.Warn("failed to remove pending upload file",
+				zap.String("bucket", dstBucket),
+				zap.String("object", dstObject),
+				zap.String("filename", *orphaned),
+				zap.Error(err))
+		}
 	}
 
 	return &s3.CopyObjectResult{
@@ -397,8 +406,18 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	}
 
 	// store the object in the database
-	if err := s.store.PutObject(accessKeyID, bucket, object, contentMD5, opts.Meta, size, fileName, true); err != nil {
+	orphaned, err := s.store.PutObject(accessKeyID, bucket, object, contentMD5, opts.Meta, size, fileName)
+	if err != nil {
 		return nil, fmt.Errorf("failed to store object metadata: %w", err)
+	}
+	if orphaned != nil {
+		if err := s.removeUpload(*orphaned); err != nil {
+			s.logger.Warn("failed to remove pending upload file",
+				zap.String("bucket", bucket),
+				zap.String("object", object),
+				zap.String("filename", *orphaned),
+				zap.Error(err))
+		}
 	}
 
 	return &s3.PutObjectResult{

@@ -3,6 +3,8 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/base32"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
@@ -12,9 +14,11 @@ import (
 	"strconv"
 	"strings"
 
+	"go.sia.tech/coreutils/wallet"
 	"go.uber.org/zap"
 	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
+	"lukechampine.com/frand"
 )
 
 type (
@@ -113,6 +117,18 @@ func runConfigCmd(fp string) {
 	setDataDirectory()
 
 	fmt.Println("")
+	if cfg.RecoveryPhrase != "" {
+		fmt.Println(ansiStyle("33", "A recovery phrase is already configured."))
+		fmt.Println("If you change your recovery phrase, you will have to re-register the app.")
+		if promptYesNo("Would you like to change your recovery phrase?") {
+			cfg.RecoveryPhrase = ""
+			setRecoveryPhrase()
+		}
+	} else {
+		setRecoveryPhrase()
+	}
+
+	fmt.Println("")
 	if len(cfg.Sia.KeyPairs) > 0 {
 		fmt.Println(ansiStyle("33", fmt.Sprintf("%d access keypair(s) already configured.", len(cfg.Sia.KeyPairs))))
 		fmt.Println("If you change them, you will need to update any scripts or applications that use the S3 API.")
@@ -163,6 +179,20 @@ func configPath() string {
 	}
 }
 
+func generateAccessKey() (accessKey, secretKey string) {
+	// 12 random bytes encode to exactly 20 base32 characters
+	akBytes := make([]byte, 12)
+	frand.Read(akBytes)
+	accessKey = base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(akBytes)
+
+	// 30 random bytes encode to exactly 40 base64 characters
+	skBytes := make([]byte, 30)
+	frand.Read(skBytes)
+	secretKey = base64.StdEncoding.EncodeToString(skBytes)
+
+	return
+}
+
 func humanList(s []string, sep string) string {
 	if len(s) == 0 {
 		return ""
@@ -208,28 +238,39 @@ func setKeypairs() {
 	for {
 		var kp KeyPair
 
+		fmt.Println("Enter an access key id for the S3 API.")
+		fmt.Println("(It must be between 16 and 128 characters. Leave blank to auto-generate a keypair.)")
+
 		for {
-			fmt.Println("Please choose the access key id.")
-			fmt.Println("This will be used for authentication with the S3 API.")
-			fmt.Println("(It must be between 16 and 128 characters.)")
-			kp.AccessKey = readPasswordInput("Enter access key")
-			if len(kp.AccessKey) >= 16 && len(kp.AccessKey) <= 128 {
+			kp.AccessKey = readInput("Enter access key")
+			if kp.AccessKey == "" {
+				kp.AccessKey, kp.SecretKey = generateAccessKey()
+				fmt.Println("")
+				fmt.Println("Generated keypair:")
+				fmt.Printf("  Access Key: %s\n", kp.AccessKey)
+				fmt.Printf("  Secret Key: %s\n", kp.SecretKey)
+				fmt.Println("")
+				fmt.Println(ansiStyle("33", "Save these credentials. The secret key is stored in the config file."))
+				break
+			} else if len(kp.AccessKey) >= 16 && len(kp.AccessKey) <= 128 {
 				break
 			}
 			fmt.Println(ansiStyle("31", "Access key id must be between 16 and 128 characters."))
 			fmt.Println("")
 		}
 
-		for {
-			fmt.Println("Please choose the secret key.")
-			fmt.Println("This will be used for authentication with the S3 API.")
-			fmt.Println("(It must be between 32 and 128 characters.)")
-			kp.SecretKey = readPasswordInput("Enter secret key")
-			if len(kp.SecretKey) >= 32 && len(kp.SecretKey) <= 128 {
-				break
+		// only prompt for secret key if not auto-generated
+		if kp.SecretKey == "" {
+			for {
+				fmt.Println("Enter a secret key for the S3 API.")
+				fmt.Println("(It must be between 32 and 128 characters.)")
+				kp.SecretKey = readPasswordInput("Enter secret key")
+				if len(kp.SecretKey) >= 32 && len(kp.SecretKey) <= 128 {
+					break
+				}
+				fmt.Println(ansiStyle("31", "Secret key must be between 32 and 128 characters."))
+				fmt.Println("")
 			}
-			fmt.Println(ansiStyle("31", "Secret key must be between 32 and 128 characters."))
-			fmt.Println("")
 		}
 
 		cfg.Sia.KeyPairs = append(cfg.Sia.KeyPairs, kp)
@@ -266,6 +307,49 @@ func setListenAddress(context string, value *string) {
 		*value = net.JoinHostPort(host, port)
 		return
 	}
+}
+
+func setRecoveryPhrase() {
+	fmt.Println("Enter your 12-word recovery phrase.")
+	fmt.Println("(Leave blank to generate a new one.)")
+
+	var phrase string
+	for {
+		input := readPasswordInput("Enter recovery phrase")
+		if input == "" {
+			phrase = wallet.NewSeedPhrase()
+
+			fmt.Println("")
+			fmt.Println("A new recovery phrase has been generated below. " + ansiStyle("1", "Write it down and keep it safe."))
+			fmt.Println("Your recovery phrase is used to register your app with the indexer.")
+			fmt.Println("")
+			fmt.Println("  Recovery Phrase: " + ansiStyle("34;1", phrase))
+			fmt.Println("")
+
+			for {
+				confirm := readPasswordInput("Confirm recovery phrase")
+				if confirm == phrase {
+					break
+				}
+				fmt.Println(ansiStyle("31", "Recovery phrases do not match!"))
+				fmt.Println(ansiStyle("31", fmt.Sprintf("Expected: %q", phrase)))
+				fmt.Println(ansiStyle("31", fmt.Sprintf("Entered:  %q", confirm)))
+				fmt.Println("")
+			}
+			break
+		}
+
+		var seed [32]byte
+		if err := wallet.SeedFromPhrase(&seed, input); err != nil {
+			fmt.Println(ansiStyle("31", fmt.Sprintf("Invalid recovery phrase: %s", err.Error())))
+			fmt.Println("")
+			continue
+		}
+		phrase = input
+		break
+	}
+
+	cfg.RecoveryPhrase = phrase
 }
 
 func readInput(context string) string {

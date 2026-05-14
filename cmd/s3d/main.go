@@ -24,15 +24,12 @@ import (
 )
 
 const (
-	recoveryPhraseEnvVar = "S3D_RECOVERY_PHRASE"
-	configFileEnvVar     = "S3D_CONFIG_FILE"
-	dataDirEnvVar        = "S3D_DATA_DIR"
+	configFileEnvVar = "S3D_CONFIG_FILE"
+	dataDirEnvVar    = "S3D_DATA_DIR"
 )
 
 var cfg = Config{
-	ApiAddress:     "127.0.0.1:8000",
-	RecoveryPhrase: os.Getenv(recoveryPhraseEnvVar),
-	Directory:      os.Getenv(dataDirEnvVar),
+	ApiAddress: "127.0.0.1:8000",
 	Log: Log{
 		File: FileLog{
 			Level:   zap.NewAtomicLevelAt(zapcore.InfoLevel),
@@ -61,12 +58,16 @@ func main() {
 	versionCmd := flagg.New("version", ``)
 	configCmd := flagg.New("config", ``)
 
-	// attempt to load the config, command line flags will override any values
-	// set in the config file
+	// attempt to load the config file
 	configPath := tryLoadConfig()
 
-	// determine the data directory
-	cfg.Directory = dataDirectory(cfg.Directory)
+	// apply environment variable overrides
+	applyEnvVars(&cfg)
+
+	// fall back to default directory if not set by now
+	if cfg.Directory == "" {
+		cfg.Directory = applicationDirectoryOS()
+	}
 
 	cmd := flagg.Parse(flagg.Tree{
 		Cmd: rootCmd,
@@ -180,11 +181,9 @@ func main() {
 	} else if errors.Is(err, sqlite.ErrNoAppKey) {
 		// register app
 		if cfg.RecoveryPhrase == "" {
-			cfg.RecoveryPhrase = sdk.NewSeedPhrase()
-			fmt.Println("No recovery phrase found. Generated new recovery phrase...")
-			fmt.Println("IMPORTANT: Store this recovery phrase in a safe place. It is required to recover your S3d account and data:")
-			fmt.Println(cfg.RecoveryPhrase)
+			checkFatalError("Please provide a recovery phrase. You can do so by updating the config file or running the 'config' command", errors.New("no recovery phrase configured"))
 		}
+
 		respURL, err := builder.RequestConnection(ctx)
 		if err != nil {
 			log.Fatal("failed to request app connection", zap.Error(err))
@@ -264,13 +263,7 @@ func checkFatalError(context string, err error) {
 	os.Exit(1)
 }
 
-func dataDirectory(fp string) string {
-	// use the provided path if it's not empty
-	if fp != "" {
-		return fp
-	}
-
-	// default to the operating system's application directory
+func applicationDirectoryOS() string {
 	switch runtime.GOOS {
 	case "windows":
 		return filepath.Join(os.Getenv("APPDATA"), "s3d")
@@ -378,4 +371,13 @@ func humanEncoder(showColors bool) zapcore.Encoder {
 	cfg.StacktraceKey = ""
 	cfg.CallerKey = ""
 	return zapcore.NewConsoleEncoder(cfg)
+}
+
+// applyEnvVars overrides config values with environment variables. This is
+// called after the config file and CLI flags have been applied so that
+// environment variables take the highest precedence.
+func applyEnvVars(cfg *Config) {
+	if v := os.Getenv(dataDirEnvVar); v != "" {
+		cfg.Directory = v
+	}
 }

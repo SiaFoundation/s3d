@@ -265,7 +265,7 @@ func TestDeleteOrphanedUploads(t *testing.T) {
 	// helper to create objects
 	createObject := func(filename string, onDisk bool) {
 		t.Helper()
-		if err := store.PutObject(testutil.AccessKeyID, "bucket", filename, frand.Entropy128(), nil, 100, &filename, true); err != nil {
+		if _, err := store.PutObject(testutil.AccessKeyID, "bucket", filename, frand.Entropy128(), nil, 100, &filename); err != nil {
 			t.Fatal(err)
 		} else if onDisk {
 			if err := os.WriteFile(filepath.Join(uploadsDir, filename), []byte("data"), 0600); err != nil {

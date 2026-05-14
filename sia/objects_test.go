@@ -922,6 +922,120 @@ func TestCopyAndDeleteObject(t *testing.T) {
 	}
 }
 
+// TestOverwritePendingObjectCleansUpFile asserts that overwriting a pending
+// object removes its previous file from the uploads directory, across the
+// PutObject, CopyObject, and CompleteMultipartUpload paths. It also asserts
+// that a file shared with another object (via CopyObject) is not removed.
+func TestOverwritePendingObjectCleansUpFile(t *testing.T) {
+	log := zaptest.NewLogger(t)
+	dir := t.TempDir()
+	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	s3Tester := NewCustomTester(t, dir, store, NewMemorySDK(), log)
+
+	const bucket = "bucket"
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	uploadsDir := filepath.Join(dir, sia.UploadsDirectory)
+	pendingFilename := func(t *testing.T, object string) string {
+		t.Helper()
+		obj, err := store.GetObject(aws.String(testutil.AccessKeyID), bucket, object, nil)
+		if err != nil {
+			t.Fatal(err)
+		} else if obj.FileName == nil {
+			t.Fatalf("expected %q to have a pending filename", object)
+		}
+		return *obj.FileName
+	}
+	assertRemoved := func(t *testing.T, filename string) {
+		t.Helper()
+		if _, err := os.Stat(filepath.Join(uploadsDir, filename)); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("expected pending file %q to be removed, got: %v", filename, err)
+		}
+	}
+	assertExists := func(t *testing.T, filename string) {
+		t.Helper()
+		if _, err := os.Stat(filepath.Join(uploadsDir, filename)); err != nil {
+			t.Fatalf("expected pending file %q to exist, got: %v", filename, err)
+		}
+	}
+
+	// PutObject over a pending object removes the previous file
+	if _, err := s3Tester.PutObject(t.Context(), bucket, "put", bytes.NewReader(frand.Bytes(100)), nil); err != nil {
+		t.Fatal(err)
+	}
+	putFile := pendingFilename(t, "put")
+	if _, err := s3Tester.PutObject(t.Context(), bucket, "put", bytes.NewReader(frand.Bytes(100)), nil); err != nil {
+		t.Fatal(err)
+	}
+	assertRemoved(t, putFile)
+
+	// CopyObject onto a pending object removes the destination's previous
+	// file while preserving the source's file
+	if _, err := s3Tester.PutObject(t.Context(), bucket, "copy-src", bytes.NewReader(frand.Bytes(100)), nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s3Tester.PutObject(t.Context(), bucket, "copy-dst", bytes.NewReader(frand.Bytes(100)), nil); err != nil {
+		t.Fatal(err)
+	}
+	srcFile := pendingFilename(t, "copy-src")
+	dstFile := pendingFilename(t, "copy-dst")
+	if _, err := s3Tester.CopyObject(t.Context(), bucket, "copy-src", bucket, "copy-dst", types.MetadataDirectiveCopy, nil); err != nil {
+		t.Fatal(err)
+	}
+	assertRemoved(t, dstFile)
+	assertExists(t, srcFile)
+
+	// overwriting the source of a copy must not delete the shared file
+	// while the destination still references it
+	if _, err := s3Tester.PutObject(t.Context(), bucket, "copy-src", bytes.NewReader(frand.Bytes(100)), nil); err != nil {
+		t.Fatal(err)
+	}
+	assertExists(t, srcFile)
+
+	// CompleteMultipartUpload over a pending object removes the previous file
+	if _, err := s3Tester.PutObject(t.Context(), bucket, "mp", bytes.NewReader(frand.Bytes(100)), nil); err != nil {
+		t.Fatal(err)
+	}
+	mpFile := pendingFilename(t, "mp")
+	mu, err := s3Tester.CreateMultipartUpload(t.Context(), bucket, "mp", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uploadID := *mu.UploadId
+	up, err := s3Tester.UploadPart(t.Context(), bucket, "mp", uploadID, 1, bytes.Repeat([]byte("a"), int(s3.MinUploadPartSize)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s3Tester.CompleteMultipartUpload(t.Context(), bucket, "mp", uploadID, []types.CompletedPart{
+		{PartNumber: aws.Int32(1), ETag: up.ETag},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertRemoved(t, mpFile)
+
+	// PutObject over a completed multipart object removes the upload
+	// directory and clears object_parts so no stale rows are left pointing
+	// at deleted files
+	mpDir := pendingFilename(t, "mp")
+	if _, err := s3Tester.PutObject(t.Context(), bucket, "mp", bytes.NewReader(frand.Bytes(100)), nil); err != nil {
+		t.Fatal(err)
+	}
+	assertRemoved(t, mpDir)
+	parts, err := store.ObjectParts(bucket, "mp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parts) != 0 {
+		t.Fatalf("expected object_parts to be empty after overwrite, got %d", len(parts))
+	}
+}
+
 func TestDeleteObjectUnpin(t *testing.T) {
 	memSDK := NewMemorySDK()
 	memSDK.SetSlabSize(32)
