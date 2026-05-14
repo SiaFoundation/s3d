@@ -42,10 +42,8 @@ var cfg = Config{
 			EnableANSI: runtime.GOOS != "windows",
 		},
 	},
-	Sia: Sia{
-		IndexerURL: "https://sia.storage",
-	},
-	S3: S3{},
+	Sia: Sia{},
+	S3:  S3{},
 }
 
 func main() {
@@ -57,6 +55,8 @@ func main() {
 	versionCmd := flagg.New("version", ``)
 	configCmd := flagg.New("config", ``)
 	loginCmd := flagg.New("login", ``)
+	var indexerURL string
+	loginCmd.StringVar(&indexerURL, "indexer", "https://sia.storage", "indexer URL to register with")
 
 	// attempt to load the config file
 	configPath := tryLoadConfig()
@@ -103,7 +103,7 @@ func main() {
 			return
 		}
 
-		runLoginCmd(ctx, configPath)
+		runLoginCmd(ctx, configPath, indexerURL)
 		return
 	case rootCmd:
 	}
@@ -172,14 +172,13 @@ func main() {
 		checkFatalError("Please provide at least one valid key pair. You can do so by updating the config file or running the 'config' command", sia.ErrNoAccessKey)
 	}
 
-	builder := newSDKBuilder()
-
-	appKey, err := store.AppKey()
+	appKey, indexerURL, err := store.AppKey()
 	if errors.Is(err, sqlite.ErrNoAppKey) {
 		checkFatalError("No app key found. Please run 's3d login' to register the app", err)
 	} else if err != nil {
 		checkFatalError("failed to get app key from database", err)
 	}
+	builder := newSDKBuilder(indexerURL)
 	sdkClient, err := builder.SDK(appKey, sdk.WithLogger(log.Named("sdk")))
 	if err != nil {
 		checkFatalError("failed to create SDK client", err)

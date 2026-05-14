@@ -17,16 +17,19 @@ func TestAppKey(t *testing.T) {
 	}
 	defer store.Close()
 
-	if _, err := store.AppKey(); !errors.Is(err, ErrNoAppKey) {
+	if _, _, err := store.AppKey(); !errors.Is(err, ErrNoAppKey) {
 		t.Fatal(err)
 	}
 
 	key := types.GeneratePrivateKey()
-	if err := store.SetAppKey(key); err != nil {
+	const indexerURL = "https://indexer.example"
+	if err := store.SetAppKey(key, indexerURL); err != nil {
 		t.Fatal(err)
-	} else if retrieved, err := store.AppKey(); err != nil {
+	} else if retrieved, gotURL, err := store.AppKey(); err != nil {
 		t.Fatal(err)
 	} else if !bytes.Equal(retrieved, key) {
 		t.Fatalf("expected key %x, got %x", key, retrieved)
+	} else if gotURL != indexerURL {
+		t.Fatalf("expected indexer URL %q, got %q", indexerURL, gotURL)
 	}
 }

@@ -57,8 +57,6 @@ type (
 	// Sia contains the configuration for the Sia backend.
 	Sia struct {
 		KeyPairs []KeyPair `yaml:"keyPairs"`
-
-		IndexerURL string `yaml:"indexerURL"`
 	}
 
 	// Config contains the configuration for S3d.
