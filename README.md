@@ -52,10 +52,12 @@ Once configured, start `s3d` with
 ./s3d
 ```
 
+A recovery phrase must be configured before first launch. Run `s3d config` to
+generate one or provide your own. Store it in a safe place as it is required to
+recover your account and data.
+
 On first launch, `s3d` will register itself with the Sia indexer and print a URL
 to approve the app connection. Visit the URL in your browser to complete setup.
-If no recovery phrase is configured, a new one will be generated automatically.
-Store it in a safe place as it is required to recover your account and data.
 
 ## Docker
 
