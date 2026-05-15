@@ -55,8 +55,6 @@ func main() {
 	versionCmd := flagg.New("version", ``)
 	configCmd := flagg.New("config", ``)
 	loginCmd := flagg.New("login", ``)
-	var indexerURL string
-	loginCmd.StringVar(&indexerURL, "indexer", "https://sia.storage", "indexer URL to register with")
 
 	// attempt to load the config file
 	configPath := tryLoadConfig()
@@ -103,7 +101,7 @@ func main() {
 			return
 		}
 
-		runLoginCmd(ctx, configPath, indexerURL)
+		runLoginCmd(ctx, configPath)
 		return
 	case rootCmd:
 	}
@@ -174,7 +172,8 @@ func main() {
 
 	appKey, indexerURL, err := store.AppKey()
 	if errors.Is(err, sqlite.ErrNoAppKey) {
-		checkFatalError("No app key found. Please run 's3d login' to register the app", err)
+		os.Stderr.WriteString("No app key found. Please run 's3d login' to register the app.\n")
+		os.Exit(1)
 	} else if err != nil {
 		checkFatalError("failed to get app key from database", err)
 	}
