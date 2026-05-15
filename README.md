@@ -36,28 +36,25 @@ CGO_ENABLED=1 go build -tags='netgo timetzdata' -trimpath -a -ldflags '-s -w' ./
 
 ## Getting Started
 
-A convenient way to configure `s3d` for the first time is to run
-
-```sh
-s3d config
-```
-
-which will guide you through an interactive configuration process and generate a
-config file. For more information on configuration options, see the
-[Configuration](#configuration) section below.
-
-Once configured, log in to register `s3d` with the Sia indexer:
+To get started, run
 
 ```sh
 s3d login
 ```
 
-`s3d login` will prompt for your 12-word recovery phrase (or generate a new one
-if you leave it blank) and print a URL to approve the app connection. Visit the
-URL in your browser to complete setup.
+`s3d login` will guide you through the initial configuration, prompt for your
+12-word recovery phrase (or generate a new one if you leave it blank), and
+register `s3d` with the Sia indexer. Visit the printed URL in your browser to
+approve the app connection and complete setup.
 
-If no config file exists yet, `s3d login` will run the configuration wizard
-first.
+To update the configuration later, run
+
+```sh
+s3d config
+```
+
+For more information on configuration options, see the
+[Configuration](#configuration) section below.
 
 Once logged in, start `s3d` with
 
@@ -269,7 +266,6 @@ s3:
   hostBases:
     - s3.example.com
 sia:
-  indexerURL: https://sia.storage # Sia indexer URL
   keyPairs:
     - accessKey: your-access-key-id # 16 to 128 characters
       secretKey: your-secret-access-key-change-me-please # 32 to 128 characters

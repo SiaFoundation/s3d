@@ -31,7 +31,7 @@ func newSDKBuilder(indexerURL string) *sdk.Builder {
 	})
 }
 
-func runLoginCmd(ctx context.Context, configPath, indexerURL string) {
+func runLoginCmd(ctx context.Context, configPath string) {
 	// if no config exists yet, run the config wizard first
 	if configPath == "" {
 		fmt.Println("No existing config found. Launching configuration wizard.")
@@ -53,6 +53,11 @@ func runLoginCmd(ctx context.Context, configPath, indexerURL string) {
 		return
 	} else if !errors.Is(err, sqlite.ErrNoAppKey) {
 		checkFatalError("failed to check app key", err)
+	}
+
+	indexerURL := readInput("Indexer URL (default: https://sia.storage)")
+	if indexerURL == "" {
+		indexerURL = "https://sia.storage"
 	}
 
 	phrase := promptRecoveryPhrase()
