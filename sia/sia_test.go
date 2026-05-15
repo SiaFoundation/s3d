@@ -263,28 +263,30 @@ func TestDeleteOrphanedUploads(t *testing.T) {
 	t.Cleanup(func() { backend.Close() })
 
 	// helper to create objects
-	createObject := func(filename string, onDisk bool) {
+	createObject := func(filename string, referenced bool) {
 		t.Helper()
-		if _, err := store.PutObject(testutil.AccessKeyID, "bucket", filename, frand.Entropy128(), nil, 100, &filename); err != nil {
-			t.Fatal(err)
-		} else if onDisk {
-			if err := os.WriteFile(filepath.Join(uploadsDir, filename), []byte("data"), 0600); err != nil {
+		if referenced {
+			if _, err := store.PutObject(testutil.AccessKeyID, "bucket", filename, frand.Entropy128(), nil, 100, &filename); err != nil {
 				t.Fatal(err)
 			}
+		}
+		if err := os.WriteFile(filepath.Join(uploadsDir, filename), []byte("data"), 0600); err != nil {
+			t.Fatal(err)
 		}
 	}
 
 	// helper to create multipart uploads
-	createMultipart := func(uid s3.UploadID, onDisk bool) {
+	createMultipart := func(uid s3.UploadID, referenced bool) {
 		t.Helper()
-		if err := store.CreateMultipartUpload("bucket", uid.String(), uid, nil); err != nil {
-			t.Fatal(err)
-		} else if onDisk {
-			if err := os.MkdirAll(filepath.Join(uploadsDir, uid.String(), "1"), 0700); err != nil {
-				t.Fatal(err)
-			} else if err := os.WriteFile(filepath.Join(uploadsDir, uid.String(), "1", "data.part"), []byte("part"), 0600); err != nil {
+		if referenced {
+			if err := store.CreateMultipartUpload("bucket", uid.String(), uid, nil); err != nil {
 				t.Fatal(err)
 			}
+		}
+		if err := os.MkdirAll(filepath.Join(uploadsDir, uid.String(), "1"), 0700); err != nil {
+			t.Fatal(err)
+		} else if err := os.WriteFile(filepath.Join(uploadsDir, uid.String(), "1", "data.part"), []byte("part"), 0600); err != nil {
+			t.Fatal(err)
 		}
 	}
 
@@ -304,13 +306,13 @@ func TestDeleteOrphanedUploads(t *testing.T) {
 		}
 	}
 
-	// add two objects, only one is on disk
+	// add two objects, only one is referenced
 	obj1 := "obj1.upload"
 	obj2 := "obj2.upload"
 	createObject(obj1, true)
 	createObject(obj2, false)
 
-	// add two multipart uploads, only one is on disk
+	// add two multipart uploads, only one is referenced
 	uid1 := s3.NewUploadID()
 	uid2 := s3.NewUploadID()
 	createMultipart(uid1, true)
