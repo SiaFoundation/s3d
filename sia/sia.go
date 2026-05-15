@@ -276,14 +276,14 @@ func (s *Sia) deleteOrphanedUploads() (int, error) { //nolint:revive
 	entries, err := os.ReadDir(s.uploadDir())
 	if err != nil {
 		s.logger.Error("failed to read uploads directory", zap.Error(err))
-		return 0, nil
+		return 0, err
 	}
 
 	// fetch all filenames from store
 	filenames, err := s.store.AllFilenames()
 	if err != nil {
 		s.logger.Error("failed to fetch filenames from store", zap.Error(err))
-		return 0, nil
+		return 0, err
 	}
 
 	// build lookup table
