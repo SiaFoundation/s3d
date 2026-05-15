@@ -162,7 +162,12 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 	sia.slabSize = slabSize
 
 	// clean up any orphaned uploads on startup
-	sia.deleteOrphanedUploads()
+	deleted, err := sia.deleteOrphanedUploads()
+	if err != nil {
+		return nil, fmt.Errorf("failed to delete orphaned uploads: %w", err)
+	} else if deleted > 0 {
+		sia.logger.Info("removed orphaned uploads", zap.Int("removed", deleted))
+	}
 
 	launchBgLoop := func(loopFn func(context.Context)) error {
 		ctx, cancel, err := sia.tg.AddContext(ctx)
@@ -266,19 +271,19 @@ func (s *Sia) LoadSecret(ctx context.Context, accessKeyID string) (auth.SecretAc
 	return slices.Clone(secret), nil
 }
 
-func (s *Sia) deleteOrphanedUploads() { //nolint:revive
+func (s *Sia) deleteOrphanedUploads() (int, error) { //nolint:revive
 	// fetch all files on disk
 	entries, err := os.ReadDir(s.uploadDir())
 	if err != nil {
 		s.logger.Error("failed to read uploads directory", zap.Error(err))
-		return
+		return 0, nil
 	}
 
 	// fetch all filenames from store
 	filenames, err := s.store.AllFilenames()
 	if err != nil {
 		s.logger.Error("failed to fetch filenames from store", zap.Error(err))
-		return
+		return 0, nil
 	}
 
 	// build lookup table
@@ -299,9 +304,7 @@ func (s *Sia) deleteOrphanedUploads() { //nolint:revive
 			removed++
 		}
 	}
-	if removed > 0 {
-		s.logger.Info("removed orphaned uploads", zap.Int("removed", removed))
-	}
+	return removed, nil
 }
 
 // syncMetadataLoop periodically syncs object metadata from the indexer.

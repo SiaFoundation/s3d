@@ -317,7 +317,12 @@ func TestDeleteOrphanedUploads(t *testing.T) {
 	createMultipart(uid2, false)
 
 	// run cleanup
-	backend.DeleteOrphanedUploads()
+	removed, err := backend.DeleteOrphanedUploads()
+	if err != nil {
+		t.Fatal(err)
+	} else if removed != 2 {
+		t.Fatalf("expected 2 orphaned uploads to be removed, got %d", removed)
+	}
 
 	// assert referenced entries are kept
 	assertExists(obj1)
