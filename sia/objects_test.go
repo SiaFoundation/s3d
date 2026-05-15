@@ -1075,6 +1075,13 @@ func TestDiskUsageLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// CopyObject does not create new disk data so it must not block
+	copyCtx, copyCancel := context.WithTimeout(t.Context(), time.Second)
+	defer copyCancel()
+	if _, err := s3Tester.CopyObject(copyCtx, bucket, "a", bucket, "a-copy", types.MetadataDirectiveCopy, nil); err != nil {
+		t.Fatal(err)
+	}
+
 	done := make(chan error, 1)
 	go func() {
 		_, err := s3Tester.PutObject(t.Context(), bucket, "c", bytes.NewReader(frand.Bytes(10)), nil)
@@ -1108,7 +1115,7 @@ func TestDiskUsageLimitOngoingMultipartUpload(t *testing.T) {
 	}
 	t.Cleanup(func() { store.Close() })
 
-	const limit = 10
+	const limit = 20
 	backend, err := sia.New(t.Context(), NewMemorySDK(), store, dir,
 		sia.WithUploadDisabled(),
 		sia.WithDiskUsageLimit(limit),
@@ -1127,18 +1134,33 @@ func TestDiskUsageLimitOngoingMultipartUpload(t *testing.T) {
 	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 		t.Fatal(err)
 	}
+
+	// put a source object for the UploadPartCopy below
+	srcData := frand.Bytes(limit / 2)
+	if _, err := s3Tester.PutObject(t.Context(), bucket, "src", bytes.NewReader(srcData), nil); err != nil {
+		t.Fatal(err)
+	}
+
 	resp, err := s3Tester.CreateMultipartUpload(t.Context(), bucket, object, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := s3Tester.UploadPart(t.Context(), bucket, object, *resp.UploadId, 1, frand.Bytes(limit)); err != nil {
+	// first part pushes usage to the limit
+	if _, err := s3Tester.UploadPart(t.Context(), bucket, object, *resp.UploadId, 1, frand.Bytes(limit/2)); err != nil {
 		t.Fatal(err)
 	}
 
+	// subsequent parts of the same upload are allowed to exceed the limit
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
-	if _, err := s3Tester.UploadPart(ctx, bucket, object, *resp.UploadId, 2, frand.Bytes(limit)); err != nil {
+	if _, err := s3Tester.UploadPart(ctx, bucket, object, *resp.UploadId, 2, frand.Bytes(limit/2)); err != nil {
+		t.Fatal(err)
+	}
+
+	// UploadPartCopy should also be allowed to exceed the limit for
+	// an ongoing multipart upload
+	if _, err := s3Tester.UploadPartCopy(ctx, bucket, "src", bucket, object, *resp.UploadId, 3, &s3.ObjectRange{Start: 0, Length: int64(len(srcData))}); err != nil {
 		t.Fatal(err)
 	}
 }
