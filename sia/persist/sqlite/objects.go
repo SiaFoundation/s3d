@@ -324,6 +324,7 @@ func (s *Store) SetObjectsCursor(cursor slabs.Cursor) error {
 // multipart uploads.
 func (s *Store) AllFilenames() (filenames []string, err error) {
 	err = s.transaction(func(tx *txn) error {
+		filenames = filenames[:0] // reuse same slice if transaction retries
 		rows, err := tx.Query(`
 			SELECT filename FROM objects WHERE filename IS NOT NULL
 			UNION ALL

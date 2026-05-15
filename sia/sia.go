@@ -287,7 +287,7 @@ func (s *Sia) deleteOrphanedUploads() { //nolint:revive
 		lookup[filename] = struct{}{}
 	}
 
-	// remove unreferenced files older than the threshold
+	// remove unreferenced files
 	var removed int
 	for _, entry := range entries {
 		if _, ok := lookup[entry.Name()]; !ok {

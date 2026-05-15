@@ -304,13 +304,13 @@ func TestDeleteOrphanedUploads(t *testing.T) {
 		}
 	}
 
-	// add two objects with files on disk
+	// add two objects, only one is on disk
 	obj1 := "obj1.upload"
 	obj2 := "obj2.upload"
 	createObject(obj1, true)
 	createObject(obj2, false)
 
-	// add two multipart uploads with directories on disk
+	// add two multipart uploads, only one is on disk
 	uid1 := s3.NewUploadID()
 	uid2 := s3.NewUploadID()
 	createMultipart(uid1, true)
