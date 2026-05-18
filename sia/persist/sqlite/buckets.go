@@ -59,6 +59,7 @@ func (s *Store) HeadBucket(accessKeyID, bucket string) error {
 func (s *Store) ListBuckets(accessKeyID string) ([]s3.BucketInfo, error) {
 	var buckets []s3.BucketInfo
 	err := s.transaction(func(tx *txn) error {
+		buckets = buckets[:0] // reuse same slice if transaction retries
 		rows, err := tx.Query("SELECT name, created_at FROM buckets")
 		if err != nil {
 			return err
