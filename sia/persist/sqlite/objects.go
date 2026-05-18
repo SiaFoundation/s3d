@@ -227,6 +227,8 @@ func (s *Store) UpdateSiaObjects(siaObjects []objects.SiaObject) (updated int64,
 func (s *Store) CopyObject(srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool) (result *objects.Object, orphaned *string, err error) {
 	var obj objects.Object
 	err = s.transaction(func(tx *txn) error {
+		obj = objects.Object{} // reset per transaction attempt
+
 		srcBid, err := bucketID(tx, srcBucket)
 		if err != nil {
 			return err
