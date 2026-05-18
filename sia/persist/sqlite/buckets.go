@@ -64,6 +64,8 @@ func (s *Store) ListBuckets(accessKeyID string) ([]s3.BucketInfo, error) {
 		if err != nil {
 			return err
 		}
+		defer rows.Close()
+
 		for rows.Next() {
 			var createdAt time.Time
 			var name string
@@ -75,7 +77,7 @@ func (s *Store) ListBuckets(accessKeyID string) ([]s3.BucketInfo, error) {
 				CreationDate: s3.NewContentTime(createdAt),
 			})
 		}
-		return rows.Close()
+		return rows.Err()
 	})
 	return buckets, err
 }
