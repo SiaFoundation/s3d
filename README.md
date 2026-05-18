@@ -86,17 +86,9 @@ volumes:
   s3d:
 ```
 
-### 2. Configure `s3d`
+### 2. Configure and log in
 
-Run the configuration wizard to generate a config file.
-
-```sh
-docker compose run --rm s3d config
-```
-
-### 3. Log in
-
-Register `s3d` with the indexer. `s3d` will print a URL that must be visited to approve the connection to the indexer.
+`s3d login` will run the configuration wizard if there is no config file detected. Then it will register `s3d` with the indexer. `s3d` will print a URL that must be visited to approve the connection to the indexer.
 
 ```sh
 docker compose run --rm s3d login
