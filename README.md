@@ -96,7 +96,7 @@ docker compose run --rm s3d config
 
 ### 3. Log in
 
-Register `s3d` with the indexer.  `s3d` will print a URL that must be visited to approve the connection to the indexer.
+Register `s3d` with the indexer. `s3d` will print a URL that must be visited to approve the connection to the indexer.
 
 ```sh
 docker compose run --rm s3d login
