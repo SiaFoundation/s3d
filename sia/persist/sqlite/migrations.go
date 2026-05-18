@@ -8,8 +8,8 @@ import (
 // one version to the next. Migrations are used to update existing databases to
 // match the schema in init.sql.
 var migrations = []func(tx *txn, log *zap.Logger) error{
-	func(tx *txn, _ *zap.Logger) error {
-		_, err := tx.Exec(`CREATE INDEX objects_filename_idx ON objects(filename) WHERE filename IS NOT NULL;`)
+	func(tx *txn, log *zap.Logger) error {
+		_, err := tx.Exec(`CREATE INDEX IF NOT EXISTS objects_filename_idx ON objects(filename) WHERE filename IS NOT NULL`)
 		return err
 	},
 	func(tx *txn, _ *zap.Logger) error {

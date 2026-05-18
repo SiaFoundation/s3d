@@ -19,12 +19,12 @@ jobs:
     steps:
       - name: Configure git
         run: git config --global core.autocrlf false
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
-      - uses: golangci/golangci-lint-action@v7
+      - uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7.0.1
         with:
           skip-cache: true
   test:
-    uses: SiaFoundation/workflows/.github/workflows/go-test.yml@master
+    uses: SiaFoundation/workflows/.github/workflows/go-test.yml@22e56c0750c0febb09784caa01c60021e0b5f111 # master

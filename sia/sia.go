@@ -98,6 +98,7 @@ type SDK interface {
 
 // Store represents the storage backend used by the Sia backend.
 type Store interface {
+	AllFilenames() ([]string, error)
 	CopyObject(srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool) (*objects.Object, *string, error)
 	CreateBucket(accessKeyID, bucket string) error
 	DeleteBucket(accessKeyID, bucket string) error
@@ -160,8 +161,13 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 	}
 	sia.slabSize = slabSize
 
-	// TODO: clean up orphaned uploads and multipart uploads in uploads
-	// directory on startup
+	// clean up any orphaned uploads on startup
+	deleted, err := sia.deleteOrphanedUploads()
+	if err != nil {
+		return nil, fmt.Errorf("failed to delete orphaned uploads: %w", err)
+	} else if deleted > 0 {
+		sia.logger.Info("removed orphaned uploads", zap.Int("removed", deleted))
+	}
 
 	launchBgLoop := func(loopFn func(context.Context)) error {
 		ctx, cancel, err := sia.tg.AddContext(ctx)
@@ -263,6 +269,42 @@ func (s *Sia) LoadSecret(ctx context.Context, accessKeyID string) (auth.SecretAc
 		return nil, s3errs.ErrInvalidAccessKeyId
 	}
 	return slices.Clone(secret), nil
+}
+
+func (s *Sia) deleteOrphanedUploads() (int, error) { //nolint:revive
+	// fetch all files on disk
+	entries, err := os.ReadDir(s.uploadDir())
+	if err != nil {
+		s.logger.Error("failed to read uploads directory", zap.Error(err))
+		return 0, err
+	}
+
+	// fetch all filenames from store
+	filenames, err := s.store.AllFilenames()
+	if err != nil {
+		s.logger.Error("failed to fetch filenames from store", zap.Error(err))
+		return 0, err
+	}
+
+	// build lookup table
+	lookup := make(map[string]struct{})
+	for _, filename := range filenames {
+		lookup[filename] = struct{}{}
+	}
+
+	// remove unreferenced files
+	var removed int
+	for _, entry := range entries {
+		if _, ok := lookup[entry.Name()]; !ok {
+			s.logger.Warn("removing orphaned upload", zap.String("name", entry.Name()))
+			if err := s.removeUpload(entry.Name()); err != nil {
+				s.logger.Error("failed to remove orphaned upload", zap.String("name", entry.Name()), zap.Error(err))
+				continue
+			}
+			removed++
+		}
+	}
+	return removed, nil
 }
 
 // syncMetadataLoop periodically syncs object metadata from the indexer.
