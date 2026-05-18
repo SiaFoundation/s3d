@@ -320,6 +320,32 @@ func (s *Store) SetObjectsCursor(cursor slabs.Cursor) error {
 	})
 }
 
+// AllFilenames returns all filenames from the objects table and in-progress
+// multipart uploads.
+func (s *Store) AllFilenames() (filenames []string, err error) {
+	err = s.transaction(func(tx *txn) error {
+		filenames = filenames[:0] // reuse same slice if transaction retries
+		rows, err := tx.Query(`
+			SELECT filename FROM objects WHERE filename IS NOT NULL
+			UNION ALL
+			SELECT LOWER(HEX(upload_id)) FROM multipart_uploads`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				return err
+			}
+			filenames = append(filenames, name)
+		}
+		return rows.Err()
+	})
+	return
+}
+
 // OrphanedObjects returns up to limit object IDs from the orphaned_objects table.
 func (s *Store) OrphanedObjects(limit int) (ids []types.Hash256, err error) {
 	err = s.transaction(func(tx *txn) error {
