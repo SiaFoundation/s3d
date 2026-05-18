@@ -92,44 +92,6 @@ func (s *Sia) releaseDiskUsage(size int64) {
 	s.diskUsageWake = make(chan struct{})
 }
 
-// removeAndRelease removes path and releases its bytes from the reserved
-// disk usage. The release only happens if the removal succeeds so that a
-// failed removal does not undercount disk usage.
-func (s *Sia) removeAndRelease(path string) error {
-	usage, err := diskUsage(path)
-	if err != nil {
-		return err
-	}
-	if err := os.RemoveAll(path); err != nil {
-		return err
-	}
-	s.releaseDiskUsage(usage)
-	return nil
-}
-
-// diskUsage returns the total size of all files at path, treating a missing
-// path as zero.
-func diskUsage(path string) (usage int64, err error) {
-	err = filepath.WalkDir(path, func(_ string, d fs.DirEntry, err error) error {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil
-		} else if err != nil {
-			return err
-		} else if d.IsDir() {
-			return nil
-		}
-		info, err := d.Info()
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil
-		} else if err != nil {
-			return err
-		}
-		usage += info.Size()
-		return nil
-	})
-	return usage, err
-}
-
 type (
 	lockedUpload struct {
 		deleted  bool
@@ -176,7 +138,7 @@ func (s *Sia) lockUpload(filename string) func() {
 			}
 			delete(s.lockedUploads, filename)
 			if lu.deleted {
-				if err := s.removeAndRelease(filepath.Join(s.uploadDir(), filename)); err != nil {
+				if err := os.RemoveAll(filepath.Join(s.uploadDir(), filename)); err != nil {
 					s.logger.Error("failed to remove upload upon unlock",
 						zap.String("filename", filename),
 						zap.Error(err))
@@ -244,7 +206,7 @@ func (s *Sia) removeUpload(fileName string) error {
 	}
 	s.lockedUploadsMu.Unlock()
 
-	return s.removeAndRelease(filepath.Join(s.uploadDir(), fileName))
+	return os.RemoveAll(filepath.Join(s.uploadDir(), fileName))
 }
 
 // CopyObject copies an object from the source bucket and object key to the
@@ -252,7 +214,7 @@ func (s *Sia) removeUpload(fileName string) error {
 // metadata that should be merged into the copied object except for the
 // x-amz-acl header.
 func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, replace bool, meta map[string]string) (*s3.CopyObjectResult, error) {
-	obj, orphaned, err := s.store.CopyObject(srcBucket, srcObject, dstBucket, dstObject, meta, replace)
+	obj, orphaned, size, err := s.store.CopyObject(srcBucket, srcObject, dstBucket, dstObject, meta, replace)
 	if err != nil {
 		return nil, err
 	}
@@ -264,6 +226,7 @@ func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject,
 				zap.String("filename", *orphaned),
 				zap.Error(err))
 		}
+		s.releaseDiskUsage(size)
 	}
 
 	return &s3.CopyObjectResult{
@@ -276,7 +239,7 @@ func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject,
 // DeleteObject deletes the object with the given key from the specified
 // bucket for the user identified by the given access key.
 func (s *Sia) DeleteObject(ctx context.Context, accessKeyID, bucket string, object s3.ObjectID) (*s3.DeleteObjectResult, error) {
-	fileName, err := s.store.DeleteObject(accessKeyID, bucket, object)
+	fileName, size, err := s.store.DeleteObject(accessKeyID, bucket, object)
 	if err != nil {
 		return nil, err
 	} else if fileName != nil {
@@ -284,6 +247,7 @@ func (s *Sia) DeleteObject(ctx context.Context, accessKeyID, bucket string, obje
 		if err := s.removeUpload(*fileName); err != nil {
 			s.logger.Warn("failed to remove pending upload file", zap.String("bucket", bucket), zap.String("object", object.Key), zap.Error(err))
 		}
+		s.releaseDiskUsage(size)
 	}
 
 	return &s3.DeleteObjectResult{
@@ -528,7 +492,7 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	}
 
 	// store the object in the database
-	orphaned, err := s.store.PutObject(accessKeyID, bucket, object, contentMD5, opts.Meta, size, fileName)
+	orphaned, orphanedSize, err := s.store.PutObject(accessKeyID, bucket, object, contentMD5, opts.Meta, size, fileName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to store object metadata: %w", err)
 	}
@@ -540,6 +504,7 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 				zap.String("filename", *orphaned),
 				zap.Error(err))
 		}
+		s.releaseDiskUsage(orphanedSize)
 	}
 
 	return &s3.PutObjectResult{

@@ -58,7 +58,6 @@ type (
 	Sia struct {
 		KeyPairs []KeyPair `yaml:"keyPairs"`
 
-		IndexerURL     string `yaml:"indexerURL"`
 		DiskUsageLimit uint64 `yaml:"diskUsageLimit"`
 	}
 

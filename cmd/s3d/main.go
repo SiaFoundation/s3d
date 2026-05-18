@@ -43,7 +43,6 @@ var cfg = Config{
 		},
 	},
 	Sia: Sia{
-		IndexerURL:     "https://sia.storage",
 		DiskUsageLimit: 10 * (1 << 30), // 10 GiB
 	},
 	S3: S3{},

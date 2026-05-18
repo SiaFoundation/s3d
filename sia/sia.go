@@ -113,10 +113,10 @@ type SDK interface {
 // Store represents the storage backend used by the Sia backend.
 type Store interface {
 	AllFilenames() ([]string, error)
-	CopyObject(srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool) (*objects.Object, *string, error)
+	CopyObject(srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool) (*objects.Object, *string, int64, error)
 	CreateBucket(accessKeyID, bucket string) error
 	DeleteBucket(accessKeyID, bucket string) error
-	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (*string, error)
+	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (*string, int64, error)
 	DiskUsage() (uint64, error)
 	GetObject(accessKeyID *string, bucket, object string, partNumber *int32) (*objects.Object, error)
 	HeadBucket(accessKeyID, bucket string) error
@@ -127,14 +127,14 @@ type Store interface {
 	ObjectParts(bucket, name string) ([]objects.Part, error)
 	ObjectsForUpload() ([]objects.ObjectForUpload, error)
 	OrphanedObjects(limit int) ([]types.Hash256, error)
-	PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string) (*string, error)
+	PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string) (*string, int64, error)
 	MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, sealed sdk.SealedObject) error
 	UpdateSiaObjects(siaObjects []objects.SiaObject) (int64, error)
 	RemoveOrphanedObject(objectID types.Hash256) error
-	AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) error
-	AddMultipartPart(bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (string, error)
+	AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) (int64, error)
+	AddMultipartPart(bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (string, int64, error)
 	CreateMultipartUpload(bucket, name string, uploadID s3.UploadID, meta map[string]string) error
-	CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64) (*string, error)
+	CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64) (*string, int64, error)
 	HasMultipartUpload(bucket, name string, uploadID s3.UploadID) (hasParts bool, err error)
 	ListMultipartUploads(bucket string, prefix s3.Prefix, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error)
 	ListParts(bucket, name string, uploadID s3.UploadID, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error)
