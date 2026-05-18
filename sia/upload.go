@@ -327,6 +327,7 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 			zap.String("bucket", uploadObj.Bucket),
 			zap.String("name", uploadObj.Name))
 
+		s.releaseDiskUsage(uploadObj.Length)
 		if err := s.removeUpload(uploadObj.Filename); err != nil {
 			if uploadObj.Multipart {
 				s.logger.Error("failed to remove multipart upload directory",

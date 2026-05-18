@@ -20,6 +20,78 @@ import (
 	"go.uber.org/zap"
 )
 
+// addDiskUsage reserves size bytes against the disk usage limit, blocking
+// until enough space is available. If allowExcess returns true the
+// reservation bypasses the limit; it is re-evaluated each time
+// notifyDiskUsage is called.
+func (s *Sia) addDiskUsage(ctx context.Context, size int64, allowExcess func() (bool, error)) error {
+	if size <= 0 || s.diskUsageLimit == 0 {
+		return nil
+	}
+	for {
+		s.diskUsageMu.Lock()
+		wake := s.diskUsageWake
+		if s.diskUsage < s.diskUsageLimit {
+			s.diskUsage += uint64(size)
+			s.diskUsageMu.Unlock()
+			return nil
+		}
+		s.diskUsageMu.Unlock()
+
+		if allowExcess != nil {
+			allow, err := allowExcess()
+			if err != nil {
+				return err
+			} else if allow {
+				s.diskUsageMu.Lock()
+				s.diskUsage += uint64(size)
+				s.diskUsageMu.Unlock()
+				return nil
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-wake:
+		}
+	}
+}
+
+// notifyDiskUsage wakes waiters in addDiskUsage so they can re-evaluate
+// their allowExcess predicate after a state change that doesn't free space.
+func (s *Sia) notifyDiskUsage() {
+	if s.diskUsageLimit == 0 {
+		return
+	}
+	s.diskUsageMu.Lock()
+	close(s.diskUsageWake)
+	s.diskUsageWake = make(chan struct{})
+	s.diskUsageMu.Unlock()
+}
+
+// releaseDiskUsage releases size bytes previously reserved by addDiskUsage.
+func (s *Sia) releaseDiskUsage(size int64) {
+	if s.diskUsageLimit == 0 {
+		return
+	}
+
+	s.diskUsageMu.Lock()
+	defer s.diskUsageMu.Unlock()
+	if size > 0 {
+		if uint64(size) > s.diskUsage {
+			s.logger.Warn("disk usage release exceeds tracked amount; resetting to 0",
+				zap.Int64("size", size),
+				zap.Uint64("diskUsage", s.diskUsage))
+			s.diskUsage = 0
+		} else {
+			s.diskUsage -= uint64(size)
+		}
+	}
+	close(s.diskUsageWake)
+	s.diskUsageWake = make(chan struct{})
+}
+
 type (
 	lockedUpload struct {
 		deleted  bool
@@ -127,13 +199,13 @@ func (s *Sia) openUpload(bucket, name string, filename *string, multipart bool, 
 
 func (s *Sia) removeUpload(fileName string) error {
 	s.lockedUploadsMu.Lock()
-	defer s.lockedUploadsMu.Unlock()
-
-	lu, ok := s.lockedUploads[fileName]
-	if ok {
+	if lu, ok := s.lockedUploads[fileName]; ok {
 		lu.deleted = true
+		s.lockedUploadsMu.Unlock()
 		return nil
 	}
+	s.lockedUploadsMu.Unlock()
+
 	return os.RemoveAll(filepath.Join(s.uploadDir(), fileName))
 }
 
@@ -142,7 +214,7 @@ func (s *Sia) removeUpload(fileName string) error {
 // metadata that should be merged into the copied object except for the
 // x-amz-acl header.
 func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, replace bool, meta map[string]string) (*s3.CopyObjectResult, error) {
-	obj, orphaned, err := s.store.CopyObject(srcBucket, srcObject, dstBucket, dstObject, meta, replace)
+	obj, orphaned, size, err := s.store.CopyObject(srcBucket, srcObject, dstBucket, dstObject, meta, replace)
 	if err != nil {
 		return nil, err
 	}
@@ -154,6 +226,7 @@ func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject,
 				zap.String("filename", *orphaned),
 				zap.Error(err))
 		}
+		s.releaseDiskUsage(size)
 	}
 
 	return &s3.CopyObjectResult{
@@ -166,7 +239,7 @@ func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject,
 // DeleteObject deletes the object with the given key from the specified
 // bucket for the user identified by the given access key.
 func (s *Sia) DeleteObject(ctx context.Context, accessKeyID, bucket string, object s3.ObjectID) (*s3.DeleteObjectResult, error) {
-	fileName, err := s.store.DeleteObject(accessKeyID, bucket, object)
+	fileName, size, err := s.store.DeleteObject(accessKeyID, bucket, object)
 	if err != nil {
 		return nil, err
 	} else if fileName != nil {
@@ -174,6 +247,7 @@ func (s *Sia) DeleteObject(ctx context.Context, accessKeyID, bucket string, obje
 		if err := s.removeUpload(*fileName); err != nil {
 			s.logger.Warn("failed to remove pending upload file", zap.String("bucket", bucket), zap.String("object", object.Key), zap.Error(err))
 		}
+		s.releaseDiskUsage(size)
 	}
 
 	return &s3.DeleteObjectResult{
@@ -343,6 +417,25 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 		return nil, err
 	}
 
+	if err := s.addDiskUsage(ctx, opts.ContentLength, nil); err != nil {
+		return nil, err
+	}
+	var objPath string
+	defer func() {
+		if err == nil {
+			return
+		}
+		if objPath != "" {
+			if removeErr := os.Remove(objPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				s.logger.Error("failed to remove pending upload file after error",
+					zap.String("path", objPath),
+					zap.Error(removeErr))
+				return
+			}
+		}
+		s.releaseDiskUsage(opts.ContentLength)
+	}()
+
 	// compute md5 checksum for the etag
 	md5Hash := md5.New()
 	r = io.TeeReader(r, md5Hash)
@@ -355,7 +448,6 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	}
 
 	// handle empty object case
-	var objPath string
 	var fileName *string
 	var size int64
 	if opts.ContentLength == 0 {
@@ -384,12 +476,6 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 		}
 	}
 
-	defer func() {
-		if err != nil && objPath != "" {
-			_ = os.Remove(objPath)
-		}
-	}()
-
 	// check content length
 	if opts.ContentLength != size {
 		return nil, s3errs.ErrIncompleteBody
@@ -406,7 +492,7 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	}
 
 	// store the object in the database
-	orphaned, err := s.store.PutObject(accessKeyID, bucket, object, contentMD5, opts.Meta, size, fileName)
+	orphaned, orphanedSize, err := s.store.PutObject(accessKeyID, bucket, object, contentMD5, opts.Meta, size, fileName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to store object metadata: %w", err)
 	}
@@ -418,6 +504,7 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 				zap.String("filename", *orphaned),
 				zap.Error(err))
 		}
+		s.releaseDiskUsage(orphanedSize)
 	}
 
 	return &s3.PutObjectResult{

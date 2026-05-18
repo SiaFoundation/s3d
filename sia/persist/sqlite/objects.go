@@ -15,12 +15,33 @@ import (
 	sdk "go.sia.tech/siastorage"
 )
 
+// DiskUsage returns the total bytes pending upload to Sia, across pending
+// objects and in-progress multipart parts. Pending objects sharing a filename
+// (e.g. via CopyObject) are counted once.
+func (s *Store) DiskUsage() (usage uint64, err error) {
+	err = s.transaction(func(tx *txn) error {
+		var objectsSize, partsSize uint64
+		err := tx.QueryRow(`
+			SELECT COALESCE(SUM(size), 0)
+			FROM (SELECT MAX(size) AS size FROM objects WHERE filename IS NOT NULL GROUP BY filename)
+		`).Scan(&objectsSize)
+		if err != nil {
+			return err
+		}
+		if err := tx.QueryRow(`SELECT COALESCE(SUM(content_length), 0) FROM multipart_parts`).Scan(&partsSize); err != nil {
+			return err
+		}
+		usage = objectsSize + partsSize
+		return nil
+	})
+	return
+}
+
 // DeleteObject deletes the object with the given bucket and name if it exists
 // and all provided preconditions match. If the deleted object's ID has no
 // remaining references, it is inserted into the orphaned_objects table. If the
 // object hasn't been uploaded yet, its filename is returned for cleanup.
-func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (*string, error) {
-	var fileName *string
+func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (orphaned *string, size int64, _ error) {
 	err := s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
@@ -31,12 +52,11 @@ func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (
 		// orphan detection; the transaction rolls back if preconditions fail
 		var deletedID sql.Null[sqlHash256]
 		var contentMD5 [16]byte
-		var size int64
 		var updatedAt time.Time
 		err = tx.QueryRow(`
 			DELETE FROM objects WHERE bucket_id = $1 AND name = $2
 			RETURNING filename, sia_object_id, content_md5, size, updated_at
-		`, bid, objectID.Key).Scan(&fileName, &deletedID, (*sqlMD5)(&contentMD5), &size, (*sqlTime)(&updatedAt))
+		`, bid, objectID.Key).Scan(&orphaned, &deletedID, (*sqlMD5)(&contentMD5), &size, (*sqlTime)(&updatedAt))
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil // object doesn't exist, nothing to delete
 		} else if err != nil {
@@ -53,9 +73,12 @@ func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (
 			return s3errs.ErrPreconditionFailed
 		}
 
-		fileName, err = orphanedFilename(tx, fileName)
+		orphaned, err = orphanedFilename(tx, orphaned)
 		if err != nil {
 			return err
+		}
+		if orphaned == nil {
+			size = 0
 		}
 
 		if deletedID.Valid {
@@ -63,7 +86,7 @@ func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (
 		}
 		return nil
 	})
-	return fileName, err
+	return orphaned, size, err
 }
 
 // GetObject retrieves the object with the given bucket and name.
@@ -145,17 +168,16 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, partNumber 
 // remaining references, it is inserted into the orphaned_objects table. If
 // the overwrite leaves a previously pending file unreferenced, its filename
 // is returned so the caller can remove it from disk.
-func (s *Store) PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string) (*string, error) {
-	var orphaned *string
+func (s *Store) PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string) (orphaned *string, size int64, _ error) {
 	err := s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
-		orphaned, err = putObject(tx, bid, name, contentMD5, meta, length, fileName, nil)
+		orphaned, size, err = putObject(tx, bid, name, contentMD5, meta, length, fileName, nil)
 		return err
 	})
-	return orphaned, err
+	return orphaned, size, err
 }
 
 // MarkObjectUploaded transitions a pending upload to a Sia-backed object by
@@ -222,7 +244,7 @@ func (s *Store) UpdateSiaObjects(siaObjects []objects.SiaObject) (updated int64,
 // replace flag. Returns the copied object metadata, and if the copy overwrote
 // a previously pending object whose file is no longer referenced, its filename
 // so the caller can remove it from disk.
-func (s *Store) CopyObject(srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool) (result *objects.Object, orphaned *string, err error) {
+func (s *Store) CopyObject(srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool) (result *objects.Object, orphaned *string, size int64, err error) {
 	var obj objects.Object
 	err = s.transaction(func(tx *txn) error {
 		srcBid, err := bucketID(tx, srcBucket)
@@ -261,16 +283,16 @@ func (s *Store) CopyObject(srcBucket, srcName, dstBucket, dstName string, meta m
 			return err
 		}
 
-		orphaned, err = putObject(tx, dstBid, dstName, obj.ContentMD5, obj.Meta, obj.Length, obj.FileName, obj.SiaObject)
+		orphaned, size, err = putObject(tx, dstBid, dstName, obj.ContentMD5, obj.Meta, obj.Length, obj.FileName, obj.SiaObject)
 		return err
 	})
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil, s3errs.ErrNoSuchKey
+		return nil, nil, 0, s3errs.ErrNoSuchKey
 	}
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
-	return &obj, orphaned, nil
+	return &obj, orphaned, size, nil
 }
 
 // ObjectParts returns the parts for a completed multipart object.
@@ -409,14 +431,14 @@ func (s *Store) ObjectsForUpload() ([]objects.ObjectForUpload, error) {
 // prior row is deleted first. If the prior row's sia_object_id is no longer
 // referenced, it is added to orphaned_objects. If the prior row's filename is
 // no longer referenced, it is returned for cleanup.
-func putObject(tx *txn, bid int64, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string, siaObject *objects.SiaObject) (*string, error) {
+func putObject(tx *txn, bid int64, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string, siaObject *objects.SiaObject) (*string, int64, error) {
 	if meta == nil {
 		meta = make(map[string]string) // force '{}' instead of 'null' in JSON
 	}
 
-	oldID, oldFilename, err := deleteObject(tx, bid, name)
+	oldID, oldFilename, oldSize, err := deleteObject(tx, bid, name)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	var id *sqlHash256
@@ -433,16 +455,23 @@ func putObject(tx *txn, bid int64, name string, contentMD5 [16]byte, meta map[st
 		sqlMetaJSON(meta), length, sqlTime(time.Now()),
 		fileName, sealed)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	if oldID != nil && (siaObject == nil || *oldID != siaObject.ID) {
 		if err := insertOrphan(tx, *oldID); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	}
 
-	return orphanedFilename(tx, oldFilename)
+	orphaned, err := orphanedFilename(tx, oldFilename)
+	if err != nil {
+		return nil, 0, err
+	}
+	if orphaned == nil {
+		oldSize = 0
+	}
+	return orphaned, oldSize, nil
 }
 
 // orphanedFilename returns filename if it is non-nil and no longer referenced
@@ -461,24 +490,25 @@ func orphanedFilename(tx *txn, filename *string) (*string, error) {
 	return filename, nil
 }
 
-// deleteObject deletes the row at (bid, name) and returns its sia_object_id and
-// filename. Both are nil when no row exists.
-func deleteObject(tx *txn, bid int64, name string) (*types.Hash256, *string, error) {
+// deleteObject deletes the row at (bid, name) and returns its sia_object_id,
+// filename, and size. All zero when no row exists.
+func deleteObject(tx *txn, bid int64, name string) (*types.Hash256, *string, int64, error) {
 	var id sql.Null[sqlHash256]
 	var filename *string
+	var size int64
 	err := tx.QueryRow(`
 		DELETE FROM objects WHERE bucket_id = $1 AND name = $2
-		RETURNING sia_object_id, filename
-	`, bid, name).Scan(&id, &filename)
+		RETURNING sia_object_id, filename, size
+	`, bid, name).Scan(&id, &filename, &size)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil, nil
+		return nil, nil, 0, nil
 	} else if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	if !id.Valid {
-		return nil, filename, nil
+		return nil, filename, size, nil
 	}
-	return (*types.Hash256)(&id.V), filename, nil
+	return (*types.Hash256)(&id.V), filename, size, nil
 }
 
 // insertOrphan adds objectID to the orphaned_objects table if no rows in the
