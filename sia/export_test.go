@@ -11,3 +11,8 @@ func (s *Sia) SyncMetadata(ctx context.Context) { //nolint:revive
 func (s *Sia) UploadObjects(ctx context.Context) { //nolint:revive
 	s.uploadObjects(ctx)
 }
+
+// DeleteOrphanedUploads exports deleteOrphanedUploads for testing.
+func (s *Sia) DeleteOrphanedUploads() (int, error) { //nolint:revive
+	return s.deleteOrphanedUploads()
+}

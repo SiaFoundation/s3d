@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 
-	"go.sia.tech/coreutils/wallet"
 	"go.uber.org/zap"
 	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
@@ -65,12 +64,11 @@ type (
 
 	// Config contains the configuration for S3d.
 	Config struct {
-		ApiAddress     string `yaml:"apiAddress"`
-		RecoveryPhrase string `yaml:"recoveryPhrase"`
-		Directory      string `yaml:"directory"`
-		Log            Log    `yaml:"log"`
-		S3             S3     `yaml:"s3"`
-		Sia            Sia    `yaml:"sia"`
+		ApiAddress string `yaml:"apiAddress"`
+		Directory  string `yaml:"directory"`
+		Log        Log    `yaml:"log"`
+		S3         S3     `yaml:"s3"`
+		Sia        Sia    `yaml:"sia"`
 	}
 )
 
@@ -116,18 +114,6 @@ func runConfigCmd(fp string) {
 
 	fmt.Println("")
 	setDataDirectory()
-
-	fmt.Println("")
-	if cfg.RecoveryPhrase != "" {
-		fmt.Println(ansiStyle("33", "A recovery phrase is already configured."))
-		fmt.Println("If you change your recovery phrase, you will have to re-register the app.")
-		if promptYesNo("Would you like to change your recovery phrase?") {
-			cfg.RecoveryPhrase = ""
-			setRecoveryPhrase()
-		}
-	} else {
-		setRecoveryPhrase()
-	}
 
 	fmt.Println("")
 	if len(cfg.Sia.KeyPairs) > 0 {
@@ -308,49 +294,6 @@ func setListenAddress(context string, value *string) {
 		*value = net.JoinHostPort(host, port)
 		return
 	}
-}
-
-func setRecoveryPhrase() {
-	fmt.Println("Enter your 12-word recovery phrase.")
-	fmt.Println("(Leave blank to generate a new one.)")
-
-	var phrase string
-	for {
-		input := readPasswordInput("Enter recovery phrase")
-		if input == "" {
-			phrase = wallet.NewSeedPhrase()
-
-			fmt.Println("")
-			fmt.Println("A new recovery phrase has been generated below. " + ansiStyle("1", "Write it down and keep it safe."))
-			fmt.Println("Your recovery phrase is used to register your app with the indexer.")
-			fmt.Println("")
-			fmt.Println("  Recovery Phrase: " + ansiStyle("34;1", phrase))
-			fmt.Println("")
-
-			for {
-				confirm := readPasswordInput("Confirm recovery phrase")
-				if confirm == phrase {
-					break
-				}
-				fmt.Println(ansiStyle("31", "Recovery phrases do not match!"))
-				fmt.Println(ansiStyle("31", fmt.Sprintf("Expected: %q", phrase)))
-				fmt.Println(ansiStyle("31", fmt.Sprintf("Entered:  %q", confirm)))
-				fmt.Println("")
-			}
-			break
-		}
-
-		var seed [32]byte
-		if err := wallet.SeedFromPhrase(&seed, input); err != nil {
-			fmt.Println(ansiStyle("31", fmt.Sprintf("Invalid recovery phrase: %s", err.Error())))
-			fmt.Println("")
-			continue
-		}
-		phrase = input
-		break
-	}
-
-	cfg.RecoveryPhrase = phrase
 }
 
 func readInput(context string) string {

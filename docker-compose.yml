@@ -1,12 +1,9 @@
 # This file contains an example docker-compose configuration for running s3d.
 #
-# Before starting the service, run the configuration wizard:
-#   docker compose run --rm -it s3d config
+# Configure s3d and register with the Sia indexer:
+#   docker compose run --rm s3d login
 # Then start the service:
 #   docker compose up -d
-#
-# On first run, s3d will print a URL to approve the app connection.
-# Run 'docker compose logs -f s3d' to see the URL and complete setup.
 
 services:
   s3d:

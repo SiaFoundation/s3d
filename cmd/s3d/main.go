@@ -16,7 +16,6 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/sia"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
-	"go.sia.tech/core/types"
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -58,6 +57,7 @@ func main() {
 	rootCmd.StringVar(&cfg.ApiAddress, "api.s3", cfg.ApiAddress, "address to serve S3 API on")
 	versionCmd := flagg.New("version", ``)
 	configCmd := flagg.New("config", ``)
+	loginCmd := flagg.New("login", ``)
 
 	// attempt to load the config file
 	configPath := tryLoadConfig()
@@ -75,6 +75,7 @@ func main() {
 		Sub: []flagg.Tree{
 			{Cmd: versionCmd},
 			{Cmd: configCmd},
+			{Cmd: loginCmd},
 		},
 	})
 
@@ -96,6 +97,14 @@ func main() {
 		}
 
 		runConfigCmd(configPath)
+		return
+	case loginCmd:
+		if len(cmd.Args()) != 0 {
+			cmd.Usage()
+			return
+		}
+
+		runLoginCmd(ctx, configPath)
 		return
 	case rootCmd:
 	}
@@ -153,7 +162,7 @@ func main() {
 	}
 	defer adminAPIListener.Close()
 
-	store, err := sqlite.OpenDatabase(filepath.Join(cfg.Directory, "s3d.db"), log)
+	store, err := openStore(log)
 	if err != nil {
 		checkFatalError("failed to open database", err)
 	}
@@ -164,48 +173,17 @@ func main() {
 		checkFatalError("Please provide at least one valid key pair. You can do so by updating the config file or running the 'config' command", sia.ErrNoAccessKey)
 	}
 
-	builder := sdk.NewBuilder(cfg.Sia.IndexerURL, sdk.AppMetadata{
-		ID:          types.HashBytes([]byte("s3d")),
-		Name:        "S3d",
-		Description: "A S3-compatible storage service backed by Sia",
-		LogoURL:     "https://example.com/logo.png",
-		ServiceURL:  "https://github.com/Siafoundation/s3d",
-	})
-
-	var sdkClient *sdk.SDK
-	appKey, err := store.AppKey()
-	if err == nil {
-		sdkClient, err = builder.SDK(appKey, sdk.WithLogger(log.Named("sdk")))
-		if err != nil {
-			checkFatalError("failed to create SDK client", err)
-		}
-	} else if errors.Is(err, sqlite.ErrNoAppKey) {
-		// register app
-		if cfg.RecoveryPhrase == "" {
-			checkFatalError("Please provide a recovery phrase. You can do so by updating the config file or running the 'config' command", errors.New("no recovery phrase configured"))
-		}
-
-		respURL, err := builder.RequestConnection(ctx)
-		if err != nil {
-			log.Fatal("failed to request app connection", zap.Error(err))
-		}
-		fmt.Println("Please approve the app connection by visiting the following URL:", respURL)
-		approved, err := builder.WaitForApproval(ctx)
-		if err != nil {
-			log.Fatal("failed to wait for app approval", zap.Error(err))
-		} else if !approved {
-			log.Info("app connection was declined")
-			os.Exit(0)
-		}
-		sdkClient, err = builder.Register(ctx, cfg.RecoveryPhrase)
-		if err != nil {
-			log.Fatal("failed to register app", zap.Error(err))
-		}
-		if err := store.SetAppKey(sdkClient.AppKey()); err != nil {
-			log.Fatal("failed to store app key in database", zap.Error(err))
-		}
-	} else {
+	appKey, indexerURL, err := store.AppKey()
+	if errors.Is(err, sqlite.ErrNoAppKey) {
+		os.Stderr.WriteString("No app key found. Please run 's3d login' to register the app.\n")
+		os.Exit(1)
+	} else if err != nil {
 		checkFatalError("failed to get app key from database", err)
+	}
+	builder := newSDKBuilder(indexerURL)
+	sdkClient, err := builder.SDK(appKey, sdk.WithLogger(log.Named("sdk")))
+	if err != nil {
+		checkFatalError("failed to create SDK client", err)
 	}
 
 	var siaOpts []sia.Option
