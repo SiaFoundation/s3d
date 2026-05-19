@@ -154,12 +154,12 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		return nil, fmt.Errorf("failed to create directory %q: %w", dir, err)
 	}
 
-	// initialize slab size if the upload loop is enabled
-	slabSize, err := sia.sdk.OptimalDataSize()
+	// initialize optimal upload size
+	optimalSize, err := sia.sdk.OptimalDataSize()
 	if err != nil {
-		return nil, fmt.Errorf("failed to determine slab size: %w", err)
+		return nil, fmt.Errorf("failed to determine optimal upload size: %w", err)
 	}
-	sia.uploadOptimalSize = slabSize
+	sia.uploadOptimalSize = optimalSize
 
 	// clean up any orphaned uploads on startup
 	deleted, err := sia.deleteOrphanedUploads()
