@@ -116,10 +116,10 @@ func TestPrepareUploads(t *testing.T) {
 		},
 	}
 	s := Sia{
-		store:          store,
-		slabSize:       100,
-		uploadWastePct: 0.10,
-		logger:         zaptest.NewLogger(t),
+		store:             store,
+		uploadOptimalSize: 100,
+		uploadWastePct:    0.10,
+		logger:            zaptest.NewLogger(t),
 	}
 
 	ready := s.prepareUploads()
