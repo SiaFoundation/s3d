@@ -50,23 +50,22 @@ func NewSDK(sdk *sdk.SDK, opts ...SDKOption) *IndexdSDK {
 }
 
 // Download downloads an object from indexd.
-func (s *IndexdSDK) Download(ctx context.Context, w io.Writer, obj sdk.Object, rnge *s3.ObjectRange) error {
+func (s *IndexdSDK) Download(obj sdk.Object, rnge *s3.ObjectRange) (io.ReadCloser, error) {
 	opts := slices.Clone(s.dlOpts)
 	if rnge != nil {
 		opts = append(opts, sdk.WithDownloadRange(uint64(rnge.Start), uint64(rnge.Length)))
 	}
-	return s.inner.Download(ctx, w, obj, opts...)
+	return s.inner.Download(obj, opts...)
 }
 
-// SlabSize returns the slab size by creating a temporary packed upload and
-// reading its capacity.
-func (s *IndexdSDK) SlabSize() (int64, error) {
+// OptimalDataSize returns the optimal data size.
+func (s *IndexdSDK) OptimalDataSize() (int64, error) {
 	pu, err := s.inner.UploadPacked(s.ulOpts...)
 	if err != nil {
 		return 0, err
 	}
 	defer pu.Close()
-	return pu.SlabSize(), nil
+	return pu.OptimalDataSize(), nil
 }
 
 // UploadPacked creates a new packed upload.

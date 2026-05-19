@@ -70,9 +70,10 @@ func runLoginCmd(ctx context.Context, configPath string) {
 	fmt.Println("Please approve the app connection by visiting the following URL:", ansiStyle("34;1", respURL))
 	fmt.Println("")
 
-	approved, err := builder.WaitForApproval(ctx)
-	checkFatalError("failed to wait for app approval", err)
-	if !approved {
+	err = builder.WaitForApproval(ctx)
+	if err != nil && !errors.Is(err, sdk.ErrUserRejected) {
+		checkFatalError("failed to wait for app approval", err)
+	} else if errors.Is(err, sdk.ErrUserRejected) {
 		fmt.Println(ansiStyle("31", "app connection was declined"))
 		os.Exit(1)
 	}

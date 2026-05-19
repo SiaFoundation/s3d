@@ -57,22 +57,21 @@ func (s *MemorySDK) DeleteObject(ctx context.Context, id types.Hash256) error {
 	return nil
 }
 
-func (s *MemorySDK) Download(ctx context.Context, w io.Writer, obj sdk.Object, rnge *s3.ObjectRange) error {
+func (s *MemorySDK) Download(obj sdk.Object, rnge *s3.ObjectRange) (io.ReadCloser, error) {
 	s.mu.Lock()
 	uploaded, exists := s.objects[obj.ID()]
 	s.mu.Unlock()
 	if !exists {
-		return errors.New("download failed - object not found")
+		return nil, errors.New("download failed: object not found")
 	}
 	data := uploaded.data
 	if rnge != nil {
 		if rnge.Start+rnge.Length > int64(len(data)) {
-			return fmt.Errorf("download failed - range %d-%d exceeds object size %d", rnge.Start, rnge.Start+rnge.Length, len(data))
+			return nil, fmt.Errorf("download failed: range %d-%d exceeds object size %d", rnge.Start, rnge.Start+rnge.Length, len(data))
 		}
 		data = data[rnge.Start : rnge.Start+rnge.Length]
 	}
-	_, err := w.Write(data)
-	return err
+	return io.NopCloser(bytes.NewReader(data)), nil
 }
 
 // SetEvents replaces the events returned by ObjectEvents.
@@ -129,7 +128,7 @@ func (s *MemorySDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error)
 // SetSlabSize overrides the slab size for testing.
 func (s *MemorySDK) SetSlabSize(size int64) { s.slabSize = size }
 
-func (s *MemorySDK) SlabSize() (int64, error) {
+func (s *MemorySDK) OptimalDataSize() (int64, error) {
 	return s.slabSize, nil
 }
 

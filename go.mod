@@ -11,7 +11,7 @@ require (
 	go.sia.tech/core v0.21.0
 	go.sia.tech/coreutils v0.22.0
 	go.sia.tech/indexd v0.2.2
-	go.sia.tech/siastorage v0.0.4-0.20260428134956-8039d0326806
+	go.sia.tech/siastorage v0.0.4-0.20260518142552-d4394462fd6e
 	go.uber.org/zap v1.28.0
 	golang.org/x/term v0.43.0
 	gopkg.in/ini.v1 v1.67.2
@@ -52,13 +52,13 @@ require (
 	github.com/shopspring/decimal v1.4.0 // indirect
 	go.etcd.io/bbolt v1.4.3 // indirect
 	go.sia.tech/jape v0.14.1 // indirect
-	go.sia.tech/mux v1.5.0 // indirect
+	go.sia.tech/mux v1.5.1 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/crypto v0.51.0 // indirect
-	golang.org/x/net v0.53.0 // indirect
+	golang.org/x/net v0.54.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.44.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
-	golang.org/x/tools v0.44.0 // indirect
+	golang.org/x/tools v0.45.0 // indirect
 )
