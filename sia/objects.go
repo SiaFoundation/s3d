@@ -23,7 +23,7 @@ import (
 // addDiskUsage reserves size bytes against the disk usage limit, blocking
 // until enough space is available. If allowExcess returns true the
 // reservation bypasses the limit; it is re-evaluated each time
-// notifyDiskUsage is called.
+// releaseDiskUsage is called.
 func (s *Sia) addDiskUsage(ctx context.Context, size int64, allowExcess func() (bool, error)) error {
 	if size <= 0 || s.diskUsageLimit == 0 {
 		return nil
@@ -58,19 +58,8 @@ func (s *Sia) addDiskUsage(ctx context.Context, size int64, allowExcess func() (
 	}
 }
 
-// notifyDiskUsage wakes waiters in addDiskUsage so they can re-evaluate
-// their allowExcess predicate after a state change that doesn't free space.
-func (s *Sia) notifyDiskUsage() {
-	if s.diskUsageLimit == 0 {
-		return
-	}
-	s.diskUsageMu.Lock()
-	close(s.diskUsageWake)
-	s.diskUsageWake = make(chan struct{})
-	s.diskUsageMu.Unlock()
-}
-
 // releaseDiskUsage releases size bytes previously reserved by addDiskUsage.
+// Passing 0 wakes blocked waiters without releasing any space.
 func (s *Sia) releaseDiskUsage(size int64) {
 	if s.diskUsageLimit == 0 {
 		return

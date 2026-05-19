@@ -214,7 +214,7 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object string
 		return nil, fmt.Errorf("failed to add part: %w", err)
 	}
 	// wake any concurrent UploadPart waiting on the disk usage limit
-	s.notifyDiskUsage()
+	s.releaseDiskUsage(0)
 	if previous != "" {
 		prevPath := filepath.Join(partDir, previous)
 		if err := os.Remove(prevPath); err != nil {
@@ -345,7 +345,7 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 		return nil, fmt.Errorf("failed to add part: %w", err)
 	}
 	// wake any concurrent UploadPart waiting on the disk usage limit
-	s.notifyDiskUsage()
+	s.releaseDiskUsage(0)
 	if previous != "" {
 		prevPath := filepath.Join(partDir, previous)
 		if err := os.Remove(prevPath); err != nil {
@@ -432,7 +432,7 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 	}
 	// wake any UploadPart waiting on the disk usage limit; HasMultipartUpload
 	// will now return ErrNoSuchUpload
-	s.notifyDiskUsage()
+	s.releaseDiskUsage(0)
 	s.cleanupOrphan(orphan)
 
 	// calculate ETag

@@ -174,7 +174,7 @@ func (s *Store) AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) 
 // number already existed.
 func (s *Store) AddMultipartPart(bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (prev string, size int64, _ error) {
 	if err := s.transaction(func(tx *txn) error {
-		prevFilename = "" // reset per transaction attempt
+		prev = "" // reset per transaction attempt
 
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
