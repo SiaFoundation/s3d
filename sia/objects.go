@@ -209,25 +209,28 @@ func (s *Sia) removeUpload(fileName string) error {
 	return os.RemoveAll(filepath.Join(s.uploadDir(), fileName))
 }
 
+func (s *Sia) cleanupOrphan(orphan *objects.OrphanedFile) {
+	if orphan == nil {
+		return
+	}
+	if err := s.removeUpload(orphan.Filename); err != nil {
+		s.logger.Warn("failed to remove orphaned upload file",
+			zap.String("filename", orphan.Filename),
+			zap.Error(err))
+	}
+	s.releaseDiskUsage(orphan.Size)
+}
+
 // CopyObject copies an object from the source bucket and object key to the
 // destination bucket and object key. The provided metadata map contains any
 // metadata that should be merged into the copied object except for the
 // x-amz-acl header.
 func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, replace bool, meta map[string]string) (*s3.CopyObjectResult, error) {
-	obj, orphaned, size, err := s.store.CopyObject(srcBucket, srcObject, dstBucket, dstObject, meta, replace)
+	obj, orphan, err := s.store.CopyObject(srcBucket, srcObject, dstBucket, dstObject, meta, replace)
 	if err != nil {
 		return nil, err
 	}
-	if orphaned != nil {
-		if err := s.removeUpload(*orphaned); err != nil {
-			s.logger.Warn("failed to remove pending upload file",
-				zap.String("bucket", dstBucket),
-				zap.String("object", dstObject),
-				zap.String("filename", *orphaned),
-				zap.Error(err))
-		}
-		s.releaseDiskUsage(size)
-	}
+	s.cleanupOrphan(orphan)
 
 	return &s3.CopyObjectResult{
 		ContentMD5:   obj.ContentMD5,
@@ -239,16 +242,11 @@ func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject,
 // DeleteObject deletes the object with the given key from the specified
 // bucket for the user identified by the given access key.
 func (s *Sia) DeleteObject(ctx context.Context, accessKeyID, bucket string, object s3.ObjectID) (*s3.DeleteObjectResult, error) {
-	fileName, size, err := s.store.DeleteObject(accessKeyID, bucket, object)
+	orphan, err := s.store.DeleteObject(accessKeyID, bucket, object)
 	if err != nil {
 		return nil, err
-	} else if fileName != nil {
-		// object hasn't been uploaded yet, so we clean up the file
-		if err := s.removeUpload(*fileName); err != nil {
-			s.logger.Warn("failed to remove pending upload file", zap.String("bucket", bucket), zap.String("object", object.Key), zap.Error(err))
-		}
-		s.releaseDiskUsage(size)
 	}
+	s.cleanupOrphan(orphan)
 
 	return &s3.DeleteObjectResult{
 		IsDeleteMarker: false,
@@ -492,20 +490,11 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	}
 
 	// store the object in the database
-	orphaned, orphanedSize, err := s.store.PutObject(accessKeyID, bucket, object, contentMD5, opts.Meta, size, fileName)
+	orphan, err := s.store.PutObject(accessKeyID, bucket, object, contentMD5, opts.Meta, size, fileName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to store object metadata: %w", err)
 	}
-	if orphaned != nil {
-		if err := s.removeUpload(*orphaned); err != nil {
-			s.logger.Warn("failed to remove pending upload file",
-				zap.String("bucket", bucket),
-				zap.String("object", object),
-				zap.String("filename", *orphaned),
-				zap.Error(err))
-		}
-		s.releaseDiskUsage(orphanedSize)
-	}
+	s.cleanupOrphan(orphan)
 
 	return &s3.PutObjectResult{
 		ContentMD5: contentMD5,

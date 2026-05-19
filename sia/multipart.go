@@ -107,13 +107,8 @@ func (s *Sia) AbortMultipartUpload(ctx context.Context, accessKeyID, bucket, obj
 		return fmt.Errorf("failed to abort multipart upload: %w", err)
 	}
 
-	// remove multipart upload directory
-	if err := s.removeUpload(uploadID.String()); err != nil && !errors.Is(err, os.ErrNotExist) {
-		s.logger.Error("failed to remove multipart upload directory",
-			zap.Stringer("uploadID", uploadID),
-			zap.Error(err))
-	}
-	s.releaseDiskUsage(size)
+	// remove multipart upload directory and release disk usage
+	s.cleanupOrphan(&objects.OrphanedFile{Filename: uploadID.String(), Size: size})
 
 	return nil
 }
@@ -214,7 +209,7 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object string
 	}
 
 	// add multipart part to the database
-	previous, size, err := s.store.AddMultipartPart(bucket, object, uploadID, filepath.Base(partPath), opts.PartNumber, contentMD5, contentLength)
+	previous, prevSize, err := s.store.AddMultipartPart(bucket, object, uploadID, filepath.Base(partPath), opts.PartNumber, contentMD5, contentLength)
 	if err != nil {
 		return nil, fmt.Errorf("failed to add part: %w", err)
 	}
@@ -222,12 +217,12 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object string
 	s.notifyDiskUsage()
 	if previous != "" {
 		prevPath := filepath.Join(partDir, previous)
-		if err := os.RemoveAll(prevPath); err != nil {
+		if err := os.Remove(prevPath); err != nil {
 			s.logger.Error("failed to remove old part file",
 				zap.String("path", prevPath),
 				zap.Error(err))
 		}
-		s.releaseDiskUsage(size)
+		s.releaseDiskUsage(prevSize)
 	}
 
 	return &s3.UploadPartResult{ContentMD5: contentMD5}, nil
@@ -345,7 +340,7 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 	}
 
 	// add multipart part to the database
-	previous, size, err := s.store.AddMultipartPart(dstBucket, dstObject, uploadID, filepath.Base(partPath), opts.PartNumber, contentMD5, contentLength)
+	previous, prevSize, err := s.store.AddMultipartPart(dstBucket, dstObject, uploadID, filepath.Base(partPath), opts.PartNumber, contentMD5, contentLength)
 	if err != nil {
 		return nil, fmt.Errorf("failed to add part: %w", err)
 	}
@@ -353,12 +348,12 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 	s.notifyDiskUsage()
 	if previous != "" {
 		prevPath := filepath.Join(partDir, previous)
-		if err := os.RemoveAll(prevPath); err != nil {
+		if err := os.Remove(prevPath); err != nil {
 			s.logger.Error("failed to remove old part file",
 				zap.String("path", prevPath),
 				zap.Error(err))
 		}
-		s.releaseDiskUsage(size)
+		s.releaseDiskUsage(prevSize)
 	}
 
 	return &s3.UploadPartCopyResult{
@@ -431,23 +426,14 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 	}
 
 	// complete the multipart upload in the database
-	orphaned, size, err := s.store.CompleteMultipartUpload(bucket, object, uploadID, contentMD5, contentLength)
+	orphan, err := s.store.CompleteMultipartUpload(bucket, object, uploadID, contentMD5, contentLength)
 	if err != nil {
 		return nil, fmt.Errorf("failed to complete multipart upload in store: %w", err)
 	}
 	// wake any UploadPart waiting on the disk usage limit; HasMultipartUpload
 	// will now return ErrNoSuchUpload
 	s.notifyDiskUsage()
-	if orphaned != nil {
-		if err := s.removeUpload(*orphaned); err != nil {
-			s.logger.Warn("failed to remove pending upload file",
-				zap.String("bucket", bucket),
-				zap.String("object", object),
-				zap.String("filename", *orphaned),
-				zap.Error(err))
-		}
-		s.releaseDiskUsage(size)
-	}
+	s.cleanupOrphan(orphan)
 
 	// calculate ETag
 	etag := s3.FormatETag(contentMD5[:], len(completed))
