@@ -606,6 +606,8 @@ func TestListParts(t *testing.T) {
 		t.Fatal("expected untruncated response")
 	} else if res.MaxParts == nil || *res.MaxParts != 1000 {
 		t.Fatalf("expected default max parts 1000, got %v", res.MaxParts)
+	} else if res.StorageClass != types.StorageClassStandard {
+		t.Fatalf("expected storage class STANDARD, got %q", res.StorageClass)
 	}
 
 	for i, got := range res.Parts {
