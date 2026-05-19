@@ -174,6 +174,8 @@ func (s *Store) AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) 
 // number already existed.
 func (s *Store) AddMultipartPart(bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (prev string, size int64, _ error) {
 	if err := s.transaction(func(tx *txn) error {
+		prevFilename = "" // reset per transaction attempt
+
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
@@ -240,6 +242,8 @@ func (s *Store) HasMultipartUpload(bucket, name string, uploadID s3.UploadID) (h
 func (s *Store) MultipartParts(bucket, name string, uploadID s3.UploadID) ([]objects.Part, error) {
 	var parts []objects.Part
 	if err := s.transaction(func(tx *txn) error {
+		parts = parts[:0] // reuse same slice if transaction retries
+
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
@@ -290,6 +294,10 @@ func (s *Store) ListParts(bucket, name string, uploadID s3.UploadID, partNumberM
 	}
 
 	if err := s.transaction(func(tx *txn) error {
+		res.Parts = res.Parts[:0] // reuse same slice if transaction retries
+		res.IsTruncated = false
+		res.NextPartNumberMarker = ""
+
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
@@ -376,6 +384,12 @@ func (s *Store) ListMultipartUploads(bucket string, prefix s3.Prefix, page s3.Li
 	}
 
 	err = s.transaction(func(tx *txn) error {
+		res.Uploads = res.Uploads[:0]               // reuse same slice if transaction retries
+		res.CommonPrefixes = res.CommonPrefixes[:0] // reuse same slice if transaction retries
+		res.IsTruncated = false                     // reset per transaction attempt
+		res.NextKeyMarker = ""                      // reset per transaction attempt
+		res.NextUploadIDMarker = ""                 // reset per transaction attempt
+
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err

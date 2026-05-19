@@ -213,6 +213,8 @@ func (s *Store) MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, sea
 // single transaction. It returns the number of rows that were updated.
 func (s *Store) UpdateSiaObjects(siaObjects []objects.SiaObject) (updated int64, err error) {
 	err = s.transaction(func(tx *txn) error {
+		updated = 0 // reset per transaction attempt
+
 		stmt, err := tx.Prepare(`
 			UPDATE objects SET sia_object = $1
 			WHERE sia_object_id = $2
@@ -246,6 +248,8 @@ func (s *Store) UpdateSiaObjects(siaObjects []objects.SiaObject) (updated int64,
 func (s *Store) CopyObject(srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool) (result *objects.Object, orphan *objects.OrphanedFile, err error) {
 	var obj objects.Object
 	err = s.transaction(func(tx *txn) error {
+		obj = objects.Object{} // reset per transaction attempt
+
 		srcBid, err := bucketID(tx, srcBucket)
 		if err != nil {
 			return err
@@ -298,6 +302,7 @@ func (s *Store) CopyObject(srcBucket, srcName, dstBucket, dstName string, meta m
 func (s *Store) ObjectParts(bucket, name string) ([]objects.Part, error) {
 	var parts []objects.Part
 	err := s.transaction(func(tx *txn) error {
+		parts = parts[:0] // reuse same slice if transaction retries
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
@@ -370,6 +375,7 @@ func (s *Store) AllFilenames() (filenames []string, err error) {
 // OrphanedObjects returns up to limit object IDs from the orphaned_objects table.
 func (s *Store) OrphanedObjects(limit int) (ids []types.Hash256, err error) {
 	err = s.transaction(func(tx *txn) error {
+		ids = ids[:0] // reuse same slice if transaction retries
 		rows, err := tx.Query("SELECT sia_object_id FROM orphaned_objects LIMIT $1", limit)
 		if err != nil {
 			return err
@@ -400,6 +406,7 @@ func (s *Store) RemoveOrphanedObject(objectID types.Hash256) error {
 func (s *Store) ObjectsForUpload() ([]objects.ObjectForUpload, error) {
 	var objs []objects.ObjectForUpload
 	if err := s.transaction(func(tx *txn) error {
+		objs = objs[:0] // reuse same slice if transaction retries
 		rows, err := tx.Query(`
 			SELECT b.name, o.name, o.filename, o.content_md5, o.size, EXISTS(SELECT 1 FROM object_parts p WHERE p.bucket_id = o.bucket_id AND p.name = o.name) AS has_parts
 			FROM objects o
@@ -546,10 +553,14 @@ func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.
 
 	const maxObjsPerQuery = 100
 	err = s.transaction(func(tx *txn) error {
+		*result = *s3.NewObjectsListResult(page.MaxKeys) // reset per transaction attempt
+
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return fmt.Errorf("failed to get bucket ID: %w", err)
 		}
+
+		innerMarker := marker
 
 		list := func(marker *string) (string, string, error) {
 			query := `SELECT o.name, o.content_md5, o.size, o.updated_at
@@ -611,7 +622,6 @@ WHERE o.bucket_id = ?`
 			return lastMatchedPart, lastObj, nil
 		}
 
-		innerMarker := marker
 		for !result.IsTruncated {
 			lastMatchedPart, lastObj, err := list(innerMarker)
 			if err != nil {
