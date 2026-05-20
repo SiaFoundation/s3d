@@ -104,14 +104,14 @@ func (s *Sia) uploadDir() string {
 	return filepath.Join(s.directory, UploadsDirectory)
 }
 
-func (s *Sia) lockUpload(filename string) func() {
+func (s *Sia) lockUpload(path string) func() {
 	s.lockedUploadsMu.Lock()
 	defer s.lockedUploadsMu.Unlock()
 
-	lu, ok := s.lockedUploads[filename]
+	lu, ok := s.lockedUploads[path]
 	if !ok {
 		lu = &lockedUpload{}
-		s.lockedUploads[filename] = lu
+		s.lockedUploads[path] = lu
 	}
 	lu.refCount++
 
@@ -121,15 +121,15 @@ func (s *Sia) lockUpload(filename string) func() {
 
 		lu.refCount--
 		if lu.refCount <= 0 {
-			_, locked := s.lockedUploads[filename]
+			_, locked := s.lockedUploads[path]
 			if !locked {
-				panic(fmt.Sprintf("unlock called for filename %s that is not locked", filename))
+				panic(fmt.Sprintf("unlock called for path %s that is not locked", path))
 			}
-			delete(s.lockedUploads, filename)
+			delete(s.lockedUploads, path)
 			if lu.deleted {
-				if err := os.RemoveAll(filepath.Join(s.uploadDir(), filename)); err != nil {
+				if err := os.RemoveAll(path); err != nil {
 					s.logger.Error("failed to remove upload upon unlock",
-						zap.String("filename", filename),
+						zap.String("path", path),
 						zap.Error(err))
 				}
 			}
@@ -141,7 +141,8 @@ func (s *Sia) openUpload(bucket, name string, filename *string, multipart bool, 
 	if filename == nil {
 		return nil, os.ErrNotExist
 	}
-	unlock := s.lockUpload(*filename)
+	uploadPath := filepath.Join(s.uploadDir(), *filename)
+	unlock := s.lockUpload(uploadPath)
 	defer func() {
 		if err != nil {
 			unlock()
@@ -160,14 +161,13 @@ func (s *Sia) openUpload(bucket, name string, filename *string, multipart bool, 
 		if err != nil {
 			return nil, fmt.Errorf("failed to get object parts: %w", err)
 		}
-		uploadDir := filepath.Join(s.uploadDir(), *filename)
-		r, err := objects.NewReader(uploadDir, parts, offset)
+		r, err := objects.NewReader(uploadPath, parts, offset)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create multipart reader: %w", err)
 		}
 		reader, closer = r, r
 	} else {
-		f, err := os.Open(filepath.Join(s.uploadDir(), *filename))
+		f, err := os.Open(uploadPath)
 		if err != nil {
 			return nil, err
 		}
@@ -186,25 +186,33 @@ func (s *Sia) openUpload(bucket, name string, filename *string, multipart bool, 
 	return &lockedUploadReader{Reader: reader, c: closer, unlock: unlock}, nil
 }
 
-func (s *Sia) removeUpload(fileName string) error {
+func (s *Sia) removeUpload(path string) error {
 	s.lockedUploadsMu.Lock()
-	if lu, ok := s.lockedUploads[fileName]; ok {
+	if lu, ok := s.lockedUploads[path]; ok {
 		lu.deleted = true
 		s.lockedUploadsMu.Unlock()
 		return nil
 	}
 	s.lockedUploadsMu.Unlock()
 
-	return os.RemoveAll(filepath.Join(s.uploadDir(), fileName))
+	return os.RemoveAll(path)
+}
+
+func (s *Sia) resolveOrphanPath(orphan *objects.OrphanedFile) *objects.OrphanedFile {
+	if orphan != nil {
+		orphan.Path = filepath.Join(s.uploadDir(), orphan.Path)
+	}
+	return orphan
 }
 
 func (s *Sia) cleanupOrphan(orphan *objects.OrphanedFile) {
 	if orphan == nil {
+		s.releaseDiskUsage(0)
 		return
 	}
-	if err := s.removeUpload(orphan.Filename); err != nil {
+	if err := s.removeUpload(orphan.Path); err != nil {
 		s.logger.Warn("failed to remove orphaned upload file",
-			zap.String("filename", orphan.Filename),
+			zap.String("path", orphan.Path),
 			zap.Error(err))
 	}
 	s.releaseDiskUsage(orphan.Size)
@@ -219,7 +227,7 @@ func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject,
 	if err != nil {
 		return nil, err
 	}
-	s.cleanupOrphan(orphan)
+	s.cleanupOrphan(s.resolveOrphanPath(orphan))
 
 	return &s3.CopyObjectResult{
 		ContentMD5:   obj.ContentMD5,
@@ -235,7 +243,7 @@ func (s *Sia) DeleteObject(ctx context.Context, accessKeyID, bucket string, obje
 	if err != nil {
 		return nil, err
 	}
-	s.cleanupOrphan(orphan)
+	s.cleanupOrphan(s.resolveOrphanPath(orphan))
 
 	return &s3.DeleteObjectResult{
 		IsDeleteMarker: false,
@@ -409,18 +417,9 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	}
 	var objPath string
 	defer func() {
-		if err == nil {
-			return
+		if err != nil {
+			s.cleanupOrphan(&objects.OrphanedFile{Path: objPath, Size: opts.ContentLength})
 		}
-		if objPath != "" {
-			if removeErr := os.Remove(objPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-				s.logger.Error("failed to remove pending upload file after error",
-					zap.String("path", objPath),
-					zap.Error(removeErr))
-				return
-			}
-		}
-		s.releaseDiskUsage(opts.ContentLength)
 	}()
 
 	// compute md5 checksum for the etag
@@ -483,7 +482,7 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	if err != nil {
 		return nil, fmt.Errorf("failed to store object metadata: %w", err)
 	}
-	s.cleanupOrphan(orphan)
+	s.cleanupOrphan(s.resolveOrphanPath(orphan))
 
 	return &s3.PutObjectResult{
 		ContentMD5: contentMD5,

@@ -15,7 +15,6 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia/objects"
-	"go.uber.org/zap"
 	"lukechampine.com/frand"
 )
 
@@ -108,7 +107,7 @@ func (s *Sia) AbortMultipartUpload(ctx context.Context, accessKeyID, bucket, obj
 	}
 
 	// remove multipart upload directory and release disk usage
-	s.cleanupOrphan(&objects.OrphanedFile{Filename: uploadID.String(), Size: size})
+	s.cleanupOrphan(&objects.OrphanedFile{Path: s.multipartUploadPath(uploadID.String()), Size: size})
 
 	return nil
 }
@@ -130,18 +129,9 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object string
 	}
 	var partPath string
 	defer func() {
-		if err == nil {
-			return
+		if err != nil {
+			s.cleanupOrphan(&objects.OrphanedFile{Path: partPath, Size: opts.ContentLength})
 		}
-		if partPath != "" {
-			if removeErr := os.Remove(partPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-				s.logger.Error("failed to remove part file after upload failure",
-					zap.String("path", partPath),
-					zap.Error(removeErr))
-				return
-			}
-		}
-		s.releaseDiskUsage(opts.ContentLength)
 	}()
 
 	// create part directory
@@ -213,16 +203,10 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object string
 	if err != nil {
 		return nil, fmt.Errorf("failed to add part: %w", err)
 	}
-	// wake any concurrent UploadPart waiting on the disk usage limit
-	s.releaseDiskUsage(0)
 	if previous != "" {
-		prevPath := filepath.Join(partDir, previous)
-		if err := os.Remove(prevPath); err != nil {
-			s.logger.Error("failed to remove old part file",
-				zap.String("path", prevPath),
-				zap.Error(err))
-		}
-		s.releaseDiskUsage(prevSize)
+		s.cleanupOrphan(&objects.OrphanedFile{Path: filepath.Join(partDir, previous), Size: prevSize})
+	} else {
+		s.cleanupOrphan(nil)
 	}
 
 	return &s3.UploadPartResult{ContentMD5: contentMD5}, nil
@@ -258,18 +242,9 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 	}
 	var partPath string
 	defer func() {
-		if err == nil {
-			return
+		if err != nil {
+			s.cleanupOrphan(&objects.OrphanedFile{Path: partPath, Size: opts.Range.Length})
 		}
-		if partPath != "" {
-			if removeErr := os.Remove(partPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-				s.logger.Error("failed to remove part file after upload failure",
-					zap.String("path", partPath),
-					zap.Error(removeErr))
-				return
-			}
-		}
-		s.releaseDiskUsage(opts.Range.Length)
 	}()
 
 	// open a reader for the requested range of the source object
@@ -344,16 +319,10 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 	if err != nil {
 		return nil, fmt.Errorf("failed to add part: %w", err)
 	}
-	// wake any concurrent UploadPart waiting on the disk usage limit
-	s.releaseDiskUsage(0)
 	if previous != "" {
-		prevPath := filepath.Join(partDir, previous)
-		if err := os.Remove(prevPath); err != nil {
-			s.logger.Error("failed to remove old part file",
-				zap.String("path", prevPath),
-				zap.Error(err))
-		}
-		s.releaseDiskUsage(prevSize)
+		s.cleanupOrphan(&objects.OrphanedFile{Path: filepath.Join(partDir, previous), Size: prevSize})
+	} else {
+		s.cleanupOrphan(nil)
 	}
 
 	return &s3.UploadPartCopyResult{
@@ -430,10 +399,7 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 	if err != nil {
 		return nil, fmt.Errorf("failed to complete multipart upload in store: %w", err)
 	}
-	// wake any UploadPart waiting on the disk usage limit; HasMultipartUpload
-	// will now return ErrNoSuchUpload
-	s.releaseDiskUsage(0)
-	s.cleanupOrphan(orphan)
+	s.cleanupOrphan(s.resolveOrphanPath(orphan))
 
 	// calculate ETag
 	etag := s3.FormatETag(contentMD5[:], len(completed))

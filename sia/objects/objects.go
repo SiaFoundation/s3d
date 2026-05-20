@@ -56,8 +56,8 @@ type ObjectForUpload struct {
 // OrphanedFile represents a pending upload file that is no longer referenced
 // by any object and should be removed from disk.
 type OrphanedFile struct {
-	Filename string
-	Size     int64
+	Path string
+	Size int64
 }
 
 // Part represents a single part of a multipart upload.

@@ -317,9 +317,10 @@ func (s *Sia) deleteOrphanedUploads() (int, error) { //nolint:revive
 	var removed int
 	for _, entry := range entries {
 		if _, ok := lookup[entry.Name()]; !ok {
-			s.logger.Warn("removing orphaned upload", zap.String("name", entry.Name()))
-			if err := s.removeUpload(entry.Name()); err != nil {
-				s.logger.Error("failed to remove orphaned upload", zap.String("name", entry.Name()), zap.Error(err))
+			path := filepath.Join(s.uploadDir(), entry.Name())
+			s.logger.Warn("removing orphaned upload", zap.String("path", path))
+			if err := s.removeUpload(path); err != nil {
+				s.logger.Error("failed to remove orphaned upload", zap.String("path", path), zap.Error(err))
 				continue
 			}
 			removed++

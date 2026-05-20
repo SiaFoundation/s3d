@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -327,7 +328,7 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 			zap.String("bucket", uploadObj.Bucket),
 			zap.String("name", uploadObj.Name))
 
-		s.cleanupOrphan(&objects.OrphanedFile{Filename: uploadObj.Filename, Size: uploadObj.Length})
+		s.cleanupOrphan(&objects.OrphanedFile{Path: filepath.Join(s.uploadDir(), uploadObj.Filename), Size: uploadObj.Length})
 	}
 
 	return nil

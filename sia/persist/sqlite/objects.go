@@ -165,8 +165,9 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, partNumber 
 // PutObject stores the given object in the given bucket with the given name or
 // overwrites it if it already exists. If the overwritten object's ID has no
 // remaining references, it is inserted into the orphaned_objects table. If
-// the overwrite leaves a previously pending file unreferenced, its filename
-// is returned so the caller can remove it from disk.
+// the overwrite leaves a previously pending file unreferenced, it is returned
+// as an OrphanedFile so the caller can remove it from disk and release its
+// disk usage.
 func (s *Store) PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string) (orphan *objects.OrphanedFile, _ error) {
 	err := s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
@@ -436,7 +437,7 @@ func (s *Store) ObjectsForUpload() ([]objects.ObjectForUpload, error) {
 // putObject replaces the object row at (bid, name) with the given values. Any
 // prior row is deleted first. If the prior row's sia_object_id is no longer
 // referenced, it is added to orphaned_objects. If the prior row's filename is
-// no longer referenced, it is returned for cleanup.
+// no longer referenced, it is returned as an OrphanedFile for cleanup.
 func putObject(tx *txn, bid int64, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string, siaObject *objects.SiaObject) (*objects.OrphanedFile, error) {
 	if meta == nil {
 		meta = make(map[string]string) // force '{}' instead of 'null' in JSON
@@ -486,7 +487,7 @@ func newOrphanedFile(tx *txn, filename *string, size int64) (*objects.OrphanedFi
 	if shared {
 		return nil, nil
 	}
-	return &objects.OrphanedFile{Filename: *filename, Size: size}, nil
+	return &objects.OrphanedFile{Path: *filename, Size: size}, nil
 }
 
 // deleteObject deletes the row at (bid, name) and returns its sia_object_id,
