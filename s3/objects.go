@@ -975,7 +975,7 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 	}
 
 	var partsCount int
-	if obj.PartsCount != nil {
+	if obj.PartsCount != nil && r.URL.Query().Get("partNumber") == "" {
 		partsCount = int(*obj.PartsCount)
 	}
 	etag := FormatETag(obj.ContentMD5[:], partsCount)

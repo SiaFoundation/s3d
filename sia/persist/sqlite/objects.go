@@ -266,7 +266,22 @@ func (s *Store) CopyObject(srcBucket, srcName, dstBucket, dstName string, meta m
 		}
 
 		orphaned, err = putObject(tx, dstBid, dstName, obj.ContentMD5, obj.Meta, obj.Length, obj.PartsCount, obj.FileName, obj.SiaObject)
-		return err
+		if err != nil {
+			return err
+		}
+
+		if obj.PartsCount > 0 {
+			_, err = tx.Exec(`
+				INSERT INTO object_parts (bucket_id, name, part_number, filename, content_md5, content_length, offset)
+				SELECT $1, $2, part_number, filename, content_md5, content_length, offset
+				FROM object_parts
+				WHERE bucket_id = $3 AND name = $4
+			`, dstBid, dstName, srcBid, srcName)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, s3errs.ErrNoSuchKey
