@@ -122,6 +122,13 @@ type PutObjectOptions struct {
 // routeObject handles URLs that contain both a bucket path segment and an
 // object path segment.
 func (s *s3) routeObject(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket, object string) error {
+	q := r.URL.Query()
+	for _, param := range []string{"acl", "attributes", "legal-hold", "renameObject", "restore", "retention", "select", "tagging", "torrent"} {
+		if _, ok := q[param]; ok {
+			return s3errs.ErrNotImplemented
+		}
+	}
+
 	// routes with optional authentication
 	switch r.Method {
 	case http.MethodGet:
