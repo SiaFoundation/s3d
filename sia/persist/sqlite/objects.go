@@ -85,10 +85,10 @@ func (s *Store) GetObject(accessKeyID *string, bucket, name string, partNumber *
 }
 
 func getObject(tx *txn, obj *objects.Object, bid int64, name string, partNumber *int32) error {
-	// get parts count
+	// get parts count from the objects table
 	err := tx.QueryRow(`
-		SELECT COUNT(*)
-		FROM object_parts
+		SELECT parts_count
+		FROM objects
 		WHERE bucket_id = $1 AND name = $2
 	`, bid, name).Scan(&obj.PartsCount)
 	if err != nil {
@@ -152,7 +152,7 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte,
 		if err != nil {
 			return err
 		}
-		orphaned, err = putObject(tx, bid, name, contentMD5, meta, length, fileName, nil)
+		orphaned, err = putObject(tx, bid, name, contentMD5, meta, length, 0, fileName, nil)
 		return err
 	})
 	return orphaned, err
@@ -265,7 +265,7 @@ func (s *Store) CopyObject(srcBucket, srcName, dstBucket, dstName string, meta m
 			return err
 		}
 
-		orphaned, err = putObject(tx, dstBid, dstName, obj.ContentMD5, obj.Meta, obj.Length, obj.FileName, obj.SiaObject)
+		orphaned, err = putObject(tx, dstBid, dstName, obj.ContentMD5, obj.Meta, obj.Length, obj.PartsCount, obj.FileName, obj.SiaObject)
 		return err
 	})
 	if errors.Is(err, sql.ErrNoRows) {
@@ -387,7 +387,7 @@ func (s *Store) ObjectsForUpload() ([]objects.ObjectForUpload, error) {
 	if err := s.transaction(func(tx *txn) error {
 		objs = objs[:0] // reuse same slice if transaction retries
 		rows, err := tx.Query(`
-			SELECT b.name, o.name, o.filename, o.content_md5, o.size, EXISTS(SELECT 1 FROM object_parts p WHERE p.bucket_id = o.bucket_id AND p.name = o.name) AS has_parts
+			SELECT b.name, o.name, o.filename, o.content_md5, o.size, o.parts_count > 0 AS has_parts
 			FROM objects o
 			JOIN buckets b ON b.id = o.bucket_id
 			WHERE o.filename IS NOT NULL
@@ -416,7 +416,7 @@ func (s *Store) ObjectsForUpload() ([]objects.ObjectForUpload, error) {
 // prior row is deleted first. If the prior row's sia_object_id is no longer
 // referenced, it is added to orphaned_objects. If the prior row's filename is
 // no longer referenced, it is returned for cleanup.
-func putObject(tx *txn, bid int64, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string, siaObject *objects.SiaObject) (*string, error) {
+func putObject(tx *txn, bid int64, name string, contentMD5 [16]byte, meta map[string]string, length int64, partsCount int32, fileName *string, siaObject *objects.SiaObject) (*string, error) {
 	if meta == nil {
 		meta = make(map[string]string) // force '{}' instead of 'null' in JSON
 	}
@@ -434,10 +434,10 @@ func putObject(tx *txn, bid int64, name string, contentMD5 [16]byte, meta map[st
 	}
 
 	_, err = tx.Exec(`
-		INSERT INTO objects (bucket_id, name, sia_object_id, content_md5, metadata, size, updated_at, filename, sia_object)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		INSERT INTO objects (bucket_id, name, sia_object_id, content_md5, metadata, size, parts_count, updated_at, filename, sia_object)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 	`, bid, name, id, sqlMD5(contentMD5),
-		sqlMetaJSON(meta), length, sqlTime(time.Now()),
+		sqlMetaJSON(meta), length, partsCount, sqlTime(time.Now()),
 		fileName, sealed)
 	if err != nil {
 		return nil, err
@@ -541,7 +541,7 @@ func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.
 		innerMarker := marker
 
 		list := func(marker *string) (string, string, error) {
-			query := `SELECT o.name, o.content_md5, o.size, o.updated_at
+			query := `SELECT o.name, o.content_md5, o.size, o.parts_count, o.updated_at
 FROM objects o
 WHERE o.bucket_id = ?`
 			args := []any{bid}
@@ -573,6 +573,7 @@ WHERE o.bucket_id = ?`
 					&obj.Name,
 					(*sqlMD5)(&obj.ContentMD5),
 					&obj.Length,
+					&obj.PartsCount,
 					(*sqlTime)(&obj.LastModified),
 				)
 				if err != nil {
@@ -587,7 +588,7 @@ WHERE o.bucket_id = ?`
 					result.Add(&s3.Content{
 						Key:          obj.Name,
 						LastModified: s3.NewContentTime(obj.LastModified),
-						ETag:         s3.FormatETag(obj.ContentMD5[:], 0),
+						ETag:         s3.FormatETag(obj.ContentMD5[:], int(obj.PartsCount)),
 						Size:         int64(obj.Length),
 						Owner:        owner,
 					})

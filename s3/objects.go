@@ -39,6 +39,7 @@ type CopyObjectResult struct {
 	ContentMD5   [16]byte
 	LastModified time.Time
 	VersionID    string
+	PartsCount   int32
 }
 
 // DeleteObjectResult contains information about the result of a DeleteObject
@@ -179,7 +180,11 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, accessKeyID, dst
 		if err != nil {
 			return err
 		}
-		etag := FormatETag(obj.ContentMD5[:], 0)
+		var partsCount int
+		if obj.PartsCount != nil {
+			partsCount = int(*obj.PartsCount)
+		}
+		etag := FormatETag(obj.ContentMD5[:], partsCount)
 		if ifMatch != "" && ifMatch != etag {
 			return s3errs.ErrPreconditionFailed
 		}
@@ -198,7 +203,7 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, accessKeyID, dst
 		w.Header().Set("x-amz-version-id", string(result.VersionID))
 	}
 
-	etag := FormatETag(result.ContentMD5[:], 0)
+	etag := FormatETag(result.ContentMD5[:], int(result.PartsCount))
 	w.Header().Set("ETag", etag)
 	return writeXMLResponse(w, ObjectCopyResult{
 		ETag:         etag,
@@ -647,7 +652,7 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID strin
 
 // FormatETag formats the given hash as an S3 ETag string.
 func FormatETag(hash []byte, partsCount int) string {
-	if partsCount > 1 {
+	if partsCount > 0 {
 		return `"` + hex.EncodeToString(hash) + "-" + strconv.Itoa(partsCount) + `"`
 	}
 	return `"` + hex.EncodeToString(hash) + `"`
@@ -951,7 +956,11 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	etag := FormatETag(obj.ContentMD5[:], 0)
+	var partsCount int
+	if obj.PartsCount != nil {
+		partsCount = int(*obj.PartsCount)
+	}
+	etag := FormatETag(obj.ContentMD5[:], partsCount)
 	w.Header().Set("ETag", etag)
 	w.Header().Set("Last-Modified", obj.LastModified.UTC().Format(http.TimeFormat))
 
@@ -959,7 +968,7 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 		return s3errs.ErrNotModified
 	}
 
-	if obj.PartsCount != nil {
+	if obj.PartsCount != nil && r.URL.Query().Get("partNumber") != "" {
 		w.Header().Set("x-amz-mp-parts-count", fmt.Sprintf("%d", *obj.PartsCount))
 	}
 
