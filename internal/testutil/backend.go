@@ -141,6 +141,7 @@ func (b *MemoryBackend) CopyObject(ctx context.Context, accessKeyID, srcBucket, 
 		ContentMD5:   dstObjct.contentMD5,
 		LastModified: dstObjct.lastModified,
 		VersionID:    "", // versioning isn't supported
+		PartsCount:   int32(len(dstObjct.parts)),
 	}, nil
 }
 
@@ -300,7 +301,7 @@ func (b *MemoryBackend) ListObjects(ctx context.Context, accessKeyID *string, bu
 			result.Add(&s3.Content{
 				Key:          obj.name,
 				LastModified: s3.NewContentTime(obj.lastModified),
-				ETag:         s3.FormatETag(obj.contentMD5[:], 0),
+				ETag:         s3.FormatETag(obj.contentMD5[:], len(obj.parts)),
 				Owner:        owner,
 				Size:         int64(len(obj.data)),
 			})
@@ -804,6 +805,10 @@ func (b *MemoryBackend) headOrGetObject(_ context.Context, accessKeyID *string, 
 		}
 	} else {
 		contentMD5 = obj.contentMD5
+		if len(obj.parts) > 0 {
+			pc := int32(len(obj.parts))
+			partCount = &pc
+		}
 	}
 
 	var body io.ReadCloser
@@ -831,7 +836,7 @@ func (b *MemoryBackend) headOrGetObject(_ context.Context, accessKeyID *string, 
 // is transmitted in http.TimeFormat which is truncated to seconds as well.
 func (o object) matches(oid s3.ObjectID) bool {
 	return o.name == oid.Key &&
-		(oid.ETag == nil || s3.FormatETag(o.contentMD5[:], 0) == *oid.ETag) &&
+		(oid.ETag == nil || s3.FormatETag(o.contentMD5[:], len(o.parts)) == *oid.ETag) &&
 		(oid.Size == nil || int64(len(o.data)) == *oid.Size) &&
 		(oid.LastModifiedTime == nil || o.lastModified.Equal(oid.LastModifiedTime.StdTime()))
 }
