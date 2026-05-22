@@ -119,13 +119,24 @@ type PutObjectOptions struct {
 	ContentSHA256 *[32]byte
 }
 
+var unsupportedObjectSubresources = map[string]struct{}{
+	"acl":          {},
+	"attributes":   {},
+	"legal-hold":   {},
+	"renameObject": {},
+	"restore":      {},
+	"retention":    {},
+	"select":       {},
+	"tagging":      {},
+	"torrent":      {},
+}
+
 // routeObject handles URLs that contain both a bucket path segment and an
 // object path segment.
 func (s *s3) routeObject(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket, object string) error {
-	q := r.URL.Query()
-	for _, param := range []string{"acl", "attributes", "legal-hold", "renameObject", "restore", "retention", "select", "tagging", "torrent"} {
-		if _, ok := q[param]; ok {
-			return s3errs.ErrNotImplemented
+	for param := range r.URL.Query() {
+		if _, ok := unsupportedObjectSubresources[param]; ok {
+			return fmt.Errorf("unsupported query subresource %q: %w", param, s3errs.ErrNotImplemented)
 		}
 	}
 

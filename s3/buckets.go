@@ -1,11 +1,36 @@
 package s3
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"go.uber.org/zap"
 )
+
+var unsupportedBucketSubresources = map[string]struct{}{
+	"abac":                {},
+	"acl":                 {},
+	"accelerate":          {},
+	"analytics":           {},
+	"cors":                {},
+	"encryption":          {},
+	"intelligent-tiering": {},
+	"inventory":           {},
+	"lifecycle":           {},
+	"logging":             {},
+	"metrics":             {},
+	"notification":        {},
+	"object-lock":         {},
+	"ownershipControls":   {},
+	"policy":              {},
+	"policyStatus":        {},
+	"publicAccessBlock":   {},
+	"replication":         {},
+	"requestPayment":      {},
+	"tagging":             {},
+	"website":             {},
+}
 
 // routeBucket handles URLs that contain only a bucket path segment, not an
 // object path segment.
@@ -16,9 +41,9 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *st
 	}
 
 	q := r.URL.Query()
-	for _, param := range []string{"abac", "acl", "accelerate", "analytics", "cors", "encryption", "intelligent-tiering", "inventory", "lifecycle", "logging", "metrics", "notification", "object-lock", "ownershipControls", "policy", "policyStatus", "publicAccessBlock", "replication", "requestPayment", "tagging", "website"} {
-		if _, ok := q[param]; ok {
-			return s3errs.ErrNotImplemented
+	for param := range q {
+		if _, ok := unsupportedBucketSubresources[param]; ok {
+			return fmt.Errorf("unsupported query subresource %q: %w", param, s3errs.ErrNotImplemented)
 		}
 	}
 
