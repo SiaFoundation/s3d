@@ -130,7 +130,7 @@ var (
 	ErrNoSuchWebsiteConfiguration                     = Error{"NoSuchWebsiteConfiguration", "The specified bucket does not have a website configuration.", http.StatusNotFound}
 	ErrNoTransformationDefined                        = Error{"NoTransformationDefined", "No transformation found for this Object Lambda Access Point.", http.StatusNotFound}
 	ErrNotDeviceOwnerError                            = Error{"NotDeviceOwnerError", "The device that generated the token is not owned by the authenticated user.", http.StatusBadRequest}
-	ErrNotImplemented                                 = Error{"NotImplemented", "A provided header implies functionality that is not implemented.", http.StatusNotImplemented}
+	ErrNotImplemented                                 = Error{"NotImplemented", "The requested functionality is not implemented.", http.StatusNotImplemented}
 	ErrNotModified                                    = Error{"NotModified", "The resource was not changed.", http.StatusNotModified}
 	ErrNotSignedUp                                    = Error{"NotSignedUp", "Your account is not signed up for Amazon S3.", http.StatusForbidden}
 	ErrObjectLockConfigurationNotFoundError           = Error{"ObjectLockConfigurationNotFoundError", "Object Lock configuration does not exist for this bucket.", http.StatusNotFound}
