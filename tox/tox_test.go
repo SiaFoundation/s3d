@@ -131,16 +131,14 @@ func TestS3(t *testing.T) {
 		)
 	})
 
-	// we ignore the following tests
-	//  - tests marked s3d_not_implemented or s3d_not_supported since they
-	//    cover features s3d does not handle by design
-	//  - tests marked s3d_not_delimiter_alt since s3d only supports "/"
-	//    as a delimiter
-	//  - bucket_logging tests since s3d does not implement bucket logging
+	// run all test_s3.py tests except those for features s3d does not
+	// support. The marker exclusions cover broad categories while the -k
+	// exclusions catch unmarked tests that use unsupported features by name.
 	t.Run("test_s3", func(t *testing.T) {
 		runTox(t, confPath, testsDir,
 			"s3tests/functional/test_s3.py",
-			"-m", "(copy or delete or list_objects or multipart) and not s3d_not_implemented and not s3d_not_supported and not s3d_not_delimiter_alt and not bucket_logging",
+			"-m", "not s3d_not_implemented and not s3d_not_supported and not s3d_not_delimiter_alt and not bucket_logging and not encryption and not sse_s3 and not bucket_encryption and not lifecycle and not lifecycle_expiration and not lifecycle_transition and not tagging and not bucket_policy and not conditional_write and not object_ownership and not checksum and not cloud_transition and not cloud_restore and not iam_user and not iam_account and not delete_marker",
+			"-k", "not _acl and not versioning and not post_object and not _torrent and not cors and not object_lock and not retention and not legal_hold and not notification and not replication and not website and not _select",
 		)
 	})
 

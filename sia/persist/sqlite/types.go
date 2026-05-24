@@ -3,9 +3,12 @@ package sqlite
 import (
 	"database/sql"
 	"database/sql/driver"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/SiaFoundation/s3d/s3"
 	"go.sia.tech/core/types"
@@ -121,19 +124,46 @@ func (m sqlSiaObject) Value() (driver.Value, error) {
 
 type sqlMetaJSON map[string]string
 
+const metaHexPrefix = "hex:"
+
 func (m *sqlMetaJSON) Scan(src any) error {
+	var raw []byte
 	switch src := src.(type) {
 	case string:
-		return json.Unmarshal([]byte(src), m)
+		raw = []byte(src)
 	case []byte:
-		return json.Unmarshal(src, m)
+		raw = src
 	default:
 		return fmt.Errorf("cannot scan %T to MetaJSON", src)
 	}
+
+	if err := json.Unmarshal(raw, m); err != nil {
+		return err
+	}
+
+	for k, v := range *m {
+		if after, ok := strings.CutPrefix(v, metaHexPrefix); ok {
+			decoded, err := hex.DecodeString(after)
+			if err != nil {
+				return fmt.Errorf("failed to hex-decode metadata value for key %q: %w", k, err)
+			}
+			(*m)[k] = string(decoded)
+		}
+	}
+	return nil
 }
 
 func (m sqlMetaJSON) Value() (driver.Value, error) {
-	data, err := json.Marshal(m)
+	encoded := make(map[string]string, len(m))
+	for k, v := range m {
+		if !utf8.ValidString(v) || strings.HasPrefix(v, metaHexPrefix) {
+			encoded[k] = metaHexPrefix + hex.EncodeToString([]byte(v))
+		} else {
+			encoded[k] = v
+		}
+	}
+
+	data, err := json.Marshal(encoded)
 	if err != nil {
 		return nil, err
 	}

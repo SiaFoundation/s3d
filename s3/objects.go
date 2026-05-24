@@ -700,6 +700,18 @@ func ParseETag(s string) [16]byte {
 	return etag
 }
 
+func etagMatches(header, etag string) bool {
+	if header == "*" {
+		return true
+	}
+	for _, v := range strings.Split(header, ",") {
+		if strings.TrimSpace(v) == etag {
+			return true
+		}
+	}
+	return false
+}
+
 // parseSource parses an X-Amz-Copy-Source string and returns the bucket and
 // object.
 func parseSource(source string) (bucket, object string, err error) {
@@ -725,8 +737,27 @@ func metadataHeaders(headers map[string][]string, sizeLimit int) (map[string]str
 		if strings.HasPrefix(hk, "X-Amz-") ||
 			hk == "Content-Type" ||
 			hk == "Content-Disposition" ||
-			hk == "Content-Encoding" {
+			hk == "Content-Encoding" ||
+			hk == "Cache-Control" ||
+			hk == "Expires" {
 			meta[hk] = hv[0]
+		}
+	}
+
+	// strip aws-chunked from Content-Encoding since it is a transfer encoding
+	// detail that should not be persisted
+	if ce, ok := meta["Content-Encoding"]; ok {
+		var parts []string
+		for _, p := range strings.Split(ce, ",") {
+			p = strings.TrimSpace(p)
+			if p != "" && !strings.EqualFold(p, "aws-chunked") {
+				parts = append(parts, p)
+			}
+		}
+		if len(parts) == 0 {
+			delete(meta, "Content-Encoding")
+		} else {
+			meta["Content-Encoding"] = strings.Join(parts, ", ")
 		}
 	}
 
@@ -982,7 +1013,18 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 	w.Header().Set("ETag", etag)
 	w.Header().Set("Last-Modified", obj.LastModified.UTC().Format(http.TimeFormat))
 
-	if r.Header.Get("If-None-Match") == etag {
+	if ifMatch := r.Header.Get("If-Match"); ifMatch != "" && !etagMatches(ifMatch, etag) {
+		return s3errs.ErrPreconditionFailed
+	}
+
+	if ifUnmodifiedSince := r.Header.Get("If-Unmodified-Since"); ifUnmodifiedSince != "" {
+		t, _ := http.ParseTime(ifUnmodifiedSince)
+		if !t.IsZero() && obj.LastModified.After(t) {
+			return s3errs.ErrPreconditionFailed
+		}
+	}
+
+	if ifNoneMatch := r.Header.Get("If-None-Match"); ifNoneMatch != "" && etagMatches(ifNoneMatch, etag) {
 		return s3errs.ErrNotModified
 	}
 
@@ -991,7 +1033,7 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 	}
 
 	if r.Header.Get("If-None-Match") == "" {
-		ifModifiedSince, _ := time.Parse(http.TimeFormat, r.Header.Get("If-Modified-Since"))
+		ifModifiedSince, _ := http.ParseTime(r.Header.Get("If-Modified-Since"))
 		if !ifModifiedSince.IsZero() && !ifModifiedSince.Before(obj.LastModified) {
 			return s3errs.ErrNotModified
 		}
@@ -1001,6 +1043,7 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 	if obj.Range != nil {
 		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", obj.Range.Start, obj.Range.Start+obj.Range.Length-1, obj.Size))
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", obj.Range.Length))
+		w.WriteHeader(http.StatusPartialContent)
 	} else {
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", obj.Size))
 	}

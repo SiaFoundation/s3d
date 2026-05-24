@@ -12,16 +12,7 @@ import (
 // CreateBucket creates a new bucket.
 func (s *Store) CreateBucket(accessKeyID, bucket string) error {
 	return s.transaction(func(tx *txn) error {
-		res, err := tx.Exec("INSERT INTO buckets (name, created_at) VALUES ($1, $2) ON CONFLICT (name) DO NOTHING", bucket, sqlTime(time.Now()))
-		if err != nil {
-			return err
-		} else if n, err := res.RowsAffected(); err != nil {
-			return err
-		} else if n == 0 {
-			// NOTE: since we don't support multiple accounts yet, any existing
-			// bucket must be owned by the same user
-			return s3errs.ErrBucketAlreadyOwnedByYou
-		}
+		_, err := tx.Exec("INSERT INTO buckets (name, created_at) VALUES ($1, $2) ON CONFLICT (name) DO NOTHING", bucket, sqlTime(time.Now()))
 		return err
 	})
 }
