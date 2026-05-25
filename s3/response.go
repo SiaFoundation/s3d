@@ -57,10 +57,7 @@ func writeErrorResponse(w http.ResponseWriter, err error) {
 		w.Header().Del(k)
 	}
 
-	w.Header().Set("Content-Type", "application/xml")
-	w.WriteHeader(s3Err.HTTPStatus)
-
-	writeXMLResponse(w, ErrorResponse{
+	writeXMLResponse(w, s3Err.HTTPStatus, ErrorResponse{
 		Code:      s3Err.Code,
 		Message:   s3Err.Description,
 		RequestID: "", // unused right now (AWS uses it for diagnostic purposes)
@@ -68,8 +65,9 @@ func writeErrorResponse(w http.ResponseWriter, err error) {
 	})
 }
 
-func writeXMLResponse(w http.ResponseWriter, resp any) error {
+func writeXMLResponse(w http.ResponseWriter, statusCode int, resp any) error {
 	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(statusCode)
 	w.Write([]byte(xml.Header))
 
 	xe := xml.NewEncoder(w)

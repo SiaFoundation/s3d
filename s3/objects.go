@@ -203,10 +203,10 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, accessKeyID, dst
 			partsCount = int(*obj.PartsCount)
 		}
 		etag := FormatETag(obj.ContentMD5[:], partsCount)
-		if ifMatch != "" && ifMatch != etag {
+		if ifMatch != "" && !etagMatches(ifMatch, etag) {
 			return s3errs.ErrPreconditionFailed
 		}
-		if ifNoneMatch != "" && ifNoneMatch == etag {
+		if ifNoneMatch != "" && etagMatches(ifNoneMatch, etag) {
 			return s3errs.ErrPreconditionFailed
 		}
 	}
@@ -223,7 +223,7 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, accessKeyID, dst
 
 	etag := FormatETag(result.ContentMD5[:], int(result.PartsCount))
 	w.Header().Set("ETag", etag)
-	return writeXMLResponse(w, ObjectCopyResult{
+	return writeXMLResponse(w, http.StatusOK, ObjectCopyResult{
 		ETag:         etag,
 		LastModified: NewContentTime(result.LastModified),
 	})
@@ -300,7 +300,7 @@ func (s *s3) deleteObjects(w http.ResponseWriter, r *http.Request, accessKeyID s
 	if req.Quiet {
 		res.Deleted = nil
 	}
-	return writeXMLResponse(w, res)
+	return writeXMLResponse(w, http.StatusOK, res)
 }
 
 func (s *s3) getObject(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket, object, version string) error {
@@ -492,7 +492,7 @@ func (s *s3) listObjectsV1(w http.ResponseWriter, r *http.Request, accessKeyID *
 		NextMarker: objects.NextMarker,
 	}
 
-	return writeXMLResponse(w, result)
+	return writeXMLResponse(w, http.StatusOK, result)
 }
 
 func (s *s3) listObjectsV2(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket string) error {
@@ -562,7 +562,7 @@ func (s *s3) listObjectsV2(w http.ResponseWriter, r *http.Request, accessKeyID *
 		result.NextContinuationToken = base64.URLEncoding.EncodeToString([]byte(objects.NextMarker))
 	}
 
-	return writeXMLResponse(w, result)
+	return writeXMLResponse(w, http.StatusOK, result)
 }
 
 func (s *s3) listObjectVersions(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket string) error {
@@ -610,7 +610,7 @@ func (s *s3) listObjectVersions(w http.ResponseWriter, r *http.Request, accessKe
 			Owner:        obj.Owner,
 		})
 	}
-	return writeXMLResponse(w, result)
+	return writeXMLResponse(w, http.StatusOK, result)
 }
 
 func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID string, bucket, object string) (err error) {
