@@ -2,14 +2,15 @@ package s3
 
 import (
 	"context"
-	"github.com/SiaFoundation/s3d/s3/auth"
-	"github.com/SiaFoundation/s3d/s3/s3errs"
-	"go.uber.org/zap"
 	"io"
 	"net"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/SiaFoundation/s3d/s3/auth"
+	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"go.uber.org/zap"
 )
 
 // Backend defines the interface for an S3 backend that data uploaded via the S3

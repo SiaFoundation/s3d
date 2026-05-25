@@ -1013,30 +1013,32 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 	w.Header().Set("ETag", etag)
 	w.Header().Set("Last-Modified", obj.LastModified.UTC().Format(http.TimeFormat))
 
-	if ifMatch := r.Header.Get("If-Match"); ifMatch != "" && !etagMatches(ifMatch, etag) {
-		return s3errs.ErrPreconditionFailed
-	}
-
-	if ifUnmodifiedSince := r.Header.Get("If-Unmodified-Since"); ifUnmodifiedSince != "" {
+	// evaluate conditional headers per RFC 7232 Section 6 precedence:
+	// If-Match > If-Unmodified-Since > If-None-Match > If-Modified-Since
+	if ifMatch := r.Header.Get("If-Match"); ifMatch != "" {
+		if !etagMatches(ifMatch, etag) {
+			return s3errs.ErrPreconditionFailed
+		}
+	} else if ifUnmodifiedSince := r.Header.Get("If-Unmodified-Since"); ifUnmodifiedSince != "" {
 		t, _ := http.ParseTime(ifUnmodifiedSince)
 		if !t.IsZero() && obj.LastModified.After(t) {
 			return s3errs.ErrPreconditionFailed
 		}
 	}
 
-	if ifNoneMatch := r.Header.Get("If-None-Match"); ifNoneMatch != "" && etagMatches(ifNoneMatch, etag) {
-		return s3errs.ErrNotModified
-	}
-
-	if obj.PartsCount != nil && r.URL.Query().Get("partNumber") != "" {
-		w.Header().Set("x-amz-mp-parts-count", fmt.Sprintf("%d", *obj.PartsCount))
-	}
-
-	if r.Header.Get("If-None-Match") == "" {
+	if ifNoneMatch := r.Header.Get("If-None-Match"); ifNoneMatch != "" {
+		if etagMatches(ifNoneMatch, etag) {
+			return s3errs.ErrNotModified
+		}
+	} else {
 		ifModifiedSince, _ := http.ParseTime(r.Header.Get("If-Modified-Since"))
 		if !ifModifiedSince.IsZero() && !ifModifiedSince.Before(obj.LastModified) {
 			return s3errs.ErrNotModified
 		}
+	}
+
+	if obj.PartsCount != nil && r.URL.Query().Get("partNumber") != "" {
+		w.Header().Set("x-amz-mp-parts-count", fmt.Sprintf("%d", *obj.PartsCount))
 	}
 
 	w.Header().Set("Accept-Ranges", "bytes")
