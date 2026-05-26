@@ -147,10 +147,15 @@ func (s *s3) listBuckets(w http.ResponseWriter, r *http.Request, accessKeyID *st
 		return err
 	}
 
+	owner, err := s.backend.UserInfo(r.Context(), validatedKey)
+	if err != nil {
+		return err
+	}
+
 	resp := &ListBucketsResponse{
 		Xmlns:   "http://s3.amazonaws.com/doc/2006-03-01/",
 		Buckets: buckets,
-		Owner:   GlobalUserInfo,
+		Owner:   owner,
 	}
 	return writeXMLResponse(w, http.StatusOK, resp)
 }

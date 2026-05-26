@@ -204,13 +204,23 @@ func NewTester(t testing.TB, opts ...testutil.TesterOption) *testutil.S3Tester {
 	}
 	t.Cleanup(func() { store.Close() })
 
+	// create test user and access key
+	if err := store.CreateUser(testutil.Owner); err != nil {
+		t.Fatal(err)
+	} else if err := store.CreateAccessKey(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey); err != nil {
+		t.Fatal(err)
+	}
+
 	return NewCustomTester(t, dir, store, sdk, log, opts...)
 }
 
 func NewCustomTester(t testing.TB, dir string, store sia.Store, sdk sia.SDK, log *zap.Logger, opts ...testutil.TesterOption) *testutil.S3Tester {
+	// ensure the test user and access key exist in the store
+	_ = store.CreateUser(testutil.Owner) // ignore duplicate errors
+	_ = store.CreateAccessKey(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey)
+
 	backend, err := sia.New(t.Context(), sdk, store, dir,
 		sia.WithUploadDisabled(),
-		sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
 		sia.WithLogger(log))
 	if err != nil {
 		t.Fatal(err)
@@ -245,6 +255,13 @@ func TestDeleteOrphanedUploads(t *testing.T) {
 	}
 	t.Cleanup(func() { store.Close() })
 
+	// create test user and access key
+	if err := store.CreateUser(testutil.Owner); err != nil {
+		t.Fatal(err)
+	} else if err := store.CreateAccessKey(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey); err != nil {
+		t.Fatal(err)
+	}
+
 	// create bucket
 	if err := store.CreateBucket(testutil.AccessKeyID, "bucket"); err != nil {
 		t.Fatal(err)
@@ -254,7 +271,6 @@ func TestDeleteOrphanedUploads(t *testing.T) {
 	memSDK := NewMemorySDK()
 	backend, err := sia.New(t.Context(), memSDK, store, dir,
 		sia.WithUploadDisabled(),
-		sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
 		sia.WithLogger(log))
 	if err != nil {
 		t.Fatal(err)
@@ -265,7 +281,7 @@ func TestDeleteOrphanedUploads(t *testing.T) {
 	createObject := func(filename string, referenced bool) {
 		t.Helper()
 		if referenced {
-			if _, err := store.PutObject(testutil.AccessKeyID, "bucket", filename, frand.Entropy128(), nil, 100, &filename); err != nil {
+			if _, err := store.PutObject("bucket", filename, frand.Entropy128(), nil, 100, &filename); err != nil {
 				t.Fatal(err)
 			}
 		}

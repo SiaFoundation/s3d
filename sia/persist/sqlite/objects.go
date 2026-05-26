@@ -19,7 +19,7 @@ import (
 // and all provided preconditions match. If the deleted object's ID has no
 // remaining references, it is inserted into the orphaned_objects table. If the
 // object hasn't been uploaded yet, its filename is returned for cleanup.
-func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (*string, error) {
+func (s *Store) DeleteObject(bucket string, objectID s3.ObjectID) (*string, error) {
 	var fileName *string
 	err := s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
@@ -67,7 +67,7 @@ func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (
 }
 
 // GetObject retrieves the object with the given bucket and name.
-func (s *Store) GetObject(accessKeyID *string, bucket, name string, partNumber *int32) (*objects.Object, error) {
+func (s *Store) GetObject(bucket, name string, partNumber *int32) (*objects.Object, error) {
 	var obj objects.Object
 	if err := s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
@@ -145,7 +145,7 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, partNumber 
 // remaining references, it is inserted into the orphaned_objects table. If
 // the overwrite leaves a previously pending file unreferenced, its filename
 // is returned so the caller can remove it from disk.
-func (s *Store) PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string) (*string, error) {
+func (s *Store) PutObject(bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string) (*string, error) {
 	var orphaned *string
 	err := s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
@@ -174,7 +174,7 @@ func (s *Store) MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, sea
 		err = tx.QueryRow(`
 			UPDATE objects
 			SET sia_object_id = $1, sia_object = $2, filename = NULL
-			WHERE bucket_id = $4 AND name = $5 AND sia_object_id IS NULL
+			WHERE bucket_id = $3 AND name = $4 AND sia_object_id IS NULL
 			RETURNING content_md5
 		`, sqlHash256(sealed.ID()), sqlSiaObject(sealed), bid, name).Scan((*sqlMD5)(&storedMD5))
 		if errors.Is(err, sql.ErrNoRows) {
@@ -520,11 +520,9 @@ func insertOrphan(tx *txn, objectID types.Hash256) error {
 	return err
 }
 
-// ListObjects lists objects in the specified bucket for the user identified
-// by the given access key. The backend should use the prefix to limit the
-// contents of the bucket and sort the results into the Contents and
-// CommonPrefixes fields of the returned ObjectsListResult.
-func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (result *s3.ObjectsListResult, err error) {
+// ListObjects lists objects in the specified bucket, filtered by prefix and
+// pagination settings.
+func (s *Store) ListObjects(bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (result *s3.ObjectsListResult, err error) {
 	result = s3.NewObjectsListResult(page.MaxKeys)
 	if page.MaxKeys == 0 {
 		return result, nil
@@ -538,17 +536,12 @@ func (s *Store) ListObjects(_ *string, bucket string, prefix s3.Prefix, page s3.
 		}
 	}
 
-	// prepare owner info if requested
-	var owner *s3.UserInfo
-	if page.FetchOwner != nil && *page.FetchOwner {
-		owner = s3.GlobalUserInfo
-	}
-
 	const maxObjsPerQuery = 100
 	err = s.transaction(func(tx *txn) error {
 		*result = *s3.NewObjectsListResult(page.MaxKeys) // reset per transaction attempt
 
-		bid, err := bucketID(tx, bucket)
+		var bid int64
+		bid, err = bucketID(tx, bucket)
 		if err != nil {
 			return fmt.Errorf("failed to get bucket ID: %w", err)
 		}
@@ -605,7 +598,7 @@ WHERE o.bucket_id = ?`
 						LastModified: s3.NewContentTime(obj.LastModified),
 						ETag:         s3.FormatETag(obj.ContentMD5[:], int(obj.PartsCount)),
 						Size:         int64(obj.Length),
-						Owner:        owner,
+						Owner:        nil,
 					})
 					lastObj = obj.Name
 				}

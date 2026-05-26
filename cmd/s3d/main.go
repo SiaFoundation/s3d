@@ -42,8 +42,7 @@ var cfg = Config{
 			EnableANSI: runtime.GOOS != "windows",
 		},
 	},
-	Sia: Sia{},
-	S3:  S3{},
+	S3: S3{},
 }
 
 func main() {
@@ -55,6 +54,9 @@ func main() {
 	versionCmd := flagg.New("version", ``)
 	configCmd := flagg.New("config", ``)
 	loginCmd := flagg.New("login", ``)
+
+	usersCmd := flagg.New("users", "Manage S3 users")
+	keysCmd := flagg.New("keys", "Manage S3 access keys")
 
 	// attempt to load the config file
 	configPath := tryLoadConfig()
@@ -73,6 +75,8 @@ func main() {
 			{Cmd: versionCmd},
 			{Cmd: configCmd},
 			{Cmd: loginCmd},
+			{Cmd: usersCmd},
+			{Cmd: keysCmd},
 		},
 	})
 
@@ -102,6 +106,20 @@ func main() {
 		}
 
 		runLoginCmd(ctx, configPath)
+		return
+	case usersCmd:
+		if len(cmd.Args()) == 0 {
+			cmd.Usage()
+			return
+		}
+		runUsersCmd(usersCmd.Args())
+		return
+	case keysCmd:
+		if len(cmd.Args()) == 0 {
+			cmd.Usage()
+			return
+		}
+		runKeysCmd(keysCmd.Args())
 		return
 	case rootCmd:
 	}
@@ -165,9 +183,15 @@ func main() {
 	}
 	defer store.Close()
 
-	// before initializing the SDK, check whether we have at least one key pair configured
-	if len(cfg.Sia.KeyPairs) == 0 {
-		checkFatalError("Please provide at least one valid key pair. You can do so by updating the config file or running the 'config' command", sia.ErrNoAccessKey)
+	// check that at least one access key is configured
+	keys, err := store.ListAccessKeys(nil)
+	if err != nil {
+		checkFatalError("failed to list access keys", err)
+	} else if len(keys) == 0 {
+		os.Stderr.WriteString("No access keys configured. Create a user and key pair first:\n\n")
+		os.Stderr.WriteString("  s3d users create <username>\n")
+		os.Stderr.WriteString("  s3d keys create <username>\n\n")
+		os.Exit(1)
 	}
 
 	appKey, indexerURL, err := store.AppKey()
@@ -183,16 +207,8 @@ func main() {
 		checkFatalError("failed to create SDK client", err)
 	}
 
-	var siaOpts []sia.Option
-	for _, kp := range cfg.Sia.KeyPairs {
-		siaOpts = append(siaOpts, sia.WithKeyPair(kp.AccessKey, kp.SecretKey))
-	}
-	siaOpts = append(siaOpts, sia.WithLogger(log.Named("backend")))
-
-	backend, err := sia.New(ctx, sia.NewSDK(sdkClient), store, cfg.Directory, siaOpts...)
-	if errors.Is(err, sia.ErrNoAccessKey) {
-		checkFatalError("Please provide at least one valid key pair. You can do so by updating the config file or running the 'config' command", err)
-	} else if err != nil {
+	backend, err := sia.New(ctx, sia.NewSDK(sdkClient), store, cfg.Directory, sia.WithLogger(log.Named("backend")))
+	if err != nil {
 		checkFatalError("failed to create Sia backend", err)
 	}
 	defer backend.Close()

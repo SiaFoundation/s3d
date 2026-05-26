@@ -8,6 +8,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const testAccessKeyID = "test-accesskey"
+
 type testStore struct {
 	*Store
 	db *sql.DB
@@ -25,7 +27,7 @@ func (store *testStore) assertCount(expected int, table string) {
 	}
 }
 
-func initTestDB(t testing.TB, log *zap.Logger) *testStore {
+func newTestStore(t testing.TB, log *zap.Logger) *testStore {
 	store, err := OpenDatabase(filepath.Join(t.TempDir(), "s3d.sqlite"), log)
 	if err != nil {
 		t.Fatal(err)
@@ -41,4 +43,15 @@ func initTestDB(t testing.TB, log *zap.Logger) *testStore {
 		db:    store.db,
 		t:     t,
 	}
+}
+
+func initTestDB(t testing.TB, log *zap.Logger) *testStore {
+	store := newTestStore(t, log)
+
+	if err := store.CreateUser("testuser"); err != nil {
+		t.Fatal(err)
+	} else if err := store.CreateAccessKey("testuser", testAccessKeyID, "testsecret"); err != nil {
+		t.Fatal(err)
+	}
+	return store
 }

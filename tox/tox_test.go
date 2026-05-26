@@ -63,18 +63,25 @@ func TestS3(t *testing.T) {
 		t.Fatalf("failed to load tox.conf: %v", err)
 	}
 
-	siaOpts := []sia.Option{sia.WithLogger(log.Named("backend"))}
+	// create users and access keys from tox.conf sections
 	seen := make(map[string]bool)
 	for _, section := range toxConf.Sections() {
 		ak := section.Key("access_key").String()
 		ssk := section.Key("secret_key").String()
+		uid := section.Key("user_id").String()
 		if ak == "" || ssk == "" || seen[ak] {
 			continue
 		}
 		seen[ak] = true
-		siaOpts = append(siaOpts, sia.WithKeyPair(ak, ssk))
+		if uid == "" {
+			uid = ak
+		}
+		_ = store.CreateUser(uid) // ignore duplicate
+		if err := store.CreateAccessKey(uid, ak, ssk); err != nil {
+			t.Fatalf("failed to create access key: %v", err)
+		}
 	}
-	backend, err := sia.New(t.Context(), sia.NewSDK(sdkClient), store, dir, siaOpts...)
+	backend, err := sia.New(t.Context(), sia.NewSDK(sdkClient), store, dir, sia.WithLogger(log.Named("backend")))
 	if err != nil {
 		t.Fatalf("failed to create Sia backend: %v", err)
 	}

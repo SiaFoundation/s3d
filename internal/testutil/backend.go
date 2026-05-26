@@ -752,6 +752,18 @@ func (b *MemoryBackend) ListBuckets(ctx context.Context, accessKeyID string) ([]
 	return buckets, nil
 }
 
+// UserInfo returns user information for the given access key ID.
+func (b *MemoryBackend) UserInfo(_ context.Context, accessKeyID string) (*s3.UserInfo, error) {
+	ak, exists := b.accessKeys[accessKeyID]
+	if !exists {
+		return nil, s3errs.ErrInvalidAccessKeyId
+	}
+	return &s3.UserInfo{
+		ID:          ak.owner,
+		DisplayName: ak.owner,
+	}, nil
+}
+
 // LoadSecret loads the secret access key for the given access key ID.
 func (b *MemoryBackend) LoadSecret(ctx context.Context, accessKeyID string) (auth.SecretAccessKey, error) {
 	if ak, exists := b.accessKeys[accessKeyID]; exists {

@@ -17,7 +17,7 @@ import (
 
 func TestCreateMultipartUpload(t *testing.T) {
 	const (
-		accessKeyID = "test-accesskey"
+		accessKeyID = testAccessKeyID
 		bucket      = "test-bucket"
 		object      = "test-object"
 	)
@@ -48,7 +48,7 @@ func TestCreateMultipartUpload(t *testing.T) {
 
 func TestAddMultipartPart(t *testing.T) {
 	const (
-		accessKeyID = "test-accesskey"
+		accessKeyID = testAccessKeyID
 		bucket      = "test-bucket"
 		object      = "test-object"
 		location    = "part-location"
@@ -57,8 +57,9 @@ func TestAddMultipartPart(t *testing.T) {
 	var contentMD5 [16]byte
 	frand.Read(contentMD5[:])
 
-	// create bucket
+	// create user and bucket
 	store := initTestDB(t, zap.NewNop())
+
 	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
 		t.Fatal(err)
 	}
@@ -95,14 +96,15 @@ func TestAddMultipartPart(t *testing.T) {
 
 func TestAbortMultipartUpload(t *testing.T) {
 	const (
-		accessKeyID = "test-accesskey"
+		accessKeyID = testAccessKeyID
 		bucket      = "test-bucket"
 		object      = "test-object"
 		filename    = "part-filename"
 	)
 
-	// create bucket
+	// create user and bucket
 	store := initTestDB(t, zap.NewNop())
+
 	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
 		t.Fatal(err)
 	}
@@ -142,13 +144,14 @@ func TestAbortMultipartUpload(t *testing.T) {
 
 func TestHasMultipartUpload(t *testing.T) {
 	const (
-		accessKeyID = "test-accesskey"
+		accessKeyID = testAccessKeyID
 		bucket      = "test-bucket"
 		object      = "test-object"
 	)
 
-	// create bucket
+	// create user and bucket
 	store := initTestDB(t, zap.NewNop())
+
 	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
 		t.Fatal(err)
 	}
@@ -173,13 +176,14 @@ func TestHasMultipartUpload(t *testing.T) {
 
 func TestListParts(t *testing.T) {
 	const (
-		accessKeyID = "test-accesskey"
+		accessKeyID = testAccessKeyID
 		bucket      = "test-bucket"
 		object      = "test-object"
 	)
 
-	// create bucket
+	// create user and bucket
 	store := initTestDB(t, zap.NewNop())
+
 	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
 		t.Fatal(err)
 	}
@@ -244,12 +248,13 @@ func TestListParts(t *testing.T) {
 
 func TestCompleteMultipartUpload(t *testing.T) {
 	const (
-		accessKeyID = "test-accesskey"
+		accessKeyID = testAccessKeyID
 		bucket      = "test-bucket"
 		object      = "test-object"
 	)
 
 	store := initTestDB(t, zap.NewNop())
+
 	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
 		t.Fatal(err)
 	}
@@ -322,6 +327,8 @@ func TestCompleteMultipartUpload(t *testing.T) {
 }
 
 func TestListMultipartUploads(t *testing.T) {
+	const accessKeyID = testAccessKeyID
+
 	store := initTestDB(t, zap.NewNop())
 
 	setupBucket := func(keys []string) (string, map[string][]string) {
@@ -329,7 +336,7 @@ func TestListMultipartUploads(t *testing.T) {
 
 		entropy := frand.Entropy128()
 		bucket := hex.EncodeToString(entropy[:8])
-		if err := store.CreateBucket("", bucket); err != nil {
+		if err := store.CreateBucket(accessKeyID, bucket); err != nil {
 			t.Fatal(err)
 		}
 
@@ -705,7 +712,7 @@ func BenchmarkListMultipartUploads(b *testing.B) {
 		maxDepth    = 4
 		minLength   = 4
 		maxLength   = 10
-		accessKeyID = "test-accesskey"
+		accessKeyID = testAccessKeyID
 		bucket      = "test-bucket"
 		slashDelim  = "/"
 	)
@@ -715,8 +722,9 @@ func BenchmarkListMultipartUploads(b *testing.B) {
 		start    = time.Now()
 	)
 
-	// create bucket
+	// create user and bucket
 	store := initTestDB(b, zap.NewNop())
+
 	if err := store.CreateBucket(accessKeyID, "test-bucket"); err != nil {
 		b.Fatal(err)
 	}

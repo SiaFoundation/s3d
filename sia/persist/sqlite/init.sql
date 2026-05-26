@@ -3,12 +3,27 @@
 	migrations.go
 */
 
+CREATE TABLE users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE access_keys (
+    access_key_id TEXT PRIMARY KEY,
+    secret_key TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE INDEX access_keys_user_id_idx ON access_keys(user_id);
 
 CREATE TABLE buckets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at INTEGER NOT NULL,
-    name TEXT NOT NULL UNIQUE
+    name TEXT NOT NULL UNIQUE,
+    user_id INTEGER NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT
 );
+CREATE INDEX buckets_user_id_idx ON buckets(user_id);
 
 CREATE TABLE objects (
     bucket_id INTEGER REFERENCES buckets(id) NOT NULL,

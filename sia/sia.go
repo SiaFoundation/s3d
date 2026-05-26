@@ -7,13 +7,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"slices"
 	"sync"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/auth"
-	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/threadgroup"
@@ -27,8 +25,8 @@ const (
 	UploadsDirectory = "uploads"
 )
 
-// ErrNoAccessKey is returned when no access key is provided to the Sia backend.
-var ErrNoAccessKey = errors.New("sia backend requires at least one access key")
+// ErrUserNotFound is returned when a user does not exist.
+var ErrUserNotFound = errors.New("user not found")
 
 // Option is a configuration option for the S3 API handler.
 type Option func(*Sia)
@@ -55,23 +53,12 @@ func WithUploadDisabled() Option {
 	}
 }
 
-// WithKeyPair adds a key pair to the Sia backend.
-func WithKeyPair(accessKeyID, secretKey string) func(*Sia) {
-	return func(mb *Sia) {
-		if accessKeyID == "" || secretKey == "" {
-			return
-		}
-		mb.accessKeys[accessKeyID] = auth.SecretAccessKey(secretKey)
-	}
-}
-
 // Sia implements the s3.Backend interface for storing data on Sia.
 type Sia struct {
 	sdk   SDK
 	store Store
 
-	directory  string
-	accessKeys map[string]auth.SecretAccessKey
+	directory string
 
 	uploadDisabled    bool
 	uploadOptimalSize int64
@@ -96,23 +83,39 @@ type SDK interface {
 	UnsealObject(sealed sdk.SealedObject) (sdk.Object, error)
 }
 
+// AccessKeyInfo contains metadata about an access key.
+type AccessKeyInfo struct {
+	AccessKeyID string
+	UserName    string
+}
+
 // Store represents the storage backend used by the Sia backend.
 type Store interface {
+	// user and access key management
+	CreateUser(name string) error
+	DeleteUser(name string) error
+	ListUsers() ([]string, error)
+	CreateAccessKey(userName, accessKeyID, secretKey string) error
+	DeleteAccessKey(accessKeyID string) error
+	ListAccessKeys(userName *string) ([]AccessKeyInfo, error)
+	LoadSecret(accessKeyID string) (string, error)
+	UserNameForAccessKey(accessKeyID string) (string, error)
+
 	AllFilenames() ([]string, error)
 	CopyObject(srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool) (*objects.Object, *string, error)
 	CreateBucket(accessKeyID, bucket string) error
 	DeleteBucket(accessKeyID, bucket string) error
-	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (*string, error)
-	GetObject(accessKeyID *string, bucket, object string, partNumber *int32) (*objects.Object, error)
-	HeadBucket(accessKeyID, bucket string) error
+	DeleteObject(bucket string, objectID s3.ObjectID) (*string, error)
+	GetObject(bucket, object string, partNumber *int32) (*objects.Object, error)
+	CheckBucketAccess(accessKeyID, bucket string) error
 	ObjectsCursor() (slabs.Cursor, error)
 	SetObjectsCursor(cursor slabs.Cursor) error
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
-	ListObjects(accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error)
+	ListObjects(bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error)
 	ObjectParts(bucket, name string) ([]objects.Part, error)
 	ObjectsForUpload() ([]objects.ObjectForUpload, error)
 	OrphanedObjects(limit int) ([]types.Hash256, error)
-	PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string) (*string, error)
+	PutObject(bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string) (*string, error)
 	MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, sealed sdk.SealedObject) error
 	UpdateSiaObjects(siaObjects []objects.SiaObject) (int64, error)
 	RemoveOrphanedObject(objectID types.Hash256) error
@@ -133,7 +136,6 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		store: store,
 
 		directory:      directory,
-		accessKeys:     make(map[string]auth.SecretAccessKey),
 		uploadWastePct: DefaultUploadWastePct,
 		lockedUploads:  make(map[string]*lockedUpload),
 
@@ -143,9 +145,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 	for _, opt := range opts {
 		opt(sia)
 	}
-	if len(sia.accessKeys) == 0 {
-		return nil, ErrNoAccessKey
-	} else if sia.uploadWastePct <= 0 {
+	if sia.uploadWastePct <= 0 {
 		return nil, errors.New("upload waste percentage must be greater than 0")
 	}
 
@@ -261,14 +261,25 @@ func (s *Sia) ProcessOrphans(ctx context.Context) {
 	}
 }
 
-// LoadSecret loads the secret key for the given access key ID. If the access
-// key wasn't found, the error s3errs.ErrInvalidAccessKeyID is returned.
-func (s *Sia) LoadSecret(ctx context.Context, accessKeyID string) (auth.SecretAccessKey, error) {
-	secret, ok := s.accessKeys[accessKeyID]
-	if !ok {
-		return nil, s3errs.ErrInvalidAccessKeyId
+// UserInfo returns user information for the given access key ID.
+func (s *Sia) UserInfo(_ context.Context, accessKeyID string) (*s3.UserInfo, error) {
+	name, err := s.store.UserNameForAccessKey(accessKeyID)
+	if err != nil {
+		return nil, err
 	}
-	return slices.Clone(secret), nil
+	return &s3.UserInfo{
+		ID:          name,
+		DisplayName: name,
+	}, nil
+}
+
+// LoadSecret loads the secret key for the given access key ID.
+func (s *Sia) LoadSecret(_ context.Context, accessKeyID string) (auth.SecretAccessKey, error) {
+	secret, err := s.store.LoadSecret(accessKeyID)
+	if err != nil {
+		return nil, err
+	}
+	return auth.SecretAccessKey(secret), nil
 }
 
 func (s *Sia) deleteOrphanedUploads() (int, error) { //nolint:revive
