@@ -149,15 +149,10 @@ func (b *MemoryBackend) CopyObject(ctx context.Context, accessKeyID, srcBucket, 
 // by the caller, the call succeeds idempotently.
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateBucket.html
 func (b *MemoryBackend) CreateBucket(ctx context.Context, accessKeyID, name string) error {
-	if _, exists := b.accessKeys[accessKeyID]; !exists {
-		return s3errs.ErrInvalidAccessKeyId
-	} else if bkt, exists := b.buckets[name]; exists && bkt.owner == b.accessKeys[accessKeyID].owner {
-		return nil
-	} else if exists {
-		return s3errs.ErrBucketAlreadyExists
-	}
-	b.buckets[name] = &bucket{
-		owner: b.accessKeys[accessKeyID].owner,
+	if _, exists := b.buckets[name]; !exists {
+		b.buckets[name] = &bucket{
+			owner: b.accessKeys[accessKeyID].owner,
+		}
 	}
 	return nil
 }
