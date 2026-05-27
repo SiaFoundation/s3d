@@ -11,6 +11,16 @@ import (
 	"lukechampine.com/frand"
 )
 
+const keysUsage = `Usage: s3d keys <command>
+
+Commands:
+  create <username> [--access-key <id> --secret-key <secret>]
+      Create a new access key pair (auto-generated if flags are omitted)
+  delete <access-key-id>
+      Delete an access key
+  list [username]
+      List access keys`
+
 func generateAccessKey() (accessKey, secretKey string) {
 	// 12 random bytes encode to exactly 20 base32 characters
 	akBytes := make([]byte, 12)
@@ -26,6 +36,11 @@ func generateAccessKey() (accessKey, secretKey string) {
 }
 
 func runKeysCmd(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, keysUsage)
+		os.Exit(1)
+	}
+
 	switch args[0] {
 	case "create":
 		fs := flag.NewFlagSet("keys create", flag.ExitOnError)
@@ -34,7 +49,7 @@ func runKeysCmd(args []string) {
 		fs.Parse(args[1:])
 
 		if fs.NArg() != 1 {
-			fmt.Fprintln(os.Stderr, "Usage: s3d keys create <username> [--access-key <id> --secret-key <secret>]")
+			fmt.Fprintln(os.Stderr, keysUsage)
 			os.Exit(1)
 		}
 		userName := fs.Arg(0)
@@ -74,7 +89,7 @@ func runKeysCmd(args []string) {
 
 	case "delete":
 		if len(args) != 2 {
-			fmt.Fprintln(os.Stderr, "Usage: s3d keys delete <access-key-id>")
+			fmt.Fprintln(os.Stderr, keysUsage)
 			os.Exit(1)
 		}
 
@@ -87,7 +102,7 @@ func runKeysCmd(args []string) {
 
 	case "list":
 		if len(args) > 2 {
-			fmt.Fprintln(os.Stderr, "Usage: s3d keys list [username]")
+			fmt.Fprintln(os.Stderr, keysUsage)
 			os.Exit(1)
 		}
 
@@ -112,8 +127,8 @@ func runKeysCmd(args []string) {
 		}
 
 	default:
-		fmt.Fprintf(os.Stderr, "Unknown subcommand %q\n", args[0])
-		fmt.Fprintln(os.Stderr, "Usage: s3d keys <create|delete|list> [args]")
+		fmt.Fprintf(os.Stderr, "Unknown subcommand %q\n\n", args[0])
+		fmt.Fprintln(os.Stderr, keysUsage)
 		os.Exit(1)
 	}
 }

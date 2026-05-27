@@ -216,8 +216,12 @@ func NewTester(t testing.TB, opts ...testutil.TesterOption) *testutil.S3Tester {
 
 func NewCustomTester(t testing.TB, dir string, store sia.Store, sdk sia.SDK, log *zap.Logger, opts ...testutil.TesterOption) *testutil.S3Tester {
 	// ensure the test user and access key exist in the store
-	_ = store.CreateUser(testutil.Owner) // ignore duplicate errors
-	_ = store.CreateAccessKey(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey)
+	if err := store.CreateUser(testutil.Owner); err != nil && !errors.Is(err, sia.ErrUserAlreadyExists) {
+		t.Fatal(err)
+	}
+	if err := store.CreateAccessKey(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey); err != nil && !errors.Is(err, sia.ErrAccessKeyAlreadyExists) {
+		t.Fatal(err)
+	}
 
 	backend, err := sia.New(t.Context(), sdk, store, dir,
 		sia.WithUploadDisabled(),

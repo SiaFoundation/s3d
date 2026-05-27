@@ -25,8 +25,17 @@ const (
 	UploadsDirectory = "uploads"
 )
 
-// ErrUserNotFound is returned when a user does not exist.
-var ErrUserNotFound = errors.New("user not found")
+var (
+	// ErrUserAlreadyExists is returned when creating a user that already exists.
+	ErrUserAlreadyExists = errors.New("user already exists")
+
+	// ErrUserNotFound is returned when a user does not exist.
+	ErrUserNotFound = errors.New("user not found")
+
+	// ErrAccessKeyAlreadyExists is returned when creating an access key that
+	// already exists.
+	ErrAccessKeyAlreadyExists = errors.New("access key already exists")
+)
 
 // Option is a configuration option for the S3 API handler.
 type Option func(*Sia)

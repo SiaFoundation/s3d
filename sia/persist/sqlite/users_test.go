@@ -28,8 +28,8 @@ func TestUsersCRUD(t *testing.T) {
 	}
 
 	// duplicate name fails
-	if err := store.CreateUser("alice"); err == nil {
-		t.Fatal("expected error for duplicate user")
+	if err := store.CreateUser("alice"); !errors.Is(err, sia.ErrUserAlreadyExists) {
+		t.Fatal("expected ErrUserAlreadyExists", err)
 	}
 
 	// list returns both, sorted by name

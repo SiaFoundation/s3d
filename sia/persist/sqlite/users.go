@@ -23,8 +23,17 @@ func userIDForAccessKey(tx *txn, accessKeyID string) (int64, error) {
 // CreateUser creates a new user with the given name.
 func (s *Store) CreateUser(name string) error {
 	return s.transaction(func(tx *txn) error {
-		_, err := tx.Exec("INSERT INTO users (name) VALUES ($1)", name)
-		return err
+		res, err := tx.Exec("INSERT INTO users (name) VALUES ($1) ON CONFLICT (name) DO NOTHING", name)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		} else if n == 0 {
+			return sia.ErrUserAlreadyExists
+		}
+		return nil
 	})
 }
 
@@ -87,8 +96,17 @@ func (s *Store) CreateAccessKey(userName, accessKeyID, secretKey string) error {
 			return err
 		}
 
-		_, err = tx.Exec("INSERT INTO access_keys (access_key_id, secret_key, user_id) VALUES ($1, $2, $3)", accessKeyID, secretKey, userID)
-		return err
+		res, err := tx.Exec("INSERT INTO access_keys (access_key_id, secret_key, user_id) VALUES ($1, $2, $3) ON CONFLICT (access_key_id) DO NOTHING", accessKeyID, secretKey, userID)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		} else if n == 0 {
+			return sia.ErrAccessKeyAlreadyExists
+		}
+		return nil
 	})
 }
 

@@ -4,6 +4,7 @@ package tox_test
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -76,7 +77,9 @@ func TestS3(t *testing.T) {
 		if uid == "" {
 			uid = ak
 		}
-		_ = store.CreateUser(uid) // ignore duplicate
+		if err := store.CreateUser(uid); err != nil && !errors.Is(err, sia.ErrUserAlreadyExists) {
+			t.Fatalf("failed to create user: %v", err)
+		}
 		if err := store.CreateAccessKey(uid, ak, ssk); err != nil {
 			t.Fatalf("failed to create access key: %v", err)
 		}

@@ -108,17 +108,9 @@ func main() {
 		runLoginCmd(ctx, configPath)
 		return
 	case usersCmd:
-		if len(cmd.Args()) == 0 {
-			cmd.Usage()
-			return
-		}
 		runUsersCmd(usersCmd.Args())
 		return
 	case keysCmd:
-		if len(cmd.Args()) == 0 {
-			cmd.Usage()
-			return
-		}
 		runKeysCmd(keysCmd.Args())
 		return
 	case rootCmd:

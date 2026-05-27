@@ -7,11 +7,23 @@ import (
 	"go.uber.org/zap"
 )
 
+const usersUsage = `Usage: s3d users <command>
+
+Commands:
+  create <username>    Create a new user
+  delete <username>    Delete a user
+  list                 List all users`
+
 func runUsersCmd(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, usersUsage)
+		os.Exit(1)
+	}
+
 	switch args[0] {
 	case "create":
 		if len(args) != 2 {
-			fmt.Fprintln(os.Stderr, "Usage: s3d users create <username>")
+			fmt.Fprintln(os.Stderr, usersUsage)
 			os.Exit(1)
 		}
 
@@ -24,7 +36,7 @@ func runUsersCmd(args []string) {
 
 	case "delete":
 		if len(args) != 2 {
-			fmt.Fprintln(os.Stderr, "Usage: s3d users delete <username>")
+			fmt.Fprintln(os.Stderr, usersUsage)
 			os.Exit(1)
 		}
 
@@ -37,7 +49,7 @@ func runUsersCmd(args []string) {
 
 	case "list":
 		if len(args) != 1 {
-			fmt.Fprintln(os.Stderr, "Usage: s3d users list")
+			fmt.Fprintln(os.Stderr, usersUsage)
 			os.Exit(1)
 		}
 
@@ -57,8 +69,8 @@ func runUsersCmd(args []string) {
 		}
 
 	default:
-		fmt.Fprintf(os.Stderr, "Unknown subcommand %q\n", args[0])
-		fmt.Fprintln(os.Stderr, "Usage: s3d users <create|delete|list> [args]")
+		fmt.Fprintf(os.Stderr, "Unknown subcommand %q\n\n", args[0])
+		fmt.Fprintln(os.Stderr, usersUsage)
 		os.Exit(1)
 	}
 }
