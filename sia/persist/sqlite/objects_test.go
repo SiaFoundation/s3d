@@ -1352,6 +1352,88 @@ func TestObjectsForUpload(t *testing.T) {
 	}
 }
 
+func TestUploadStats(t *testing.T) {
+	const (
+		accessKeyID = "test-accesskey"
+		bucket      = "test-bucket"
+	)
+
+	store := initTestDB(t, zaptest.NewLogger(t))
+	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	assertStats := func(expected s3.UploadStats) {
+		t.Helper()
+		stats, err := store.UploadStats()
+		if err != nil {
+			t.Fatal(err)
+		} else if stats != expected {
+			t.Fatalf("expected %+v, got %+v", expected, stats)
+		}
+	}
+
+	// no stats initially
+	assertStats(s3.UploadStats{})
+
+	// add two pending uploads
+	if _, err := store.PutObject(accessKeyID, bucket, "obj1", frand.Entropy128(), nil, 100, new(string)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PutObject(accessKeyID, bucket, "obj2", frand.Entropy128(), nil, 250, new(string)); err != nil {
+		t.Fatal(err)
+	}
+
+	assertStats(s3.UploadStats{
+		PendingObjects: 2,
+		PendingSize:    350,
+	})
+
+	// mark a third object as uploaded to Sia
+	contentMD5 := frand.Entropy128()
+	if _, err := store.PutObject(accessKeyID, bucket, "obj3", contentMD5, nil, 500, new(string)); err != nil {
+		t.Fatal(err)
+	}
+	sealObj := sdk.Object{}
+	sealed := sealObj.Seal(types.GeneratePrivateKey())
+	if err := store.MarkObjectUploaded(bucket, "obj3", contentMD5, sealed); err != nil {
+		t.Fatal(err)
+	}
+
+	assertStats(s3.UploadStats{
+		PendingObjects:  2,
+		PendingSize:     350,
+		UploadedObjects: 1,
+		UploadedSize:    500,
+	})
+
+	// create an in-progress multipart upload
+	uid := s3.NewUploadID()
+	if err := store.CreateMultipartUpload(bucket, "mp1", uid, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	assertStats(s3.UploadStats{
+		PendingObjects:   2,
+		PendingSize:      350,
+		UploadedObjects:  1,
+		UploadedSize:     500,
+		MultipartUploads: 1,
+	})
+
+	// delete uploaded object to create an orphan
+	if _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "obj3"}); err != nil {
+		t.Fatal(err)
+	}
+
+	assertStats(s3.UploadStats{
+		PendingObjects:   2,
+		PendingSize:      350,
+		OrphanedObjects:  1,
+		MultipartUploads: 1,
+	})
+}
+
 func newTestObject() sdk.Object {
 	obj := sdk.NewEmptyObject()
 	ss := []slabs.SlabSlice{{EncryptionKey: frand.Entropy256(), Length: 1}}

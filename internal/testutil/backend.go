@@ -752,6 +752,11 @@ func (b *MemoryBackend) ListBuckets(ctx context.Context, accessKeyID string) ([]
 	return buckets, nil
 }
 
+// UploadStats returns empty upload stats for the in-memory backend.
+func (b *MemoryBackend) UploadStats(_ context.Context) (s3.UploadStats, error) {
+	return s3.UploadStats{}, nil
+}
+
 // LoadSecret loads the secret access key for the given access key ID.
 func (b *MemoryBackend) LoadSecret(ctx context.Context, accessKeyID string) (auth.SecretAccessKey, error) {
 	if ak, exists := b.accessKeys[accessKeyID]; exists {

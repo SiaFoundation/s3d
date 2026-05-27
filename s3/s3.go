@@ -228,6 +228,9 @@ type Backend interface {
 	//
 	// - If the last part is below the minimum size, [ErrEntityTooSmall] must be returned.
 	CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, object string, uploadID UploadID, parts []CompleteMultipartPart) (*CompleteMultipartUploadResult, error)
+
+	// UploadStats returns statistics about the background upload pipeline.
+	UploadStats(ctx context.Context) (UploadStats, error)
 }
 
 type s3 struct {
@@ -414,7 +417,9 @@ func (s *s3) routeBase(w http.ResponseWriter, r *http.Request, accessKeyID *stri
 	// common headers at
 	// https://docs.aws.amazon.com/AmazonS3/latest/API/RESTCommonResponseHeaders.html.
 	//
-	if uploadID := query.Get("uploadId"); uploadID != "" {
+	if r.Method == http.MethodGet && path == "_s3d/status/uploads" {
+		err = s.handleUploadStats(w, r)
+	} else if uploadID := query.Get("uploadId"); uploadID != "" {
 		err = s.routeMultipartUpload(w, r, accessKeyID, bucket, object, uploadID)
 	} else if _, ok := query["uploads"]; ok {
 		err = s.routeMultipartUploadBase(w, r, accessKeyID, bucket, object)

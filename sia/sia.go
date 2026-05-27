@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
@@ -80,6 +81,8 @@ type Sia struct {
 	lockedUploadsMu sync.Mutex
 	lockedUploads   map[string]*lockedUpload
 
+	failedUploads atomic.Int64
+
 	tg     *threadgroup.ThreadGroup
 	logger *zap.Logger
 }
@@ -124,6 +127,7 @@ type Store interface {
 	ListMultipartUploads(bucket string, prefix s3.Prefix, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error)
 	ListParts(bucket, name string, uploadID s3.UploadID, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error)
 	MultipartParts(bucket, name string, uploadID s3.UploadID) ([]objects.Part, error)
+	UploadStats() (s3.UploadStats, error)
 }
 
 // New creates a new Sia backend instance.

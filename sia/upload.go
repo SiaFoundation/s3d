@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
@@ -227,6 +228,16 @@ func (s *Sia) uploadObjects(ctx context.Context) { //nolint:revive
 	wg.Wait()
 }
 
+// UploadStats returns statistics about the background upload pipeline.
+func (s *Sia) UploadStats(_ context.Context) (s3.UploadStats, error) {
+	stats, err := s.store.UploadStats()
+	if err != nil {
+		return s3.UploadStats{}, err
+	}
+	stats.FailedUploads = s.failedUploads.Load()
+	return stats, nil
+}
+
 func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 	upload, err := s.sdk.UploadPacked()
 	if err != nil {
@@ -238,6 +249,7 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 	for i, obj := range group.objects {
 		rc, err := s.openUpload(obj.Bucket, obj.Name, &obj.Filename, obj.Multipart, nil)
 		if err != nil {
+			s.failedUploads.Add(1)
 			s.logger.Error("failed to open upload",
 				zap.String("bucket", obj.Bucket),
 				zap.String("name", obj.Name),
@@ -247,6 +259,7 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 		}
 		n, err := upload.Add(ctx, rc)
 		if err != nil {
+			s.failedUploads.Add(1)
 			s.logger.Error("failed to add object to upload",
 				zap.String("bucket", obj.Bucket),
 				zap.String("name", obj.Name),
@@ -255,6 +268,7 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 			rc.Close()
 			continue
 		} else if n != obj.Length {
+			s.failedUploads.Add(1)
 			s.logger.Warn("unexpected number of bytes added to upload",
 				zap.String("bucket", obj.Bucket),
 				zap.String("name", obj.Name),
@@ -271,9 +285,13 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 	// finalize upload
 	results, err := upload.Finalize(ctx)
 	if err != nil {
+		s.failedUploads.Add(int64(len(objIdx)))
 		s.logger.Error("failed to finalize upload", zap.Error(err))
 		return err
 	} else if len(results) != len(objIdx) {
+		if n := int64(len(objIdx)) - int64(len(results)); n > 0 {
+			s.failedUploads.Add(n)
+		}
 		s.logger.Error("finalize returned unexpected number of results",
 			zap.Int("expected", len(objIdx)),
 			zap.Int("got", len(results)))
@@ -284,6 +302,7 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 	for i, obj := range results {
 		uploadObj := group.objects[objIdx[i]]
 		if err := s.sdk.PinObject(ctx, obj); err != nil {
+			s.failedUploads.Add(1)
 			s.logger.Error("failed to pin object",
 				zap.String("bucket", uploadObj.Bucket),
 				zap.String("name", uploadObj.Name),
@@ -307,6 +326,7 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 					zap.String("bucket", uploadObj.Bucket),
 					zap.String("name", uploadObj.Name))
 			} else {
+				s.failedUploads.Add(1)
 				s.logger.Error("failed to finalize object in store",
 					zap.String("bucket", uploadObj.Bucket),
 					zap.String("name", uploadObj.Name),
