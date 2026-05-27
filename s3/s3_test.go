@@ -2,14 +2,65 @@ package s3_test
 
 import (
 	"bytes"
+	"encoding/json"
+	"net/http"
 	"testing"
 
 	"github.com/SiaFoundation/s3d/internal/testutil"
+	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	service "github.com/aws/aws-sdk-go-v2/service/s3"
 )
+
+func TestUploadStats(t *testing.T) {
+	s3Tester := testutil.NewTester(t)
+	opts := s3Tester.Client().Options()
+	httpClient := opts.HTTPClient
+	baseURL := *opts.BaseEndpoint
+
+	t.Run("GET returns 200 with zero stats", func(t *testing.T) {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, baseURL+"/_s3d/status/uploads", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		} else if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
+			t.Fatalf("expected Content-Type application/json, got %q", ct)
+		}
+
+		var stats s3.UploadStats
+		if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
+			t.Fatal(err)
+		} else if stats != (s3.UploadStats{}) {
+			t.Fatalf("expected zero stats, got %+v", stats)
+		}
+	})
+
+	t.Run("anonymous request is allowed", func(t *testing.T) {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, baseURL+"/_s3d/status/uploads", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected anonymous access to succeed, got %d", resp.StatusCode)
+		}
+	})
+}
 
 // TestInvalidCredentials tests that API calls with invalid credentials fail.
 func TestInvalidCredentials(t *testing.T) {
