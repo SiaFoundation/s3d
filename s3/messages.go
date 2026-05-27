@@ -122,7 +122,7 @@ type (
 		LastModified ContentTime  `xml:"LastModified"`
 		ETag         string       `xml:"ETag"`
 		Size         int64        `xml:"Size"`
-		StorageClass StorageClass `xml:"StorageClass,omitempty"`
+		StorageClass StorageClass `xml:"StorageClass"`
 		Owner        *UserInfo    `xml:"Owner,omitempty"`
 	}
 
@@ -350,7 +350,7 @@ type (
 		NextPartNumberMarker int                  `xml:"NextPartNumberMarker,omitempty"`
 		MaxParts             int64                `xml:"MaxParts"`
 		IsTruncated          bool                 `xml:"IsTruncated"`
-		StorageClass         StorageClass         `xml:"StorageClass,omitempty"`
+		StorageClass         StorageClass         `xml:"StorageClass"`
 		Initiator            *UserInfo            `xml:"Initiator,omitempty"`
 		Owner                *UserInfo            `xml:"Owner,omitempty"`
 		Parts                []ListedPartResponse `xml:"Part"`

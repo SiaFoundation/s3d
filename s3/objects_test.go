@@ -678,6 +678,8 @@ func TestListObjects(t *testing.T) {
 						t.Fatalf("expected object %v, got %v", tc.objects[i], *resp.Contents[i].Key)
 					} else if *resp.Contents[i].ETag != etag {
 						t.Fatalf("expected ETag %q, got %q", etag, *resp.Contents[i].ETag)
+					} else if resp.Contents[i].StorageClass != types.ObjectStorageClassStandard {
+						t.Fatalf("expected StorageClass STANDARD, got %q", resp.Contents[i].StorageClass)
 					}
 				}
 				assertCommonPrefixesEqual(t, tc.commonPrefixes, resp.CommonPrefixes)
@@ -701,6 +703,8 @@ func TestListObjects(t *testing.T) {
 						t.Fatalf("expected object %v, got %v", tc.objects[i], *resp.Contents[i].Key)
 					} else if *resp.Contents[i].ETag != etag {
 						t.Fatalf("expected ETag %q, got %q", etag, *resp.Contents[i].ETag)
+					} else if resp.Contents[i].StorageClass != types.ObjectStorageClassStandard {
+						t.Fatalf("expected StorageClass STANDARD, got %q", resp.Contents[i].StorageClass)
 					}
 				}
 				assertCommonPrefixesEqual(t, tc.commonPrefixes, resp.CommonPrefixes)

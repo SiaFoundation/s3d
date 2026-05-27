@@ -16,6 +16,7 @@ CREATE TABLE objects (
     content_md5 BLOB NOT NULL,
     metadata TEXT NOT NULL,
     size INTEGER NOT NULL,
+    parts_count INTEGER NOT NULL DEFAULT 0,
     updated_at INTEGER NOT NULL,
     filename TEXT, -- name of file for regular uploads or dir for multipart uploads
     sia_object_id BLOB,

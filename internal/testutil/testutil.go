@@ -3,7 +3,6 @@ package testutil
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http/httptest"
@@ -94,12 +93,8 @@ func (t *S3Tester) CopyObject(ctx context.Context, srcBucket, srcObject, dstBuck
 	if err != nil {
 		return nil, err
 	}
-	etag := strings.Trim(*resp.CopyObjectResult.ETag, `"`)
-	hash, err := hex.DecodeString(etag)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode ETag %q: %w", *resp.CopyObjectResult.ETag, err)
-	}
-	return hash, nil
+	hash := s3.ParseETag(*resp.CopyObjectResult.ETag)
+	return hash[:], nil
 }
 
 // CreateBucket creates a new S3 bucket.
@@ -151,12 +146,7 @@ func (t *S3Tester) GetObject(ctx context.Context, bucket, object string, rnge *s
 	if err != nil {
 		return nil, err
 	}
-	etag := strings.Trim(*resp.ETag, `"`)
-	var contentMD5 [16]byte
-	_, err = hex.Decode(contentMD5[:], []byte(etag))
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode ETag %q: %w", *resp.ETag, err)
-	}
+	contentMD5 := s3.ParseETag(*resp.ETag)
 	var objRange *s3.ObjectRange
 	var size int64
 	if resp.ContentRange != nil {
@@ -189,12 +179,7 @@ func (t *S3Tester) GetObjectPart(ctx context.Context, bucket, object string, par
 	if err != nil {
 		return nil, err
 	}
-	etag := strings.Trim(*resp.ETag, `"`)
-	var contentMD5 [16]byte
-	_, err = hex.Decode(contentMD5[:], []byte(etag))
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode ETag %q: %w", *resp.ETag, err)
-	}
+	contentMD5 := s3.ParseETag(*resp.ETag)
 	var objRange *s3.ObjectRange
 	var size int64
 	if resp.ContentRange != nil {
@@ -234,12 +219,7 @@ func (t *S3Tester) HeadObject(ctx context.Context, bucket, object string, rnge *
 	if err != nil {
 		return nil, err
 	}
-	etag := strings.Trim(*resp.ETag, `"`)
-	var contentMD5 [16]byte
-	_, err = hex.Decode(contentMD5[:], []byte(etag))
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode ETag %q: %w", *resp.ETag, err)
-	}
+	contentMD5 := s3.ParseETag(*resp.ETag)
 	var objRange *s3.ObjectRange
 	var size int64
 	if resp.ContentRange != nil {
@@ -271,12 +251,7 @@ func (t *S3Tester) HeadObjectPart(ctx context.Context, bucket, object string, pa
 	if err != nil {
 		return nil, err
 	}
-	etag := strings.Trim(*resp.ETag, `"`)
-	var contentMD5 [16]byte
-	_, err = hex.Decode(contentMD5[:], []byte(etag))
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode ETag %q: %w", *resp.ETag, err)
-	}
+	contentMD5 := s3.ParseETag(*resp.ETag)
 	var objRange *s3.ObjectRange
 	var size int64
 	if resp.ContentRange != nil {
@@ -385,12 +360,8 @@ func (t *S3Tester) PutObject(ctx context.Context, bucket, object string, r io.Re
 	if err != nil {
 		return nil, err
 	}
-	etag := strings.Trim(*resp.ETag, `"`)
-	hash, err := hex.DecodeString(etag)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode ETag %q: %w", *resp.ETag, err)
-	}
-	return hash, nil
+	hash := s3.ParseETag(*resp.ETag)
+	return hash[:], nil
 }
 
 // CreateMultipartUpload is a convenience wrapper around the AWS SDK's

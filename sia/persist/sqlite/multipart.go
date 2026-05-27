@@ -99,11 +99,11 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 		// the upload_id serves as the filename since parts are stored
 		// under the upload directory
 		_, err = tx.Exec(`
-			INSERT INTO objects (bucket_id, name, content_md5, metadata, size, updated_at, filename)
-			SELECT bucket_id, name, $1, metadata, $2, $3, $4
+			INSERT INTO objects (bucket_id, name, content_md5, metadata, size, parts_count, updated_at, filename)
+			SELECT bucket_id, name, $1, metadata, $2, $3, $4, $5
 			FROM multipart_uploads
-			WHERE upload_id = $5
-		`, sqlMD5(contentMD5), contentLength, sqlTime(time.Now()), uploadID.String(), sqlUploadID(uploadID))
+			WHERE upload_id = $6
+		`, sqlMD5(contentMD5), contentLength, partCount, sqlTime(time.Now()), uploadID.String(), sqlUploadID(uploadID))
 		if err != nil {
 			return err
 		}

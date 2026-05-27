@@ -16,4 +16,12 @@ var migrations = []func(tx *txn, log *zap.Logger) error{
 		_, err := tx.Exec(`ALTER TABLE global_settings ADD COLUMN indexer_url TEXT;`)
 		return err
 	},
+	func(tx *txn, _ *zap.Logger) error {
+		_, err := tx.Exec(`ALTER TABLE objects ADD COLUMN parts_count INTEGER NOT NULL DEFAULT 0`)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(`UPDATE objects SET parts_count = (SELECT COUNT(*) FROM object_parts WHERE object_parts.bucket_id = objects.bucket_id AND object_parts.name = objects.name)`)
+		return err
+	},
 }
