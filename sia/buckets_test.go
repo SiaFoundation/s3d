@@ -63,11 +63,9 @@ func TestBuckets(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// creating it again should succeed
+		// re-creating an owned bucket should fail with BucketAlreadyOwnedByYou
 		err = s3Tester.CreateBucket(t.Context(), bucket)
-		if err != nil {
-			t.Fatal(err)
-		}
+		testutil.AssertS3Error(t, s3errs.ErrBucketAlreadyOwnedByYou, err)
 
 		// creating a bucket with invalid name should fail
 		err = s3Tester.CreateBucket(t.Context(), "invalid_bucket")
