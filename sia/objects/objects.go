@@ -53,13 +53,6 @@ type ObjectForUpload struct {
 	Multipart  bool
 }
 
-// OrphanedFile represents a pending upload file that is no longer referenced
-// by any object and should be removed from disk.
-type OrphanedFile struct {
-	Path string
-	Size int64
-}
-
 // Part represents a single part of a multipart upload.
 type Part struct {
 	PartNumber int

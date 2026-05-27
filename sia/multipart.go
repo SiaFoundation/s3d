@@ -107,7 +107,7 @@ func (s *Sia) AbortMultipartUpload(ctx context.Context, accessKeyID, bucket, obj
 	}
 
 	// remove multipart upload directory and release disk usage
-	s.cleanupOrphan(&objects.OrphanedFile{Path: s.multipartUploadPath(uploadID.String()), Size: size})
+	s.cleanupOrphan(s.multipartUploadPath(uploadID.String()), size)
 
 	return nil
 }
@@ -130,7 +130,7 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object string
 	var partPath string
 	defer func() {
 		if err != nil {
-			s.cleanupOrphan(&objects.OrphanedFile{Path: partPath, Size: opts.ContentLength})
+			s.cleanupOrphan(partPath, opts.ContentLength)
 		}
 	}()
 
@@ -204,9 +204,9 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object string
 		return nil, fmt.Errorf("failed to add part: %w", err)
 	}
 	if previous != "" {
-		s.cleanupOrphan(&objects.OrphanedFile{Path: filepath.Join(partDir, previous), Size: prevSize})
+		s.cleanupOrphan(filepath.Join(partDir, previous), prevSize)
 	} else {
-		s.cleanupOrphan(nil)
+		s.releaseDiskUsage(0)
 	}
 
 	return &s3.UploadPartResult{ContentMD5: contentMD5}, nil
@@ -243,7 +243,7 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 	var partPath string
 	defer func() {
 		if err != nil {
-			s.cleanupOrphan(&objects.OrphanedFile{Path: partPath, Size: opts.Range.Length})
+			s.cleanupOrphan(partPath, opts.Range.Length)
 		}
 	}()
 
@@ -320,9 +320,9 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 		return nil, fmt.Errorf("failed to add part: %w", err)
 	}
 	if previous != "" {
-		s.cleanupOrphan(&objects.OrphanedFile{Path: filepath.Join(partDir, previous), Size: prevSize})
+		s.cleanupOrphan(filepath.Join(partDir, previous), prevSize)
 	} else {
-		s.cleanupOrphan(nil)
+		s.releaseDiskUsage(0)
 	}
 
 	return &s3.UploadPartCopyResult{
@@ -395,11 +395,13 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 	}
 
 	// complete the multipart upload in the database
-	orphan, err := s.store.CompleteMultipartUpload(bucket, object, uploadID, contentMD5, contentLength)
+	orphanFile, orphanSize, err := s.store.CompleteMultipartUpload(bucket, object, uploadID, contentMD5, contentLength)
 	if err != nil {
 		return nil, fmt.Errorf("failed to complete multipart upload in store: %w", err)
 	}
-	s.cleanupOrphan(s.resolveOrphanPath(orphan))
+	if orphanFile != "" {
+		s.cleanupOrphan(filepath.Join(s.uploadDir(), orphanFile), orphanSize)
+	}
 
 	// calculate ETag
 	etag := s3.FormatETag(contentMD5[:], len(completed))

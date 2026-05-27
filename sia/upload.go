@@ -328,7 +328,7 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 			zap.String("bucket", uploadObj.Bucket),
 			zap.String("name", uploadObj.Name))
 
-		s.cleanupOrphan(&objects.OrphanedFile{Path: filepath.Join(s.uploadDir(), uploadObj.Filename), Size: uploadObj.Length})
+		s.cleanupOrphan(filepath.Join(s.uploadDir(), uploadObj.Filename), uploadObj.Length)
 	}
 
 	return nil

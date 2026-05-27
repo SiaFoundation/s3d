@@ -198,24 +198,13 @@ func (s *Sia) removeUpload(path string) error {
 	return os.RemoveAll(path)
 }
 
-func (s *Sia) resolveOrphanPath(orphan *objects.OrphanedFile) *objects.OrphanedFile {
-	if orphan != nil {
-		orphan.Path = filepath.Join(s.uploadDir(), orphan.Path)
-	}
-	return orphan
-}
-
-func (s *Sia) cleanupOrphan(orphan *objects.OrphanedFile) {
-	if orphan == nil {
-		s.releaseDiskUsage(0)
-		return
-	}
-	if err := s.removeUpload(orphan.Path); err != nil {
+func (s *Sia) cleanupOrphan(path string, size int64) {
+	if err := s.removeUpload(path); err != nil {
 		s.logger.Warn("failed to remove orphaned upload file",
-			zap.String("path", orphan.Path),
+			zap.String("path", path),
 			zap.Error(err))
 	}
-	s.releaseDiskUsage(orphan.Size)
+	s.releaseDiskUsage(size)
 }
 
 // CopyObject copies an object from the source bucket and object key to the
@@ -223,11 +212,13 @@ func (s *Sia) cleanupOrphan(orphan *objects.OrphanedFile) {
 // metadata that should be merged into the copied object except for the
 // x-amz-acl header.
 func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, replace bool, meta map[string]string) (*s3.CopyObjectResult, error) {
-	obj, orphan, err := s.store.CopyObject(srcBucket, srcObject, dstBucket, dstObject, meta, replace)
+	obj, orphanFile, orphanSize, err := s.store.CopyObject(srcBucket, srcObject, dstBucket, dstObject, meta, replace)
 	if err != nil {
 		return nil, err
 	}
-	s.cleanupOrphan(s.resolveOrphanPath(orphan))
+	if orphanFile != "" {
+		s.cleanupOrphan(filepath.Join(s.uploadDir(), orphanFile), orphanSize)
+	}
 
 	return &s3.CopyObjectResult{
 		ContentMD5:   obj.ContentMD5,
@@ -240,11 +231,13 @@ func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject,
 // DeleteObject deletes the object with the given key from the specified
 // bucket for the user identified by the given access key.
 func (s *Sia) DeleteObject(ctx context.Context, accessKeyID, bucket string, object s3.ObjectID) (*s3.DeleteObjectResult, error) {
-	orphan, err := s.store.DeleteObject(accessKeyID, bucket, object)
+	orphanFile, orphanSize, err := s.store.DeleteObject(accessKeyID, bucket, object)
 	if err != nil {
 		return nil, err
 	}
-	s.cleanupOrphan(s.resolveOrphanPath(orphan))
+	if orphanFile != "" {
+		s.cleanupOrphan(filepath.Join(s.uploadDir(), orphanFile), orphanSize)
+	}
 
 	return &s3.DeleteObjectResult{
 		IsDeleteMarker: false,
@@ -423,7 +416,7 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	var objPath string
 	defer func() {
 		if err != nil {
-			s.cleanupOrphan(&objects.OrphanedFile{Path: objPath, Size: opts.ContentLength})
+			s.cleanupOrphan(objPath, opts.ContentLength)
 		}
 	}()
 
@@ -483,11 +476,13 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	}
 
 	// store the object in the database
-	orphan, err := s.store.PutObject(accessKeyID, bucket, object, contentMD5, opts.Meta, size, fileName)
+	orphanFile, orphanSize, err := s.store.PutObject(accessKeyID, bucket, object, contentMD5, opts.Meta, size, fileName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to store object metadata: %w", err)
 	}
-	s.cleanupOrphan(s.resolveOrphanPath(orphan))
+	if orphanFile != "" {
+		s.cleanupOrphan(filepath.Join(s.uploadDir(), orphanFile), orphanSize)
+	}
 
 	return &s3.PutObjectResult{
 		ContentMD5: contentMD5,
