@@ -404,6 +404,20 @@ func TestCompleteMultipartUpload(t *testing.T) {
 		t.Fatalf("unexpected object data")
 	}
 
+	// regression: GET/HEAD without partNumber must return the multipart
+	// ETag with the "-N" suffix so clients don't mistake it for a plain MD5.
+	headResp, err := s3Tester.Client().HeadObject(t.Context(), &service.HeadObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(object),
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if !strings.Contains(*headResp.ETag, "-") {
+		t.Fatalf("expected multipart ETag suffix, got %q", *headResp.ETag)
+	} else if *headResp.ETag != expectedETag {
+		t.Fatalf("expected HEAD ETag %q, got %q", expectedETag, *headResp.ETag)
+	}
+
 	// assert [s3errs.ErrNoSuchUpload] is returned for invalid upload id
 	_, err = s3Tester.CompleteMultipartUpload(t.Context(), bucket, object, s3.NewUploadID().String(), parts)
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchUpload, err)
@@ -606,6 +620,8 @@ func TestListParts(t *testing.T) {
 		t.Fatal("expected untruncated response")
 	} else if res.MaxParts == nil || *res.MaxParts != 1000 {
 		t.Fatalf("expected default max parts 1000, got %v", res.MaxParts)
+	} else if res.StorageClass != types.StorageClassStandard {
+		t.Fatalf("expected storage class STANDARD, got %q", res.StorageClass)
 	}
 
 	for i, got := range res.Parts {

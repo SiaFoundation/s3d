@@ -160,6 +160,7 @@ func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject,
 		ContentMD5:   obj.ContentMD5,
 		LastModified: obj.LastModified,
 		VersionID:    "", // versioning isn't supported
+		PartsCount:   obj.PartsCount,
 	}, nil
 }
 
@@ -251,6 +252,10 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 		if err != nil {
 			return nil, err
 		}
+		var partsCount *int32
+		if obj.PartsCount > 0 {
+			partsCount = aws.Int32(obj.PartsCount)
+		}
 		resp = &s3.Object{
 			Body:         nil,
 			ContentMD5:   obj.ContentMD5,
@@ -258,7 +263,7 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 			Metadata:     obj.Meta,
 			Range:        rnge,
 			Size:         obj.Length,
-			PartsCount:   nil,
+			PartsCount:   partsCount,
 		}
 	}
 

@@ -1,11 +1,36 @@
 package s3
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"go.uber.org/zap"
 )
+
+var unsupportedBucketSubresources = map[string]struct{}{
+	"abac":                {},
+	"acl":                 {},
+	"accelerate":          {},
+	"analytics":           {},
+	"cors":                {},
+	"encryption":          {},
+	"intelligent-tiering": {},
+	"inventory":           {},
+	"lifecycle":           {},
+	"logging":             {},
+	"metrics":             {},
+	"notification":        {},
+	"object-lock":         {},
+	"ownershipControls":   {},
+	"policy":              {},
+	"policyStatus":        {},
+	"publicAccessBlock":   {},
+	"replication":         {},
+	"requestPayment":      {},
+	"tagging":             {},
+	"website":             {},
+}
 
 // routeBucket handles URLs that contain only a bucket path segment, not an
 // object path segment.
@@ -15,12 +40,19 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *st
 		return err
 	}
 
+	q := r.URL.Query()
+	for param := range q {
+		if _, ok := unsupportedBucketSubresources[param]; ok {
+			return fmt.Errorf("unsupported query subresource %q: %w", param, s3errs.ErrNotImplemented)
+		}
+	}
+
 	switch r.Method {
 	case http.MethodGet:
 		// nolint:gocritic
-		if _, ok := r.URL.Query()["location"]; ok {
+		if _, ok := q["location"]; ok {
 			return s.bucketLocation(w, r, bucket)
-		} else if r.URL.Query().Get("list-type") == "2" {
+		} else if q.Get("list-type") == "2" {
 			return s.listObjectsV2(w, r, accessKeyID, bucket)
 		} else {
 			return s.listObjectsV1(w, r, accessKeyID, bucket)
@@ -33,7 +65,7 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *st
 		return s.headBucket(w, r, validatedKey, bucket)
 	case http.MethodPost:
 		// nolint:gocritic
-		if _, ok := r.URL.Query()["delete"]; ok {
+		if _, ok := q["delete"]; ok {
 			return s.deleteObjects(w, r, *accessKeyID, bucket)
 		} else {
 			return s3errs.ErrNotImplemented // createObjectBrowserUpload is not implemented
@@ -70,15 +102,6 @@ func (s *s3) createBucket(w http.ResponseWriter, r *http.Request, accessKeyID, b
 
 	if err := ValidateBucketName(bucket); err != nil {
 		return err
-	}
-
-	q := r.URL.Query()
-	if _, hasACL := q["acl"]; hasACL {
-		return s3errs.ErrNotImplemented // ACLs are not implemented
-	} else if _, hasPolicy := q["policy"]; hasPolicy {
-		return s3errs.ErrNotImplemented // Bucket policies are not implemented
-	} else if _, hasLifecycle := q["lifecycle"]; hasLifecycle {
-		return s3errs.ErrNotImplemented // Bucket lifecycles are not implemented
 	}
 
 	if err := s.backend.CreateBucket(r.Context(), accessKeyID, bucket); err != nil {

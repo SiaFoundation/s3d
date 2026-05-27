@@ -100,11 +100,11 @@ func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadI
 		// the upload_id serves as the filename since parts are stored
 		// under the upload directory
 		_, err = tx.Exec(`
-			INSERT INTO objects (bucket_id, name, content_md5, metadata, size, updated_at, filename)
-			SELECT bucket_id, name, $1, metadata, $2, $3, $4
+			INSERT INTO objects (bucket_id, name, content_md5, metadata, size, parts_count, updated_at, filename)
+			SELECT bucket_id, name, $1, metadata, $2, $3, $4, $5
 			FROM multipart_uploads
-			WHERE upload_id = $5
-		`, sqlMD5(contentMD5), contentLength, sqlTime(time.Now()), uploadID.String(), sqlUploadID(uploadID))
+			WHERE upload_id = $6
+		`, sqlMD5(contentMD5), contentLength, partCount, sqlTime(time.Now()), uploadID.String(), sqlUploadID(uploadID))
 		if err != nil {
 			return err
 		}
@@ -166,6 +166,8 @@ func (s *Store) AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) 
 func (s *Store) AddMultipartPart(bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (string, error) {
 	var prevFilename string
 	if err := s.transaction(func(tx *txn) error {
+		prevFilename = "" // reset per transaction attempt
+
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
@@ -228,6 +230,8 @@ func (s *Store) HasMultipartUpload(bucket, name string, uploadID s3.UploadID) er
 func (s *Store) MultipartParts(bucket, name string, uploadID s3.UploadID) ([]objects.Part, error) {
 	var parts []objects.Part
 	if err := s.transaction(func(tx *txn) error {
+		parts = parts[:0] // reuse same slice if transaction retries
+
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
@@ -278,6 +282,10 @@ func (s *Store) ListParts(bucket, name string, uploadID s3.UploadID, partNumberM
 	}
 
 	if err := s.transaction(func(tx *txn) error {
+		res.Parts = res.Parts[:0] // reuse same slice if transaction retries
+		res.IsTruncated = false
+		res.NextPartNumberMarker = ""
+
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
@@ -364,6 +372,12 @@ func (s *Store) ListMultipartUploads(bucket string, prefix s3.Prefix, page s3.Li
 	}
 
 	err = s.transaction(func(tx *txn) error {
+		res.Uploads = res.Uploads[:0]               // reuse same slice if transaction retries
+		res.CommonPrefixes = res.CommonPrefixes[:0] // reuse same slice if transaction retries
+		res.IsTruncated = false                     // reset per transaction attempt
+		res.NextKeyMarker = ""                      // reset per transaction attempt
+		res.NextUploadIDMarker = ""                 // reset per transaction attempt
+
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
