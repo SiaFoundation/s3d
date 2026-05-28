@@ -204,13 +204,6 @@ func NewTester(t testing.TB, opts ...testutil.TesterOption) *testutil.S3Tester {
 	}
 	t.Cleanup(func() { store.Close() })
 
-	// create test user and access key
-	if err := store.CreateUser(testutil.Owner); err != nil {
-		t.Fatal(err)
-	} else if err := store.CreateAccessKey(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey); err != nil {
-		t.Fatal(err)
-	}
-
 	return NewCustomTester(t, dir, store, sdk, log, opts...)
 }
 
