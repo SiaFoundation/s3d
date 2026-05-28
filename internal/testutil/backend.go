@@ -152,7 +152,7 @@ func (b *MemoryBackend) CreateBucket(ctx context.Context, accessKeyID, name stri
 	if _, exists := b.accessKeys[accessKeyID]; !exists {
 		return s3errs.ErrInvalidAccessKeyId
 	} else if bkt, exists := b.buckets[name]; exists && bkt.owner == b.accessKeys[accessKeyID].owner {
-		return nil
+		return s3errs.ErrBucketAlreadyOwnedByYou
 	} else if exists {
 		return s3errs.ErrBucketAlreadyExists
 	}
