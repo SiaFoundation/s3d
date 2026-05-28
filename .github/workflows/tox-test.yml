@@ -43,9 +43,7 @@ jobs:
           python -m pip install "tox>=4"
 
       - name: Clone test repo
-        run: |
-          git clone https://github.com/SiaFoundation/s3-tests.git
-          cd s3-tests && git checkout 59e424123b008690b33f5fc4d6b219a69af11911
+        run: git clone https://github.com/SiaFoundation/s3-tests.git
 
       # warm up the tox env so the Go test's `tox --skip-pkg-install` is fast
       - name: Setup test suite (create envs only)
