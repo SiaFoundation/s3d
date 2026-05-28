@@ -145,8 +145,8 @@ func (b *MemoryBackend) CopyObject(ctx context.Context, accessKeyID, srcBucket, 
 	}, nil
 }
 
-// CreateBucket creates a new bucket. If the bucket already exists and is owned
-// by the caller, the call succeeds idempotently.
+// CreateBucket creates a new bucket if it doesn't exist yet and returns an
+// error otherwise.
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateBucket.html
 func (b *MemoryBackend) CreateBucket(ctx context.Context, accessKeyID, name string) error {
 	if _, exists := b.buckets[name]; !exists {
