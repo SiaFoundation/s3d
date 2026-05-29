@@ -1,11 +1,21 @@
 package auth
 
 import (
+	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash/crc32"
+	"io"
 	"net/http"
 	"reflect"
+	"slices"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -103,5 +113,239 @@ func TestDateValidation(t *testing.T) {
 	_, err = verifyV4SignedRequest(req, store, "", now)
 	if !errors.Is(err, s3errs.ErrInvalidAccessKeyId) {
 		t.Fatal(err)
+	}
+}
+
+func TestHandleAuthV4Streaming(t *testing.T) {
+	skey := bytes.Repeat([]byte{0x42}, 32)
+	const (
+		scope     = "20260101/us-east-1/s3/aws4_request"
+		timestamp = "20260101T000000Z"
+		seedSig   = "1111111111111111111111111111111111111111111111111111111111111111"
+		chunkSize = 64 * 1024
+	)
+	payload := bytes.Repeat([]byte("a"), 66560)
+
+	result := &v4SignResult{
+		SigningKey: skey,
+		Scope:      scope,
+		Timestamp:  timestamp,
+		SeedSig:    seedSig,
+	}
+
+	hmacHex := func(data string) string {
+		mac := hmac.New(sha256.New, skey)
+		mac.Write([]byte(data))
+		return hex.EncodeToString(mac.Sum(nil))
+	}
+	emptyHash := sha256.Sum256(nil)
+	emptyHex := hex.EncodeToString(emptyHash[:])
+
+	chunkSig := func(prevSig string, data []byte) string {
+		dataHash := sha256.Sum256(data)
+		return hmacHex(strings.Join([]string{
+			"AWS4-HMAC-SHA256-PAYLOAD",
+			timestamp, scope, prevSig,
+			emptyHex,
+			hex.EncodeToString(dataHash[:]),
+		}, "\n"))
+	}
+
+	trailerSig := func(prevSig, canonicalTrailer string) string {
+		trailerHash := sha256.Sum256([]byte(canonicalTrailer))
+		return hmacHex(strings.Join([]string{
+			"AWS4-HMAC-SHA256-TRAILER",
+			timestamp, scope, prevSig,
+			hex.EncodeToString(trailerHash[:]),
+		}, "\n"))
+	}
+
+	signedChunks := func() ([]byte, string) {
+		var buf bytes.Buffer
+		prev := seedSig
+		for i := 0; i < len(payload); i += chunkSize {
+			end := min(i+chunkSize, len(payload))
+			sig := chunkSig(prev, payload[i:end])
+			fmt.Fprintf(&buf, "%x;chunk-signature=%s\r\n", end-i, sig)
+			buf.Write(payload[i:end])
+			buf.WriteString("\r\n")
+			prev = sig
+		}
+		finalSig := chunkSig(prev, nil)
+		fmt.Fprintf(&buf, "0;chunk-signature=%s\r\n", finalSig)
+		return buf.Bytes(), finalSig
+	}
+
+	unsignedChunks := func() []byte {
+		var buf bytes.Buffer
+		for i := 0; i < len(payload); i += chunkSize {
+			end := min(i+chunkSize, len(payload))
+			fmt.Fprintf(&buf, "%x\r\n", end-i)
+			buf.Write(payload[i:end])
+			buf.WriteString("\r\n")
+		}
+		buf.WriteString("0\r\n")
+		return buf.Bytes()
+	}
+
+	crc := crc32.New(crc32.MakeTable(crc32.Castagnoli))
+	crc.Write(payload)
+	crcB64 := base64.StdEncoding.EncodeToString(crc.Sum(nil))
+	canonicalCrc := "x-amz-checksum-crc32c:" + crcB64 + "\n"
+
+	sha := sha256.Sum256(payload)
+	shaB64 := base64.StdEncoding.EncodeToString(sha[:])
+	canonicalCrcSha := canonicalCrc + "x-amz-checksum-sha256:" + shaB64 + "\n"
+
+	chunks, finalSig := signedChunks()
+	crcTrailerBlock := fmt.Sprintf("x-amz-checksum-crc32c:%s\r\nx-amz-trailer-signature:%s\r\n\r\n",
+		crcB64, trailerSig(finalSig, canonicalCrc))
+	multiTrailerBlock := fmt.Sprintf("x-amz-checksum-sha256:%s\r\nx-amz-checksum-crc32c:%s\r\nx-amz-trailer-signature:%s\r\n\r\n",
+		shaB64, crcB64, trailerSig(finalSig, canonicalCrcSha))
+
+	tamperedChunkSig := bytes.Replace(chunks,
+		[]byte(chunkSig(seedSig, payload[:chunkSize])),
+		[]byte(strings.Repeat("0", 64)), 1)
+	tamperedTrailer := strings.Replace(crcTrailerBlock,
+		trailerSig(finalSig, canonicalCrc),
+		strings.Repeat("0", 64), 1)
+	tamperedPayload := bytes.Replace(chunks, payload[:8], []byte("AAAAAAAA"), 1)
+	truncated := chunks[:len(chunks)-len("0;chunk-signature=")-64-len("\r\n")]
+
+	unsigned := unsignedChunks()
+	unsignedTrailer := []byte("x-amz-checksum-sha256:" + shaB64 + "\r\n\r\n")
+	unsignedSpurious := []byte("x-amz-checksum-sha256:" + shaB64 + "\r\nx-amz-trailer-signature:" + strings.Repeat("0", 64) + "\r\n\r\n")
+
+	cases := []struct {
+		name          string
+		contentSha    string
+		xAmzTrailer   string
+		decodedLength string
+		result        *v4SignResult
+		body          []byte
+		wantSetupErr  error
+		wantReadErr   error
+		wantBody      []byte
+	}{
+		{
+			name:       "payload",
+			contentSha: ContentStreamingAWS4HMACSHA256Payload,
+			result:     result,
+			body:       slices.Concat(chunks, []byte("\r\n")),
+			wantBody:   payload,
+		},
+		{
+			name:        "payload-trailer",
+			contentSha:  ContentStreamingAWS4HMACSHA256PayloadTrailer,
+			xAmzTrailer: xAmzChecksumCrc32C,
+			result:      result,
+			body:        slices.Concat(chunks, []byte(crcTrailerBlock)),
+			wantBody:    payload,
+		},
+		{
+			name:        "tampered chunk signature",
+			contentSha:  ContentStreamingAWS4HMACSHA256Payload,
+			result:      result,
+			body:        slices.Concat(tamperedChunkSig, []byte("\r\n")),
+			wantReadErr: s3errs.ErrInvalidSignature,
+		},
+		{
+			name:        "tampered trailer signature",
+			contentSha:  ContentStreamingAWS4HMACSHA256PayloadTrailer,
+			xAmzTrailer: xAmzChecksumCrc32C,
+			result:      result,
+			body:        slices.Concat(chunks, []byte(tamperedTrailer)),
+			wantReadErr: s3errs.ErrInvalidSignature,
+		},
+		{
+			name:        "tampered payload byte",
+			contentSha:  ContentStreamingAWS4HMACSHA256Payload,
+			result:      result,
+			body:        slices.Concat(tamperedPayload, []byte("\r\n")),
+			wantReadErr: s3errs.ErrInvalidSignature,
+		},
+		{
+			name:        "truncated body",
+			contentSha:  ContentStreamingAWS4HMACSHA256Payload,
+			result:      result,
+			body:        truncated,
+			wantReadErr: io.ErrUnexpectedEOF,
+		},
+		{
+			name:        "missing trailer signature",
+			contentSha:  ContentStreamingAWS4HMACSHA256PayloadTrailer,
+			xAmzTrailer: xAmzChecksumCrc32C,
+			result:      result,
+			body:        slices.Concat(chunks, []byte("x-amz-checksum-crc32c:"+crcB64+"\r\n\r\n")),
+			wantReadErr: s3errs.ErrInvalidSignature,
+		},
+		{
+			name:        "two declared trailers",
+			contentSha:  ContentStreamingAWS4HMACSHA256PayloadTrailer,
+			xAmzTrailer: xAmzChecksumCrc32C + "," + xAmzChecksumSha256,
+			result:      result,
+			body:        slices.Concat(chunks, []byte(multiTrailerBlock)),
+			wantBody:    payload,
+		},
+		{
+			name:        "unsigned trailer variant",
+			contentSha:  ContentStreamingUnsignedPayloadTrailer,
+			xAmzTrailer: xAmzChecksumSha256,
+			body:        slices.Concat(unsigned, unsignedTrailer),
+			wantBody:    payload,
+		},
+		{
+			name:        "spurious trailer signature on unsigned variant",
+			contentSha:  ContentStreamingUnsignedPayloadTrailer,
+			xAmzTrailer: xAmzChecksumSha256,
+			body:        slices.Concat(unsigned, unsignedSpurious),
+			wantReadErr: s3errs.ErrInvalidArgument,
+		},
+		{
+			name:          "negative decoded content length",
+			contentSha:    ContentStreamingAWS4HMACSHA256Payload,
+			decodedLength: "-1",
+			result:        result,
+			wantSetupErr:  s3errs.ErrInvalidArgument,
+		},
+	}
+
+	for _, c := range cases {
+		header := make(http.Header)
+		header.Set(HeaderXAMZContentSHA256, c.contentSha)
+		if c.decodedLength == "" {
+			header.Set(HeaderXAMZDecodedContentLength, strconv.Itoa(len(payload)))
+		} else {
+			header.Set(HeaderXAMZDecodedContentLength, c.decodedLength)
+		}
+		if c.xAmzTrailer != "" {
+			header.Set(HeaderXAMZTrailer, c.xAmzTrailer)
+		}
+
+		req := &http.Request{Header: header, Body: io.NopCloser(bytes.NewReader(c.body))}
+		err := handleAuthV4Streaming(req, c.result)
+		if c.wantSetupErr != nil {
+			if !errors.Is(err, c.wantSetupErr) {
+				t.Fatal(c.name, "setup:", err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatal(c.name, "setup:", err)
+		}
+
+		got, err := io.ReadAll(req.Body)
+		if c.wantReadErr != nil {
+			if !errors.Is(err, c.wantReadErr) {
+				t.Fatal(c.name, "read:", err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatal(c.name, "read:", err)
+		}
+		if !bytes.Equal(got, c.wantBody) {
+			t.Fatal(c.name, "payload mismatch")
+		}
 	}
 }

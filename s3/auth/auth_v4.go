@@ -179,50 +179,59 @@ func sumHMAC(key []byte, data []byte) []byte {
 	return hash.Sum(nil)
 }
 
-func verifyV4SignedRequest(req *http.Request, store KeyStore, region string, now time.Time) (string, error) {
+type v4SignResult struct {
+	AccessKeyID string
+	SigningKey  []byte
+	Scope       string
+	Timestamp   string
+	SeedSig     string
+}
+
+func verifyV4SignedRequest(req *http.Request, store KeyStore, region string, now time.Time) (*v4SignResult, error) {
 	// for the simple signature, we expect the full payload hash to be provided
 	// in the header
 	payloadHash := req.Header.Get(HeaderXAMZContentSHA256)
 	if payloadHash == "" {
-		payloadHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" // SHA256 of empty string
+		payloadHash = emptySha256Hex
 	}
 
 	// parse authorization header
 	header, err := parseAuthHeader(req.Header)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	// parse and validate date header
 	const maxClockSkew = 5 * time.Minute
 	date, err := parseDateHeader(req.Header)
 	if err != nil {
-		return "", err
+		return nil, err
 	} else if !sameDay(date, header.Credential.Scope.Date) {
-		return "", s3errs.ErrAuthorizationHeaderMalformed
+		return nil, s3errs.ErrAuthorizationHeaderMalformed
 	} else if date.Before(now.Add(-maxClockSkew)) || date.After(now.Add(maxClockSkew)) {
-		return "", s3errs.ErrRequestTimeTooSkewed
+		return nil, s3errs.ErrRequestTimeTooSkewed
 	}
 
 	secretKey, err := store.LoadSecret(req.Context(), header.Credential.AccessKeyID)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer clear(secretKey)
 
 	signedHeaders, err := extractSignedHeaders(req, header.SignedHeaders)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	// create the canonical request to sign
 	if err := req.ParseForm(); err != nil {
-		return "", err
+		return nil, err
 	}
 	canonicalRequest := canonicalRequest(signedHeaders, payloadHash, req.Form.Encode(), req.URL.Path, req.Method)
 
 	// combine it with the canonical scope to create the string to sign
-	toSign := canonicalStringToSign(canonicalRequest, date, header.Credential.Scope.Canonical())
+	scope := header.Credential.Scope.Canonical()
+	toSign := canonicalStringToSign(canonicalRequest, date, scope)
 
 	// derive the signing key from the secret key using the date and region
 	if region == "" {
@@ -235,7 +244,13 @@ func verifyV4SignedRequest(req *http.Request, store KeyStore, region string, now
 	// compare signature in constant time to avoid timing attacks
 	expectedSignature := getSignature(signingKey, toSign)
 	if subtle.ConstantTimeCompare([]byte(expectedSignature), []byte(header.Signature)) != 1 {
-		return "", s3errs.ErrInvalidSignature
+		return nil, s3errs.ErrInvalidSignature
 	}
-	return header.Credential.AccessKeyID, nil
+	return &v4SignResult{
+		AccessKeyID: header.Credential.AccessKeyID,
+		SigningKey:  signingKey,
+		Scope:       scope,
+		Timestamp:   date.Format(layoutISO8601),
+		SeedSig:     header.Signature,
+	}, nil
 }
