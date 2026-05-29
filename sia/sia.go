@@ -55,6 +55,15 @@ func WithUploadDisabled() Option {
 	}
 }
 
+// WithDiskUsageLimit sets the maximum number of bytes that can be stored on
+// disk pending upload to Sia. When the limit is reached, new uploads block
+// until existing data has been offloaded. A value of 0 disables the limit.
+func WithDiskUsageLimit(limit uint64) Option {
+	return func(s *Sia) {
+		s.diskUsageLimit = limit
+	}
+}
+
 // WithKeyPair adds a key pair to the Sia backend.
 func WithKeyPair(accessKeyID, secretKey string) func(*Sia) {
 	return func(mb *Sia) {
@@ -72,6 +81,13 @@ type Sia struct {
 
 	directory  string
 	accessKeys map[string]auth.SecretAccessKey
+
+	slabSize       int64
+	diskUsageLimit uint64
+
+	diskUsageMu   sync.Mutex
+	diskUsageWake chan struct{}
+	diskUsage     uint64
 
 	uploadDisabled    bool
 	uploadOptimalSize int64
@@ -99,10 +115,11 @@ type SDK interface {
 // Store represents the storage backend used by the Sia backend.
 type Store interface {
 	AllFilenames() ([]string, error)
-	CopyObject(srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool) (*objects.Object, *string, error)
+	CopyObject(srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool) (*objects.Object, string, int64, error)
 	CreateBucket(accessKeyID, bucket string) error
 	DeleteBucket(accessKeyID, bucket string) error
-	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (*string, error)
+	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (string, int64, error)
+	DiskUsage() (uint64, error)
 	GetObject(accessKeyID *string, bucket, object string, partNumber *int32) (*objects.Object, error)
 	HeadBucket(accessKeyID, bucket string) error
 	ObjectsCursor() (slabs.Cursor, error)
@@ -112,15 +129,15 @@ type Store interface {
 	ObjectParts(bucket, name string) ([]objects.Part, error)
 	ObjectsForUpload() ([]objects.ObjectForUpload, error)
 	OrphanedObjects(limit int) ([]types.Hash256, error)
-	PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string) (*string, error)
+	PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string) (string, int64, error)
 	MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, sealed sdk.SealedObject) error
 	UpdateSiaObjects(siaObjects []objects.SiaObject) (int64, error)
 	RemoveOrphanedObject(objectID types.Hash256) error
-	AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) error
-	AddMultipartPart(bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (string, error)
+	AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) (int64, error)
+	AddMultipartPart(bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (string, int64, error)
 	CreateMultipartUpload(bucket, name string, uploadID s3.UploadID, meta map[string]string) error
-	CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64) (*string, error)
-	HasMultipartUpload(bucket, name string, uploadID s3.UploadID) error
+	CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64) (string, int64, error)
+	HasMultipartUpload(bucket, name string, uploadID s3.UploadID) (hasParts bool, err error)
 	ListMultipartUploads(bucket string, prefix s3.Prefix, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error)
 	ListParts(bucket, name string, uploadID s3.UploadID, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error)
 	MultipartParts(bucket, name string, uploadID s3.UploadID) ([]objects.Part, error)
@@ -140,6 +157,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		logger: zap.NewNop(),
 		tg:     threadgroup.New(),
 	}
+	sia.diskUsageWake = make(chan struct{})
 	for _, opt := range opts {
 		opt(sia)
 	}
@@ -153,6 +171,11 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create directory %q: %w", dir, err)
 	}
+	diskUsage, err := sia.store.DiskUsage()
+	if err != nil {
+		return nil, fmt.Errorf("failed to determine disk usage: %w", err)
+	}
+	sia.diskUsage = diskUsage
 
 	// initialize optimal upload size
 	optimalSize, err := sia.sdk.OptimalDataSize()
@@ -296,9 +319,10 @@ func (s *Sia) deleteOrphanedUploads() (int, error) { //nolint:revive
 	var removed int
 	for _, entry := range entries {
 		if _, ok := lookup[entry.Name()]; !ok {
-			s.logger.Warn("removing orphaned upload", zap.String("name", entry.Name()))
-			if err := s.removeUpload(entry.Name()); err != nil {
-				s.logger.Error("failed to remove orphaned upload", zap.String("name", entry.Name()), zap.Error(err))
+			path := filepath.Join(s.uploadDir(), entry.Name())
+			s.logger.Warn("removing orphaned upload", zap.String("path", path))
+			if err := s.removeUpload(path); err != nil {
+				s.logger.Error("failed to remove orphaned upload", zap.String("path", path), zap.Error(err))
 				continue
 			}
 			removed++

@@ -25,6 +25,89 @@ import (
 	"lukechampine.com/frand"
 )
 
+func TestDiskUsage(t *testing.T) {
+	const (
+		accessKeyID = "test-accesskey"
+		bucket      = "test-bucket"
+	)
+
+	store := initTestDB(t, zaptest.NewLogger(t))
+	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// initially zero
+	usage, err := store.DiskUsage()
+	if err != nil {
+		t.Fatal(err)
+	} else if usage != 0 {
+		t.Fatalf("expected 0 disk usage, got %d", usage)
+	}
+
+	// add pending objects
+	fn := "a.obj"
+	if _, _, err := store.PutObject(accessKeyID, bucket, "a", frand.Entropy128(), nil, 100, &fn); err != nil {
+		t.Fatal(err)
+	}
+	fn = "b.obj"
+	if _, _, err := store.PutObject(accessKeyID, bucket, "b", frand.Entropy128(), nil, 250, &fn); err != nil {
+		t.Fatal(err)
+	}
+
+	usage, err = store.DiskUsage()
+	if err != nil {
+		t.Fatal(err)
+	} else if usage != 350 {
+		t.Fatalf("expected 350, got %d", usage)
+	}
+
+	// add in-progress multipart parts
+	uid := s3.NewUploadID()
+	if err := store.CreateMultipartUpload(bucket, "multipart", uid, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.AddMultipartPart(bucket, "multipart", uid, "p1", 1, frand.Entropy128(), 500); err != nil {
+		t.Fatal(err)
+	}
+
+	usage, err = store.DiskUsage()
+	if err != nil {
+		t.Fatal(err)
+	} else if usage != 850 {
+		t.Fatalf("expected 850, got %d", usage)
+	}
+
+	// copy "a" - shared filename should not double-count
+	if _, _, _, err := store.CopyObject(bucket, "a", bucket, "a-copy", nil, false); err != nil {
+		t.Fatal(err)
+	}
+
+	usage, err = store.DiskUsage()
+	if err != nil {
+		t.Fatal(err)
+	} else if usage != 850 {
+		t.Fatalf("expected 850 (shared filename not double-counted), got %d", usage)
+	}
+
+	// uploaded objects should no longer count
+	contentMD5 := frand.Entropy128()
+	if _, _, err := store.PutObject(accessKeyID, bucket, "uploaded", contentMD5, nil, 200, new(string)); err != nil {
+		t.Fatal(err)
+	}
+	sealObj := sdk.Object{}
+	sealed := sealObj.Seal(types.GeneratePrivateKey())
+	if err := store.MarkObjectUploaded(bucket, "uploaded", contentMD5, sealed); err != nil {
+		t.Fatal(err)
+	}
+
+	usage, err = store.DiskUsage()
+	if err != nil {
+		t.Fatal(err)
+	} else if usage != 850 {
+		t.Fatalf("expected 850 (uploaded object excluded), got %d", usage)
+	}
+}
+
 func TestAllFilenames(t *testing.T) {
 	const (
 		accessKeyID = "test-accesskey"
@@ -46,7 +129,7 @@ func TestAllFilenames(t *testing.T) {
 
 	// add a pending upload
 	fn := "regular.obj"
-	if _, err := store.PutObject(accessKeyID, bucket, "obj1", frand.Entropy128(), nil, 100, &fn); err != nil {
+	if _, _, err := store.PutObject(accessKeyID, bucket, "obj1", frand.Entropy128(), nil, 100, &fn); err != nil {
 		t.Fatal(err)
 	}
 
@@ -80,7 +163,7 @@ func TestAllFilenames(t *testing.T) {
 	obj := sdk.Object{}
 	sealed := obj.Seal(types.GeneratePrivateKey())
 	md5 := frand.Entropy128()
-	if _, err := store.PutObject(accessKeyID, bucket, "obj1", md5, nil, 100, &fn); err != nil {
+	if _, _, err := store.PutObject(accessKeyID, bucket, "obj1", md5, nil, 100, &fn); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.MarkObjectUploaded(bucket, "obj1", md5, sealed); err != nil {
@@ -98,11 +181,11 @@ func TestAllFilenames(t *testing.T) {
 	}
 
 	// complete the multipart upload
-	if _, err := store.AddMultipartPart(bucket, "mp1", uid, "p1", 1, frand.Entropy128(), s3.MinUploadPartSize); err != nil {
+	if _, _, err := store.AddMultipartPart(bucket, "mp1", uid, "p1", 1, frand.Entropy128(), s3.MinUploadPartSize); err != nil {
 		t.Fatal(err)
 	}
 	mpMD5 := frand.Entropy128()
-	if _, err := store.CompleteMultipartUpload(bucket, "mp1", uid, mpMD5, s3.MinUploadPartSize); err != nil {
+	if _, _, err := store.CompleteMultipartUpload(bucket, "mp1", uid, mpMD5, s3.MinUploadPartSize); err != nil {
 		t.Fatal(err)
 	}
 
@@ -165,7 +248,7 @@ func TestGetObject(t *testing.T) {
 	}
 
 	// create object
-	_, err := store.PutObject(accessKeyID, bucket, object, objMD5, objMeta, int64(objLength), new(string))
+	_, _, err := store.PutObject(accessKeyID, bucket, object, objMD5, objMeta, int64(objLength), new(string))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,15 +261,15 @@ func TestGetObject(t *testing.T) {
 	// add parts
 	part1MD5 := frand.Entropy128()
 	part2MD5 := frand.Entropy128()
-	if _, err := store.AddMultipartPart(bucket, multipart, multipartUploadID, "part-1", 1, part1MD5, s3.MinUploadPartSize); err != nil {
+	if _, _, err := store.AddMultipartPart(bucket, multipart, multipartUploadID, "part-1", 1, part1MD5, s3.MinUploadPartSize); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AddMultipartPart(bucket, multipart, multipartUploadID, "part-2", 2, part2MD5, 2); err != nil {
+	if _, _, err := store.AddMultipartPart(bucket, multipart, multipartUploadID, "part-2", 2, part2MD5, 2); err != nil {
 		t.Fatal(err)
 	}
 	// complete
 	totalSize := int64(s3.MinUploadPartSize + 2)
-	_, err = store.CompleteMultipartUpload(bucket, multipart, multipartUploadID, multipartMD5, totalSize)
+	_, _, err = store.CompleteMultipartUpload(bucket, multipart, multipartUploadID, multipartMD5, totalSize)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,14 +372,14 @@ func TestGetObjectPartFields(t *testing.T) {
 	if err := store.CreateMultipartUpload(bucket, name, uploadID, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AddMultipartPart(bucket, name, uploadID, "part-1", 1, frand.Entropy128(), s3.MinUploadPartSize); err != nil {
+	if _, _, err := store.AddMultipartPart(bucket, name, uploadID, "part-1", 1, frand.Entropy128(), s3.MinUploadPartSize); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AddMultipartPart(bucket, name, uploadID, "part-2", 2, frand.Entropy128(), 64); err != nil {
+	if _, _, err := store.AddMultipartPart(bucket, name, uploadID, "part-2", 2, frand.Entropy128(), 64); err != nil {
 		t.Fatal(err)
 	}
 	contentMD5 := frand.Entropy128()
-	if _, err := store.CompleteMultipartUpload(bucket, name, uploadID, contentMD5, s3.MinUploadPartSize+64); err != nil {
+	if _, _, err := store.CompleteMultipartUpload(bucket, name, uploadID, contentMD5, s3.MinUploadPartSize+64); err != nil {
 		t.Fatal(err)
 	}
 
@@ -494,7 +577,7 @@ func TestListObjects(t *testing.T) {
 		}
 
 		for _, key := range tt.keys {
-			_, err := store.PutObject("", bucket, key, contentMD5, nil, int64(frand.Intn(1000))+1, new(string))
+			_, _, err := store.PutObject("", bucket, key, contentMD5, nil, int64(frand.Intn(1000))+1, new(string))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -566,7 +649,7 @@ func TestListObjectsMatch(t *testing.T) {
 	etag := s3.FormatETag(contentMD5[:], 0)
 
 	for _, key := range keys {
-		_, err := store.PutObject("", bucket, key, contentMD5, nil, int64(frand.Intn(1000))+1, new(string))
+		_, _, err := store.PutObject("", bucket, key, contentMD5, nil, int64(frand.Intn(1000))+1, new(string))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -675,7 +758,7 @@ func TestListObjectsWalk(t *testing.T) {
 	keysAll := make(map[string]struct{})
 	for range numKeys {
 		key := randomPath(minLength, maxLength, maxDepth, alphabet, delimiter)
-		_, err := store.PutObject("", bucket, key, contentMD5, nil, int64(frand.Intn(1000))+1, new(string))
+		_, _, err := store.PutObject("", bucket, key, contentMD5, nil, int64(frand.Intn(1000))+1, new(string))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -958,7 +1041,7 @@ func TestOrphanedObjects(t *testing.T) {
 
 	// put first object and mark it uploaded
 	md5a := frand.Entropy128()
-	if _, err := store.PutObject(accessKeyID, bucket, "a", md5a, nil, 1, new(string)); err != nil {
+	if _, _, err := store.PutObject(accessKeyID, bucket, "a", md5a, nil, 1, new(string)); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.MarkObjectUploaded(bucket, "a", md5a, sealed); err != nil {
@@ -966,12 +1049,12 @@ func TestOrphanedObjects(t *testing.T) {
 	}
 
 	// copy object to a second key
-	if _, _, err := store.CopyObject(bucket, "a", bucket, "b", nil, false); err != nil {
+	if _, _, _, err := store.CopyObject(bucket, "a", bucket, "b", nil, false); err != nil {
 		t.Fatal(err)
 	}
 
 	// delete first object - references still exist, nothing orphaned
-	if _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "a"}); err != nil {
+	if _, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "a"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -983,7 +1066,7 @@ func TestOrphanedObjects(t *testing.T) {
 	}
 
 	// delete second object - last reference gone, should be orphaned
-	if _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "b"}); err != nil {
+	if _, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "b"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1025,7 +1108,7 @@ func TestPutObjectOrphan(t *testing.T) {
 
 	// put initial object and mark it uploaded
 	md5old := frand.Entropy128()
-	if _, err := store.PutObject(accessKeyID, bucket, "obj", md5old, nil, 1, new(string)); err != nil {
+	if _, _, err := store.PutObject(accessKeyID, bucket, "obj", md5old, nil, 1, new(string)); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.MarkObjectUploaded(bucket, "obj", md5old, oldSealed); err != nil {
@@ -1041,7 +1124,7 @@ func TestPutObjectOrphan(t *testing.T) {
 
 	// overwrite with a different sia_object_id - old ID should be orphaned
 	md5new := frand.Entropy128()
-	if _, err := store.PutObject(accessKeyID, bucket, "obj", md5new, nil, 1, new(string)); err != nil {
+	if _, _, err := store.PutObject(accessKeyID, bucket, "obj", md5new, nil, 1, new(string)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1061,7 +1144,7 @@ func TestPutObjectOrphan(t *testing.T) {
 	if err := store.MarkObjectUploaded(bucket, "obj", md5new, newSealed); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.PutObject(accessKeyID, bucket, "obj", frand.Entropy128(), nil, 2, new(string)); err != nil {
+	if _, _, err := store.PutObject(accessKeyID, bucket, "obj", frand.Entropy128(), nil, 2, new(string)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1157,7 +1240,7 @@ func TestUpdateSiaObjects(t *testing.T) {
 		obj := newTestObject()
 		sealed := obj.Seal(types.GeneratePrivateKey())
 		contentMD5 := frand.Entropy128()
-		if _, err := store.PutObject(accessKeyID, bucket, key, contentMD5, nil, 1, new(string)); err != nil {
+		if _, _, err := store.PutObject(accessKeyID, bucket, key, contentMD5, nil, 1, new(string)); err != nil {
 			t.Fatal(err)
 		} else if err := store.MarkObjectUploaded(bucket, key, contentMD5, sealed); err != nil {
 			t.Fatal(err)
@@ -1183,7 +1266,7 @@ func TestUpdateSiaObjects(t *testing.T) {
 	}
 
 	// delete the first object
-	if _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "obj1"}); err != nil {
+	if _, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "obj1"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1227,7 +1310,7 @@ func TestMarkObjectUploaded(t *testing.T) {
 	// create a pending upload
 	fileName := "test-file.obj"
 	contentMD5 := frand.Entropy128()
-	if _, err := store.PutObject(accessKeyID, bucket, object, contentMD5, nil, 100, &fileName); err != nil {
+	if _, _, err := store.PutObject(accessKeyID, bucket, object, contentMD5, nil, 100, &fileName); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1289,7 +1372,7 @@ func TestObjectsForUpload(t *testing.T) {
 		{"large", 1000, "large.obj"},
 	} {
 		fn := tc.fnName
-		if _, err := store.PutObject(accessKeyID, bucket, tc.name, frand.Entropy128(), nil, tc.size, &fn); err != nil {
+		if _, _, err := store.PutObject(accessKeyID, bucket, tc.name, frand.Entropy128(), nil, tc.size, &fn); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1297,7 +1380,7 @@ func TestObjectsForUpload(t *testing.T) {
 	// insert an object that has been uploaded to Sia, so filename is cleared
 	fn := "uploaded.obj"
 	uploadedMD5 := frand.Entropy128()
-	if _, err := store.PutObject(accessKeyID, bucket, "uploaded", uploadedMD5, nil, 200, &fn); err != nil {
+	if _, _, err := store.PutObject(accessKeyID, bucket, "uploaded", uploadedMD5, nil, 200, &fn); err != nil {
 		t.Fatal(err)
 	}
 	sealObj := sdk.Object{}
@@ -1311,14 +1394,14 @@ func TestObjectsForUpload(t *testing.T) {
 	if err := store.CreateMultipartUpload(bucket, "multipart", uid, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AddMultipartPart(bucket, "multipart", uid, "p1", 1, frand.Entropy128(), s3.MinUploadPartSize); err != nil {
+	if _, _, err := store.AddMultipartPart(bucket, "multipart", uid, "p1", 1, frand.Entropy128(), s3.MinUploadPartSize); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AddMultipartPart(bucket, "multipart", uid, "p2", 2, frand.Entropy128(), 50); err != nil {
+	if _, _, err := store.AddMultipartPart(bucket, "multipart", uid, "p2", 2, frand.Entropy128(), 50); err != nil {
 		t.Fatal(err)
 	}
 	mpSize := int64(s3.MinUploadPartSize + 50)
-	if _, err := store.CompleteMultipartUpload(bucket, "multipart", uid, frand.Entropy128(), mpSize); err != nil {
+	if _, _, err := store.CompleteMultipartUpload(bucket, "multipart", uid, frand.Entropy128(), mpSize); err != nil {
 		t.Fatal(err)
 	}
 

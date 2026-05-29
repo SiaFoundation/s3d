@@ -57,6 +57,8 @@ type (
 	// Sia contains the configuration for the Sia backend.
 	Sia struct {
 		KeyPairs []KeyPair `yaml:"keyPairs"`
+
+		DiskUsageLimit uint64 `yaml:"diskUsageLimit"`
 	}
 
 	// Config contains the configuration for S3d.
