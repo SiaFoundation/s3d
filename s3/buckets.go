@@ -51,7 +51,7 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *st
 	case http.MethodGet:
 		// nolint:gocritic
 		if _, ok := q["location"]; ok {
-			return s.bucketLocation(w, r, bucket)
+			return s.bucketLocation(w, r, validatedKey, bucket)
 		} else if q.Get("list-type") == "2" {
 			return s.listObjectsV2(w, r, accessKeyID, bucket)
 		} else {
@@ -78,8 +78,12 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *st
 // bucketLocation handles GET Bucket location requests.
 //
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketLocation.html
-func (s *s3) bucketLocation(w http.ResponseWriter, r *http.Request, bucket string) error {
+func (s *s3) bucketLocation(w http.ResponseWriter, r *http.Request, accessKeyID, bucket string) error {
 	s.logger.Debug("getting bucket location", zap.String("bucket", bucket))
+
+	if err := s.backend.HeadBucket(r.Context(), accessKeyID, bucket); err != nil {
+		return err
+	}
 
 	region := s.region
 	if region == "" {

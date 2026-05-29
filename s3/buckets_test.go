@@ -58,6 +58,10 @@ func TestBuckets(t *testing.T) {
 		err = otherTester.HeadBucket(t.Context(), bucket)
 		testutil.AssertS3StatusCode(t, s3errs.ErrAccessDenied, err)
 
+		// bucket location should not be readable by other account
+		_, err = otherTester.BucketLocation(t.Context(), bucket)
+		testutil.AssertS3StatusCode(t, s3errs.ErrAccessDenied, err)
+
 		// make sure it shows up in the list
 		buckets, err := s3Tester.ListBuckets(t.Context())
 		if err != nil {
