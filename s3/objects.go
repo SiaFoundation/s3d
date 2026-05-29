@@ -456,10 +456,6 @@ func (s *s3) listObjectsV1(w http.ResponseWriter, r *http.Request, accessKeyID *
 		page.Marker = &marker
 	}
 
-	if prefix.Delimiter != "" && prefix.Delimiter != "/" {
-		return s3errs.ErrNotImplemented // only "/" delimiter is supported
-	}
-
 	// list objects
 	objects, err := s.backend.ListObjects(r.Context(), accessKeyID, bucket, prefix, page)
 	if err != nil {
@@ -505,8 +501,6 @@ func (s *s3) listObjectsV2(w http.ResponseWriter, r *http.Request, accessKeyID *
 	page, err := listObjectsPageFromQuery(q)
 	if err != nil {
 		return err
-	} else if prefix.Delimiter != "" && prefix.Delimiter != "/" {
-		return s3errs.ErrNotImplemented // only "/" delimiter is supported
 	}
 
 	// don't allow unordered listing with delimiter

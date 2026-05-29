@@ -7,7 +7,6 @@ import (
 	"unsafe"
 
 	"fmt"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"time"
@@ -740,57 +739,57 @@ func BenchmarkListObjects(b *testing.B) {
 
 	store := initTestDB(b, zaptest.NewLogger(b))
 
-	// prepare a bucket
-	bucket := "foo"
-	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
-		b.Fatal(err)
-	}
-
 	obj := sdk.Object{}
 	sealed := obj.Seal(types.GeneratePrivateKey())
+	objID := sealed.ID()
+	contentMD5 := [16]byte(frand.Bytes(16))
 
-	err := store.transaction(func(tx *txn) error {
-		bid, err := bucketID(tx, bucket)
-		if err != nil {
-			return err
+	var size uint64
+	for _, slab := range sealed.Slabs {
+		size += uint64(slab.Length)
+	}
+
+	populateBucket := func(bucket, delimiter string) {
+		if err := store.CreateBucket("", bucket); err != nil {
+			b.Fatal(err)
 		}
+		err := store.transaction(func(tx *txn) error {
+			bid, err := bucketID(tx, bucket)
+			if err != nil {
+				return err
+			}
+			now := time.Now()
+			for i := 0; i < dir1; i++ {
+				layer1 := fmt.Sprint(i)
+				for j := 0; j < dir2; j++ {
+					layer2 := layer1 + delimiter + fmt.Sprint(j)
+					for k := 0; k < dir3; k++ {
+						layer3 := layer2 + delimiter + fmt.Sprint(k)
+						for l := 0; l < dir4; l++ {
+							idx := i*dir1 + j*dir2 + k*dir3 + l*dir4
+							if (idx % 10000) == 0 {
+								b.Log(idx)
+							}
 
-		objID := sealed.ID()
-		contentMD5 := [16]byte(frand.Bytes(16))
+							name := strconv.Itoa(idx)
+							key := layer3 + delimiter + name
 
-		var size uint64
-		for _, slab := range sealed.Slabs {
-			size += uint64(slab.Length)
-		}
-
-		now := time.Now()
-		for i := 0; i < dir1; i++ {
-			layer1 := fmt.Sprint(i)
-			for j := 0; j < dir2; j++ {
-				layer2 := filepath.Join(layer1, fmt.Sprint(j))
-				for k := 0; k < dir3; k++ {
-					layer3 := filepath.Join(layer2, fmt.Sprint(k))
-					for l := 0; l < dir4; l++ {
-						idx := i*dir1 + j*dir2 + k*dir3 + l*dir4
-						if (idx % 10000) == 0 {
-							b.Log(idx)
-						}
-
-						name := strconv.Itoa(idx)
-						layer4 := filepath.Join(layer3, name)
-
-						_, err = tx.Exec(`
+							_, err = tx.Exec(`
 			INSERT INTO objects (bucket_id, name, sia_object_id, content_md5, metadata, size, updated_at, sia_object)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, bid, layer4, sqlHash256(objID), sqlMD5(contentMD5), []byte{}, size, sqlTime(now), sqlSiaObject(sealed))
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, bid, key, sqlHash256(objID), sqlMD5(contentMD5), []byte{}, size, sqlTime(now), sqlSiaObject(sealed))
+						}
 					}
 				}
 			}
+			return err
+		})
+		if err != nil {
+			b.Fatal(err)
 		}
-		return err
-	})
-	if err != nil {
-		b.Fatal(err)
 	}
+
+	populateBucket("slash", "/")
+	populateBucket("backslash", `\`)
 
 	if _, err := store.db.Exec(`VACUUM;`); err != nil {
 		b.Fatal(err)
@@ -799,9 +798,10 @@ func BenchmarkListObjects(b *testing.B) {
 	}
 
 	const maxKeys = 1000
+
 	b.Run("no_delimiter_no_prefix", func(b *testing.B) {
 		for b.Loop() {
-			result, err := store.ListObjects(bucket, s3.Prefix{}, s3.ListObjectsPage{MaxKeys: maxKeys})
+			result, err := store.ListObjects("slash", s3.Prefix{}, s3.ListObjectsPage{MaxKeys: maxKeys})
 			if err != nil {
 				b.Fatal(err)
 			} else if (len(result.Contents) + len(result.CommonPrefixes)) == 0 {
@@ -810,96 +810,105 @@ func BenchmarkListObjects(b *testing.B) {
 		}
 	})
 
-	b.Run("root_delimiter", func(b *testing.B) {
-		for b.Loop() {
-			var marker *string
-			for {
+	benchmarkListObjects := func(b *testing.B, bucket, delimiter string) {
+		b.Run("root_delimiter", func(b *testing.B) {
+			for b.Loop() {
+				var marker *string
+				for {
+					result, err := store.ListObjects(bucket, s3.Prefix{
+						Delimiter:    delimiter,
+						HasDelimiter: true,
+					}, s3.ListObjectsPage{MaxKeys: maxKeys, Marker: marker})
+					if err != nil {
+						b.Fatal(err)
+					} else if (len(result.Contents) + len(result.CommonPrefixes)) == 0 {
+						b.Fatal("no results")
+					}
+					if !result.IsTruncated {
+						break
+					}
+					marker = &result.NextMarker
+				}
+			}
+		})
+
+		b.Run("random_without_delimiter", func(b *testing.B) {
+			for b.Loop() {
+				var prefix string
+				switch frand.Intn(3) {
+				case 0:
+					prefix = fmt.Sprintf("%d"+delimiter, frand.Intn(dir1))
+				case 1:
+					prefix = fmt.Sprintf("%d"+delimiter+"%d"+delimiter, frand.Intn(dir1), frand.Intn(dir2))
+				case 2:
+					prefix = fmt.Sprintf("%d"+delimiter+"%d"+delimiter+"%d"+delimiter, frand.Intn(dir1), frand.Intn(dir2), frand.Intn(dir3))
+				}
 				result, err := store.ListObjects(bucket, s3.Prefix{
-					Delimiter:    "/",
-					HasDelimiter: true,
-				}, s3.ListObjectsPage{MaxKeys: maxKeys, Marker: marker})
+					Prefix:    prefix,
+					HasPrefix: true,
+				}, s3.ListObjectsPage{MaxKeys: maxKeys})
 				if err != nil {
 					b.Fatal(err)
 				} else if (len(result.Contents) + len(result.CommonPrefixes)) == 0 {
 					b.Fatal("no results")
 				}
-				if !result.IsTruncated {
-					break
+			}
+		})
+
+		b.Run("random_with_delimiter", func(b *testing.B) {
+			for b.Loop() {
+				result, err := store.ListObjects(bucket, s3.Prefix{
+					Prefix:       fmt.Sprintf("%d"+delimiter+"%d"+delimiter, frand.Intn(dir1), frand.Intn(dir2)),
+					HasPrefix:    true,
+					Delimiter:    delimiter,
+					HasDelimiter: true,
+				}, s3.ListObjectsPage{MaxKeys: maxKeys})
+				if err != nil {
+					b.Fatal(err)
+				} else if (len(result.Contents) + len(result.CommonPrefixes)) == 0 {
+					b.Fatal("no results")
 				}
-				marker = &result.NextMarker
 			}
-		}
-	})
+		})
 
-	b.Run("random_without_delimiter", func(b *testing.B) {
-		for b.Loop() {
-			var prefix string
-			switch frand.Intn(3) {
-			case 0:
-				prefix = fmt.Sprintf("%d/", frand.Intn(dir1))
-			case 1:
-				prefix = fmt.Sprintf("%d/%d/", frand.Intn(dir1), frand.Intn(dir2))
-			case 2:
-				prefix = fmt.Sprintf("%d/%d/%d/", frand.Intn(dir1), frand.Intn(dir2), frand.Intn(dir3))
+		b.Run("folder_bottom_delimiter", func(b *testing.B) {
+			for b.Loop() {
+				result, err := store.ListObjects(bucket, s3.Prefix{
+					Prefix:       "0" + delimiter + "0" + delimiter + "0",
+					HasPrefix:    true,
+					Delimiter:    delimiter,
+					HasDelimiter: true,
+				}, s3.ListObjectsPage{MaxKeys: maxKeys})
+				if err != nil {
+					b.Fatal(err)
+				} else if (len(result.Contents) + len(result.CommonPrefixes)) == 0 {
+					b.Fatal("no results")
+				}
 			}
-			result, err := store.ListObjects(bucket, s3.Prefix{
-				Prefix:    prefix,
-				HasPrefix: true,
-			}, s3.ListObjectsPage{MaxKeys: maxKeys})
-			if err != nil {
-				b.Fatal(err)
-			} else if (len(result.Contents) + len(result.CommonPrefixes)) == 0 {
-				b.Fatal("no results")
-			}
-		}
-	})
+		})
 
-	b.Run("random_with_delimiter", func(b *testing.B) {
-		for b.Loop() {
-			result, err := store.ListObjects(bucket, s3.Prefix{
-				Prefix:       fmt.Sprintf("%d/%d/", frand.Intn(dir1), frand.Intn(dir2)),
-				HasPrefix:    true,
-				Delimiter:    "/",
-				HasDelimiter: true,
-			}, s3.ListObjectsPage{MaxKeys: maxKeys})
-			if err != nil {
-				b.Fatal(err)
-			} else if (len(result.Contents) + len(result.CommonPrefixes)) == 0 {
-				b.Fatal("no results")
+		b.Run("folder_delimiter", func(b *testing.B) {
+			for b.Loop() {
+				result, err := store.ListObjects(bucket, s3.Prefix{
+					Prefix:       "0" + delimiter,
+					HasPrefix:    true,
+					Delimiter:    delimiter,
+					HasDelimiter: true,
+				}, s3.ListObjectsPage{MaxKeys: maxKeys})
+				if err != nil {
+					b.Fatal(err)
+				} else if (len(result.Contents) + len(result.CommonPrefixes)) == 0 {
+					b.Fatal("no results")
+				}
 			}
-		}
-	})
+		})
+	}
 
-	b.Run("folder_bottom_delimiter", func(b *testing.B) {
-		for b.Loop() {
-			result, err := store.ListObjects(bucket, s3.Prefix{
-				Prefix:       "0/0/0",
-				HasPrefix:    true,
-				Delimiter:    "/",
-				HasDelimiter: true,
-			}, s3.ListObjectsPage{MaxKeys: maxKeys})
-			if err != nil {
-				b.Fatal(err)
-			} else if (len(result.Contents) + len(result.CommonPrefixes)) == 0 {
-				b.Fatal("no results")
-			}
-		}
+	b.Run("slash", func(b *testing.B) {
+		benchmarkListObjects(b, "slash", "/")
 	})
-
-	b.Run("folder_delimiter", func(b *testing.B) {
-		for b.Loop() {
-			result, err := store.ListObjects(bucket, s3.Prefix{
-				Prefix:       "0/",
-				HasPrefix:    true,
-				Delimiter:    "/",
-				HasDelimiter: true,
-			}, s3.ListObjectsPage{MaxKeys: maxKeys})
-			if err != nil {
-				b.Fatal(err)
-			} else if (len(result.Contents) + len(result.CommonPrefixes)) == 0 {
-				b.Fatal("no results")
-			}
-		}
+	b.Run("backslash", func(b *testing.B) {
+		benchmarkListObjects(b, "backslash", `\`)
 	})
 }
 
