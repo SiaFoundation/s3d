@@ -134,13 +134,11 @@ func TestS3(t *testing.T) {
 	// we ignore the following tests
 	//  - tests marked s3d_not_implemented or s3d_not_supported since they
 	//    cover features s3d does not handle by design
-	//  - tests marked s3d_not_delimiter_alt since s3d only supports "/"
-	//    as a delimiter
 	//  - bucket_logging tests since s3d does not implement bucket logging
 	t.Run("test_s3", func(t *testing.T) {
 		runTox(t, confPath, testsDir,
 			"s3tests/functional/test_s3.py",
-			"-m", "(copy or delete or list_objects or multipart) and not s3d_not_implemented and not s3d_not_supported and not s3d_not_delimiter_alt and not bucket_logging",
+			"-m", "(copy or delete or list_objects or multipart) and not s3d_not_implemented and not s3d_not_supported and not bucket_logging",
 		)
 	})
 

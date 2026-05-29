@@ -370,18 +370,12 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 	}
 
 	// otherwise, we download the body
-	pr, pw := io.Pipe()
-	go func() {
-		defer pw.Close()
-		err = s.sdk.Download(ctx, pw, siaObj, resp.Range)
-		if err != nil {
-			s.logger.Error("download failed", zap.Error(err), zap.String("bucket", bucket), zap.String("object", object))
-			pw.CloseWithError(err)
-			return
-		}
-	}()
+	body, err := s.sdk.Download(siaObj, resp.Range)
+	if err != nil {
+		return nil, fmt.Errorf("failed to download object: %w", err)
+	}
 
-	resp.Body = pr
+	resp.Body = body
 	return resp, nil
 }
 

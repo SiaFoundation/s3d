@@ -112,7 +112,7 @@ func (p *uploadGroup) tryAdd(obj objects.ObjectForUpload) bool {
 
 func (s *Sia) newUploadGroup(initial objects.ObjectForUpload) uploadGroup {
 	return uploadGroup{
-		slabSize:       s.slabSize,
+		slabSize:       s.uploadOptimalSize,
 		maxGroupSize:   DefaultMaxGroupSize,
 		uploadWastePct: s.uploadWastePct,
 		objects:        []objects.ObjectForUpload{initial},

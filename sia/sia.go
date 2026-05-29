@@ -83,13 +83,15 @@ type Sia struct {
 	accessKeys map[string]auth.SecretAccessKey
 
 	slabSize       int64
-	uploadWastePct float64
-	uploadDisabled bool
 	diskUsageLimit uint64
 
 	diskUsageMu   sync.Mutex
 	diskUsageWake chan struct{}
 	diskUsage     uint64
+
+	uploadDisabled    bool
+	uploadOptimalSize int64
+	uploadWastePct    float64
 
 	lockedUploadsMu sync.Mutex
 	lockedUploads   map[string]*lockedUpload
@@ -101,9 +103,9 @@ type Sia struct {
 // SDK describes the SDK used to interact with Sia.
 type SDK interface {
 	DeleteObject(ctx context.Context, id types.Hash256) error
-	Download(ctx context.Context, w io.Writer, obj sdk.Object, rnge *s3.ObjectRange) error
+	Download(obj sdk.Object, rnge *s3.ObjectRange) (io.ReadCloser, error)
 	ObjectEvents(ctx context.Context, cursor slabs.Cursor, limit int) ([]sdk.ObjectEvent, error)
-	SlabSize() (int64, error)
+	OptimalDataSize() (int64, error)
 	UploadPacked() (PackedUpload, error)
 	PinObject(ctx context.Context, obj sdk.Object) error
 	SealObject(obj sdk.Object) sdk.SealedObject
@@ -175,12 +177,12 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 	}
 	sia.diskUsage = diskUsage
 
-	// initialize slab size if the upload loop is enabled
-	slabSize, err := sia.sdk.SlabSize()
+	// initialize optimal upload size
+	optimalSize, err := sia.sdk.OptimalDataSize()
 	if err != nil {
-		return nil, fmt.Errorf("failed to determine slab size: %w", err)
+		return nil, fmt.Errorf("failed to determine optimal upload size: %w", err)
 	}
-	sia.slabSize = slabSize
+	sia.uploadOptimalSize = optimalSize
 
 	// clean up any orphaned uploads on startup
 	deleted, err := sia.deleteOrphanedUploads()
