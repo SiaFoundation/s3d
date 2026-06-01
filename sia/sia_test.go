@@ -108,6 +108,11 @@ func (s *MemorySDK) ObjectEvents(_ context.Context, cursor slabs.Cursor, limit i
 	return filtered, nil
 }
 
+// PruneSlabs prunes slabs not associated with an object from the indexer.
+func (s *MemorySDK) PruneSlabs(ctx context.Context) error {
+	return nil
+}
+
 // Upload stores an object in memory. It is not part of the SDK interface but
 // used by tests to simulate the background upload to Sia.
 func (s *MemorySDK) Upload(ctx context.Context, r io.Reader) (sdk.Object, error) {

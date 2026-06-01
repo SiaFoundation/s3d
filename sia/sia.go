@@ -105,6 +105,7 @@ type SDK interface {
 	OptimalDataSize() (int64, error)
 	UploadPacked() (PackedUpload, error)
 	PinObject(ctx context.Context, obj sdk.Object) error
+	PruneSlabs(ctx context.Context) error
 	SealObject(obj sdk.Object) sdk.SealedObject
 	UnsealObject(sealed sdk.SealedObject) (sdk.Object, error)
 }
@@ -237,12 +238,27 @@ func (s *Sia) processOrphansLoop(ctx context.Context) {
 	t := time.NewTicker(time.Hour)
 	defer t.Stop()
 
+	s.logger.Info("pruning orphaned slabs")
+	start := time.Now()
+	if err := s.sdk.PruneSlabs(ctx); err != nil {
+		s.logger.Error("failed to prune slabs after processing orphans", zap.Error(err))
+	} else {
+		s.logger.Info("finished pruning orphaned slabs from Sia network", zap.Duration("elapsed", time.Since(start)))
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 			s.ProcessOrphans(ctx)
+		}
+
+		start := time.Now()
+		if err := s.sdk.PruneSlabs(ctx); err != nil {
+			s.logger.Error("failed to prune slabs after processing orphans", zap.Error(err))
+		} else {
+			s.logger.Info("finished pruning orphaned slabs from Sia network", zap.Duration("elapsed", time.Since(start)))
 		}
 	}
 }

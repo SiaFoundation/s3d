@@ -89,6 +89,11 @@ func (s *IndexdSDK) ObjectEvents(ctx context.Context, cursor slabs.Cursor, limit
 	return s.inner.ObjectEvents(ctx, cursor, limit)
 }
 
+// PruneSlabs prunes slabs not associated with an object from the indexer.
+func (s *IndexdSDK) PruneSlabs(ctx context.Context) error {
+	return s.inner.PruneSlabs(ctx)
+}
+
 // SealObject seals the object using the app key.
 func (s *IndexdSDK) SealObject(obj sdk.Object) sdk.SealedObject {
 	return obj.Seal(s.inner.AppKey())
