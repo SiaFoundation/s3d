@@ -19,10 +19,10 @@ import (
 // and all provided preconditions match. If the deleted object's ID has no
 // remaining references, it is inserted into the orphaned_objects table. If the
 // object hasn't been uploaded yet, its filename is returned for cleanup.
-func (s *Store) DeleteObject(bucket string, objectID s3.ObjectID) (*string, error) {
+func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (*string, error) {
 	var fileName *string
 	err := s.transaction(func(tx *txn) error {
-		bid, err := bucketID(tx, bucket)
+		bid, err := bucketID(tx, accessKeyID, bucket)
 		if err != nil {
 			return err
 		}
@@ -67,10 +67,10 @@ func (s *Store) DeleteObject(bucket string, objectID s3.ObjectID) (*string, erro
 }
 
 // GetObject retrieves the object with the given bucket and name.
-func (s *Store) GetObject(bucket, name string, partNumber *int32) (*objects.Object, error) {
+func (s *Store) GetObject(accessKeyID, bucket, name string, partNumber *int32) (*objects.Object, error) {
 	var obj objects.Object
 	if err := s.transaction(func(tx *txn) error {
-		bid, err := bucketID(tx, bucket)
+		bid, err := bucketID(tx, accessKeyID, bucket)
 		if err != nil {
 			return err
 		}
@@ -145,10 +145,10 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, partNumber 
 // remaining references, it is inserted into the orphaned_objects table. If
 // the overwrite leaves a previously pending file unreferenced, its filename
 // is returned so the caller can remove it from disk.
-func (s *Store) PutObject(bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string) (*string, error) {
+func (s *Store) PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string) (*string, error) {
 	var orphaned *string
 	err := s.transaction(func(tx *txn) error {
-		bid, err := bucketID(tx, bucket)
+		bid, err := bucketID(tx, accessKeyID, bucket)
 		if err != nil {
 			return err
 		}
@@ -165,7 +165,7 @@ func (s *Store) PutObject(bucket, name string, contentMD5 [16]byte, meta map[str
 // if the stored content MD5 does not match the provided contentMD5.
 func (s *Store) MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, sealed sdk.SealedObject) error {
 	return s.transaction(func(tx *txn) error {
-		bid, err := bucketID(tx, bucket)
+		bid, err := bucketIDByName(tx, bucket)
 		if err != nil {
 			return err
 		}
@@ -224,12 +224,12 @@ func (s *Store) UpdateSiaObjects(siaObjects []objects.SiaObject) (updated int64,
 // replace flag. Returns the copied object metadata, and if the copy overwrote
 // a previously pending object whose file is no longer referenced, its filename
 // so the caller can remove it from disk.
-func (s *Store) CopyObject(srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool) (result *objects.Object, orphaned *string, err error) {
+func (s *Store) CopyObject(accessKeyID, srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool) (result *objects.Object, orphaned *string, err error) {
 	var obj objects.Object
 	err = s.transaction(func(tx *txn) error {
 		obj = objects.Object{} // reset per transaction attempt
 
-		srcBid, err := bucketID(tx, srcBucket)
+		srcBid, err := bucketID(tx, accessKeyID, srcBucket)
 		if err != nil {
 			return err
 		}
@@ -246,7 +246,7 @@ func (s *Store) CopyObject(srcBucket, srcName, dstBucket, dstName string, meta m
 
 		dstBid := srcBid
 		if dstBucket != srcBucket {
-			dstBid, err = bucketID(tx, dstBucket)
+			dstBid, err = bucketID(tx, accessKeyID, dstBucket)
 			if err != nil {
 				return err
 			}
@@ -292,12 +292,14 @@ func (s *Store) CopyObject(srcBucket, srcName, dstBucket, dstName string, meta m
 	return &obj, orphaned, nil
 }
 
-// ObjectParts returns the parts for a completed multipart object.
-func (s *Store) ObjectParts(bucket, name string) ([]objects.Part, error) {
+// ObjectPartsByName returns the parts for a completed multipart object. It is
+// intended for internal callers (the upload loop and downstream of an
+// ownership-scoped GetObject) and does not perform an access check.
+func (s *Store) ObjectPartsByName(bucket, name string) ([]objects.Part, error) {
 	var parts []objects.Part
 	err := s.transaction(func(tx *txn) error {
 		parts = parts[:0] // reuse same slice if transaction retries
-		bid, err := bucketID(tx, bucket)
+		bid, err := bucketIDByName(tx, bucket)
 		if err != nil {
 			return err
 		}
@@ -522,7 +524,7 @@ func insertOrphan(tx *txn, objectID types.Hash256) error {
 
 // ListObjects lists objects in the specified bucket, filtered by prefix and
 // pagination settings.
-func (s *Store) ListObjects(bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (result *s3.ObjectsListResult, err error) {
+func (s *Store) ListObjects(accessKeyID, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (result *s3.ObjectsListResult, err error) {
 	result = s3.NewObjectsListResult(page.MaxKeys)
 	if page.MaxKeys == 0 {
 		return result, nil
@@ -541,7 +543,7 @@ func (s *Store) ListObjects(bucket string, prefix s3.Prefix, page s3.ListObjects
 		*result = *s3.NewObjectsListResult(page.MaxKeys) // reset per transaction attempt
 
 		var bid int64
-		bid, err = bucketID(tx, bucket)
+		bid, err = bucketID(tx, accessKeyID, bucket)
 		if err != nil {
 			return fmt.Errorf("failed to get bucket ID: %w", err)
 		}

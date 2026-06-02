@@ -279,7 +279,7 @@ func TestPutObject(t *testing.T) {
 		}
 
 		// verify the object is on disk
-		obj, err := store.GetObject(bucket, "pending", nil)
+		obj, err := store.GetObject(testutil.AccessKeyID, bucket, "pending", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -308,7 +308,7 @@ func TestPutObject(t *testing.T) {
 		backend.UploadObjects(t.Context())
 
 		// verify the object is now on Sia
-		obj, err = store.GetObject(bucket, "pending", nil)
+		obj, err = store.GetObject(testutil.AccessKeyID, bucket, "pending", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -789,7 +789,7 @@ func TestSyncMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	obj, err := store.GetObject(bucket, "obj", nil)
+	obj, err := store.GetObject(testutil.AccessKeyID, bucket, "obj", nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.FileName == nil {
@@ -801,7 +801,7 @@ func TestSyncMetadata(t *testing.T) {
 	}
 
 	// record the original sealed object
-	origObj, err := store.GetObject(bucket, "obj", nil)
+	origObj, err := store.GetObject(testutil.AccessKeyID, bucket, "obj", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -837,7 +837,7 @@ func TestSyncMetadata(t *testing.T) {
 	}
 
 	// the object's sia_object should have been re-sealed by the sync
-	objAfter, err := store.GetObject(bucket, "obj", nil)
+	objAfter, err := store.GetObject(testutil.AccessKeyID, bucket, "obj", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -954,7 +954,7 @@ func TestOverwritePendingObjectCleansUpFile(t *testing.T) {
 	uploadsDir := filepath.Join(dir, sia.UploadsDirectory)
 	pendingFilename := func(t *testing.T, object string) string {
 		t.Helper()
-		obj, err := store.GetObject(bucket, object, nil)
+		obj, err := store.GetObject(testutil.AccessKeyID, bucket, object, nil)
 		if err != nil {
 			t.Fatal(err)
 		} else if obj.FileName == nil {
@@ -1037,7 +1037,7 @@ func TestOverwritePendingObjectCleansUpFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertRemoved(t, mpDir)
-	parts, err := store.ObjectParts(bucket, "mp")
+	parts, err := store.ObjectPartsByName(bucket, "mp")
 	if err != nil {
 		t.Fatal(err)
 	}

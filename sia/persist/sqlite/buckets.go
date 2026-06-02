@@ -43,16 +43,9 @@ func (s *Store) CreateBucket(accessKeyID, bucket string) error {
 // user.
 func (s *Store) DeleteBucket(accessKeyID, bucket string) error {
 	return s.transaction(func(tx *txn) error {
-		uid, err := userIDForAccessKey(tx, accessKeyID)
+		bid, err := bucketID(tx, accessKeyID, bucket)
 		if err != nil {
 			return err
-		}
-
-		bid, ownerID, err := bucketIDAndOwner(tx, bucket)
-		if err != nil {
-			return err
-		} else if ownerID != uid {
-			return s3errs.ErrAccessDenied
 		}
 
 		var inUse bool
@@ -69,22 +62,12 @@ func (s *Store) DeleteBucket(accessKeyID, bucket string) error {
 	})
 }
 
-// CheckBucketAccess verifies that the bucket exists and is owned by the user
+// HeadBucket verifies that the bucket exists and is owned by the user
 // associated with the given access key.
-func (s *Store) CheckBucketAccess(accessKeyID, bucket string) error {
+func (s *Store) HeadBucket(accessKeyID, bucket string) error {
 	return s.transaction(func(tx *txn) error {
-		uid, err := userIDForAccessKey(tx, accessKeyID)
-		if err != nil {
-			return err
-		}
-
-		_, ownerID, err := bucketIDAndOwner(tx, bucket)
-		if err != nil {
-			return err
-		} else if ownerID != uid {
-			return s3errs.ErrAccessDenied
-		}
-		return nil
+		_, err := bucketID(tx, accessKeyID, bucket)
+		return err
 	})
 }
 
@@ -122,20 +105,33 @@ func (s *Store) ListBuckets(accessKeyID string) ([]s3.BucketInfo, error) {
 	return buckets, err
 }
 
-// bucketID returns the ID of the bucket with the given name or an error if it
-// does not exist.
-func bucketID(t *txn, bucket string) (bucketID int64, err error) {
-	err = t.QueryRow(`SELECT id FROM buckets WHERE buckets.name = $1`, bucket).Scan(&bucketID)
-	if errors.Is(err, sql.ErrNoRows) {
-		err = s3errs.ErrNoSuchBucket
+// bucketID returns the ID of the bucket with the given name if the user
+// associated with the given access key owns it. Returns ErrNoSuchBucket if
+// the bucket does not exist, or ErrAccessDenied if it exists but is owned by
+// a different user.
+func bucketID(t *txn, accessKeyID, bucket string) (int64, error) {
+	uid, err := userIDForAccessKey(t, accessKeyID)
+	if err != nil {
+		return 0, err
 	}
-	return
+
+	var bid, ownerID int64
+	err = t.QueryRow(`SELECT id, user_id FROM buckets WHERE name = $1`, bucket).Scan(&bid, &ownerID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, s3errs.ErrNoSuchBucket
+	} else if err != nil {
+		return 0, err
+	} else if ownerID != uid {
+		return 0, s3errs.ErrAccessDenied
+	}
+	return bid, nil
 }
 
-// bucketIDAndOwner returns the ID and owner user ID of the bucket with the
-// given name, or an error if the bucket does not exist.
-func bucketIDAndOwner(t *txn, bucket string) (bid int64, ownerID int64, err error) {
-	err = t.QueryRow(`SELECT id, user_id FROM buckets WHERE name = $1`, bucket).Scan(&bid, &ownerID)
+// bucketIDByName returns the ID of the bucket with the given name regardless
+// of ownership. It is intended for internal callers like the upload loop and
+// metadata sync paths that have no access key.
+func bucketIDByName(t *txn, bucket string) (bid int64, err error) {
+	err = t.QueryRow(`SELECT id FROM buckets WHERE name = $1`, bucket).Scan(&bid)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = s3errs.ErrNoSuchBucket
 	}

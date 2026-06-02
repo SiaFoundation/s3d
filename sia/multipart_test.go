@@ -189,7 +189,7 @@ func TestMultipartAddPart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parts, err := store.MultipartParts(bucket, object, uid)
+	parts, err := store.MultipartParts(testutil.AccessKeyID, bucket, object, uid)
 	if err != nil {
 		t.Fatal(err)
 	} else if len(parts) != 1 {
@@ -547,7 +547,7 @@ func TestMultipartUpload(t *testing.T) {
 	}
 
 	// verify the completed object references the upload directory
-	obj, err := store.GetObject(bucket, object, nil)
+	obj, err := store.GetObject(testutil.AccessKeyID, bucket, object, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -578,7 +578,7 @@ func TestMultipartUpload(t *testing.T) {
 	backend.UploadObjects(t.Context())
 
 	// verify the object is now on Sia
-	obj, err = store.GetObject(bucket, object, nil)
+	obj, err = store.GetObject(testutil.AccessKeyID, bucket, object, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -707,7 +707,7 @@ func TestMultipartUploadPartCopy(t *testing.T) {
 	testutil.AssertS3Error(t, s3errs.ErrInvalidRange, err)
 
 	// assert [s3errs.ErrEntityTooLarge] is returned for oversized range
-	if _, err := store.PutObject(bucketSrc, objectSrc, [16]byte{}, nil, s3.MaxUploadPartSize+1, new(string)); err != nil {
+	if _, err := store.PutObject(testutil.AccessKeyID, bucketSrc, objectSrc, [16]byte{}, nil, s3.MaxUploadPartSize+1, new(string)); err != nil {
 		t.Fatal(err)
 	}
 	mu, err = s3Tester.CreateMultipartUpload(t.Context(), bucketDst, objectDst, nil)

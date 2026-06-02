@@ -184,12 +184,12 @@ func TestBucketOwnership(t *testing.T) {
 	}
 
 	// alice can head her bucket
-	if err := store.CheckBucketAccess("ALICE_KEY", "shared-name"); err != nil {
+	if err := store.HeadBucket("ALICE_KEY", "shared-name"); err != nil {
 		t.Fatal(err)
 	}
 
 	// bob gets access denied on head
-	if err := store.CheckBucketAccess("BOB_KEY", "shared-name"); !errors.Is(err, s3errs.ErrAccessDenied) {
+	if err := store.HeadBucket("BOB_KEY", "shared-name"); !errors.Is(err, s3errs.ErrAccessDenied) {
 		t.Fatal("expected ErrAccessDenied", err)
 	}
 
@@ -224,7 +224,7 @@ func TestBucketOwnership(t *testing.T) {
 	}
 
 	// verify it is gone
-	if err := store.CheckBucketAccess("ALICE_KEY", "shared-name"); !errors.Is(err, s3errs.ErrNoSuchBucket) {
+	if err := store.HeadBucket("ALICE_KEY", "shared-name"); !errors.Is(err, s3errs.ErrNoSuchBucket) {
 		t.Fatal("expected ErrNoSuchBucket", err)
 	}
 }
