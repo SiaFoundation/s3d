@@ -282,15 +282,38 @@ func New(b Backend, opts ...Option) http.Handler {
 	// base router
 	handler := auth.AuthenticatedHandler(auth.AuthenticatedHandlerFunc(s3.routeBase))
 
-	// TODO: We might have to wrap the base router in a CORS middleware
-
 	// handle virtual-hosted style bucket URLs
 	if len(s3.hostBucketBases) > 0 {
 		handler = s3.hostBucketBaseMiddleware(handler)
 	}
 
-	// authentication middleware
-	return s3.authMiddleware(handler)
+	// wrap authentication in CORS so unauthenticated preflight requests are
+	// handled before they reach the authentication middleware
+	return corsMiddleware(s3.authMiddleware(handler))
+}
+
+// corsMiddleware adds permissive CORS headers and answers preflight OPTIONS
+// requests so browser-based S3 clients can make cross-origin requests.
+func corsMiddleware(handler http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Vary", "Origin")
+		if r.Header.Get("Origin") != "" {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, HEAD")
+			// the "*" wildcard does not authorize the Authorization header used
+			// by AWS SigV4 signing, so it must be listed explicitly.
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, *")
+			w.Header().Set("Access-Control-Expose-Headers", "ETag")
+			// cache preflight results to avoid re-issuing a preflight for every
+			// non-simple request.
+			w.Header().Set("Access-Control-Max-Age", "86400")
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+		}
+		handler.ServeHTTP(w, r)
+	})
 }
 
 // authMiddleware is an HTTP middleware that authenticates requests using AWS v4

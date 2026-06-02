@@ -40,8 +40,7 @@ func (s *Store) CreateMultipartUpload(accessKeyID, bucket, name string, uploadID
 // object's ID has no remaining references, it is inserted into the
 // orphaned_objects table. If the overwrite leaves a previously pending file
 // unreferenced, its filename is returned so the caller can remove it from disk.
-func (s *Store) CompleteMultipartUpload(accessKeyID, bucket, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64) (*string, error) {
-	var orphaned *string
+func (s *Store) CompleteMultipartUpload(accessKeyID, bucket, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64) (orphanFile string, orphanSize int64, _ error) {
 	err := s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, accessKeyID, bucket)
 		if err != nil {
@@ -91,7 +90,7 @@ func (s *Store) CompleteMultipartUpload(accessKeyID, bucket, name string, upload
 		}
 
 		// delete any existing upload at this key
-		oldID, oldFilename, err := deleteObject(tx, bid, name)
+		oldID, oldFilename, oldSize, err := deleteObject(tx, bid, name)
 		if err != nil {
 			return err
 		}
@@ -134,16 +133,23 @@ func (s *Store) CompleteMultipartUpload(accessKeyID, bucket, name string, upload
 			return err
 		}
 
-		orphaned, err = orphanedFilename(tx, oldFilename)
+		orphanFile, orphanSize, err = newOrphanedFile(tx, oldFilename, oldSize)
 		return err
 	})
-	return orphaned, err
+	return orphanFile, orphanSize, err
 }
 
-// AbortMultipartUpload removes a multipart upload from the store.
-func (s *Store) AbortMultipartUpload(accessKeyID, bucket, name string, uploadID s3.UploadID) error {
-	return s.transaction(func(tx *txn) error {
+// AbortMultipartUpload removes a multipart upload from the store and returns
+// the total size of all parts that were removed.
+func (s *Store) AbortMultipartUpload(accessKeyID, bucket, name string, uploadID s3.UploadID) (size int64, _ error) {
+	err := s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, accessKeyID, bucket)
+		if err != nil {
+			return err
+		}
+
+		err = tx.QueryRow(`SELECT COALESCE(SUM(content_length), 0) FROM multipart_parts WHERE upload_id = $1`,
+			sqlUploadID(uploadID)).Scan(&size)
 		if err != nil {
 			return err
 		}
@@ -160,13 +166,15 @@ func (s *Store) AbortMultipartUpload(accessKeyID, bucket, name string, uploadID 
 		}
 		return nil
 	})
+	return size, err
 }
 
-// AddMultipartPart adds metadata for a multipart part to the store.
-func (s *Store) AddMultipartPart(accessKeyID, bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (string, error) {
-	var prevFilename string
+// AddMultipartPart adds metadata for a multipart part to the store. It returns
+// the previous part's filename and content length if a part with the same
+// number already existed.
+func (s *Store) AddMultipartPart(accessKeyID, bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (prev string, size int64, _ error) {
 	if err := s.transaction(func(tx *txn) error {
-		prevFilename = "" // reset per transaction attempt
+		prev = "" // reset per transaction attempt
 
 		bid, err := bucketID(tx, accessKeyID, bucket)
 		if err != nil {
@@ -183,8 +191,8 @@ func (s *Store) AddMultipartPart(accessKeyID, bucket, name string, uploadID s3.U
 			return s3errs.ErrNoSuchUpload
 		}
 
-		err = tx.QueryRow(`SELECT filename FROM multipart_parts WHERE upload_id = $1 AND part_number = $2`,
-			sqlUploadID(uploadID), partNumber).Scan(&prevFilename)
+		err = tx.QueryRow(`SELECT filename, content_length FROM multipart_parts WHERE upload_id = $1 AND part_number = $2`,
+			sqlUploadID(uploadID), partNumber).Scan(&prev, &size)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
@@ -200,22 +208,25 @@ func (s *Store) AddMultipartPart(accessKeyID, bucket, name string, uploadID s3.U
 		`, sqlUploadID(uploadID), partNumber, filename, sqlMD5(contentMD5), contentLength, sqlTime(time.Now()))
 		return err
 	}); err != nil {
-		return "", err
+		return "", 0, err
 	}
-	return prevFilename, nil
+	return prev, size, nil
 }
 
-// HasMultipartUpload checks if a multipart upload exists.
-func (s *Store) HasMultipartUpload(accessKeyID, bucket, name string, uploadID s3.UploadID) error {
-	return s.transaction(func(tx *txn) error {
+// HasMultipartUpload checks if a multipart upload exists and reports whether
+// any parts have been uploaded for it.
+func (s *Store) HasMultipartUpload(accessKeyID, bucket, name string, uploadID s3.UploadID) (hasParts bool, err error) {
+	err = s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, accessKeyID, bucket)
 		if err != nil {
 			return err
 		}
 
 		var exists bool
-		err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM multipart_uploads WHERE upload_id = $1 AND bucket_id = $2 AND name = $3)`,
-			sqlUploadID(uploadID), bid, name).Scan(&exists)
+		err = tx.QueryRow(`
+			SELECT EXISTS(SELECT 1 FROM multipart_uploads WHERE upload_id = $1 AND bucket_id = $2 AND name = $3),
+			       EXISTS(SELECT 1 FROM multipart_parts WHERE upload_id = $1)
+		`, sqlUploadID(uploadID), bid, name).Scan(&exists, &hasParts)
 		if err != nil {
 			return err
 		}
@@ -224,6 +235,7 @@ func (s *Store) HasMultipartUpload(accessKeyID, bucket, name string, uploadID s3
 		}
 		return nil
 	})
+	return
 }
 
 // MultipartParts returns the parts belonging to the specified multipart upload.

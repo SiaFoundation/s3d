@@ -46,11 +46,17 @@ type (
 		HostBases []string `yaml:"hostBases"`
 	}
 
+	// Sia contains the configuration for the Sia backend.
+	Sia struct {
+		DiskUsageLimit uint64 `yaml:"diskUsageLimit"`
+	}
+
 	// Config contains the configuration for S3d.
 	Config struct {
 		ApiAddress string `yaml:"apiAddress"`
 		Directory  string `yaml:"directory"`
 		Log        Log    `yaml:"log"`
+		Sia        Sia    `yaml:"sia"`
 		S3         S3     `yaml:"s3"`
 	}
 )
