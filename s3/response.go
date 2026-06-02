@@ -4,6 +4,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 )
@@ -38,9 +39,7 @@ func writeErrorResponse(w http.ResponseWriter, err error) {
 		// or headers that trigger body parsing in SDKs
 		etag := w.Header().Get("ETag")
 		lastMod := w.Header().Get("Last-Modified")
-		for k := range w.Header() {
-			w.Header().Del(k)
-		}
+		clearHeadersExceptCORS(w.Header())
 		if etag != "" {
 			w.Header().Set("ETag", etag)
 		}
@@ -53,9 +52,7 @@ func writeErrorResponse(w http.ResponseWriter, err error) {
 
 	// clear any headers that may have been set before the error was detected
 	// (e.g. conditional GET sets ETag and metadata before checking If-Match)
-	for k := range w.Header() {
-		w.Header().Del(k)
-	}
+	clearHeadersExceptCORS(w.Header())
 
 	writeXMLResponse(w, s3Err.HTTPStatus, ErrorResponse{
 		Code:      s3Err.Code,
@@ -63,6 +60,18 @@ func writeErrorResponse(w http.ResponseWriter, err error) {
 		RequestID: "", // unused right now (AWS uses it for diagnostic purposes)
 		HostID:    "", // unused right now (AWS uses it to identify their server)
 	})
+}
+
+// clearHeadersExceptCORS removes every header from h except CORS headers set
+// by corsMiddleware (Vary and Access-Control-*). Without this, error responses
+// drop the CORS headers and browser clients see opaque failures.
+func clearHeadersExceptCORS(h http.Header) {
+	for k := range h {
+		if k == "Vary" || strings.HasPrefix(k, "Access-Control-") {
+			continue
+		}
+		h.Del(k)
+	}
 }
 
 func writeXMLResponse(w http.ResponseWriter, statusCode int, resp any) error {
