@@ -1,15 +1,9 @@
 package s3
 
 import (
-	"crypto/subtle"
-	"encoding/json"
-	"net/http"
-
 	"github.com/SiaFoundation/s3d/internal/prometheus"
+	"go.sia.tech/jape"
 )
-
-// statusUploadsPath is the request path of the upload statistics endpoint.
-const statusUploadsPath = "_s3d/status/uploads"
 
 // UploadStats contains statistics about the background upload pipeline.
 type UploadStats struct {
@@ -57,35 +51,24 @@ func (s UploadStats) PrometheusMetric() []prometheus.Metric {
 	}
 }
 
-// authenticateStatus checks the request's HTTP Basic authentication credentials
-// against the configured status password. If authentication fails, it writes a
-// 401 response and returns false. The status endpoints are inaccessible when no
-// status password is configured.
-func (s *s3) authenticateStatus(w http.ResponseWriter, r *http.Request) bool {
-	_, password, ok := r.BasicAuth()
-	if !ok || s.statusPassword == "" || subtle.ConstantTimeCompare([]byte(password), []byte(s.statusPassword)) != 1 {
-		w.Header().Set("WWW-Authenticate", "Basic")
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return false
-	}
-	return true
-}
-
-func (s *s3) handleUploadStats(w http.ResponseWriter, r *http.Request) error {
-	if !s.authenticateStatus(w, r) {
-		return nil
-	}
-	stats, err := s.backend.UploadStats(r.Context())
-	if err != nil {
-		return err
+func (s *s3) handleUploadStats(jc jape.Context) {
+	stats, err := s.backend.UploadStats(jc.Request.Context())
+	if jc.Check("failed to get upload stats", err) != nil {
+		return
 	}
 
-	switch r.URL.Query().Get("response") {
+	var responseFormat string
+	if jc.Check("failed to decode form", jc.DecodeForm("response", &responseFormat)) != nil {
+		return
+	}
+
+	switch responseFormat {
 	case "prometheus":
-		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-		return prometheus.NewEncoder(w).Append(stats)
+		jc.ResponseWriter.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		if jc.Check("failed to marshal prometheus response", prometheus.NewEncoder(jc.ResponseWriter).Append(stats)) != nil {
+			return
+		}
 	default:
-		w.Header().Set("Content-Type", "application/json")
-		return json.NewEncoder(w).Encode(stats)
+		jc.Encode(stats)
 	}
 }

@@ -11,11 +11,13 @@ import (
 	"path/filepath"
 	"runtime"
 	"syscall"
+	"time"
 
 	"github.com/SiaFoundation/s3d/build"
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/sia"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
+	"go.sia.tech/jape"
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -201,8 +203,7 @@ func main() {
 	defer backend.Close()
 
 	s3Handler := s3.New(backend, s3.WithHostBucketBases(cfg.S3.HostBases),
-		s3.WithLogger(log),
-		s3.WithStatusPassword(cfg.S3.StatusPassword))
+		s3.WithLogger(log))
 
 	server := http.Server{
 		Handler: s3Handler,
@@ -215,6 +216,37 @@ func main() {
 		}
 	}()
 
+	// optionally serve the status endpoints on a separate listener
+	var statusServer *http.Server
+	if cfg.S3.StatusAddress != "" {
+		if cfg.S3.StatusAddress == cfg.ApiAddress {
+			checkFatalError("invalid status address", errors.New("status address must differ from the S3 API address"))
+		} else if cfg.S3.StatusPassword == "" {
+			checkFatalError("invalid status configuration", errors.New("status password must be set when the status address is configured"))
+		}
+
+		statusListener, err := startLocalhostListener(cfg.S3.StatusAddress, log.Named("status.listener"))
+		if err != nil {
+			checkFatalError("failed to start status listener", err)
+		}
+		defer statusListener.Close()
+
+		statusHandler := jape.BasicAuth(cfg.S3.StatusPassword)(s3.NewStatus(backend, s3.WithLogger(log)))
+		statusServer = &http.Server{
+			Handler:      statusHandler,
+			ReadTimeout:  30 * time.Second,
+			WriteTimeout: 30 * time.Second,
+		}
+		defer statusServer.Close()
+
+		go func() {
+			log.Debug("starting status server", zap.String("address", cfg.S3.StatusAddress))
+			if err := statusServer.Serve(statusListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error("failed to serve status server", zap.Error(err))
+			}
+		}()
+	}
+
 	log.Info("server started", zap.Stringer("admin", adminAPIListener.Addr()), zap.Stringer("application", adminAPIListener.Addr()))
 	<-ctx.Done()
 	log.Info("shutdown signal received...attempting graceful shutdown...")
@@ -225,6 +257,11 @@ func main() {
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Error("failed to shutdown S3 API", zap.Error(err))
+	}
+	if statusServer != nil {
+		if err := statusServer.Shutdown(shutdownCtx); err != nil {
+			log.Error("failed to shutdown status server", zap.Error(err))
+		}
 	}
 	select {
 	case <-shutdownCtx.Done():

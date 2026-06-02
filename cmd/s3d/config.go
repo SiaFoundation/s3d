@@ -46,6 +46,10 @@ type (
 	// S3 contains S3 related configuration.
 	S3 struct {
 		HostBases []string `yaml:"hostBases"`
+		// StatusAddress is the address the status endpoints are served on. It
+		// must differ from the S3 API address. If empty, the status server is
+		// not started.
+		StatusAddress string `yaml:"statusAddress"`
 		// StatusPassword is the password required to access the status
 		// endpoints via HTTP Basic authentication. If empty, the status
 		// endpoints are inaccessible.

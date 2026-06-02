@@ -10,6 +10,7 @@ import (
 
 	"github.com/SiaFoundation/s3d/s3/auth"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"go.sia.tech/jape"
 	"go.uber.org/zap"
 )
 
@@ -238,7 +239,6 @@ type s3 struct {
 	hostBucketBases []string
 	logger          *zap.Logger
 	region          string
-	statusPassword  string
 }
 
 // Option is a configuration option for the S3 API handler.
@@ -270,15 +270,6 @@ func WithRegion(region string) Option {
 	}
 }
 
-// WithStatusPassword sets the password required to access the status endpoints
-// via HTTP Basic authentication. If empty, the status endpoints are
-// inaccessible.
-func WithStatusPassword(password string) Option {
-	return func(s *s3) {
-		s.statusPassword = password
-	}
-}
-
 // New creates an instance of the S3 API handler using the provided backend.
 func New(b Backend, opts ...Option) http.Handler {
 	s3 := &s3{
@@ -299,20 +290,22 @@ func New(b Backend, opts ...Option) http.Handler {
 		handler = s3.hostBucketBaseMiddleware(handler)
 	}
 
-	return s3.statusMiddleware(s3.authMiddleware(handler))
+	return s3.authMiddleware(handler)
 }
 
-// statusMiddleware handles requests for the status endpoint
-func (s *s3) statusMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || strings.TrimPrefix(r.URL.Path, "/") != statusUploadsPath {
-			next.ServeHTTP(w, r)
-			return
-		}
-		if err := s.handleUploadStats(w, r); err != nil {
-			s.logger.Error("failed to handle status request", zap.Error(err))
-			writeErrorResponse(w, err)
-		}
+// NewStatus creates an HTTP handler that serves the status endpoint
+// using the provided backend
+func NewStatus(b Backend, opts ...Option) http.Handler {
+	s3 := &s3{
+		backend: b,
+		logger:  zap.NewNop(),
+	}
+	for _, opt := range opts {
+		opt(s3)
+	}
+
+	return jape.Mux(map[string]jape.Handler{
+		"GET /api/status/uploads": s3.handleUploadStats,
 	})
 }
 
