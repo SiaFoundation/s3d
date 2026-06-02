@@ -221,14 +221,6 @@ func main() {
 	}
 	defer store.Close()
 
-	// warn when no access keys are configured; the server still starts so users
-	// can provision keys via the CLI while s3d is running
-	if keys, err := store.ListAccessKeys(nil); err != nil {
-		checkFatalError("failed to list access keys", err)
-	} else if len(keys) == 0 {
-		log.Warn("no access keys configured; create one with 's3d users create <username>' and 's3d keys create <username>'")
-	}
-
 	appKey, indexerURL, err := store.AppKey()
 	if errors.Is(err, sqlite.ErrNoAppKey) {
 		os.Stderr.WriteString("No app key found. Please run 's3d login' to register the app.\n")
