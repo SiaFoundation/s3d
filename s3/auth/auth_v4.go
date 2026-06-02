@@ -244,7 +244,7 @@ func verifyV4SignedRequest(req *http.Request, store KeyStore, region string, now
 	// compare signature in constant time to avoid timing attacks
 	expectedSignature := getSignature(signingKey, toSign)
 	if subtle.ConstantTimeCompare([]byte(expectedSignature), []byte(header.Signature)) != 1 {
-		return "", s3errs.ErrSignatureDoesNotMatch
+		return nil, s3errs.ErrSignatureDoesNotMatch
 	}
 	return &v4SignResult{
 		AccessKeyID: header.Credential.AccessKeyID,

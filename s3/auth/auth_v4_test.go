@@ -12,6 +12,7 @@ import (
 	"hash/crc32"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"slices"
 	"strconv"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"lukechampine.com/frand"
 )
 
 type mockKeyStore struct {
@@ -27,6 +29,16 @@ type mockKeyStore struct {
 
 func (s *mockKeyStore) LoadSecret(_ context.Context, _ string) (SecretAccessKey, error) {
 	return nil, s3errs.ErrInvalidAccessKeyId
+}
+
+type staticKeyStore map[string]SecretAccessKey
+
+func (s staticKeyStore) LoadSecret(_ context.Context, id string) (SecretAccessKey, error) {
+	v, ok := s[id]
+	if !ok {
+		return nil, s3errs.ErrInvalidAccessKeyId
+	}
+	return slices.Clone(v), nil
 }
 
 func TestParseAuthHeader(t *testing.T) {
@@ -347,5 +359,97 @@ func TestHandleAuthV4Streaming(t *testing.T) {
 		if !bytes.Equal(got, c.wantBody) {
 			t.Fatal(c.name, "payload mismatch")
 		}
+	}
+}
+
+func TestStreamingSignEndToEnd(t *testing.T) {
+	const (
+		accessKey = "AKIA7GQ3XN52WQLYDHZP"
+		secret    = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+		region    = "us-east-1"
+		host      = "localhost"
+		path      = "/foo/bar"
+		chunkSize = 64 * 1024
+	)
+	now := time.Now().UTC().Truncate(time.Second)
+	payload := frand.Bytes(66560)
+
+	store := staticKeyStore{accessKey: SecretAccessKey(secret)}
+
+	// derive what the server will derive
+	sk := signingKey(SecretAccessKey(secret), now, region)
+	timestamp := now.Format(layoutISO8601)
+	scope := now.Format(yyyymmdd) + "/" + region + "/s3/aws4_request"
+
+	// build the seed-signed header set the server will reconstruct
+	signed := http.Header{}
+	signed.Set("Host", host)
+	signed.Set(HeaderXAMZContentSHA256, ContentStreamingAWS4HMACSHA256Payload)
+	signed.Set(HeaderXAMZDate, timestamp)
+	signed.Set(HeaderXAMZDecodedContentLength, strconv.Itoa(len(payload)))
+	signedNames := []string{"host", "x-amz-content-sha256", "x-amz-date", "x-amz-decoded-content-length"}
+
+	cr := canonicalRequest(signed, ContentStreamingAWS4HMACSHA256Payload, "", path, http.MethodPut)
+	seedSig := getSignature(sk, canonicalStringToSign(cr, now, scope))
+
+	// helper for per-chunk signature
+	emptyHash := sha256.Sum256(nil)
+	emptyHex := hex.EncodeToString(emptyHash[:])
+	chunkSig := func(prevSig string, data []byte) string {
+		dataHash := sha256.Sum256(data)
+		mac := hmac.New(sha256.New, sk)
+		mac.Write([]byte(strings.Join([]string{
+			"AWS4-HMAC-SHA256-PAYLOAD",
+			timestamp, scope, prevSig, emptyHex,
+			hex.EncodeToString(dataHash[:]),
+		}, "\n")))
+		return hex.EncodeToString(mac.Sum(nil))
+	}
+
+	// build the aws-chunked body
+	var body bytes.Buffer
+	prev := seedSig
+	for i := 0; i < len(payload); i += chunkSize {
+		end := min(i+chunkSize, len(payload))
+		sig := chunkSig(prev, payload[i:end])
+		fmt.Fprintf(&body, "%x;chunk-signature=%s\r\n", end-i, sig)
+		body.Write(payload[i:end])
+		body.WriteString("\r\n")
+		prev = sig
+	}
+	fmt.Fprintf(&body, "0;chunk-signature=%s\r\n\r\n", chunkSig(prev, nil))
+
+	// assemble the real request
+	req := httptest.NewRequest(http.MethodPut, "http://"+host+path, &body)
+	req.Header.Set(HeaderXAMZContentSHA256, ContentStreamingAWS4HMACSHA256Payload)
+	req.Header.Set(HeaderXAMZDate, timestamp)
+	req.Header.Set(HeaderXAMZDecodedContentLength, strconv.Itoa(len(payload)))
+	req.Header.Set(HeaderAuthorization, fmt.Sprintf(
+		"AWS4-HMAC-SHA256 Credential=%s/%s,SignedHeaders=%s,Signature=%s",
+		accessKey, scope, strings.Join(signedNames, ";"), seedSig))
+
+	// verify the whole pipeline: seed sig, key derivation, chunk sigs
+	gotKey, err := HandleAuth(req, store, region, now)
+	if err != nil {
+		t.Fatal(err)
+	} else if gotKey != accessKey {
+		t.Fatal("access key mismatch:", gotKey)
+	}
+
+	got, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatal(err)
+	} else if !bytes.Equal(got, payload) {
+		t.Fatal("payload mismatch")
+	}
+
+	// tamper with the seed sig: HandleAuth must reject
+	req2 := req.Clone(t.Context())
+	req2.Header.Set(HeaderAuthorization, strings.Replace(
+		req.Header.Get(HeaderAuthorization),
+		"Signature="+seedSig,
+		"Signature="+strings.Repeat("0", 64), 1))
+	if _, err := HandleAuth(req2, store, region, now); !errors.Is(err, s3errs.ErrSignatureDoesNotMatch) {
+		t.Fatal("expected ErrSignatureDoesNotMatch, got", err)
 	}
 }
