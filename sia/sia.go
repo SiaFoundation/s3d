@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -274,7 +275,7 @@ func (s *Sia) ProcessOrphans(ctx context.Context) {
 			default:
 			}
 
-			if err := s.sdk.DeleteObject(ctx, id); err != nil && !errors.Is(err, slabs.ErrObjectNotFound) {
+			if err := s.sdk.DeleteObject(ctx, id); err != nil && !strings.Contains(err.Error(), slabs.ErrObjectNotFound.Error()) {
 				s.logger.Error("failed to unpin object from indexer", zap.Error(err), zap.Stringer("objectID", &id))
 				return
 			}
@@ -282,6 +283,7 @@ func (s *Sia) ProcessOrphans(ctx context.Context) {
 				s.logger.Error("failed to remove orphaned object", zap.Error(err), zap.Stringer("objectID", &id))
 				return
 			}
+			s.logger.Debug("processed orphaned object", zap.Stringer("objectID", &id))
 			totalUnpinned++
 		}
 		if len(orphans) < batchSize {
