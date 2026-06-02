@@ -198,7 +198,8 @@ func main() {
 	defer backend.Close()
 
 	s3Handler := s3.New(backend, s3.WithHostBucketBases(cfg.S3.HostBases),
-		s3.WithLogger(log))
+		s3.WithLogger(log),
+		s3.WithStatusPassword(cfg.S3.StatusPassword))
 
 	server := http.Server{
 		Handler: s3Handler,

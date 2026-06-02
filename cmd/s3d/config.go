@@ -46,6 +46,10 @@ type (
 	// S3 contains S3 related configuration.
 	S3 struct {
 		HostBases []string `yaml:"hostBases"`
+		// StatusPassword is the password required to access the status
+		// endpoints via HTTP Basic authentication. If empty, the status
+		// endpoints are inaccessible.
+		StatusPassword string `yaml:"statusPassword"`
 	}
 
 	// KeyPair contains an S3 access key and secret key pair.

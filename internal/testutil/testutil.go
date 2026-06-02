@@ -453,9 +453,10 @@ func (t *S3Tester) CompleteMultipartUpload(ctx context.Context, bucket, object, 
 }
 
 type testerCfg struct {
-	backend     s3.Backend
-	serviceOpts []func(*service.Options)
-	tls         bool
+	backend        s3.Backend
+	serviceOpts    []func(*service.Options)
+	tls            bool
+	statusPassword string
 }
 
 // TesterOption is an option for configuring the S3Tester.
@@ -482,6 +483,13 @@ func WithTLS() TesterOption {
 	}
 }
 
+// WithStatusPassword sets the password required to access the status endpoints.
+func WithStatusPassword(password string) TesterOption {
+	return func(cfg *testerCfg) {
+		cfg.statusPassword = password
+	}
+}
+
 // NewTester creates a new S3Tester and a AWS client configured to talk to it.
 func NewTester(t testing.TB, opts ...TesterOption) *S3Tester {
 	t.Helper()
@@ -502,7 +510,8 @@ func NewTester(t testing.TB, opts ...TesterOption) *S3Tester {
 
 	handler := s3.New(cfg.backend,
 		s3.WithHostBucketBases([]string{"localhost"}),
-		s3.WithLogger(zaptest.NewLogger(t)))
+		s3.WithLogger(zaptest.NewLogger(t)),
+		s3.WithStatusPassword(cfg.statusPassword))
 
 	server := httptest.NewUnstartedServer(handler)
 	if cfg.tls {

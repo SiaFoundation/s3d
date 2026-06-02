@@ -3,6 +3,7 @@ package s3_test
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"testing"
 
@@ -15,16 +16,20 @@ import (
 )
 
 func TestUploadStats(t *testing.T) {
-	s3Tester := testutil.NewTester(t)
+	const statusPassword = "s3cret-status-password"
+	s3Tester := testutil.NewTester(t, testutil.WithStatusPassword(statusPassword))
 	opts := s3Tester.Client().Options()
 	httpClient := opts.HTTPClient
 	baseURL := *opts.BaseEndpoint
 
-	t.Run("GET returns 200 with zero stats", func(t *testing.T) {
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, baseURL+"/_s3d/status/uploads", nil)
+	statusURL := baseURL + "/_s3d/status/uploads"
+
+	t.Run("valid password returns 200 with zero stats", func(t *testing.T) {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, statusURL, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
+		req.SetBasicAuth("", statusPassword)
 		resp, err := httpClient.Do(req)
 		if err != nil {
 			t.Fatal(err)
@@ -45,8 +50,34 @@ func TestUploadStats(t *testing.T) {
 		}
 	})
 
-	t.Run("anonymous request is allowed", func(t *testing.T) {
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, baseURL+"/_s3d/status/uploads", nil)
+	t.Run("prometheus response format", func(t *testing.T) {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, statusURL+"?response=prometheus", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.SetBasicAuth("", statusPassword)
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		} else if ct := resp.Header.Get("Content-Type"); ct != "text/plain; version=0.0.4" {
+			t.Fatalf("expected Prometheus Content-Type, got %q", ct)
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		} else if !bytes.Contains(body, []byte("s3d_upload_pending_objects 0")) {
+			t.Fatalf("expected prometheus metrics, got %q", body)
+		}
+	})
+
+	t.Run("missing credentials are rejected", func(t *testing.T) {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, statusURL, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -56,8 +87,47 @@ func TestUploadStats(t *testing.T) {
 		}
 		defer resp.Body.Close()
 
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("expected anonymous access to succeed, got %d", resp.StatusCode)
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("expected 401, got %d", resp.StatusCode)
+		} else if h := resp.Header.Get("WWW-Authenticate"); h == "" {
+			t.Fatal("expected WWW-Authenticate header on 401 response")
+		}
+	})
+
+	t.Run("incorrect password is rejected", func(t *testing.T) {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, statusURL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.SetBasicAuth("", "wrong-password")
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("expected 401, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("inaccessible when no password is configured", func(t *testing.T) {
+		noPassTester := testutil.NewTester(t)
+		noPassOpts := noPassTester.Client().Options()
+
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, *noPassOpts.BaseEndpoint+"/_s3d/status/uploads", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.SetBasicAuth("", "")
+		resp, err := noPassOpts.HTTPClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("expected 401 when no status password is configured, got %d", resp.StatusCode)
 		}
 	})
 }

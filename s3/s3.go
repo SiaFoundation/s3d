@@ -238,6 +238,7 @@ type s3 struct {
 	hostBucketBases []string
 	logger          *zap.Logger
 	region          string
+	statusPassword  string
 }
 
 // Option is a configuration option for the S3 API handler.
@@ -269,6 +270,15 @@ func WithRegion(region string) Option {
 	}
 }
 
+// WithStatusPassword sets the password required to access the status endpoints
+// via HTTP Basic authentication. If empty, the status endpoints are
+// inaccessible.
+func WithStatusPassword(password string) Option {
+	return func(s *s3) {
+		s.statusPassword = password
+	}
+}
+
 // New creates an instance of the S3 API handler using the provided backend.
 func New(b Backend, opts ...Option) http.Handler {
 	s3 := &s3{
@@ -289,8 +299,21 @@ func New(b Backend, opts ...Option) http.Handler {
 		handler = s3.hostBucketBaseMiddleware(handler)
 	}
 
-	// authentication middleware
-	return s3.authMiddleware(handler)
+	return s3.statusMiddleware(s3.authMiddleware(handler))
+}
+
+// statusMiddleware handles requests for the status endpoint
+func (s *s3) statusMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || strings.TrimPrefix(r.URL.Path, "/") != statusUploadsPath {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if err := s.handleUploadStats(w, r); err != nil {
+			s.logger.Error("failed to handle status request", zap.Error(err))
+			writeErrorResponse(w, err)
+		}
+	})
 }
 
 // authMiddleware is an HTTP middleware that authenticates requests using AWS v4
@@ -417,9 +440,7 @@ func (s *s3) routeBase(w http.ResponseWriter, r *http.Request, accessKeyID *stri
 	// common headers at
 	// https://docs.aws.amazon.com/AmazonS3/latest/API/RESTCommonResponseHeaders.html.
 	//
-	if r.Method == http.MethodGet && path == "_s3d/status/uploads" {
-		err = s.handleUploadStats(w, r)
-	} else if uploadID := query.Get("uploadId"); uploadID != "" {
+	if uploadID := query.Get("uploadId"); uploadID != "" {
 		err = s.routeMultipartUpload(w, r, accessKeyID, bucket, object, uploadID)
 	} else if _, ok := query["uploads"]; ok {
 		err = s.routeMultipartUploadBase(w, r, accessKeyID, bucket, object)
