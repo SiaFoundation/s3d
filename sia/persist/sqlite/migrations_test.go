@@ -17,7 +17,7 @@ const initialSchema = `/*
 */
 
 CREATE TABLE users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY,
     name TEXT NOT NULL UNIQUE
 );
 
@@ -30,7 +30,7 @@ CREATE TABLE access_keys (
 CREATE INDEX access_keys_user_id_idx ON access_keys(user_id);
 
 CREATE TABLE buckets (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY,
     created_at INTEGER NOT NULL,
     name TEXT NOT NULL UNIQUE,
     user_id INTEGER NOT NULL,
