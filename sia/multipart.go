@@ -58,13 +58,14 @@ func (s *Sia) ensureMultipartPartDir(uploadID s3.UploadID, partNumber int) (stri
 func (s *Sia) CreateMultipartUpload(ctx context.Context, accessKeyID, bucket, object string, opts s3.CreateMultipartUploadOptions) (*s3.CreateMultipartUploadResult, error) {
 	// create multipart upload directory
 	uploadID := s3.NewUploadID()
-	if _, err := s.createMultipartUploadDir(uploadID.String()); err != nil {
+	uploadDir, err := s.createMultipartUploadDir(uploadID.String())
+	if err != nil {
 		return nil, err
 	}
 
 	// create multipart upload in the database
-	err := s.store.CreateMultipartUpload(accessKeyID, bucket, object, uploadID, opts.Meta)
-	if err != nil {
+	if err := s.store.CreateMultipartUpload(accessKeyID, bucket, object, uploadID, opts.Meta); err != nil {
+		s.cleanupOrphan(uploadDir, 0)
 		return nil, fmt.Errorf("failed to create multipart upload: %w", err)
 	}
 
