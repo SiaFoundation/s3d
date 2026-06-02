@@ -257,7 +257,7 @@ func (s *s3) createMultipartUpload(w http.ResponseWriter, r *http.Request, acces
 		return err
 	}
 
-	return writeXMLResponse(w, InitiateMultipartUploadResponse{
+	return writeXMLResponse(w, http.StatusOK, InitiateMultipartUploadResponse{
 		Xmlns:    "http://s3.amazonaws.com/doc/2006-03-01/",
 		Bucket:   bucket,
 		Key:      object,
@@ -321,7 +321,7 @@ func (s *s3) listMultipartUploads(w http.ResponseWriter, r *http.Request, access
 		})
 	}
 
-	return writeXMLResponse(w, resp)
+	return writeXMLResponse(w, http.StatusOK, resp)
 }
 
 func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, accessKeyID, dstBucket, dstObject string, uploadID UploadID, partNumber int) error {
@@ -366,7 +366,7 @@ func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, accessKeyID, dstBu
 
 	etag := FormatETag(result.ContentMD5[:], 0)
 	w.Header().Set("ETag", etag)
-	return writeXMLResponse(w, PartCopyResult{
+	return writeXMLResponse(w, http.StatusOK, PartCopyResult{
 		ETag:         etag,
 		LastModified: NewContentTime(result.LastModified),
 	})
@@ -491,7 +491,7 @@ func (s *s3) listUploadParts(w http.ResponseWriter, r *http.Request, accessKeyID
 		})
 	}
 
-	return writeXMLResponse(w, resp)
+	return writeXMLResponse(w, http.StatusOK, resp)
 }
 
 func (s *s3) completeMultipartUpload(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object string, uploadID UploadID) error {
@@ -540,7 +540,7 @@ func (s *s3) completeMultipartUpload(w http.ResponseWriter, r *http.Request, acc
 	}
 
 	w.Header().Set("ETag", res.ETag)
-	return writeXMLResponse(w, CompleteMultipartUploadResponse{
+	return writeXMLResponse(w, http.StatusOK, CompleteMultipartUploadResponse{
 		Xmlns:    "http://s3.amazonaws.com/doc/2006-03-01/",
 		Location: location,
 		Bucket:   bucket,

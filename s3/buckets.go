@@ -88,7 +88,7 @@ func (s *s3) bucketLocation(w http.ResponseWriter, r *http.Request, bucket strin
 		region = Null
 	}
 
-	return writeXMLResponse(w, GetBucketLocation{
+	return writeXMLResponse(w, http.StatusOK, GetBucketLocation{
 		Xmlns:              "http://s3.amazonaws.com/doc/2006-03-01/",
 		LocationConstraint: region,
 	})
@@ -152,5 +152,5 @@ func (s *s3) listBuckets(w http.ResponseWriter, r *http.Request, accessKeyID *st
 		Buckets: buckets,
 		Owner:   GlobalUserInfo,
 	}
-	return writeXMLResponse(w, resp)
+	return writeXMLResponse(w, http.StatusOK, resp)
 }
