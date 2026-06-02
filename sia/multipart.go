@@ -15,7 +15,6 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia/objects"
-	"go.uber.org/zap"
 	"lukechampine.com/frand"
 )
 
@@ -102,16 +101,13 @@ func (s *Sia) AbortMultipartUpload(ctx context.Context, accessKeyID, bucket, obj
 	}
 
 	// abort the multipart upload in the database
-	if err := s.store.AbortMultipartUpload(bucket, object, uploadID); err != nil {
+	size, err := s.store.AbortMultipartUpload(bucket, object, uploadID)
+	if err != nil {
 		return fmt.Errorf("failed to abort multipart upload: %w", err)
 	}
 
-	// remove multipart upload directory
-	if err := s.removeUpload(uploadID.String()); err != nil && !errors.Is(err, os.ErrNotExist) {
-		s.logger.Error("failed to remove multipart upload directory",
-			zap.Stringer("uploadID", uploadID),
-			zap.Error(err))
-	}
+	// remove multipart upload directory and release disk usage
+	s.cleanupOrphan(s.multipartUploadPath(uploadID.String()), size)
 
 	return nil
 }
@@ -119,9 +115,24 @@ func (s *Sia) AbortMultipartUpload(ctx context.Context, accessKeyID, bucket, obj
 // UploadPart uploads a single multipart part.
 func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object string, uploadID s3.UploadID, r io.Reader, opts s3.UploadPartOptions) (_ *s3.UploadPartResult, err error) {
 	// check if the multipart upload exists
-	if err := s.store.HasMultipartUpload(bucket, object, uploadID); err != nil {
+	if _, err := s.store.HasMultipartUpload(bucket, object, uploadID); err != nil {
 		return nil, err
 	}
+
+	// allow exceeding the limit once any part has been stored so
+	// concurrent parts of the same upload can complete
+	allowExcess := func() (bool, error) {
+		return s.store.HasMultipartUpload(bucket, object, uploadID)
+	}
+	if err := s.addDiskUsage(ctx, opts.ContentLength, allowExcess); err != nil {
+		return nil, err
+	}
+	var partPath string
+	defer func() {
+		if err != nil {
+			s.cleanupOrphan(partPath, opts.ContentLength)
+		}
+	}()
 
 	// create part directory
 	partDir, err := s.ensureMultipartPartDir(uploadID, opts.PartNumber)
@@ -132,23 +143,12 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object string
 	}
 
 	// create part file
-	partPath := filepath.Join(partDir, randPartName())
+	partPath = filepath.Join(partDir, randPartName())
 	partFile, err := os.Create(partPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create part file: %w", err)
 	}
 	defer partFile.Close()
-
-	// defer cleanup on error
-	defer func() {
-		if err != nil {
-			if removeErr := os.Remove(partPath); removeErr != nil {
-				s.logger.Error("failed to remove part file after upload failure",
-					zap.String("path", partPath),
-					zap.Error(removeErr))
-			}
-		}
-	}()
 
 	// prepare writers
 	md5Hash := md5.New()
@@ -199,25 +199,23 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object string
 	}
 
 	// add multipart part to the database
-	previous, err := s.store.AddMultipartPart(bucket, object, uploadID, filepath.Base(partPath), opts.PartNumber, contentMD5, contentLength)
+	previous, prevSize, err := s.store.AddMultipartPart(bucket, object, uploadID, filepath.Base(partPath), opts.PartNumber, contentMD5, contentLength)
 	if err != nil {
 		return nil, fmt.Errorf("failed to add part: %w", err)
-	} else if previous != "" {
-		prevPath := filepath.Join(partDir, previous)
-		if err := os.Remove(prevPath); err != nil {
-			s.logger.Error("failed to remove old part file",
-				zap.String("path", prevPath),
-				zap.Error(err))
-		}
+	}
+	if previous != "" {
+		s.cleanupOrphan(filepath.Join(partDir, previous), prevSize)
+	} else {
+		s.releaseDiskUsage(0)
 	}
 
 	return &s3.UploadPartResult{ContentMD5: contentMD5}, nil
 }
 
 // UploadPartCopy uploads a part by copying data from an existing object.
-func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, uploadID s3.UploadID, opts s3.UploadPartCopyOptions) (*s3.UploadPartCopyResult, error) {
+func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, uploadID s3.UploadID, opts s3.UploadPartCopyOptions) (_ *s3.UploadPartCopyResult, err error) {
 	// check if the multipart upload exists
-	if err := s.store.HasMultipartUpload(dstBucket, dstObject, uploadID); err != nil {
+	if _, err := s.store.HasMultipartUpload(dstBucket, dstObject, uploadID); err != nil {
 		return nil, err
 	}
 
@@ -234,6 +232,21 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 		return nil, s3errs.ErrEntityTooLarge
 	}
 
+	// allow exceeding the limit once any part has been stored so
+	// concurrent parts of the same upload can complete
+	allowExcess := func() (bool, error) {
+		return s.store.HasMultipartUpload(dstBucket, dstObject, uploadID)
+	}
+	if err := s.addDiskUsage(ctx, opts.Range.Length, allowExcess); err != nil {
+		return nil, err
+	}
+	var partPath string
+	defer func() {
+		if err != nil {
+			s.cleanupOrphan(partPath, opts.Range.Length)
+		}
+	}()
+
 	// open a reader for the requested range of the source object
 	var src io.ReadCloser
 	if obj.FileName != nil {
@@ -249,14 +262,10 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 		if err != nil {
 			return nil, fmt.Errorf("failed to unseal object: %w", err)
 		}
-		pr, pw := io.Pipe()
-		go func() {
-			defer pw.Close()
-			if err := s.sdk.Download(ctx, pw, pinnedObj, &opts.Range); err != nil {
-				pw.CloseWithError(err)
-			}
-		}()
-		src = pr
+		src, err = s.sdk.Download(pinnedObj, &opts.Range)
+		if err != nil {
+			return nil, fmt.Errorf("failed to download source object: %w", err)
+		}
 	}
 	defer src.Close()
 
@@ -269,23 +278,12 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 	}
 
 	// create part file
-	partPath := filepath.Join(partDir, randPartName())
+	partPath = filepath.Join(partDir, randPartName())
 	partFile, err := os.Create(partPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create part file: %w", err)
 	}
 	defer partFile.Close()
-
-	// defer cleanup on error
-	defer func() {
-		if err != nil {
-			if removeErr := os.Remove(partPath); removeErr != nil {
-				s.logger.Error("failed to remove part file after upload failure",
-					zap.String("path", partPath),
-					zap.Error(removeErr))
-			}
-		}
-	}()
 
 	// copy the requested range to the part file
 	md5Hash := md5.New()
@@ -313,16 +311,14 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 	}
 
 	// add multipart part to the database
-	previous, err := s.store.AddMultipartPart(dstBucket, dstObject, uploadID, filepath.Base(partPath), opts.PartNumber, contentMD5, contentLength)
+	previous, prevSize, err := s.store.AddMultipartPart(dstBucket, dstObject, uploadID, filepath.Base(partPath), opts.PartNumber, contentMD5, contentLength)
 	if err != nil {
 		return nil, fmt.Errorf("failed to add part: %w", err)
-	} else if previous != "" {
-		prevPath := filepath.Join(partDir, previous)
-		if err := os.Remove(prevPath); err != nil {
-			s.logger.Error("failed to remove old part file",
-				zap.String("path", prevPath),
-				zap.Error(err))
-		}
+	}
+	if previous != "" {
+		s.cleanupOrphan(filepath.Join(partDir, previous), prevSize)
+	} else {
+		s.releaseDiskUsage(0)
 	}
 
 	return &s3.UploadPartCopyResult{
@@ -395,18 +391,12 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 	}
 
 	// complete the multipart upload in the database
-	orphaned, err := s.store.CompleteMultipartUpload(bucket, object, uploadID, contentMD5, contentLength)
+	orphanFile, orphanSize, err := s.store.CompleteMultipartUpload(bucket, object, uploadID, contentMD5, contentLength)
 	if err != nil {
 		return nil, fmt.Errorf("failed to complete multipart upload in store: %w", err)
 	}
-	if orphaned != nil {
-		if err := s.removeUpload(*orphaned); err != nil {
-			s.logger.Warn("failed to remove pending upload file",
-				zap.String("bucket", bucket),
-				zap.String("object", object),
-				zap.String("filename", *orphaned),
-				zap.Error(err))
-		}
+	if orphanFile != "" {
+		s.cleanupOrphan(filepath.Join(s.uploadDir(), orphanFile), orphanSize)
 	}
 
 	// calculate ETag

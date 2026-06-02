@@ -658,6 +658,12 @@ func TestListObjects(t *testing.T) {
 			objects:        []string{"foo"},
 			commonPrefixes: []string{"foo/"},
 		},
+		{
+			name:           "NonSlashDelimiter",
+			delimiter:      ptr("b"),
+			objects:        []string{"foo"},
+			commonPrefixes: []string{"foo/b"},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

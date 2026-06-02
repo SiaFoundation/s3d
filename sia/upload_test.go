@@ -116,10 +116,10 @@ func TestPrepareUploads(t *testing.T) {
 		},
 	}
 	s := Sia{
-		store:          store,
-		slabSize:       100,
-		uploadWastePct: 0.10,
-		logger:         zaptest.NewLogger(t),
+		store:             store,
+		uploadOptimalSize: 100,
+		uploadWastePct:    0.10,
+		logger:            zaptest.NewLogger(t),
 	}
 
 	ready := s.prepareUploads()
@@ -171,7 +171,7 @@ func TestOpenAndRemoveUpload(t *testing.T) {
 
 	// removeUpload while the reader is open should mark deleted but not
 	// remove the file from disk
-	if err := s.removeUpload(fileName); err != nil {
+	if err := s.removeUpload(filePath); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filePath); err != nil {
@@ -214,7 +214,7 @@ func TestOpenAndRemoveUpload(t *testing.T) {
 
 	// verify the lockedUploads map is cleaned up
 	s.lockedUploadsMu.Lock()
-	if _, ok := s.lockedUploads[fileName]; ok {
+	if _, ok := s.lockedUploads[filePath]; ok {
 		t.Fatal("lockedUploads entry should have been cleaned up")
 	}
 	s.lockedUploadsMu.Unlock()
@@ -225,7 +225,7 @@ func TestOpenAndRemoveUpload(t *testing.T) {
 	if err := os.WriteFile(filePath2, data, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.removeUpload(fileName2); err != nil {
+	if err := s.removeUpload(filePath2); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filePath2); !os.IsNotExist(err) {

@@ -20,6 +20,67 @@ import (
 	"go.uber.org/zap"
 )
 
+// addDiskUsage reserves size bytes against the disk usage limit, blocking
+// until enough space is available. If allowExcess returns true the
+// reservation bypasses the limit; it is re-evaluated each time
+// releaseDiskUsage is called.
+func (s *Sia) addDiskUsage(ctx context.Context, size int64, allowExcess func() (bool, error)) error {
+	if size <= 0 || s.diskUsageLimit == 0 {
+		return nil
+	}
+	for {
+		s.diskUsageMu.Lock()
+		wake := s.diskUsageWake
+		if s.diskUsage < s.diskUsageLimit {
+			s.diskUsage += uint64(size)
+			s.diskUsageMu.Unlock()
+			return nil
+		}
+		s.diskUsageMu.Unlock()
+
+		if allowExcess != nil {
+			allow, err := allowExcess()
+			if err != nil {
+				return err
+			} else if allow {
+				s.diskUsageMu.Lock()
+				s.diskUsage += uint64(size)
+				s.diskUsageMu.Unlock()
+				return nil
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-wake:
+		}
+	}
+}
+
+// releaseDiskUsage releases size bytes previously reserved by addDiskUsage.
+// Passing 0 wakes blocked waiters without releasing any space.
+func (s *Sia) releaseDiskUsage(size int64) {
+	if s.diskUsageLimit == 0 {
+		return
+	}
+
+	s.diskUsageMu.Lock()
+	defer s.diskUsageMu.Unlock()
+	if size > 0 {
+		if uint64(size) > s.diskUsage {
+			s.logger.Warn("disk usage release exceeds tracked amount; resetting to 0",
+				zap.Int64("size", size),
+				zap.Uint64("diskUsage", s.diskUsage))
+			s.diskUsage = 0
+		} else {
+			s.diskUsage -= uint64(size)
+		}
+	}
+	close(s.diskUsageWake)
+	s.diskUsageWake = make(chan struct{})
+}
+
 type (
 	lockedUpload struct {
 		deleted  bool
@@ -43,14 +104,14 @@ func (s *Sia) uploadDir() string {
 	return filepath.Join(s.directory, UploadsDirectory)
 }
 
-func (s *Sia) lockUpload(filename string) func() {
+func (s *Sia) lockUpload(path string) func() {
 	s.lockedUploadsMu.Lock()
 	defer s.lockedUploadsMu.Unlock()
 
-	lu, ok := s.lockedUploads[filename]
+	lu, ok := s.lockedUploads[path]
 	if !ok {
 		lu = &lockedUpload{}
-		s.lockedUploads[filename] = lu
+		s.lockedUploads[path] = lu
 	}
 	lu.refCount++
 
@@ -60,15 +121,15 @@ func (s *Sia) lockUpload(filename string) func() {
 
 		lu.refCount--
 		if lu.refCount <= 0 {
-			_, locked := s.lockedUploads[filename]
+			_, locked := s.lockedUploads[path]
 			if !locked {
-				panic(fmt.Sprintf("unlock called for filename %s that is not locked", filename))
+				panic(fmt.Sprintf("unlock called for path %s that is not locked", path))
 			}
-			delete(s.lockedUploads, filename)
+			delete(s.lockedUploads, path)
 			if lu.deleted {
-				if err := os.RemoveAll(filepath.Join(s.uploadDir(), filename)); err != nil {
+				if err := os.RemoveAll(path); err != nil {
 					s.logger.Error("failed to remove upload upon unlock",
-						zap.String("filename", filename),
+						zap.String("path", path),
 						zap.Error(err))
 				}
 			}
@@ -80,7 +141,8 @@ func (s *Sia) openUpload(bucket, name string, filename *string, multipart bool, 
 	if filename == nil {
 		return nil, os.ErrNotExist
 	}
-	unlock := s.lockUpload(*filename)
+	uploadPath := filepath.Join(s.uploadDir(), *filename)
+	unlock := s.lockUpload(uploadPath)
 	defer func() {
 		if err != nil {
 			unlock()
@@ -99,14 +161,13 @@ func (s *Sia) openUpload(bucket, name string, filename *string, multipart bool, 
 		if err != nil {
 			return nil, fmt.Errorf("failed to get object parts: %w", err)
 		}
-		uploadDir := filepath.Join(s.uploadDir(), *filename)
-		r, err := objects.NewReader(uploadDir, parts, offset)
+		r, err := objects.NewReader(uploadPath, parts, offset)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create multipart reader: %w", err)
 		}
 		reader, closer = r, r
 	} else {
-		f, err := os.Open(filepath.Join(s.uploadDir(), *filename))
+		f, err := os.Open(uploadPath)
 		if err != nil {
 			return nil, err
 		}
@@ -125,16 +186,25 @@ func (s *Sia) openUpload(bucket, name string, filename *string, multipart bool, 
 	return &lockedUploadReader{Reader: reader, c: closer, unlock: unlock}, nil
 }
 
-func (s *Sia) removeUpload(fileName string) error {
+func (s *Sia) removeUpload(path string) error {
 	s.lockedUploadsMu.Lock()
-	defer s.lockedUploadsMu.Unlock()
-
-	lu, ok := s.lockedUploads[fileName]
-	if ok {
+	if lu, ok := s.lockedUploads[path]; ok {
 		lu.deleted = true
+		s.lockedUploadsMu.Unlock()
 		return nil
 	}
-	return os.RemoveAll(filepath.Join(s.uploadDir(), fileName))
+	s.lockedUploadsMu.Unlock()
+
+	return os.RemoveAll(path)
+}
+
+func (s *Sia) cleanupOrphan(path string, size int64) {
+	if err := s.removeUpload(path); err != nil {
+		s.logger.Warn("failed to remove orphaned upload file",
+			zap.String("path", path),
+			zap.Error(err))
+	}
+	s.releaseDiskUsage(size)
 }
 
 // CopyObject copies an object from the source bucket and object key to the
@@ -142,18 +212,12 @@ func (s *Sia) removeUpload(fileName string) error {
 // metadata that should be merged into the copied object except for the
 // x-amz-acl header.
 func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, replace bool, meta map[string]string) (*s3.CopyObjectResult, error) {
-	obj, orphaned, err := s.store.CopyObject(srcBucket, srcObject, dstBucket, dstObject, meta, replace)
+	obj, orphanFile, orphanSize, err := s.store.CopyObject(srcBucket, srcObject, dstBucket, dstObject, meta, replace)
 	if err != nil {
 		return nil, err
 	}
-	if orphaned != nil {
-		if err := s.removeUpload(*orphaned); err != nil {
-			s.logger.Warn("failed to remove pending upload file",
-				zap.String("bucket", dstBucket),
-				zap.String("object", dstObject),
-				zap.String("filename", *orphaned),
-				zap.Error(err))
-		}
+	if orphanFile != "" {
+		s.cleanupOrphan(filepath.Join(s.uploadDir(), orphanFile), orphanSize)
 	}
 
 	return &s3.CopyObjectResult{
@@ -167,14 +231,12 @@ func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject,
 // DeleteObject deletes the object with the given key from the specified
 // bucket for the user identified by the given access key.
 func (s *Sia) DeleteObject(ctx context.Context, accessKeyID, bucket string, object s3.ObjectID) (*s3.DeleteObjectResult, error) {
-	fileName, err := s.store.DeleteObject(accessKeyID, bucket, object)
+	orphanFile, orphanSize, err := s.store.DeleteObject(accessKeyID, bucket, object)
 	if err != nil {
 		return nil, err
-	} else if fileName != nil {
-		// object hasn't been uploaded yet, so we clean up the file
-		if err := s.removeUpload(*fileName); err != nil {
-			s.logger.Warn("failed to remove pending upload file", zap.String("bucket", bucket), zap.String("object", object.Key), zap.Error(err))
-		}
+	}
+	if orphanFile != "" {
+		s.cleanupOrphan(filepath.Join(s.uploadDir(), orphanFile), orphanSize)
 	}
 
 	return &s3.DeleteObjectResult{
@@ -308,18 +370,12 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 	}
 
 	// otherwise, we download the body
-	pr, pw := io.Pipe()
-	go func() {
-		defer pw.Close()
-		err = s.sdk.Download(ctx, pw, siaObj, resp.Range)
-		if err != nil {
-			s.logger.Error("download failed", zap.Error(err), zap.String("bucket", bucket), zap.String("object", object))
-			pw.CloseWithError(err)
-			return
-		}
-	}()
+	body, err := s.sdk.Download(siaObj, resp.Range)
+	if err != nil {
+		return nil, fmt.Errorf("failed to download object: %w", err)
+	}
 
-	resp.Body = pr
+	resp.Body = body
 	return resp, nil
 }
 
@@ -348,6 +404,16 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 		return nil, err
 	}
 
+	if err := s.addDiskUsage(ctx, opts.ContentLength, nil); err != nil {
+		return nil, err
+	}
+	var objPath string
+	defer func() {
+		if err != nil {
+			s.cleanupOrphan(objPath, opts.ContentLength)
+		}
+	}()
+
 	// compute md5 checksum for the etag
 	md5Hash := md5.New()
 	r = io.TeeReader(r, md5Hash)
@@ -360,7 +426,6 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	}
 
 	// handle empty object case
-	var objPath string
 	var fileName *string
 	var size int64
 	if opts.ContentLength == 0 {
@@ -389,12 +454,6 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 		}
 	}
 
-	defer func() {
-		if err != nil && objPath != "" {
-			_ = os.Remove(objPath)
-		}
-	}()
-
 	// check content length
 	if opts.ContentLength != size {
 		return nil, s3errs.ErrIncompleteBody
@@ -411,18 +470,12 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	}
 
 	// store the object in the database
-	orphaned, err := s.store.PutObject(accessKeyID, bucket, object, contentMD5, opts.Meta, size, fileName)
+	orphanFile, orphanSize, err := s.store.PutObject(accessKeyID, bucket, object, contentMD5, opts.Meta, size, fileName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to store object metadata: %w", err)
 	}
-	if orphaned != nil {
-		if err := s.removeUpload(*orphaned); err != nil {
-			s.logger.Warn("failed to remove pending upload file",
-				zap.String("bucket", bucket),
-				zap.String("object", object),
-				zap.String("filename", *orphaned),
-				zap.Error(err))
-		}
+	if orphanFile != "" {
+		s.cleanupOrphan(filepath.Join(s.uploadDir(), orphanFile), orphanSize)
 	}
 
 	return &s3.PutObjectResult{

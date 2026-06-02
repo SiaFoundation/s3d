@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -112,7 +113,7 @@ func (p *uploadGroup) tryAdd(obj objects.ObjectForUpload) bool {
 
 func (s *Sia) newUploadGroup(initial objects.ObjectForUpload) uploadGroup {
 	return uploadGroup{
-		slabSize:       s.slabSize,
+		slabSize:       s.uploadOptimalSize,
 		maxGroupSize:   DefaultMaxGroupSize,
 		uploadWastePct: s.uploadWastePct,
 		objects:        []objects.ObjectForUpload{initial},
@@ -347,17 +348,7 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 			zap.String("bucket", uploadObj.Bucket),
 			zap.String("name", uploadObj.Name))
 
-		if err := s.removeUpload(uploadObj.Filename); err != nil {
-			if uploadObj.Multipart {
-				s.logger.Error("failed to remove multipart upload directory",
-					zap.String("uploadID", uploadObj.Filename),
-					zap.Error(err))
-			} else {
-				s.logger.Error("failed to remove upload from disk",
-					zap.String("filename", uploadObj.Filename),
-					zap.Error(err))
-			}
-		}
+		s.cleanupOrphan(filepath.Join(s.uploadDir(), uploadObj.Filename), uploadObj.Length)
 	}
 
 	return nil
