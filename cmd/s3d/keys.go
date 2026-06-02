@@ -11,15 +11,29 @@ import (
 	"lukechampine.com/frand"
 )
 
-const keysUsage = `Usage: s3d keys <command>
+const (
+	keysUsage = `Usage: s3d keys <command>
+
+Manage S3 access keys.
 
 Commands:
-  create <username> [--access-key <id> --secret-key <secret>]
-      Create a new access key pair (auto-generated if flags are omitted)
-  delete <access-key-id>
-      Delete an access key
-  list [username]
-      List access keys`
+  create    Create a new access key
+  delete    Delete an access key
+  list      List access keys`
+
+	keysCreateUsage = `Usage: s3d keys create [--access-key <id> --secret-key <secret>] <username>
+
+Create a new access key pair for a user. The pair is auto-generated when both
+flags are omitted.`
+
+	keysDeleteUsage = `Usage: s3d keys delete <access-key-id>
+
+Delete an access key.`
+
+	keysListUsage = `Usage: s3d keys list [username]
+
+List access keys, optionally filtered by username.`
+)
 
 func generateAccessKey() (accessKey, secretKey string) {
 	// 12 random bytes encode to exactly 20 base32 characters
@@ -35,100 +49,84 @@ func generateAccessKey() (accessKey, secretKey string) {
 	return
 }
 
-func runKeysCmd(args []string) {
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, keysUsage)
+func runKeysCreate(cmd *flag.FlagSet, accessKey, secretKey string) {
+	args := cmd.Args()
+	if len(args) != 1 {
+		cmd.Usage()
+		os.Exit(1)
+	}
+	userName := args[0]
+
+	// validate or generate
+	if accessKey == "" && secretKey == "" {
+		accessKey, secretKey = generateAccessKey()
+	} else if accessKey == "" || secretKey == "" {
+		fmt.Fprintln(os.Stderr, "Both --access-key and --secret-key must be provided together, or omit both to auto-generate.")
+		os.Exit(1)
+	} else {
+		if len(accessKey) < 16 || len(accessKey) > 128 {
+			fmt.Fprintln(os.Stderr, "Access key must be between 16 and 128 characters.")
+			os.Exit(1)
+		}
+		if len(secretKey) < 32 || len(secretKey) > 128 {
+			fmt.Fprintln(os.Stderr, "Secret key must be between 32 and 128 characters.")
+			os.Exit(1)
+		}
+	}
+
+	store, err := openStore(zap.NewNop())
+	checkFatalError("failed to open database", err)
+	defer store.Close()
+
+	checkFatalError("failed to create access key", store.CreateAccessKey(userName, accessKey, secretKey))
+
+	fmt.Println("Created access key for user", userName)
+	fmt.Println("")
+	fmt.Printf("  Access Key: %s\n", accessKey)
+	fmt.Printf("  Secret Key: %s\n", secretKey)
+	fmt.Println("")
+	fmt.Println("Save these credentials. The secret key will not be shown again.")
+}
+
+func runKeysDelete(cmd *flag.FlagSet) {
+	args := cmd.Args()
+	if len(args) != 1 {
+		cmd.Usage()
 		os.Exit(1)
 	}
 
-	switch args[0] {
-	case "create":
-		fs := flag.NewFlagSet("keys create", flag.ExitOnError)
-		accessKeyFlag := fs.String("access-key", "", "access key ID (auto-generated if empty)")
-		secretKeyFlag := fs.String("secret-key", "", "secret key (auto-generated if empty)")
-		fs.Parse(args[1:])
+	store, err := openStore(zap.NewNop())
+	checkFatalError("failed to open database", err)
+	defer store.Close()
 
-		if fs.NArg() != 1 {
-			fmt.Fprintln(os.Stderr, keysUsage)
-			os.Exit(1)
-		}
-		userName := fs.Arg(0)
+	checkFatalError("failed to delete access key", store.DeleteAccessKey(args[0]))
+	fmt.Printf("Deleted access key %q\n", args[0])
+}
 
-		accessKey := *accessKeyFlag
-		secretKey := *secretKeyFlag
-
-		// validate or generate
-		if accessKey == "" && secretKey == "" {
-			accessKey, secretKey = generateAccessKey()
-		} else if accessKey == "" || secretKey == "" {
-			fmt.Fprintln(os.Stderr, "Both --access-key and --secret-key must be provided together, or omit both to auto-generate.")
-			os.Exit(1)
-		} else {
-			if len(accessKey) < 16 || len(accessKey) > 128 {
-				fmt.Fprintln(os.Stderr, "Access key must be between 16 and 128 characters.")
-				os.Exit(1)
-			}
-			if len(secretKey) < 32 || len(secretKey) > 128 {
-				fmt.Fprintln(os.Stderr, "Secret key must be between 32 and 128 characters.")
-				os.Exit(1)
-			}
-		}
-
-		store, err := openStore(zap.NewNop())
-		checkFatalError("failed to open database", err)
-		defer store.Close()
-
-		checkFatalError("failed to create access key", store.CreateAccessKey(userName, accessKey, secretKey))
-
-		fmt.Println("Created access key for user", userName)
-		fmt.Println("")
-		fmt.Printf("  Access Key: %s\n", accessKey)
-		fmt.Printf("  Secret Key: %s\n", secretKey)
-		fmt.Println("")
-		fmt.Println("Save these credentials. The secret key will not be shown again.")
-
-	case "delete":
-		if len(args) != 2 {
-			fmt.Fprintln(os.Stderr, keysUsage)
-			os.Exit(1)
-		}
-
-		store, err := openStore(zap.NewNop())
-		checkFatalError("failed to open database", err)
-		defer store.Close()
-
-		checkFatalError("failed to delete access key", store.DeleteAccessKey(args[1]))
-		fmt.Printf("Deleted access key %q\n", args[1])
-
-	case "list":
-		if len(args) > 2 {
-			fmt.Fprintln(os.Stderr, keysUsage)
-			os.Exit(1)
-		}
-
-		var userName *string
-		if len(args) == 2 {
-			userName = &args[1]
-		}
-
-		store, err := openStore(zap.NewNop())
-		checkFatalError("failed to open database", err)
-		defer store.Close()
-
-		keys, err := store.ListAccessKeys(userName)
-		checkFatalError("failed to list access keys", err)
-
-		if len(keys) == 0 {
-			fmt.Println("No access keys found.")
-			return
-		}
-		for _, k := range keys {
-			fmt.Printf("%s\t%s\n", k.AccessKeyID, k.UserName)
-		}
-
-	default:
-		fmt.Fprintf(os.Stderr, "Unknown subcommand %q\n\n", args[0])
-		fmt.Fprintln(os.Stderr, keysUsage)
+func runKeysList(cmd *flag.FlagSet) {
+	args := cmd.Args()
+	if len(args) > 1 {
+		cmd.Usage()
 		os.Exit(1)
+	}
+
+	var userName *string
+	if len(args) == 1 {
+		userName = &args[0]
+	}
+
+	store, err := openStore(zap.NewNop())
+	checkFatalError("failed to open database", err)
+	defer store.Close()
+
+	keys, err := store.ListAccessKeys(userName)
+	checkFatalError("failed to list access keys", err)
+
+	if len(keys) == 0 {
+		fmt.Println("No access keys found.")
+		return
+	}
+	for _, k := range keys {
+		fmt.Printf("%s\t%s\n", k.AccessKeyID, k.UserName)
 	}
 }

@@ -21,7 +21,7 @@ CREATE TABLE buckets (
     created_at INTEGER NOT NULL,
     name TEXT NOT NULL UNIQUE,
     user_id INTEGER NOT NULL,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT
+    FOREIGN KEY (user_id) REFERENCES users(id)
 );
 CREATE INDEX buckets_user_id_idx ON buckets(user_id);
 

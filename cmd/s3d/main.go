@@ -55,8 +55,19 @@ func main() {
 	configCmd := flagg.New("config", ``)
 	loginCmd := flagg.New("login", ``)
 
-	usersCmd := flagg.New("users", "Manage S3 users")
-	keysCmd := flagg.New("keys", "Manage S3 access keys")
+	usersCmd := flagg.New("users", usersUsage)
+	usersCreateCmd := flagg.New("create", usersCreateUsage)
+	usersDeleteCmd := flagg.New("delete", usersDeleteUsage)
+	usersListCmd := flagg.New("list", usersListUsage)
+
+	keysCmd := flagg.New("keys", keysUsage)
+	keysCreateCmd := flagg.New("create", keysCreateUsage)
+	keysDeleteCmd := flagg.New("delete", keysDeleteUsage)
+	keysListCmd := flagg.New("list", keysListUsage)
+
+	var keysCreateAccessKey, keysCreateSecretKey string
+	keysCreateCmd.StringVar(&keysCreateAccessKey, "access-key", "", "access key ID (auto-generated if empty)")
+	keysCreateCmd.StringVar(&keysCreateSecretKey, "secret-key", "", "secret key (auto-generated if empty)")
 
 	// attempt to load the config file
 	configPath := tryLoadConfig()
@@ -75,8 +86,22 @@ func main() {
 			{Cmd: versionCmd},
 			{Cmd: configCmd},
 			{Cmd: loginCmd},
-			{Cmd: usersCmd},
-			{Cmd: keysCmd},
+			{
+				Cmd: usersCmd,
+				Sub: []flagg.Tree{
+					{Cmd: usersCreateCmd},
+					{Cmd: usersDeleteCmd},
+					{Cmd: usersListCmd},
+				},
+			},
+			{
+				Cmd: keysCmd,
+				Sub: []flagg.Tree{
+					{Cmd: keysCreateCmd},
+					{Cmd: keysDeleteCmd},
+					{Cmd: keysListCmd},
+				},
+			},
 		},
 	})
 
@@ -108,10 +133,28 @@ func main() {
 		runLoginCmd(ctx, configPath)
 		return
 	case usersCmd:
-		runUsersCmd(usersCmd.Args())
+		cmd.Usage()
+		return
+	case usersCreateCmd:
+		runUsersCreate(usersCreateCmd)
+		return
+	case usersDeleteCmd:
+		runUsersDelete(usersDeleteCmd)
+		return
+	case usersListCmd:
+		runUsersList(usersListCmd)
 		return
 	case keysCmd:
-		runKeysCmd(keysCmd.Args())
+		cmd.Usage()
+		return
+	case keysCreateCmd:
+		runKeysCreate(keysCreateCmd, keysCreateAccessKey, keysCreateSecretKey)
+		return
+	case keysDeleteCmd:
+		runKeysDelete(keysDeleteCmd)
+		return
+	case keysListCmd:
+		runKeysList(keysListCmd)
 		return
 	case rootCmd:
 	}
@@ -175,15 +218,12 @@ func main() {
 	}
 	defer store.Close()
 
-	// check that at least one access key is configured
-	keys, err := store.ListAccessKeys(nil)
-	if err != nil {
+	// warn when no access keys are configured; the server still starts so users
+	// can provision keys via the CLI while s3d is running
+	if keys, err := store.ListAccessKeys(nil); err != nil {
 		checkFatalError("failed to list access keys", err)
 	} else if len(keys) == 0 {
-		os.Stderr.WriteString("No access keys configured. Create a user and key pair first:\n\n")
-		os.Stderr.WriteString("  s3d users create <username>\n")
-		os.Stderr.WriteString("  s3d keys create <username>\n\n")
-		os.Exit(1)
+		log.Warn("no access keys configured; create one with 's3d users create <username>' and 's3d keys create <username>'")
 	}
 
 	appKey, indexerURL, err := store.AppKey()
