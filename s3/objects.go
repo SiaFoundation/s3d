@@ -203,10 +203,10 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, accessKeyID, dst
 			partsCount = int(*obj.PartsCount)
 		}
 		etag := FormatETag(obj.ContentMD5[:], partsCount)
-		if ifMatch != "" && ifMatch != etag {
+		if ifMatch != "" && !etagMatches(ifMatch, etag) {
 			return s3errs.ErrPreconditionFailed
 		}
-		if ifNoneMatch != "" && ifNoneMatch == etag {
+		if ifNoneMatch != "" && etagMatches(ifNoneMatch, etag) {
 			return s3errs.ErrPreconditionFailed
 		}
 	}
@@ -223,7 +223,7 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, accessKeyID, dst
 
 	etag := FormatETag(result.ContentMD5[:], int(result.PartsCount))
 	w.Header().Set("ETag", etag)
-	return writeXMLResponse(w, ObjectCopyResult{
+	return writeXMLResponse(w, http.StatusOK, ObjectCopyResult{
 		ETag:         etag,
 		LastModified: NewContentTime(result.LastModified),
 	})
@@ -300,7 +300,7 @@ func (s *s3) deleteObjects(w http.ResponseWriter, r *http.Request, accessKeyID s
 	if req.Quiet {
 		res.Deleted = nil
 	}
-	return writeXMLResponse(w, res)
+	return writeXMLResponse(w, http.StatusOK, res)
 }
 
 func (s *s3) getObject(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket, object, version string) error {
@@ -488,7 +488,7 @@ func (s *s3) listObjectsV1(w http.ResponseWriter, r *http.Request, accessKeyID *
 		NextMarker: objects.NextMarker,
 	}
 
-	return writeXMLResponse(w, result)
+	return writeXMLResponse(w, http.StatusOK, result)
 }
 
 func (s *s3) listObjectsV2(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket string) error {
@@ -556,7 +556,7 @@ func (s *s3) listObjectsV2(w http.ResponseWriter, r *http.Request, accessKeyID *
 		result.NextContinuationToken = base64.URLEncoding.EncodeToString([]byte(objects.NextMarker))
 	}
 
-	return writeXMLResponse(w, result)
+	return writeXMLResponse(w, http.StatusOK, result)
 }
 
 func (s *s3) listObjectVersions(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket string) error {
@@ -604,7 +604,7 @@ func (s *s3) listObjectVersions(w http.ResponseWriter, r *http.Request, accessKe
 			Owner:        obj.Owner,
 		})
 	}
-	return writeXMLResponse(w, result)
+	return writeXMLResponse(w, http.StatusOK, result)
 }
 
 func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID string, bucket, object string) (err error) {
@@ -694,6 +694,18 @@ func ParseETag(s string) [16]byte {
 	return etag
 }
 
+func etagMatches(header, etag string) bool {
+	if header == "*" {
+		return true
+	}
+	for _, v := range strings.Split(header, ",") {
+		if strings.TrimSpace(v) == etag {
+			return true
+		}
+	}
+	return false
+}
+
 // parseSource parses an X-Amz-Copy-Source string and returns the bucket and
 // object.
 func parseSource(source string) (bucket, object string, err error) {
@@ -719,8 +731,27 @@ func metadataHeaders(headers map[string][]string, sizeLimit int) (map[string]str
 		if strings.HasPrefix(hk, "X-Amz-") ||
 			hk == "Content-Type" ||
 			hk == "Content-Disposition" ||
-			hk == "Content-Encoding" {
+			hk == "Content-Encoding" ||
+			hk == "Cache-Control" ||
+			hk == "Expires" {
 			meta[hk] = hv[0]
+		}
+	}
+
+	// strip aws-chunked from Content-Encoding since it is a transfer encoding
+	// detail that should not be persisted
+	if ce, ok := meta["Content-Encoding"]; ok {
+		var parts []string
+		for _, p := range strings.Split(ce, ",") {
+			p = strings.TrimSpace(p)
+			if p != "" && !strings.EqualFold(p, "aws-chunked") {
+				parts = append(parts, p)
+			}
+		}
+		if len(parts) == 0 {
+			delete(meta, "Content-Encoding")
+		} else {
+			meta["Content-Encoding"] = strings.Join(parts, ", ")
 		}
 	}
 
@@ -976,25 +1007,39 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 	w.Header().Set("ETag", etag)
 	w.Header().Set("Last-Modified", obj.LastModified.UTC().Format(http.TimeFormat))
 
-	if r.Header.Get("If-None-Match") == etag {
-		return s3errs.ErrNotModified
+	// evaluate conditional headers per RFC 7232 Section 6 precedence:
+	// If-Match > If-Unmodified-Since > If-None-Match > If-Modified-Since
+	if ifMatch := r.Header.Get("If-Match"); ifMatch != "" {
+		if !etagMatches(ifMatch, etag) {
+			return s3errs.ErrPreconditionFailed
+		}
+	} else if ifUnmodifiedSince := r.Header.Get("If-Unmodified-Since"); ifUnmodifiedSince != "" {
+		t, _ := http.ParseTime(ifUnmodifiedSince)
+		if !t.IsZero() && obj.LastModified.After(t) {
+			return s3errs.ErrPreconditionFailed
+		}
+	}
+
+	if ifNoneMatch := r.Header.Get("If-None-Match"); ifNoneMatch != "" {
+		if etagMatches(ifNoneMatch, etag) {
+			return s3errs.ErrNotModified
+		}
+	} else {
+		ifModifiedSince, _ := http.ParseTime(r.Header.Get("If-Modified-Since"))
+		if !ifModifiedSince.IsZero() && !ifModifiedSince.Before(obj.LastModified) {
+			return s3errs.ErrNotModified
+		}
 	}
 
 	if obj.PartsCount != nil && r.URL.Query().Get("partNumber") != "" {
 		w.Header().Set("x-amz-mp-parts-count", fmt.Sprintf("%d", *obj.PartsCount))
 	}
 
-	if r.Header.Get("If-None-Match") == "" {
-		ifModifiedSince, _ := time.Parse(http.TimeFormat, r.Header.Get("If-Modified-Since"))
-		if !ifModifiedSince.IsZero() && !ifModifiedSince.Before(obj.LastModified) {
-			return s3errs.ErrNotModified
-		}
-	}
-
 	w.Header().Set("Accept-Ranges", "bytes")
 	if obj.Range != nil {
 		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", obj.Range.Start, obj.Range.Start+obj.Range.Length-1, obj.Size))
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", obj.Range.Length))
+		w.WriteHeader(http.StatusPartialContent)
 	} else {
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", obj.Size))
 	}

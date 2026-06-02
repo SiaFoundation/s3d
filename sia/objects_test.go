@@ -2,6 +2,7 @@ package sia_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/md5"
 	"encoding/hex"
 	"errors"
@@ -1033,6 +1034,195 @@ func TestOverwritePendingObjectCleansUpFile(t *testing.T) {
 	}
 	if len(parts) != 0 {
 		t.Fatalf("expected object_parts to be empty after overwrite, got %d", len(parts))
+	}
+}
+
+func TestDiskUsageLimit(t *testing.T) {
+	log := zaptest.NewLogger(t)
+	dir := t.TempDir()
+	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	const limit = 500
+	memSDK := NewMemorySDK()
+	memSDK.SetSlabSize(100)
+	backend, err := sia.New(t.Context(), memSDK, store, dir,
+		sia.WithUploadDisabled(),
+		sia.WithDiskUsageLimit(limit),
+		sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
+		sia.WithLogger(log))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { backend.Close() })
+	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
+
+	const bucket = "bucket"
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// uploads under the limit succeed even if they push usage over it
+	_, err = s3Tester.PutObject(t.Context(), bucket, "a", bytes.NewReader(frand.Bytes(400)), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s3Tester.PutObject(t.Context(), bucket, "b", bytes.NewReader(frand.Bytes(200)), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// CopyObject does not create new disk data so it must not block
+	copyCtx, copyCancel := context.WithTimeout(t.Context(), time.Second)
+	defer copyCancel()
+	if _, err := s3Tester.CopyObject(copyCtx, bucket, "a", bucket, "a-copy", types.MetadataDirectiveCopy, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := s3Tester.PutObject(t.Context(), bucket, "c", bytes.NewReader(frand.Bytes(10)), nil)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("expected upload to block while usage exceeds the limit, got %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	backend.UploadObjects(t.Context())
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for upload to resume")
+	}
+}
+
+func TestDiskUsageLimitOngoingMultipartUpload(t *testing.T) {
+	log := zaptest.NewLogger(t)
+	dir := t.TempDir()
+	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	const limit = 20
+	backend, err := sia.New(t.Context(), NewMemorySDK(), store, dir,
+		sia.WithUploadDisabled(),
+		sia.WithDiskUsageLimit(limit),
+		sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
+		sia.WithLogger(log))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { backend.Close() })
+	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
+
+	const (
+		bucket = "bucket"
+		object = "multipart"
+	)
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// put a source object for the UploadPartCopy below
+	srcData := frand.Bytes(limit / 2)
+	if _, err := s3Tester.PutObject(t.Context(), bucket, "src", bytes.NewReader(srcData), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := s3Tester.CreateMultipartUpload(t.Context(), bucket, object, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// first part pushes usage to the limit
+	if _, err := s3Tester.UploadPart(t.Context(), bucket, object, *resp.UploadId, 1, frand.Bytes(limit/2)); err != nil {
+		t.Fatal(err)
+	}
+
+	// subsequent parts of the same upload are allowed to exceed the limit
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	if _, err := s3Tester.UploadPart(ctx, bucket, object, *resp.UploadId, 2, frand.Bytes(limit/2)); err != nil {
+		t.Fatal(err)
+	}
+
+	// UploadPartCopy should also be allowed to exceed the limit for
+	// an ongoing multipart upload
+	if _, err := s3Tester.UploadPartCopy(ctx, bucket, "src", bucket, object, *resp.UploadId, 3, &s3.ObjectRange{Start: 0, Length: int64(len(srcData))}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDiskUsageLimitOverwriteCleanup(t *testing.T) {
+	log := zaptest.NewLogger(t)
+	dir := t.TempDir()
+	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	const limit = 200
+	backend, err := sia.New(t.Context(), NewMemorySDK(), store, dir,
+		sia.WithUploadDisabled(),
+		sia.WithDiskUsageLimit(limit),
+		sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
+		sia.WithLogger(log))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { backend.Close() })
+	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
+
+	const bucket = "bucket"
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// without overwrite cleanup, the third put would block at the limit
+	for range 3 {
+		if _, err := s3Tester.PutObject(t.Context(), bucket, "obj", bytes.NewReader(frand.Bytes(100)), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// only the current pending object should remain on disk
+	entries, err := os.ReadDir(filepath.Join(dir, sia.UploadsDirectory))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("expected 1 file in uploads directory, got %d: %v", len(entries), names)
+	}
+
+	// re-open the database to assert the persisted disk usage
+	store2, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store2.Close() })
+	usage, err := store2.DiskUsage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage != 100 {
+		t.Fatalf("expected persisted disk usage 100, got %d", usage)
 	}
 }
 
