@@ -1470,10 +1470,10 @@ func TestUploadStats(t *testing.T) {
 	assertStats(s3.UploadStats{})
 
 	// add two pending uploads
-	if _, err := store.PutObject(accessKeyID, bucket, "obj1", frand.Entropy128(), nil, 100, new(string)); err != nil {
+	if _, _, err := store.PutObject(accessKeyID, bucket, "obj1", frand.Entropy128(), nil, 100, new(string)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.PutObject(accessKeyID, bucket, "obj2", frand.Entropy128(), nil, 250, new(string)); err != nil {
+	if _, _, err := store.PutObject(accessKeyID, bucket, "obj2", frand.Entropy128(), nil, 250, new(string)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1484,7 +1484,7 @@ func TestUploadStats(t *testing.T) {
 
 	// mark a third object as uploaded to Sia
 	contentMD5 := frand.Entropy128()
-	if _, err := store.PutObject(accessKeyID, bucket, "obj3", contentMD5, nil, 500, new(string)); err != nil {
+	if _, _, err := store.PutObject(accessKeyID, bucket, "obj3", contentMD5, nil, 500, new(string)); err != nil {
 		t.Fatal(err)
 	}
 	sealObj := sdk.Object{}
@@ -1515,7 +1515,7 @@ func TestUploadStats(t *testing.T) {
 	})
 
 	// delete uploaded object to create an orphan
-	if _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "obj3"}); err != nil {
+	if _, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "obj3"}); err != nil {
 		t.Fatal(err)
 	}
 
