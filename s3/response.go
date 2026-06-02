@@ -50,8 +50,8 @@ func writeErrorResponse(w http.ResponseWriter, err error) {
 		return
 	}
 
-	// clear any headers that may have been set before the error was detected
-	// (e.g. conditional GET sets ETag and metadata before checking If-Match)
+	// clear any headers that may have been set before the error was detected,
+	// like conditional GET sets ETag and metadata before checking If-Match
 	clearHeadersExceptCORS(w.Header())
 
 	writeXMLResponse(w, s3Err.HTTPStatus, ErrorResponse{

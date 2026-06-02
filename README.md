@@ -59,11 +59,12 @@ For more information on configuration options, see the
 Next, create a user and generate an access key pair:
 
 ```sh
-s3d users create myuser
-s3d keys create myuser
+s3d users create <username>
+s3d keys create [--access-key <id> --secret-key <secret>] <username>
 ```
 
-Save the printed credentials. The secret key is only shown once.
+The access key pair is auto-generated when both flags are omitted. Save the
+printed credentials. The secret key is only shown once.
 
 Once logged in and credentials are set up, start `s3d` with
 
@@ -106,11 +107,12 @@ docker compose run --rm s3d login
 ### 3. Create a user and access key
 
 ```sh
-docker compose run --rm s3d users create myuser
-docker compose run --rm s3d keys create myuser
+docker compose run --rm s3d users create <username>
+docker compose run --rm s3d keys create [--access-key <id> --secret-key <secret>] <username>
 ```
 
-Save the printed credentials. The secret key is only shown once.
+The access key pair is auto-generated when both flags are omitted. Save the
+printed credentials. The secret key is only shown once.
 
 ### 4. Start `s3d`
 
