@@ -56,7 +56,17 @@ s3d config
 For more information on configuration options, see the
 [Configuration](#configuration) section below.
 
-Once logged in, start `s3d` with
+Next, create a user and generate an access key pair:
+
+```sh
+s3d users create <username>
+s3d keys create [--access-key <id> --secret-key <secret>] <username>
+```
+
+The access key pair is auto-generated when both flags are omitted. Save the
+printed credentials. The secret key is only shown once.
+
+Once logged in and credentials are set up, start `s3d` with
 
 ```sh
 s3d
@@ -93,6 +103,16 @@ volumes:
 ```sh
 docker compose run --rm s3d login
 ```
+
+### 3. Create a user and access key
+
+```sh
+docker compose run --rm s3d users create <username>
+docker compose run --rm s3d keys create [--access-key <id> --secret-key <secret>] <username>
+```
+
+The access key pair is auto-generated when both flags are omitted. Save the
+printed credentials. The secret key is only shown once.
 
 ### 4. Start `s3d`
 
@@ -207,6 +227,8 @@ generate one.
 | `version` | Print the version, commit hash, and build date |
 | `config` | Launch the interactive configuration wizard |
 | `login` | Prompts for recovery phrase and registers `s3d` with the Sia indexer |
+| `users` | Manage S3 users (create, delete, list) |
+| `keys` | Manage S3 access keys (create, delete, list) |
 
 ### Default Ports
 
@@ -257,8 +279,8 @@ log:
 s3:
   hostBases:
     - s3.example.com
-sia:
-  keyPairs:
-    - accessKey: your-access-key-id # 16 to 128 characters
-      secretKey: your-secret-access-key-change-me-please # 32 to 128 characters
 ```
+
+Access keys are managed via the `s3d users` and `s3d keys` CLI commands and
+stored in the SQLite database. See [Getting Started](#getting-started) for
+details.

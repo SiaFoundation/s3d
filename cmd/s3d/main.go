@@ -27,6 +27,32 @@ import (
 const (
 	configFileEnvVar = "S3D_CONFIG_FILE"
 	dataDirEnvVar    = "S3D_DATA_DIR"
+
+	rootUsage = `Usage:
+s3d [flags] [command]
+
+Run 's3d' with no command to start the S3 gateway daemon.
+
+Commands:
+	version		Print the s3d version
+	config		Interactively configure s3d
+	login		Register this s3d instance with the indexer
+	users		Manage users
+	keys		Manage S3 access keys
+`
+
+	versionUsage = `Usage: s3d version
+
+Print the s3d version.`
+
+	configUsage = `Usage: s3d config
+
+Interactively configure s3d. The resulting config will be saved to s3d.yml or
+the file specified by the S3D_CONFIG_FILE environment variable.`
+
+	loginUsage = `Usage: s3d login
+
+Register this s3d instance with the indexer and obtain an app key.`
 )
 
 var cfg = Config{
@@ -55,10 +81,25 @@ func main() {
 	defer cancel()
 
 	rootCmd := flagg.Root
+	rootCmd.Usage = flagg.SimpleUsage(rootCmd, rootUsage)
 	rootCmd.StringVar(&cfg.ApiAddress, "api.s3", cfg.ApiAddress, "address to serve S3 API on")
-	versionCmd := flagg.New("version", ``)
-	configCmd := flagg.New("config", ``)
-	loginCmd := flagg.New("login", ``)
+	versionCmd := flagg.New("version", versionUsage)
+	configCmd := flagg.New("config", configUsage)
+	loginCmd := flagg.New("login", loginUsage)
+
+	usersCmd := flagg.New("users", usersUsage)
+	usersCreateCmd := flagg.New("create", usersCreateUsage)
+	usersDeleteCmd := flagg.New("delete", usersDeleteUsage)
+	usersListCmd := flagg.New("list", usersListUsage)
+
+	keysCmd := flagg.New("keys", keysUsage)
+	keysCreateCmd := flagg.New("create", keysCreateUsage)
+	keysDeleteCmd := flagg.New("delete", keysDeleteUsage)
+	keysListCmd := flagg.New("list", keysListUsage)
+
+	var keysCreateAccessKey, keysCreateSecretKey string
+	keysCreateCmd.StringVar(&keysCreateAccessKey, "access-key", "", "access key ID (auto-generated if empty)")
+	keysCreateCmd.StringVar(&keysCreateSecretKey, "secret-key", "", "secret key (auto-generated if empty)")
 
 	// attempt to load the config file
 	configPath := tryLoadConfig()
@@ -77,6 +118,22 @@ func main() {
 			{Cmd: versionCmd},
 			{Cmd: configCmd},
 			{Cmd: loginCmd},
+			{
+				Cmd: usersCmd,
+				Sub: []flagg.Tree{
+					{Cmd: usersCreateCmd},
+					{Cmd: usersDeleteCmd},
+					{Cmd: usersListCmd},
+				},
+			},
+			{
+				Cmd: keysCmd,
+				Sub: []flagg.Tree{
+					{Cmd: keysCreateCmd},
+					{Cmd: keysDeleteCmd},
+					{Cmd: keysListCmd},
+				},
+			},
 		},
 	})
 
@@ -84,7 +141,7 @@ func main() {
 	case versionCmd:
 		if len(cmd.Args()) != 0 {
 			cmd.Usage()
-			return
+			os.Exit(1)
 		}
 
 		fmt.Println("s3d", build.Version())
@@ -94,7 +151,7 @@ func main() {
 	case configCmd:
 		if len(cmd.Args()) != 0 {
 			cmd.Usage()
-			return
+			os.Exit(1)
 		}
 
 		runConfigCmd(configPath)
@@ -102,12 +159,46 @@ func main() {
 	case loginCmd:
 		if len(cmd.Args()) != 0 {
 			cmd.Usage()
-			return
+			os.Exit(1)
 		}
 
 		runLoginCmd(ctx, configPath)
 		return
+	case usersCmd:
+		cmd.Usage()
+		if len(cmd.Args()) != 0 {
+			os.Exit(1)
+		}
+		return
+	case usersCreateCmd:
+		runUsersCreate(usersCreateCmd)
+		return
+	case usersDeleteCmd:
+		runUsersDelete(usersDeleteCmd)
+		return
+	case usersListCmd:
+		runUsersList(usersListCmd)
+		return
+	case keysCmd:
+		cmd.Usage()
+		if len(cmd.Args()) != 0 {
+			os.Exit(1)
+		}
+		return
+	case keysCreateCmd:
+		runKeysCreate(keysCreateCmd, keysCreateAccessKey, keysCreateSecretKey)
+		return
+	case keysDeleteCmd:
+		runKeysDelete(keysDeleteCmd)
+		return
+	case keysListCmd:
+		runKeysList(keysListCmd)
+		return
 	case rootCmd:
+		if len(cmd.Args()) != 0 {
+			cmd.Usage()
+			os.Exit(1)
+		}
 	}
 
 	var logCores []zapcore.Core
@@ -169,11 +260,6 @@ func main() {
 	}
 	defer store.Close()
 
-	// before initializing the SDK, check whether we have at least one key pair configured
-	if len(cfg.Sia.KeyPairs) == 0 {
-		checkFatalError("Please provide at least one valid key pair. You can do so by updating the config file or running the 'config' command", sia.ErrNoAccessKey)
-	}
-
 	appKey, indexerURL, err := store.AppKey()
 	if errors.Is(err, sqlite.ErrNoAppKey) {
 		os.Stderr.WriteString("No app key found. Please run 's3d login' to register the app.\n")
@@ -187,17 +273,8 @@ func main() {
 		checkFatalError("failed to create SDK client", err)
 	}
 
-	var siaOpts []sia.Option
-	for _, kp := range cfg.Sia.KeyPairs {
-		siaOpts = append(siaOpts, sia.WithKeyPair(kp.AccessKey, kp.SecretKey))
-	}
-	siaOpts = append(siaOpts, sia.WithLogger(log.Named("backend")))
-	siaOpts = append(siaOpts, sia.WithDiskUsageLimit(cfg.Sia.DiskUsageLimit))
-
-	backend, err := sia.New(ctx, sia.NewSDK(sdkClient), store, cfg.Directory, siaOpts...)
-	if errors.Is(err, sia.ErrNoAccessKey) {
-		checkFatalError("Please provide at least one valid key pair. You can do so by updating the config file or running the 'config' command", err)
-	} else if err != nil {
+	backend, err := sia.New(ctx, sia.NewSDK(sdkClient), store, cfg.Directory, sia.WithDiskUsageLimit(cfg.Sia.DiskUsageLimit), sia.WithLogger(log.Named("backend")))
+	if err != nil {
 		checkFatalError("failed to create Sia backend", err)
 	}
 	defer backend.Close()
@@ -276,7 +353,7 @@ func checkFatalError(context string, err error) {
 	if err == nil {
 		return
 	}
-	os.Stderr.WriteString(fmt.Sprintf("%s: %s\n", context, err))
+	fmt.Fprintf(os.Stderr, "%s: %s\n", context, err)
 	os.Exit(1)
 }
 

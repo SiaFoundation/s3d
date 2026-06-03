@@ -157,7 +157,7 @@ func (s *Sia) openUpload(bucket, name string, filename *string, multipart bool, 
 	var reader io.Reader
 	var closer io.Closer
 	if multipart {
-		parts, err := s.store.ObjectParts(bucket, name)
+		parts, err := s.store.ObjectPartsByName(bucket, name)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get object parts: %w", err)
 		}
@@ -212,7 +212,7 @@ func (s *Sia) cleanupOrphan(path string, size int64) {
 // metadata that should be merged into the copied object except for the
 // x-amz-acl header.
 func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, replace bool, meta map[string]string) (*s3.CopyObjectResult, error) {
-	obj, orphanFile, orphanSize, err := s.store.CopyObject(srcBucket, srcObject, dstBucket, dstObject, meta, replace)
+	obj, orphanFile, orphanSize, err := s.store.CopyObject(accessKeyID, srcBucket, srcObject, dstBucket, dstObject, meta, replace)
 	if err != nil {
 		return nil, err
 	}
@@ -248,12 +248,16 @@ func (s *Sia) DeleteObject(ctx context.Context, accessKeyID, bucket string, obje
 // DeleteObjects deletes multiple objects from the specified bucket for the
 // user identified by the given access key.
 func (s *Sia) DeleteObjects(ctx context.Context, accessKeyID, bucket string, objects []s3.ObjectID) (*s3.ObjectsDeleteResult, error) {
+	if err := s.store.HeadBucket(accessKeyID, bucket); err != nil {
+		return nil, err
+	}
+
 	var result s3.ObjectsDeleteResult
 
 	for _, obj := range objects {
-		_, err := s.DeleteObject(ctx, accessKeyID, bucket, obj)
-		if errors.Is(err, s3errs.ErrNoSuchBucket) {
-			return nil, err
+		orphanFile, orphanSize, err := s.store.DeleteObject(accessKeyID, bucket, obj)
+		if err == nil && orphanFile != "" {
+			s.cleanupOrphan(filepath.Join(s.uploadDir(), orphanFile), orphanSize)
 		}
 
 		if err != nil && !errors.Is(err, s3errs.ErrNoSuchKey) {
@@ -288,11 +292,10 @@ func (s *Sia) HeadObject(ctx context.Context, accessKeyID *string, bucket, objec
 
 func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, object string, requestedRange *s3.ObjectRangeRequest, partNumber *int32, head bool) (*s3.Object, error) {
 	if accessKeyID == nil {
-		// anonymous access is not supported yet
 		return nil, s3errs.ErrAccessDenied
 	}
 
-	obj, err := s.store.GetObject(accessKeyID, bucket, object, partNumber)
+	obj, err := s.store.GetObject(*accessKeyID, bucket, object, partNumber)
 	if err != nil {
 		return nil, err
 	}
@@ -346,7 +349,7 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 		if errors.Is(err, fs.ErrNotExist) {
 			// the upload loop moved the file to Sia between our GetObject
 			// and file open, re-fetch to get the updated metadata and retry
-			obj, err = s.store.GetObject(accessKeyID, bucket, object, partNumber)
+			obj, err = s.store.GetObject(*accessKeyID, bucket, object, partNumber)
 			if err != nil {
 				return nil, err
 			} else if obj.FileName != nil {
@@ -389,17 +392,27 @@ func (s *Sia) ListObjects(ctx context.Context, accessKeyID *string, bucket strin
 		return nil, s3errs.ErrAccessDenied
 	}
 
-	// quick check if the bucket exists
-	if err := s.store.HeadBucket(*accessKeyID, bucket); err != nil {
+	result, err := s.store.ListObjects(*accessKeyID, bucket, prefix, page)
+	if err != nil {
 		return nil, err
 	}
 
-	return s.store.ListObjects(accessKeyID, bucket, prefix, page)
+	// populate owner info if requested
+	if page.FetchOwner != nil && *page.FetchOwner {
+		owner, err := s.UserInfo(ctx, *accessKeyID)
+		if err != nil {
+			return nil, err
+		}
+		for i := range result.Contents {
+			result.Contents[i].Owner = owner
+		}
+	}
+	return result, nil
 }
 
 // PutObject puts an object with the given key into the specified bucket.
 func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object string, r io.Reader, opts s3.PutObjectOptions) (_ *s3.PutObjectResult, err error) {
-	// quick check if the bucket exists
+	// fail fast if the bucket is inaccessible before streaming the body to disk
 	if err := s.store.HeadBucket(accessKeyID, bucket); err != nil {
 		return nil, err
 	}

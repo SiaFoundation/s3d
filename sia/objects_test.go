@@ -251,10 +251,15 @@ func TestPutObject(t *testing.T) {
 		}
 		t.Cleanup(func() { store.Close() })
 
+		if err := store.CreateUser(testutil.Owner); err != nil {
+			t.Fatal(err)
+		} else if err := store.CreateAccessKey(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey); err != nil {
+			t.Fatal(err)
+		}
+
 		memSDK := NewMemorySDK()
 		memSDK.SetSlabSize(24)
 		backend, err := sia.New(t.Context(), memSDK, store, dir,
-			sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
 			sia.WithLogger(log))
 		if err != nil {
 			t.Fatal(err)
@@ -275,7 +280,7 @@ func TestPutObject(t *testing.T) {
 		}
 
 		// verify the object is on disk
-		obj, err := store.GetObject(aws.String(testutil.AccessKeyID), bucket, "pending", nil)
+		obj, err := store.GetObject(testutil.AccessKeyID, bucket, "pending", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -304,7 +309,7 @@ func TestPutObject(t *testing.T) {
 		backend.UploadObjects(t.Context())
 
 		// verify the object is now on Sia
-		obj, err = store.GetObject(aws.String(testutil.AccessKeyID), bucket, "pending", nil)
+		obj, err = store.GetObject(testutil.AccessKeyID, bucket, "pending", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -758,13 +763,18 @@ func TestSyncMetadata(t *testing.T) {
 	}
 	t.Cleanup(func() { store.Close() })
 
-	siaBackend, err := sia.New(t.Context(), memSDK, store, dir, sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey), sia.WithLogger(log))
+	if err := store.CreateUser(testutil.Owner); err != nil {
+		t.Fatal(err)
+	} else if err := store.CreateAccessKey(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey); err != nil {
+		t.Fatal(err)
+	}
+
+	siaBackend, err := sia.New(t.Context(), memSDK, store, dir, sia.WithLogger(log))
 	if err != nil {
 		t.Fatal(err)
 	}
 	s3Tester := testutil.NewTester(t, testutil.WithBackend(siaBackend))
 
-	accessKeyID := testutil.AccessKeyID
 	const bucket = "bucket"
 	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 		t.Fatal(err)
@@ -780,7 +790,7 @@ func TestSyncMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	obj, err := store.GetObject(nil, bucket, "obj", nil)
+	obj, err := store.GetObject(testutil.AccessKeyID, bucket, "obj", nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.FileName == nil {
@@ -792,7 +802,7 @@ func TestSyncMetadata(t *testing.T) {
 	}
 
 	// record the original sealed object
-	origObj, err := store.GetObject(&accessKeyID, bucket, "obj", nil)
+	origObj, err := store.GetObject(testutil.AccessKeyID, bucket, "obj", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -828,7 +838,7 @@ func TestSyncMetadata(t *testing.T) {
 	}
 
 	// the object's sia_object should have been re-sealed by the sync
-	objAfter, err := store.GetObject(&accessKeyID, bucket, "obj", nil)
+	objAfter, err := store.GetObject(testutil.AccessKeyID, bucket, "obj", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -945,7 +955,7 @@ func TestOverwritePendingObjectCleansUpFile(t *testing.T) {
 	uploadsDir := filepath.Join(dir, sia.UploadsDirectory)
 	pendingFilename := func(t *testing.T, object string) string {
 		t.Helper()
-		obj, err := store.GetObject(aws.String(testutil.AccessKeyID), bucket, object, nil)
+		obj, err := store.GetObject(testutil.AccessKeyID, bucket, object, nil)
 		if err != nil {
 			t.Fatal(err)
 		} else if obj.FileName == nil {
@@ -1028,7 +1038,7 @@ func TestOverwritePendingObjectCleansUpFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertRemoved(t, mpDir)
-	parts, err := store.ObjectParts(bucket, "mp")
+	parts, err := store.ObjectPartsByName(bucket, "mp")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1046,13 +1056,18 @@ func TestDiskUsageLimit(t *testing.T) {
 	}
 	t.Cleanup(func() { store.Close() })
 
+	if err := store.CreateUser(testutil.Owner); err != nil {
+		t.Fatal(err)
+	} else if err := store.CreateAccessKey(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey); err != nil {
+		t.Fatal(err)
+	}
+
 	const limit = 500
 	memSDK := NewMemorySDK()
 	memSDK.SetSlabSize(100)
 	backend, err := sia.New(t.Context(), memSDK, store, dir,
 		sia.WithUploadDisabled(),
 		sia.WithDiskUsageLimit(limit),
-		sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
 		sia.WithLogger(log))
 	if err != nil {
 		t.Fatal(err)
@@ -1115,11 +1130,16 @@ func TestDiskUsageLimitOngoingMultipartUpload(t *testing.T) {
 	}
 	t.Cleanup(func() { store.Close() })
 
+	if err := store.CreateUser(testutil.Owner); err != nil {
+		t.Fatal(err)
+	} else if err := store.CreateAccessKey(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey); err != nil {
+		t.Fatal(err)
+	}
+
 	const limit = 20
 	backend, err := sia.New(t.Context(), NewMemorySDK(), store, dir,
 		sia.WithUploadDisabled(),
 		sia.WithDiskUsageLimit(limit),
-		sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
 		sia.WithLogger(log))
 	if err != nil {
 		t.Fatal(err)
@@ -1174,11 +1194,16 @@ func TestDiskUsageLimitOverwriteCleanup(t *testing.T) {
 	}
 	t.Cleanup(func() { store.Close() })
 
+	if err := store.CreateUser(testutil.Owner); err != nil {
+		t.Fatal(err)
+	} else if err := store.CreateAccessKey(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey); err != nil {
+		t.Fatal(err)
+	}
+
 	const limit = 200
 	backend, err := sia.New(t.Context(), NewMemorySDK(), store, dir,
 		sia.WithUploadDisabled(),
 		sia.WithDiskUsageLimit(limit),
-		sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
 		sia.WithLogger(log))
 	if err != nil {
 		t.Fatal(err)
@@ -1237,7 +1262,13 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	}
 	t.Cleanup(func() { store.Close() })
 
-	siaBackend, err := sia.New(t.Context(), memSDK, store, dir, sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey), sia.WithLogger(log))
+	if err := store.CreateUser(testutil.Owner); err != nil {
+		t.Fatal(err)
+	} else if err := store.CreateAccessKey(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey); err != nil {
+		t.Fatal(err)
+	}
+
+	siaBackend, err := sia.New(t.Context(), memSDK, store, dir, sia.WithLogger(log))
 	if err != nil {
 		t.Fatal(err)
 	}

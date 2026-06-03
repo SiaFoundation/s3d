@@ -10,14 +10,6 @@ import (
 // Such as a VersionID or location.
 const Null = "null"
 
-// GlobalUserInfo is a static placeholder for all responses requiring user info.
-// Once we add authentication, this will be passed tied to the authenticated
-// user and persisted in the backend.
-var GlobalUserInfo = &UserInfo{
-	ID:          "bcaf1ffd86f41161ca5fb16fd081034f",
-	DisplayName: "S3D",
-}
-
 // Common types
 type (
 	// UserInfo represents the owner of a resource

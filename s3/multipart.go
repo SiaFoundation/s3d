@@ -310,12 +310,17 @@ func (s *s3) listMultipartUploads(w http.ResponseWriter, r *http.Request, access
 		resp.CommonPrefixes = append(resp.CommonPrefixes, CommonPrefix{Prefix: cp})
 	}
 
+	owner, err := s.backend.UserInfo(r.Context(), accessKeyID)
+	if err != nil {
+		return err
+	}
+
 	for _, upload := range result.Uploads {
 		resp.Uploads = append(resp.Uploads, ListedMultipartUpload{
 			Key:          upload.Key,
 			UploadID:     upload.UploadID.String(),
-			Initiator:    GlobalUserInfo,
-			Owner:        GlobalUserInfo,
+			Initiator:    owner,
+			Owner:        owner,
 			StorageClass: StorageClass("STANDARD"),
 			Initiated:    NewContentTime(upload.Initiated),
 		})
@@ -467,20 +472,12 @@ func (s *s3) listUploadParts(w http.ResponseWriter, r *http.Request, accessKeyID
 		}
 	}
 
-	resp.Owner = GlobalUserInfo
-	if result.OwnerID != "" || result.OwnerDisplayName != "" {
-		resp.Owner = &UserInfo{
-			ID:          result.OwnerID,
-			DisplayName: result.OwnerDisplayName,
-		}
+	owner, err := s.backend.UserInfo(r.Context(), accessKeyID)
+	if err != nil {
+		return err
 	}
-	resp.Initiator = GlobalUserInfo
-	if result.InitiatorID != "" || result.InitiatorDisplayName != "" {
-		resp.Initiator = &UserInfo{
-			ID:          result.InitiatorID,
-			DisplayName: result.InitiatorDisplayName,
-		}
-	}
+	resp.Owner = owner
+	resp.Initiator = owner
 
 	for _, part := range result.Parts {
 		resp.Parts = append(resp.Parts, ListedPartResponse{

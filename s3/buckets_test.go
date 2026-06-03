@@ -58,6 +58,10 @@ func TestBuckets(t *testing.T) {
 		err = otherTester.HeadBucket(t.Context(), bucket)
 		testutil.AssertS3StatusCode(t, s3errs.ErrAccessDenied, err)
 
+		// bucket location should not be readable by other account
+		_, err = otherTester.BucketLocation(t.Context(), bucket)
+		testutil.AssertS3StatusCode(t, s3errs.ErrAccessDenied, err)
+
 		// make sure it shows up in the list
 		buckets, err := s3Tester.ListBuckets(t.Context())
 		if err != nil {
@@ -72,6 +76,10 @@ func TestBuckets(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+
+		// re-creating an owned bucket should fail with BucketAlreadyOwnedByYou
+		err = s3Tester.CreateBucket(t.Context(), bucket)
+		testutil.AssertS3Error(t, s3errs.ErrBucketAlreadyOwnedByYou, err)
 
 		// creating a bucket with invalid name should fail
 		err = s3Tester.CreateBucket(t.Context(), "invalid_bucket")

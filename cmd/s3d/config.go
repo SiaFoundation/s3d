@@ -3,8 +3,6 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"encoding/base32"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
@@ -14,10 +12,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/SiaFoundation/s3d/sia"
 	"go.uber.org/zap"
 	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
-	"lukechampine.com/frand"
 )
 
 type (
@@ -55,16 +53,8 @@ type (
 		AdminPassword string `yaml:"adminPassword"`
 	}
 
-	// KeyPair contains an S3 access key and secret key pair.
-	KeyPair struct {
-		AccessKey string `yaml:"accessKey"`
-		SecretKey string `yaml:"secretKey"`
-	}
-
 	// Sia contains the configuration for the Sia backend.
 	Sia struct {
-		KeyPairs []KeyPair `yaml:"keyPairs"`
-
 		DiskUsageLimit uint64 `yaml:"diskUsageLimit"`
 	}
 
@@ -73,8 +63,8 @@ type (
 		ApiAddress string `yaml:"apiAddress"`
 		Directory  string `yaml:"directory"`
 		Log        Log    `yaml:"log"`
-		S3         S3     `yaml:"s3"`
 		Sia        Sia    `yaml:"sia"`
+		S3         S3     `yaml:"s3"`
 	}
 )
 
@@ -121,19 +111,9 @@ func runConfigCmd(fp string) {
 	fmt.Println("")
 	setDataDirectory()
 
-	fmt.Println("")
-	if len(cfg.Sia.KeyPairs) > 0 {
-		fmt.Println(ansiStyle("33", fmt.Sprintf("%d access keypair(s) already configured.", len(cfg.Sia.KeyPairs))))
-		fmt.Println("If you change them, you will need to update any scripts or applications that use the S3 API.")
-		if promptYesNo("Would you like to reconfigure your access keypairs?") {
-			cfg.Sia.KeyPairs = nil
-			setKeypairs()
-		}
-	} else {
-		setKeypairs()
-	}
-
 	setAdvancedConfig()
+
+	setAccessKeyPairs()
 
 	// write the config file
 	f, err := os.Create(fp)
@@ -172,20 +152,6 @@ func configPath() string {
 	}
 }
 
-func generateAccessKey() (accessKey, secretKey string) {
-	// 12 random bytes encode to exactly 20 base32 characters
-	akBytes := make([]byte, 12)
-	frand.Read(akBytes)
-	accessKey = base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(akBytes)
-
-	// 30 random bytes encode to exactly 40 base64 characters
-	skBytes := make([]byte, 30)
-	frand.Read(skBytes)
-	secretKey = base64.StdEncoding.EncodeToString(skBytes)
-
-	return
-}
-
 func humanList(s []string, sep string) string {
 	if len(s) == 0 {
 		return ""
@@ -210,6 +176,47 @@ func humanList(s []string, sep string) string {
 	return sb.String()
 }
 
+func setAccessKeyPairs() {
+	fmt.Println("")
+	if !promptYesNo("Would you like to create an initial S3 user and access key now?") {
+		fmt.Println("")
+		fmt.Println("To create S3 access credentials later, run:")
+		fmt.Println("  s3d users create <username>")
+		fmt.Println("  s3d keys create <username>")
+		return
+	}
+
+	store, err := openStore(zap.NewNop())
+	checkFatalError("failed to open database", err)
+	defer store.Close()
+
+	var userName string
+	for {
+		userName = readInput("Enter user name")
+		if userName == "" {
+			stdoutError("User name must not be empty.")
+			continue
+		}
+		err := store.CreateUser(userName)
+		if err == nil {
+			break
+		} else if errors.Is(err, sia.ErrUserAlreadyExists) {
+			fmt.Printf("User %q already exists, reusing it.\n", userName)
+			break
+		}
+		checkFatalError("failed to create user", err)
+	}
+
+	accessKey, secretKey := generateAccessKey()
+	checkFatalError("failed to create access key", store.CreateAccessKey(userName, accessKey, secretKey))
+
+	fmt.Println("")
+	fmt.Printf("  Access Key: %s\n", accessKey)
+	fmt.Printf("  Secret Key: %s\n", secretKey)
+	fmt.Println("")
+	fmt.Println(ansiStyle("1", "Save these credentials. The secret key will not be shown again."))
+}
+
 func setAdvancedConfig() {
 	fmt.Println("")
 	if !promptYesNo("Would you like to configure advanced settings?") {
@@ -225,54 +232,6 @@ func setAdvancedConfig() {
 	fmt.Println("The HTTP address is used to serve the S3 API.")
 	fmt.Println("It should only be exposed to the public internet via an https reverse proxy")
 	setListenAddress("HTTP Address", &cfg.ApiAddress)
-}
-
-func setKeypairs() {
-	for {
-		var kp KeyPair
-
-		fmt.Println("Enter an access key id for the S3 API.")
-		fmt.Println("(It must be between 16 and 128 characters. Leave blank to auto-generate a keypair.)")
-
-		for {
-			kp.AccessKey = readInput("Enter access key")
-			if kp.AccessKey == "" {
-				kp.AccessKey, kp.SecretKey = generateAccessKey()
-				fmt.Println("")
-				fmt.Println("Generated keypair:")
-				fmt.Printf("  Access Key: %s\n", kp.AccessKey)
-				fmt.Printf("  Secret Key: %s\n", kp.SecretKey)
-				fmt.Println("")
-				fmt.Println(ansiStyle("33", "Save these credentials. The secret key is stored in the config file."))
-				break
-			} else if len(kp.AccessKey) >= 16 && len(kp.AccessKey) <= 128 {
-				break
-			}
-			fmt.Println(ansiStyle("31", "Access key id must be between 16 and 128 characters."))
-			fmt.Println("")
-		}
-
-		// only prompt for secret key if not auto-generated
-		if kp.SecretKey == "" {
-			for {
-				fmt.Println("Enter a secret key for the S3 API.")
-				fmt.Println("(It must be between 32 and 128 characters.)")
-				kp.SecretKey = readPasswordInput("Enter secret key")
-				if len(kp.SecretKey) >= 32 && len(kp.SecretKey) <= 128 {
-					break
-				}
-				fmt.Println(ansiStyle("31", "Secret key must be between 32 and 128 characters."))
-				fmt.Println("")
-			}
-		}
-
-		cfg.Sia.KeyPairs = append(cfg.Sia.KeyPairs, kp)
-		fmt.Println("")
-		if !promptYesNo("Would you like to add another keypair?") {
-			break
-		}
-		fmt.Println("")
-	}
 }
 
 func setListenAddress(context string, value *string) {

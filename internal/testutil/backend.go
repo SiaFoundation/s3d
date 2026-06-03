@@ -152,7 +152,7 @@ func (b *MemoryBackend) CreateBucket(ctx context.Context, accessKeyID, name stri
 	if _, exists := b.accessKeys[accessKeyID]; !exists {
 		return s3errs.ErrInvalidAccessKeyId
 	} else if bkt, exists := b.buckets[name]; exists && bkt.owner == b.accessKeys[accessKeyID].owner {
-		return nil
+		return s3errs.ErrBucketAlreadyOwnedByYou
 	} else if exists {
 		return s3errs.ErrBucketAlreadyExists
 	}
@@ -755,6 +755,18 @@ func (b *MemoryBackend) ListBuckets(ctx context.Context, accessKeyID string) ([]
 // UploadStats returns empty upload stats for the in-memory backend.
 func (b *MemoryBackend) UploadStats(_ context.Context) (s3.UploadStats, error) {
 	return s3.UploadStats{}, nil
+}
+
+// UserInfo returns user information for the given access key ID.
+func (b *MemoryBackend) UserInfo(_ context.Context, accessKeyID string) (*s3.UserInfo, error) {
+	ak, exists := b.accessKeys[accessKeyID]
+	if !exists {
+		return nil, s3errs.ErrInvalidAccessKeyId
+	}
+	return &s3.UserInfo{
+		ID:          ak.owner,
+		DisplayName: ak.owner,
+	}, nil
 }
 
 // LoadSecret loads the secret access key for the given access key ID.

@@ -189,7 +189,7 @@ func TestMultipartAddPart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parts, err := store.MultipartParts(bucket, object, uid)
+	parts, err := store.MultipartParts(testutil.AccessKeyID, bucket, object, uid)
 	if err != nil {
 		t.Fatal(err)
 	} else if len(parts) != 1 {
@@ -501,10 +501,15 @@ func TestMultipartUpload(t *testing.T) {
 	}
 	t.Cleanup(func() { store.Close() })
 
+	if err := store.CreateUser(testutil.Owner); err != nil {
+		t.Fatal(err)
+	} else if err := store.CreateAccessKey(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey); err != nil {
+		t.Fatal(err)
+	}
+
 	memSDK := NewMemorySDK()
 	memSDK.SetSlabSize(24) // small slab so the test object meets the upload threshold
 	backend, err := sia.New(t.Context(), memSDK, store, dir,
-		sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
 		sia.WithLogger(log))
 	if err != nil {
 		t.Fatal(err)
@@ -542,7 +547,7 @@ func TestMultipartUpload(t *testing.T) {
 	}
 
 	// verify the completed object references the upload directory
-	obj, err := store.GetObject(aws.String(testutil.AccessKeyID), bucket, object, nil)
+	obj, err := store.GetObject(testutil.AccessKeyID, bucket, object, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -573,7 +578,7 @@ func TestMultipartUpload(t *testing.T) {
 	backend.UploadObjects(t.Context())
 
 	// verify the object is now on Sia
-	obj, err = store.GetObject(aws.String(testutil.AccessKeyID), bucket, object, nil)
+	obj, err = store.GetObject(testutil.AccessKeyID, bucket, object, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

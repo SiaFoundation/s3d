@@ -19,6 +19,9 @@ import (
 type Backend interface {
 	auth.KeyStore
 
+	// UserInfo returns user information for the given access key ID.
+	UserInfo(ctx context.Context, accessKeyID string) (*UserInfo, error)
+
 	// CopyObject copies an object from the source bucket and object key to the
 	// destination bucket and object key. The provided metadata map contains any
 	// metadata that should either be merged into the copied object or replace
