@@ -305,15 +305,28 @@ func (r *chunkedPayloadTrailerReader) Read(p []byte) (int, error) {
 func (r *chunkedPayloadTrailerReader) assertTrailerHeaders(expectedHeaders map[string]struct{}) (http.Header, error) {
 	parsedHeaders := make(http.Header)
 
+	// on the signed-trailer variant, minio-go inserts a spurious blank
+	// line between the trailer headers and the trailer-signature line.
+	// skipBlank allows that single blank line through; the blank line
+	// after the signature still terminates the block.
+	skipBlank := r.verifier != nil && r.expectedHeaders != nil
 	for {
-		// read a line from the buffer
 		line, err := readCRLFLine(r.br)
 		if err != nil {
+			// EOF after we already swallowed a blank line means the
+			// signature line we were waiting for never arrived; surface
+			// that as a signature error rather than a generic parse error.
+			if !skipBlank && r.verifier != nil && r.expectedHeaders != nil && r.trailerSig == "" && errors.Is(err, io.EOF) {
+				return nil, s3errs.ErrInvalidSignature
+			}
 			return nil, s3errs.ErrInvalidArgument
 		}
 
-		// an empty line indicates the end of the headers
 		if line == "" {
+			if skipBlank && r.trailerSig == "" {
+				skipBlank = false
+				continue
+			}
 			break
 		}
 
@@ -458,14 +471,17 @@ func parseChunkHeader(line string) (int64, string, error) {
 	return n, sig, nil
 }
 
+// readCRLFLine reads a line terminated by LF, with or without a preceding CR.
+// RFC 9112 §2.2 mandates CRLF but allows recipients to accept bare LF for
+// interop; minio-go in particular emits bare LF for trailer header lines.
 func readCRLFLine(br *bufio.Reader) (string, error) {
-	// read until '\n' and ensure it ends with "\r\n".
 	b, err := br.ReadBytes('\n')
 	if err != nil {
 		return "", err
 	}
-	if len(b) < 2 || b[len(b)-2] != '\r' {
-		return "", fmt.Errorf("malformed chunk header: missing CRLF")
+	b = b[:len(b)-1] // strip LF
+	if len(b) > 0 && b[len(b)-1] == '\r' {
+		b = b[:len(b)-1] // strip optional CR
 	}
-	return string(b[:len(b)-2]), nil // strip CRLF
+	return string(b), nil
 }
