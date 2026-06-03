@@ -51,7 +51,7 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *st
 	case http.MethodGet:
 		// nolint:gocritic
 		if _, ok := q["location"]; ok {
-			return s.bucketLocation(w, r, bucket)
+			return s.bucketLocation(w, r, validatedKey, bucket)
 		} else if q.Get("list-type") == "2" {
 			return s.listObjectsV2(w, r, accessKeyID, bucket)
 		} else {
@@ -78,8 +78,12 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *st
 // bucketLocation handles GET Bucket location requests.
 //
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketLocation.html
-func (s *s3) bucketLocation(w http.ResponseWriter, r *http.Request, bucket string) error {
+func (s *s3) bucketLocation(w http.ResponseWriter, r *http.Request, accessKeyID, bucket string) error {
 	s.logger.Debug("getting bucket location", zap.String("bucket", bucket))
+
+	if err := s.backend.HeadBucket(r.Context(), accessKeyID, bucket); err != nil {
+		return err
+	}
 
 	region := s.region
 	if region == "" {
@@ -102,6 +106,15 @@ func (s *s3) createBucket(w http.ResponseWriter, r *http.Request, accessKeyID, b
 
 	if err := ValidateBucketName(bucket); err != nil {
 		return err
+	}
+
+	q := r.URL.Query()
+	if _, hasACL := q["acl"]; hasACL {
+		return s3errs.ErrNotImplemented // ACLs are not implemented
+	} else if _, hasPolicy := q["policy"]; hasPolicy {
+		return s3errs.ErrNotImplemented // Bucket policies are not implemented
+	} else if _, hasLifecycle := q["lifecycle"]; hasLifecycle {
+		return s3errs.ErrNotImplemented // Bucket lifecycles are not implemented
 	}
 
 	if err := s.backend.CreateBucket(r.Context(), accessKeyID, bucket); err != nil {
@@ -147,10 +160,15 @@ func (s *s3) listBuckets(w http.ResponseWriter, r *http.Request, accessKeyID *st
 		return err
 	}
 
+	owner, err := s.backend.UserInfo(r.Context(), validatedKey)
+	if err != nil {
+		return err
+	}
+
 	resp := &ListBucketsResponse{
 		Xmlns:   "http://s3.amazonaws.com/doc/2006-03-01/",
 		Buckets: buckets,
-		Owner:   GlobalUserInfo,
+		Owner:   owner,
 	}
 	return writeXMLResponse(w, http.StatusOK, resp)
 }

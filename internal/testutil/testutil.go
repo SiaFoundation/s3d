@@ -78,7 +78,10 @@ func (t *S3Tester) BucketLocation(ctx context.Context, bucket string) (string, e
 	resp, err := t.client.GetBucketLocation(ctx, &service.GetBucketLocationInput{
 		Bucket: aws.String(bucket),
 	})
-	return string(resp.LocationConstraint), err
+	if err != nil {
+		return "", err
+	}
+	return string(resp.LocationConstraint), nil
 }
 
 // CopyObject is a convenience wrapper around the AWS SDK's CopyObject API.

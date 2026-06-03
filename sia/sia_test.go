@@ -208,9 +208,16 @@ func NewTester(t testing.TB, opts ...testutil.TesterOption) *testutil.S3Tester {
 }
 
 func NewCustomTester(t testing.TB, dir string, store sia.Store, sdk sia.SDK, log *zap.Logger, opts ...testutil.TesterOption) *testutil.S3Tester {
+	// ensure the test user and access key exist in the store
+	if err := store.CreateUser(testutil.Owner); err != nil && !errors.Is(err, sia.ErrUserAlreadyExists) {
+		t.Fatal(err)
+	}
+	if err := store.CreateAccessKey(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey); err != nil && !errors.Is(err, sia.ErrAccessKeyAlreadyExists) {
+		t.Fatal(err)
+	}
+
 	backend, err := sia.New(t.Context(), sdk, store, dir,
 		sia.WithUploadDisabled(),
-		sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
 		sia.WithLogger(log))
 	if err != nil {
 		t.Fatal(err)
@@ -245,6 +252,13 @@ func TestDeleteOrphanedUploads(t *testing.T) {
 	}
 	t.Cleanup(func() { store.Close() })
 
+	// create test user and access key
+	if err := store.CreateUser(testutil.Owner); err != nil {
+		t.Fatal(err)
+	} else if err := store.CreateAccessKey(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey); err != nil {
+		t.Fatal(err)
+	}
+
 	// create bucket
 	if err := store.CreateBucket(testutil.AccessKeyID, "bucket"); err != nil {
 		t.Fatal(err)
@@ -254,7 +268,6 @@ func TestDeleteOrphanedUploads(t *testing.T) {
 	memSDK := NewMemorySDK()
 	backend, err := sia.New(t.Context(), memSDK, store, dir,
 		sia.WithUploadDisabled(),
-		sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey),
 		sia.WithLogger(log))
 	if err != nil {
 		t.Fatal(err)
@@ -278,7 +291,7 @@ func TestDeleteOrphanedUploads(t *testing.T) {
 	createMultipart := func(uid s3.UploadID, referenced bool) {
 		t.Helper()
 		if referenced {
-			if err := store.CreateMultipartUpload("bucket", uid.String(), uid, nil); err != nil {
+			if err := store.CreateMultipartUpload(testutil.AccessKeyID, "bucket", uid.String(), uid, nil); err != nil {
 				t.Fatal(err)
 			}
 		}

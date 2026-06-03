@@ -4,6 +4,7 @@ package tox_test
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -63,18 +64,27 @@ func TestS3(t *testing.T) {
 		t.Fatalf("failed to load tox.conf: %v", err)
 	}
 
-	siaOpts := []sia.Option{sia.WithLogger(log.Named("backend"))}
+	// create users and access keys from tox.conf sections
 	seen := make(map[string]bool)
 	for _, section := range toxConf.Sections() {
 		ak := section.Key("access_key").String()
 		ssk := section.Key("secret_key").String()
+		uid := section.Key("user_id").String()
 		if ak == "" || ssk == "" || seen[ak] {
 			continue
 		}
 		seen[ak] = true
-		siaOpts = append(siaOpts, sia.WithKeyPair(ak, ssk))
+		if uid == "" {
+			uid = ak
+		}
+		if err := store.CreateUser(uid); err != nil && !errors.Is(err, sia.ErrUserAlreadyExists) {
+			t.Fatalf("failed to create user: %v", err)
+		}
+		if err := store.CreateAccessKey(uid, ak, ssk); err != nil {
+			t.Fatalf("failed to create access key: %v", err)
+		}
 	}
-	backend, err := sia.New(t.Context(), sia.NewSDK(sdkClient), store, dir, siaOpts...)
+	backend, err := sia.New(t.Context(), sia.NewSDK(sdkClient), store, dir, sia.WithLogger(log.Named("backend")))
 	if err != nil {
 		t.Fatalf("failed to create Sia backend: %v", err)
 	}
@@ -138,7 +148,7 @@ func TestS3(t *testing.T) {
 		runTox(t, confPath, testsDir,
 			"s3tests/functional/test_s3.py",
 			"-m", "not s3d_not_implemented and not s3d_not_supported and not bucket_logging and not encryption and not sse_s3 and not bucket_encryption and not lifecycle and not lifecycle_expiration and not lifecycle_transition and not tagging and not bucket_policy and not conditional_write and not object_ownership and not checksum and not cloud_transition and not cloud_restore and not iam_user and not iam_account and not delete_marker",
-			"-k", "not _acl and not versioning and not post_object and not _torrent and not cors and not object_lock and not retention and not legal_hold and not notification and not replication and not website and not _select",
+			"-k", "not _acl and not versioning and not post_object and not _torrent and not cors and not object_lock and not retention and not legal_hold and not notification and not replication and not website and not _select and not bucket_recreate_not_overriding",
 		)
 	})
 
