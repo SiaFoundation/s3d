@@ -84,8 +84,6 @@ func runKeysCreate(cmd *flag.FlagSet, accessKey, secretKey string) {
 	fmt.Println("")
 	fmt.Printf("  Access Key: %s\n", accessKey)
 	fmt.Printf("  Secret Key: %s\n", secretKey)
-	fmt.Println("")
-	fmt.Println("Save these credentials. The secret key will not be shown again.")
 }
 
 func runKeysDelete(cmd *flag.FlagSet) {
@@ -127,6 +125,6 @@ func runKeysList(cmd *flag.FlagSet) {
 		return
 	}
 	for _, k := range keys {
-		fmt.Printf("%s\t%s\n", k.AccessKeyID, k.UserName)
+		fmt.Printf("%s\t%s\t%s\n", k.AccessKeyID, k.SecretKey, k.UserName)
 	}
 }

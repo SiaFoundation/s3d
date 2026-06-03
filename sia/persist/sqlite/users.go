@@ -138,13 +138,13 @@ func (s *Store) ListAccessKeys(userName *string) ([]sia.AccessKeyInfo, error) {
 		var err error
 		if userName == nil {
 			r, err = tx.Query(`
-				SELECT ak.access_key_id, u.name
+				SELECT ak.access_key_id, ak.secret_key, u.name
 				FROM access_keys ak
 				INNER JOIN users u ON ak.user_id = u.id
 				ORDER BY u.name ASC, ak.access_key_id ASC`)
 		} else {
 			r, err = tx.Query(`
-				SELECT ak.access_key_id, u.name
+				SELECT ak.access_key_id, ak.secret_key, u.name
 				FROM access_keys ak
 				INNER JOIN users u ON ak.user_id = u.id
 				WHERE u.name = $1
@@ -157,7 +157,7 @@ func (s *Store) ListAccessKeys(userName *string) ([]sia.AccessKeyInfo, error) {
 
 		for r.Next() {
 			var k sia.AccessKeyInfo
-			if err := r.Scan(&k.AccessKeyID, &k.UserName); err != nil {
+			if err := r.Scan(&k.AccessKeyID, &k.SecretKey, &k.UserName); err != nil {
 				return err
 			}
 			keys = append(keys, k)

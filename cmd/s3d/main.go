@@ -25,6 +25,32 @@ import (
 const (
 	configFileEnvVar = "S3D_CONFIG_FILE"
 	dataDirEnvVar    = "S3D_DATA_DIR"
+
+	rootUsage = `Usage:
+s3d [flags] [command]
+
+Run 's3d' with no command to start the S3 gateway daemon.
+
+Commands:
+	version		Print the s3d version
+	config		Interactively configure s3d
+	login		Register this s3d instance with the indexer
+	users		Manage users
+	keys		Manage S3 access keys
+`
+
+	versionUsage = `Usage: s3d version
+
+Print the s3d version.`
+
+	configUsage = `Usage: s3d config
+
+Interactively configure s3d. The resulting config will be saved to s3d.yml or
+the file specified by the S3D_CONFIG_FILE environment variable.`
+
+	loginUsage = `Usage: s3d login
+
+Register this s3d instance with the indexer and obtain an app key.`
 )
 
 var cfg = Config{
@@ -53,10 +79,11 @@ func main() {
 	defer cancel()
 
 	rootCmd := flagg.Root
+	rootCmd.Usage = flagg.SimpleUsage(rootCmd, rootUsage)
 	rootCmd.StringVar(&cfg.ApiAddress, "api.s3", cfg.ApiAddress, "address to serve S3 API on")
-	versionCmd := flagg.New("version", ``)
-	configCmd := flagg.New("config", ``)
-	loginCmd := flagg.New("login", ``)
+	versionCmd := flagg.New("version", versionUsage)
+	configCmd := flagg.New("config", configUsage)
+	loginCmd := flagg.New("login", loginUsage)
 
 	usersCmd := flagg.New("users", usersUsage)
 	usersCreateCmd := flagg.New("create", usersCreateUsage)
@@ -112,7 +139,7 @@ func main() {
 	case versionCmd:
 		if len(cmd.Args()) != 0 {
 			cmd.Usage()
-			return
+			os.Exit(1)
 		}
 
 		fmt.Println("s3d", build.Version())
@@ -122,7 +149,7 @@ func main() {
 	case configCmd:
 		if len(cmd.Args()) != 0 {
 			cmd.Usage()
-			return
+			os.Exit(1)
 		}
 
 		runConfigCmd(configPath)
@@ -130,13 +157,16 @@ func main() {
 	case loginCmd:
 		if len(cmd.Args()) != 0 {
 			cmd.Usage()
-			return
+			os.Exit(1)
 		}
 
 		runLoginCmd(ctx, configPath)
 		return
 	case usersCmd:
 		cmd.Usage()
+		if len(cmd.Args()) != 0 {
+			os.Exit(1)
+		}
 		return
 	case usersCreateCmd:
 		runUsersCreate(usersCreateCmd)
@@ -149,6 +179,9 @@ func main() {
 		return
 	case keysCmd:
 		cmd.Usage()
+		if len(cmd.Args()) != 0 {
+			os.Exit(1)
+		}
 		return
 	case keysCreateCmd:
 		runKeysCreate(keysCreateCmd, keysCreateAccessKey, keysCreateSecretKey)
@@ -160,6 +193,10 @@ func main() {
 		runKeysList(keysListCmd)
 		return
 	case rootCmd:
+		if len(cmd.Args()) != 0 {
+			cmd.Usage()
+			os.Exit(1)
+		}
 	}
 
 	var logCores []zapcore.Core
@@ -278,7 +315,7 @@ func checkFatalError(context string, err error) {
 	if err == nil {
 		return
 	}
-	os.Stderr.WriteString(fmt.Sprintf("%s: %s\n", context, err))
+	fmt.Fprintf(os.Stderr, "%s: %s\n", context, err)
 	os.Exit(1)
 }
 

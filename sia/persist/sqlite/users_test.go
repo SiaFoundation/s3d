@@ -104,6 +104,8 @@ func TestAccessKeysCRUD(t *testing.T) {
 		t.Fatal("expected 2 keys for alice", len(keys))
 	} else if keys[0].AccessKeyID != "AKID1" || keys[1].AccessKeyID != "AKID2" {
 		t.Fatal("unexpected keys", keys[0].AccessKeyID, keys[1].AccessKeyID)
+	} else if keys[0].SecretKey != "secret1" || keys[1].SecretKey != "secret2" {
+		t.Fatal("unexpected secrets", keys[0].SecretKey, keys[1].SecretKey)
 	} else if keys[0].UserName != "alice" {
 		t.Fatal("unexpected user", keys[0].UserName)
 	}

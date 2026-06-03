@@ -112,6 +112,7 @@ type SDK interface {
 // AccessKeyInfo contains metadata about an access key.
 type AccessKeyInfo struct {
 	AccessKeyID string
+	SecretKey   string
 	UserName    string
 }
 
