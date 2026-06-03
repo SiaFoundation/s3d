@@ -46,14 +46,13 @@ type (
 	// S3 contains S3 related configuration.
 	S3 struct {
 		HostBases []string `yaml:"hostBases"`
-		// StatusAddress is the address the status endpoints are served on. It
-		// must differ from the S3 API address. If empty, the status server is
-		// not started.
-		StatusAddress string `yaml:"statusAddress"`
-		// StatusPassword is the password required to access the status
-		// endpoints via HTTP Basic authentication. If empty, the status
-		// endpoints are inaccessible.
-		StatusPassword string `yaml:"statusPassword"`
+		// AdminAddress is the address the admin API is served on. It must
+		// differ from the S3 API address. If empty, the admin API is not
+		// started.
+		AdminAddress string `yaml:"adminAddress"`
+		// AdminPassword is the password required to access the admin API via
+		// HTTP Basic authentication. If empty, the admin API is inaccessible.
+		AdminPassword string `yaml:"adminPassword"`
 	}
 
 	// KeyPair contains an S3 access key and secret key pair.

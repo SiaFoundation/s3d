@@ -2,7 +2,6 @@ package s3_test
 
 import (
 	"bytes"
-	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,67 +15,39 @@ import (
 	service "github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
-func newStatusServer(t *testing.T) (string, *http.Client) {
+func newAdminServer(t *testing.T) (string, *http.Client) {
 	t.Helper()
 	backend := testutil.NewMemoryBackend(testutil.WithKeyPair(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey))
-	server := httptest.NewServer(s3.NewStatus(backend))
+	server := httptest.NewServer(s3.NewAdmin(backend))
 	t.Cleanup(server.Close)
 	return server.URL, server.Client()
 }
 
-func TestUploadStats(t *testing.T) {
-	baseURL, httpClient := newStatusServer(t)
-	statusURL := baseURL + "/api/status/uploads"
+func TestPrometheus(t *testing.T) {
+	baseURL, httpClient := newAdminServer(t)
 
-	t.Run("returns 200 with zero stats", func(t *testing.T) {
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, statusURL, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp, err := httpClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, baseURL+"/prometheus", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
 
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("expected 200, got %d", resp.StatusCode)
-		} else if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
-			t.Fatalf("expected Content-Type application/json, got %q", ct)
-		}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	} else if ct := resp.Header.Get("Content-Type"); ct != "text/plain; version=0.0.4" {
+		t.Fatalf("expected Prometheus Content-Type, got %q", ct)
+	}
 
-		var stats s3.UploadStats
-		if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
-			t.Fatal(err)
-		} else if stats != (s3.UploadStats{}) {
-			t.Fatalf("expected zero stats, got %+v", stats)
-		}
-	})
-
-	t.Run("prometheus response format", func(t *testing.T) {
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, statusURL+"?response=prometheus", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp, err := httpClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("expected 200, got %d", resp.StatusCode)
-		} else if ct := resp.Header.Get("Content-Type"); ct != "text/plain; version=0.0.4" {
-			t.Fatalf("expected Prometheus Content-Type, got %q", ct)
-		}
-
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatal(err)
-		} else if !bytes.Contains(body, []byte("s3d_upload_pending_objects 0")) {
-			t.Fatalf("expected prometheus metrics, got %q", body)
-		}
-	})
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	} else if !bytes.Contains(body, []byte("s3d_upload_pending_objects 0")) {
+		t.Fatalf("expected prometheus metrics, got %q", body)
+	}
 }
 
 // TestInvalidCredentials tests that API calls with invalid credentials fail.

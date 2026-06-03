@@ -51,24 +51,17 @@ func (s UploadStats) PrometheusMetric() []prometheus.Metric {
 	}
 }
 
-func (s *s3) handleUploadStats(jc jape.Context) {
+// handlePrometheus serves the admin API metrics in the Prometheus text
+// exposition format. Currently the only metrics exposed are the background
+// upload stats.
+func (s *s3) handlePrometheus(jc jape.Context) {
 	stats, err := s.backend.UploadStats(jc.Request.Context())
 	if jc.Check("failed to get upload stats", err) != nil {
 		return
 	}
 
-	var responseFormat string
-	if jc.Check("failed to decode form", jc.DecodeForm("response", &responseFormat)) != nil {
+	jc.ResponseWriter.Header().Set("Content-Type", "text/plain; version=0.0.4")
+	if jc.Check("failed to marshal prometheus response", prometheus.NewEncoder(jc.ResponseWriter).Append(stats)) != nil {
 		return
-	}
-
-	switch responseFormat {
-	case "prometheus":
-		jc.ResponseWriter.Header().Set("Content-Type", "text/plain; version=0.0.4")
-		if jc.Check("failed to marshal prometheus response", prometheus.NewEncoder(jc.ResponseWriter).Append(stats)) != nil {
-			return
-		}
-	default:
-		jc.Encode(stats)
 	}
 }

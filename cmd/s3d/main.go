@@ -216,33 +216,33 @@ func main() {
 		}
 	}()
 
-	// optionally serve the status endpoints on a separate listener
-	var statusServer *http.Server
-	if cfg.S3.StatusAddress != "" {
-		if cfg.S3.StatusAddress == cfg.ApiAddress {
-			checkFatalError("invalid status address", errors.New("status address must differ from the S3 API address"))
-		} else if cfg.S3.StatusPassword == "" {
-			checkFatalError("invalid status configuration", errors.New("status password must be set when the status address is configured"))
+	// optionally serve the admin API on a separate listener
+	var adminServer *http.Server
+	if cfg.S3.AdminAddress != "" {
+		if cfg.S3.AdminAddress == cfg.ApiAddress {
+			checkFatalError("invalid admin address", errors.New("admin address must differ from the S3 API address"))
+		} else if cfg.S3.AdminPassword == "" {
+			checkFatalError("invalid admin configuration", errors.New("admin password must be set when the admin address is configured"))
 		}
 
-		statusListener, err := startLocalhostListener(cfg.S3.StatusAddress, log.Named("status.listener"))
+		adminListener, err := startLocalhostListener(cfg.S3.AdminAddress, log.Named("admin.listener"))
 		if err != nil {
-			checkFatalError("failed to start status listener", err)
+			checkFatalError("failed to start admin listener", err)
 		}
-		defer statusListener.Close()
+		defer adminListener.Close()
 
-		statusHandler := jape.BasicAuth(cfg.S3.StatusPassword)(s3.NewStatus(backend, s3.WithLogger(log)))
-		statusServer = &http.Server{
-			Handler:      statusHandler,
+		adminHandler := jape.BasicAuth(cfg.S3.AdminPassword)(s3.NewAdmin(backend, s3.WithLogger(log)))
+		adminServer = &http.Server{
+			Handler:      adminHandler,
 			ReadTimeout:  30 * time.Second,
 			WriteTimeout: 30 * time.Second,
 		}
-		defer statusServer.Close()
+		defer adminServer.Close()
 
 		go func() {
-			log.Debug("starting status server", zap.String("address", cfg.S3.StatusAddress))
-			if err := statusServer.Serve(statusListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				log.Error("failed to serve status server", zap.Error(err))
+			log.Debug("starting admin server", zap.String("address", cfg.S3.AdminAddress))
+			if err := adminServer.Serve(adminListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error("failed to serve admin server", zap.Error(err))
 			}
 		}()
 	}
@@ -258,9 +258,9 @@ func main() {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Error("failed to shutdown S3 API", zap.Error(err))
 	}
-	if statusServer != nil {
-		if err := statusServer.Shutdown(shutdownCtx); err != nil {
-			log.Error("failed to shutdown status server", zap.Error(err))
+	if adminServer != nil {
+		if err := adminServer.Shutdown(shutdownCtx); err != nil {
+			log.Error("failed to shutdown admin server", zap.Error(err))
 		}
 	}
 	select {
