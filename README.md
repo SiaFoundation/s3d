@@ -153,6 +153,41 @@ Each part is uploaded individually to the Sia network. On completion, the parts
 are assembled into the final object. `UploadPartCopy` is supported for
 assembling objects from existing data without re-uploading.
 
+## Admin API
+
+`s3d` can serve an admin API on a separate HTTP address for monitoring. It is
+disabled by default. To enable it, run `s3d config` and enable it under the
+advanced settings, or set both `adminAddress` and `adminPassword` in the `s3`
+section of the config file:
+
+```yaml
+s3:
+  adminAddress: 127.0.0.1:8001 # must differ from apiAddress; empty disables the admin API
+  adminPassword: change-me # required when adminAddress is set
+```
+
+Requests are authenticated via HTTP Basic authentication using the configured
+password; the username is ignored.
+
+### `GET /prometheus`
+
+Returns metrics about the background upload pipeline in the Prometheus text
+exposition format:
+
+```sh
+curl -u ":change-me" http://127.0.0.1:8001/prometheus
+```
+
+| Metric | Description |
+|--------|-------------|
+| `s3d_upload_pending_objects` | Objects buffered on disk waiting to be uploaded to Sia |
+| `s3d_upload_pending_size_bytes` | Total size of pending objects in bytes |
+| `s3d_upload_uploaded_objects` | Objects fully uploaded to the Sia network |
+| `s3d_upload_uploaded_size_bytes` | Total size of uploaded objects in bytes |
+| `s3d_upload_failed_uploads` | Failed upload attempts since the process started |
+| `s3d_upload_orphaned_objects` | Deleted or overwritten objects pending cleanup |
+| `s3d_upload_multipart_uploads` | In-progress multipart uploads |
+
 ## Compatibility
 
 `s3d` aims to be as compatible as possible with the S3 API. Authentication uses
@@ -235,6 +270,7 @@ generate one.
 | Port | Protocol | Description |
 |------|----------|-------------|
 | 8000 | TCP | S3 API |
+| 8001 | TCP | Admin API (disabled by default, see [Admin API](#admin-api)) |
 
 ### Default Paths
 
@@ -279,6 +315,8 @@ log:
 s3:
   hostBases:
     - s3.example.com
+  adminAddress: 127.0.0.1:8001 # serve the admin API on this address (empty = disabled)
+  adminPassword: change-me # required when adminAddress is set
 ```
 
 Access keys are managed via the `s3d users` and `s3d keys` CLI commands and

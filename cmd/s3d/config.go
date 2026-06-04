@@ -228,10 +228,54 @@ func setAdvancedConfig() {
 	fmt.Println("You can leave these settings blank to use the defaults.")
 	fmt.Println("")
 
-	// http address of Admin API
+	// http address of the S3 API
 	fmt.Println("The HTTP address is used to serve the S3 API.")
 	fmt.Println("It should only be exposed to the public internet via an https reverse proxy")
 	setListenAddress("HTTP Address", &cfg.ApiAddress)
+
+	setAdminAPI()
+}
+
+func setAdminAPI() {
+	fmt.Println("")
+	fmt.Println("The admin API serves Prometheus metrics about the upload pipeline on a separate HTTP address.")
+	fmt.Println("It is disabled by default.")
+
+	if cfg.S3.AdminAddress != "" {
+		if !promptYesNo(fmt.Sprintf("The admin API is currently enabled on %q. Would you like to keep it enabled?", cfg.S3.AdminAddress)) {
+			cfg.S3.AdminAddress = ""
+			cfg.S3.AdminPassword = ""
+			return
+		}
+	} else if !promptYesNo("Would you like to enable the admin API?") {
+		return
+	}
+
+	if cfg.S3.AdminAddress == "" {
+		cfg.S3.AdminAddress = "127.0.0.1:8001"
+	}
+	for {
+		setListenAddress("Admin API Address", &cfg.S3.AdminAddress)
+		if cfg.S3.AdminAddress != cfg.ApiAddress {
+			break
+		}
+		stdoutError("The admin API address must differ from the S3 API address.")
+	}
+
+	for {
+		prompt := "Enter admin API password"
+		if cfg.S3.AdminPassword != "" {
+			prompt += " (leave blank to keep the current password)"
+		}
+		password := readPasswordInput(prompt)
+		if password != "" {
+			cfg.S3.AdminPassword = password
+			return
+		} else if cfg.S3.AdminPassword != "" {
+			return
+		}
+		stdoutError("The admin API password must not be empty.")
+	}
 }
 
 func setListenAddress(context string, value *string) {
