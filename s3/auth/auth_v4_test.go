@@ -24,16 +24,9 @@ import (
 	"lukechampine.com/frand"
 )
 
-type mockKeyStore struct {
-}
+type mockKeyStore map[string]SecretAccessKey
 
-func (s *mockKeyStore) LoadSecret(_ context.Context, _ string) (SecretAccessKey, error) {
-	return nil, s3errs.ErrInvalidAccessKeyId
-}
-
-type staticKeyStore map[string]SecretAccessKey
-
-func (s staticKeyStore) LoadSecret(_ context.Context, id string) (SecretAccessKey, error) {
+func (s mockKeyStore) LoadSecret(_ context.Context, id string) (SecretAccessKey, error) {
 	v, ok := s[id]
 	if !ok {
 		return nil, s3errs.ErrInvalidAccessKeyId
@@ -86,7 +79,7 @@ func TestDateValidation(t *testing.T) {
 	now := time.Now().UTC()
 	header.Set(HeaderAuthorization, fmt.Sprintf("AWS4-HMAC-SHA256 Credential=AKIA7GQ3XN52WQLYDHZP/%s/us-east-1/s3/aws4_request, SignedHeaders=accept-encoding;amz-sdk-invocation-id;amz-sdk-request;content-length;content-type;host;x-amz-content-sha256;x-amz-date, Signature=f66373650f043e2074da14a5439516bdb2fb4cd209d9376ae4c8df139f944100", now.Format(yyyymmdd)))
 	req := &http.Request{Header: header}
-	store := &mockKeyStore{}
+	store := mockKeyStore{}
 
 	// Case 1: date not set
 	_, err := verifyV4SignedRequest(req, store, "", now)
@@ -374,7 +367,7 @@ func TestStreamingSignEndToEnd(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	payload := frand.Bytes(66560)
 
-	store := staticKeyStore{accessKey: SecretAccessKey(secret)}
+	store := mockKeyStore{accessKey: SecretAccessKey(secret)}
 
 	// derive what the server will derive
 	sk := signingKey(SecretAccessKey(secret), now, region)
