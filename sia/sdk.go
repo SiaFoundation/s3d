@@ -7,6 +7,7 @@ import (
 
 	"github.com/SiaFoundation/s3d/s3"
 	"go.sia.tech/core/types"
+	"go.sia.tech/indexd/api"
 	"go.sia.tech/indexd/slabs"
 	sdk "go.sia.tech/siastorage"
 )
@@ -90,8 +91,8 @@ func (s *IndexdSDK) ObjectEvents(ctx context.Context, cursor slabs.Cursor, limit
 }
 
 // PruneSlabs prunes slabs not associated with an object from the indexer.
-func (s *IndexdSDK) PruneSlabs(ctx context.Context) error {
-	return s.inner.PruneSlabs(ctx)
+func (s *IndexdSDK) PruneSlabs(ctx context.Context, opts ...api.URLQueryParameterOption) error {
+	return s.inner.PruneSlabs(ctx, opts...)
 }
 
 // SealObject seals the object using the app key.

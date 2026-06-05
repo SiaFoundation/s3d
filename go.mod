@@ -9,9 +9,9 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.102.2
 	github.com/mattn/go-sqlite3 v1.14.44
 	go.sia.tech/core v0.21.0
-	go.sia.tech/coreutils v0.22.1-0.20260513143633-9856f6e895bd
-	go.sia.tech/indexd v0.2.3-0.20260527091316-f295546d979c
-	go.sia.tech/siastorage v0.1.0
+	go.sia.tech/coreutils v0.22.1-0.20260602072818-74eb647d67d8
+	go.sia.tech/indexd v0.2.3
+	go.sia.tech/siastorage v0.1.1-0.20260604162030-173f981c9a8a
 	go.uber.org/zap v1.28.0
 	golang.org/x/term v0.43.0
 	gopkg.in/ini.v1 v1.67.2
@@ -39,7 +39,7 @@ require (
 	github.com/jackc/pgerrcode v0.0.0-20240316143900-6e2875d9b438 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
-	github.com/jackc/pgx/v5 v5.9.2 // indirect
+	github.com/jackc/pgx/v5 v5.10.0 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/julienschmidt/httprouter v1.3.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect

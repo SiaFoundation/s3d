@@ -16,6 +16,7 @@ import (
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/threadgroup"
+	"go.sia.tech/indexd/api"
 	"go.sia.tech/indexd/slabs"
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
@@ -105,7 +106,7 @@ type SDK interface {
 	OptimalDataSize() (int64, error)
 	UploadPacked() (PackedUpload, error)
 	PinObject(ctx context.Context, obj sdk.Object) error
-	PruneSlabs(ctx context.Context) error
+	PruneSlabs(ctx context.Context, opts ...api.URLQueryParameterOption) error
 	SealObject(obj sdk.Object) sdk.SealedObject
 	UnsealObject(sealed sdk.SealedObject) (sdk.Object, error)
 }
@@ -238,10 +239,12 @@ func (s *Sia) processOrphansLoop(ctx context.Context) {
 	t := time.NewTicker(time.Hour)
 	defer t.Stop()
 
+	const pruneDelay = time.Hour
+
 	s.logger.Info("pruning orphaned slabs")
 	start := time.Now()
-	if err := s.sdk.PruneSlabs(ctx); err != nil {
-		s.logger.Error("failed to prune slabs after processing orphans", zap.Error(err))
+	if err := s.sdk.PruneSlabs(ctx, api.WithBefore(time.Now().Add(-pruneDelay))); err != nil {
+		s.logger.Error("failed to prune slabs on startup", zap.Error(err))
 	} else {
 		s.logger.Info("finished pruning orphaned slabs from Sia network", zap.Duration("elapsed", time.Since(start)))
 	}
@@ -255,7 +258,7 @@ func (s *Sia) processOrphansLoop(ctx context.Context) {
 		}
 
 		start := time.Now()
-		if err := s.sdk.PruneSlabs(ctx); err != nil {
+		if err := s.sdk.PruneSlabs(ctx, api.WithBefore(time.Now().Add(-pruneDelay))); err != nil {
 			s.logger.Error("failed to prune slabs after processing orphans", zap.Error(err))
 		} else {
 			s.logger.Info("finished pruning orphaned slabs from Sia network", zap.Duration("elapsed", time.Since(start)))
