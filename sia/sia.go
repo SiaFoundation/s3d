@@ -243,29 +243,24 @@ func (s *Sia) processOrphansLoop(ctx context.Context) {
 	t := time.NewTicker(orphanLoopInterval)
 	defer t.Stop()
 
-	const pruneDelay = time.Hour
-
-	s.logger.Info("pruning orphaned slabs")
-	start := time.Now()
-	if err := s.sdk.PruneSlabs(ctx, api.WithBefore(time.Now().Add(-pruneDelay))); err != nil {
-		s.logger.Error("failed to prune slabs on startup", zap.Error(err))
-	} else {
-		s.logger.Info("finished pruning orphaned slabs from Sia network", zap.Duration("elapsed", time.Since(start)))
-	}
-
 	for {
+		s.ProcessOrphans(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+
+		s.logger.Info("pruning orphaned slabs")
+		start := time.Now()
+		if err := s.sdk.PruneSlabs(ctx, api.WithBefore(time.Now().Add(-time.Hour))); err != nil {
+			s.logger.Error("failed to prune slabs after processing orphans", zap.Error(err))
+		} else {
+			s.logger.Info("finished pruning orphaned slabs from Sia network", zap.Duration("elapsed", time.Since(start)))
+		}
+
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			s.ProcessOrphans(ctx)
-		}
-
-		start := time.Now()
-		if err := s.sdk.PruneSlabs(ctx, api.WithBefore(time.Now().Add(-pruneDelay))); err != nil {
-			s.logger.Error("failed to prune slabs after processing orphans", zap.Error(err))
-		} else {
-			s.logger.Info("finished pruning orphaned slabs from Sia network", zap.Duration("elapsed", time.Since(start)))
 		}
 	}
 }
