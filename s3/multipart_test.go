@@ -20,12 +20,8 @@ import (
 )
 
 func TestCreateMultipartUpload(t *testing.T) {
-	// prepare a backend with 2 keypairs
-	backend := testutil.NewMemoryBackend(
-		testutil.WithKeyPair(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey),
-		testutil.WithKeyPair("other", "foo", "bar"),
-	)
-	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
+	// prepare a tester with an additional keypair
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair("other", "foo", "bar"))
 
 	const (
 		bucket = "multipart-bucket"
@@ -72,12 +68,8 @@ func TestCreateMultipartUpload(t *testing.T) {
 }
 
 func TestAbortMultipartUpload(t *testing.T) {
-	// prepare a backend with 2 keypairs
-	backend := testutil.NewMemoryBackend(
-		testutil.WithKeyPair(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey),
-		testutil.WithKeyPair("other", "foo", "bar"),
-	)
-	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
+	// prepare a tester with an additional keypair
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair("other", "foo", "bar"))
 
 	const (
 		bucket = "abort-multipart-bucket"
@@ -117,12 +109,8 @@ func TestAbortMultipartUpload(t *testing.T) {
 }
 
 func TestUploadPart(t *testing.T) {
-	// prepare a backend with 2 keypairs
-	backend := testutil.NewMemoryBackend(
-		testutil.WithKeyPair(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey),
-		testutil.WithKeyPair("other", "foo", "bar"),
-	)
-	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
+	// prepare a tester with an additional keypair
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair("other", "foo", "bar"))
 
 	const (
 		bucket = "multipart-bucket"
@@ -176,12 +164,8 @@ func TestUploadPart(t *testing.T) {
 }
 
 func TestUploadPartCopy(t *testing.T) {
-	// prepare a backend with 2 keypairs
-	backend := testutil.NewMemoryBackend(
-		testutil.WithKeyPair(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey),
-		testutil.WithKeyPair("other", "foo", "bar"),
-	)
-	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
+	// prepare a tester with an additional keypair
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair("other", "foo", "bar"))
 
 	const (
 		bucketSrc = "bucket-src"
@@ -334,12 +318,8 @@ func TestUploadPartCopy(t *testing.T) {
 }
 
 func TestCompleteMultipartUpload(t *testing.T) {
-	// prepare a backend with 2 keypairs
-	backend := testutil.NewMemoryBackend(
-		testutil.WithKeyPair(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey),
-		testutil.WithKeyPair("other", "foo", "bar"),
-	)
-	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
+	// prepare a tester with an additional keypair
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair("other", "foo", "bar"))
 
 	const (
 		bucket = "complete-multipart-bucket"
@@ -453,12 +433,8 @@ func TestCompleteMultipartUpload(t *testing.T) {
 }
 
 func TestListMultipartUploads(t *testing.T) {
-	// prepare a backend with 2 keypairs
-	backend := testutil.NewMemoryBackend(
-		testutil.WithKeyPair(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey),
-		testutil.WithKeyPair("other", "foo", "bar"),
-	)
-	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
+	// prepare a tester with an additional keypair
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair("other", "foo", "bar"))
 
 	const bucket = "list-multipart-bucket"
 

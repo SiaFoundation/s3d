@@ -14,7 +14,7 @@ func TestBuckets(t *testing.T) {
 	const bucket = "bucket"
 
 	run := func(t *testing.T, pathStyle bool) {
-		s3Tester := NewTester(t, testutil.WithServiceOptions(func(o *service.Options) {
+		s3Tester := testutil.NewTester(t, testutil.WithServiceOptions(func(o *service.Options) {
 			o.UsePathStyle = pathStyle
 		}))
 
