@@ -20,6 +20,7 @@ import (
 	"github.com/SiaFoundation/s3d/sia"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"go.sia.tech/core/types"
+	"go.sia.tech/indexd/api"
 	"go.sia.tech/indexd/slabs"
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
@@ -114,7 +115,7 @@ func (s *MemorySDK) ObjectEvents(_ context.Context, cursor slabs.Cursor, limit i
 }
 
 // PruneSlabs prunes slabs not associated with an object from the indexer.
-func (s *MemorySDK) PruneSlabs(ctx context.Context) error {
+func (s *MemorySDK) PruneSlabs(ctx context.Context, opts ...api.URLQueryParameterOption) error {
 	s.mu.Lock()
 	s.pruneSlabsCalls++
 	s.mu.Unlock()
