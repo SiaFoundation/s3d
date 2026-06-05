@@ -155,15 +155,14 @@ assembling objects from existing data without re-uploading.
 
 ## Admin API
 
-`s3d` can serve an admin API on a separate HTTP address for monitoring. It is
-disabled by default. To enable it, run `s3d config` and enable it under the
-advanced settings, or set both `adminAddress` and `adminPassword` in the `s3`
-section of the config file:
+`s3d` serves an admin API on a separate HTTP address for monitoring. It is
+always enabled and defaults to `127.0.0.1:8001`. The admin password is set
+during `s3d config`, or via `adminAddress` and `adminPassword` in the config
+file:
 
 ```yaml
-s3:
-  adminAddress: 127.0.0.1:8001 # must differ from apiAddress; empty disables the admin API
-  adminPassword: change-me # required when adminAddress is set
+adminAddress: 127.0.0.1:8001 # must differ from apiAddress
+adminPassword: change-me # required
 ```
 
 Requests are authenticated via HTTP Basic authentication using the configured
@@ -300,6 +299,8 @@ file and CLI flags. The order of precedence from lowest to highest is:
 
 ```yaml
 apiAddress: 127.0.0.1:8000
+adminAddress: 127.0.0.1:8001 # serve the admin API on this address (must differ from apiAddress)
+adminPassword: change-me # required to access the admin API
 directory: /var/lib/s3d
 log:
   stdout:
@@ -315,8 +316,6 @@ log:
 s3:
   hostBases:
     - s3.example.com
-  adminAddress: 127.0.0.1:8001 # serve the admin API on this address (empty = disabled)
-  adminPassword: change-me # required when adminAddress is set
 ```
 
 Access keys are managed via the `s3d users` and `s3d keys` CLI commands and
