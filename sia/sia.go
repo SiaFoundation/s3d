@@ -23,6 +23,10 @@ import (
 )
 
 const (
+	// orphanLoopInterval is the interval at which the background loop for
+	// processing orphaned objects runs.
+	orphanLoopInterval = time.Hour
+
 	// UploadsDirectory is the directory name used for storing pending uploads.
 	UploadsDirectory = "uploads"
 )
@@ -236,7 +240,7 @@ func (s *Sia) Close() error {
 
 // processOrphansLoop periodically processes orphaned objects.
 func (s *Sia) processOrphansLoop(ctx context.Context) {
-	t := time.NewTicker(time.Hour)
+	t := time.NewTicker(orphanLoopInterval)
 	defer t.Stop()
 
 	const pruneDelay = time.Hour

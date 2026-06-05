@@ -12,6 +12,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 	"unsafe"
 
@@ -41,7 +42,6 @@ type MemorySDK struct {
 	slabSize int64
 
 	pruneSlabsCalls int
-	pruneSlabsCh    chan struct{}
 
 	objectCallCount int
 	fail            bool // when true, Object() will return an error
@@ -49,10 +49,9 @@ type MemorySDK struct {
 
 func NewMemorySDK() *MemorySDK {
 	return &MemorySDK{
-		slabSize:     40 << 20,
-		appKey:       types.GeneratePrivateKey(),
-		objects:      make(map[types.Hash256]uploadedObject),
-		pruneSlabsCh: make(chan struct{}, 16),
+		slabSize: 40 << 20,
+		appKey:   types.GeneratePrivateKey(),
+		objects:  make(map[types.Hash256]uploadedObject),
 	}
 }
 
@@ -117,12 +116,8 @@ func (s *MemorySDK) ObjectEvents(_ context.Context, cursor slabs.Cursor, limit i
 // PruneSlabs prunes slabs not associated with an object from the indexer.
 func (s *MemorySDK) PruneSlabs(ctx context.Context, opts ...api.URLQueryParameterOption) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.pruneSlabsCalls++
-	s.mu.Unlock()
-	select {
-	case s.pruneSlabsCh <- struct{}{}:
-	default:
-	}
 	return nil
 }
 
@@ -131,17 +126,6 @@ func (s *MemorySDK) PruneSlabsCalls() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.pruneSlabsCalls
-}
-
-// WaitForPruneSlabs blocks until PruneSlabs is invoked or the context is
-// canceled. Returns true if a call was observed.
-func (s *MemorySDK) WaitForPruneSlabs(ctx context.Context) bool {
-	select {
-	case <-s.pruneSlabsCh:
-		return true
-	case <-ctx.Done():
-		return false
-	}
 }
 
 // Upload stores an object in memory. It is not part of the SDK interface but
@@ -383,32 +367,40 @@ func TestDeleteOrphanedUploads(t *testing.T) {
 	assertRemoved(uid2.String())
 }
 
-// TestPruneSlabsOnStartup verifies that the Sia backend's background orphan
-// processing loop invokes PruneSlabs immediately on startup, so slab garbage
-// left behind by previously-unpinned objects is reclaimed without waiting for
-// the loop's hourly ticker.
-func TestPruneSlabsOnStartup(t *testing.T) {
-	memSDK := NewMemorySDK()
-	log := zaptest.NewLogger(t)
-	dir := t.TempDir()
-	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { store.Close() })
+// TestPruneSlabs verifies that the Sia backend's background orphan processing
+// loop invokes PruneSlabs immediately on startup and once per interval
+// thereafter, so slab garbage left behind by previously-unpinned objects is
+// reclaimed promptly.
+func TestPruneSlabs(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		memSDK := NewMemorySDK()
+		log := zaptest.NewLogger(t)
+		dir := t.TempDir()
+		store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
 
-	siaBackend, err := sia.New(t.Context(), memSDK, store, dir, sia.WithKeyPair(testutil.AccessKeyID, testutil.SecretAccessKey), sia.WithLogger(log))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { siaBackend.Close() })
+		siaBackend, err := sia.New(t.Context(), memSDK, store, dir,
+			sia.WithUploadDisabled(), sia.WithLogger(log))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer siaBackend.Close()
 
-	waitCtx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-	if !memSDK.WaitForPruneSlabs(waitCtx) {
-		t.Fatal("PruneSlabs was not invoked within 5s of starting the Sia backend")
-	}
-	if got := memSDK.PruneSlabsCalls(); got < 1 {
-		t.Fatalf("expected PruneSlabs to be called at least once, got %d", got)
-	}
+		synctest.Wait()
+		if got := memSDK.PruneSlabsCalls(); got != 1 {
+			t.Fatalf("after startup: expected 1 PruneSlabs call, got %d", got)
+		}
+
+		for i := 1; i <= 4; i++ {
+			time.Sleep(sia.OrphanLoopInterval)
+			synctest.Wait()
+			want := 1 + i
+			if got := memSDK.PruneSlabsCalls(); got != want {
+				t.Fatalf("after %d intervals: expected %d PruneSlabs calls, got %d", i, want, got)
+			}
+		}
+	})
 }
