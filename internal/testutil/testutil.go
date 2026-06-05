@@ -519,6 +519,9 @@ func NewBackend(t testing.TB, opts ...TesterOption) *sia.Sia {
 	for _, opt := range opts {
 		opt(cfg)
 	}
+	if cfg.backend != nil {
+		t.Fatal("WithBackend cannot be combined with NewBackend")
+	}
 
 	log := zaptest.NewLogger(t)
 	dir := t.TempDir()
