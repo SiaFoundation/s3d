@@ -32,6 +32,10 @@ const (
 	// HeaderXAMZTrailer contains the expected headers of the payload trailer
 	HeaderXAMZTrailer = "X-Amz-Trailer"
 
+	// HeaderXAMZTrailerSignature carries the signature over the trailer
+	// block on the signed *-TRAILER variants.
+	HeaderXAMZTrailerSignature = "X-Amz-Trailer-Signature"
+
 	// HeaderDate is the standard HTTP "Date" header. It is used if
 	// HeaderXAMZDate is not present.
 	HeaderDate = "Date"
@@ -112,7 +116,7 @@ func HandleAuth(req *http.Request, store KeyStore, region string, now time.Time)
 // handleAuthV4 handles AWS Signature Version 4 authentication using HMAC.
 func handleAuthV4(req *http.Request, store KeyStore, region string, now time.Time) (string, error) {
 	// verify the signed request first
-	accessKeyID, err := verifyV4SignedRequest(req, store, region, now)
+	result, err := verifyV4SignedRequest(req, store, region, now)
 	if err != nil {
 		return "", err
 	}
@@ -122,16 +126,16 @@ func handleAuthV4(req *http.Request, store KeyStore, region string, now time.Tim
 	switch req.Header.Get(HeaderXAMZContentSHA256) {
 	// case1: payload is not signed at all
 	case ContentUnsignedPayload:
-		return accessKeyID, nil
+		return result.AccessKeyID, nil
 	// case2-4: payload is streamed and possibly signed or has a trailer with
 	// additional headers
 	case ContentStreamingUnsignedPayloadTrailer,
 		ContentStreamingAWS4HMACSHA256Payload,
 		ContentStreamingAWS4HMACSHA256PayloadTrailer:
-		return accessKeyID, handleAuthV4Streaming(req)
+		return result.AccessKeyID, handleAuthV4Streaming(req, result)
 	// case5: the x-amz-content-sha256 header contains the actual payload hash
 	default:
-		return accessKeyID, nil
+		return result.AccessKeyID, nil
 	}
 }
 

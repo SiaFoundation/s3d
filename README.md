@@ -156,9 +156,12 @@ assembling objects from existing data without re-uploading.
 ## Compatibility
 
 `s3d` aims to be as compatible as possible with the S3 API. Authentication uses
-AWS Signature V4 exclusively. Both path-style (`s3.example.com/bucket/object`)
-and virtual-hosted-style (`bucket.s3.example.com/object`) addressing are
-supported.
+AWS Signature V4 exclusively. SigV4A is not implemented. Supported
+`x-amz-content-sha256` modes include `UNSIGNED-PAYLOAD`,
+`STREAMING-UNSIGNED-PAYLOAD-TRAILER`, `STREAMING-AWS4-HMAC-SHA256-PAYLOAD`, and
+`STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER`. Both path-style
+(`s3.example.com/bucket/object`) and virtual-hosted-style
+(`bucket.s3.example.com/object`) addressing are supported.
 
 ### Operations
 
