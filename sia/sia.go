@@ -17,12 +17,17 @@ import (
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/threadgroup"
+	"go.sia.tech/indexd/api"
 	"go.sia.tech/indexd/slabs"
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
 )
 
 const (
+	// orphanLoopInterval is the interval at which the background loop for
+	// processing orphaned objects runs.
+	orphanLoopInterval = time.Hour
+
 	// UploadsDirectory is the directory name used for storing pending uploads.
 	UploadsDirectory = "uploads"
 )
@@ -108,6 +113,7 @@ type SDK interface {
 	OptimalDataSize() (int64, error)
 	UploadPacked() (PackedUpload, error)
 	PinObject(ctx context.Context, obj sdk.Object) error
+	PruneSlabs(ctx context.Context, opts ...api.URLQueryParameterOption) error
 	SealObject(obj sdk.Object) sdk.SealedObject
 	UnsealObject(sealed sdk.SealedObject) (sdk.Object, error)
 }
@@ -238,15 +244,27 @@ func (s *Sia) Close() error {
 
 // processOrphansLoop periodically processes orphaned objects.
 func (s *Sia) processOrphansLoop(ctx context.Context) {
-	t := time.NewTicker(time.Hour)
+	t := time.NewTicker(orphanLoopInterval)
 	defer t.Stop()
 
 	for {
+		s.ProcessOrphans(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+
+		s.logger.Info("pruning orphaned slabs")
+		start := time.Now()
+		if err := s.sdk.PruneSlabs(ctx, api.WithBefore(time.Now().Add(-time.Hour))); err != nil {
+			s.logger.Error("failed to prune slabs after processing orphans", zap.Error(err))
+		} else {
+			s.logger.Info("finished pruning orphaned slabs from Sia network", zap.Duration("elapsed", time.Since(start)))
+		}
+
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			s.ProcessOrphans(ctx)
 		}
 	}
 }

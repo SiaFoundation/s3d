@@ -12,6 +12,8 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"testing/synctest"
+	"time"
 	"unsafe"
 
 	"github.com/SiaFoundation/s3d/internal/testutil"
@@ -19,6 +21,7 @@ import (
 	"github.com/SiaFoundation/s3d/sia"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"go.sia.tech/core/types"
+	"go.sia.tech/indexd/api"
 	"go.sia.tech/indexd/slabs"
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
@@ -37,6 +40,8 @@ type MemorySDK struct {
 	objects  map[types.Hash256]uploadedObject
 	events   []sdk.ObjectEvent
 	slabSize int64
+
+	pruneSlabsCalls int
 
 	objectCallCount int
 	fail            bool // when true, Object() will return an error
@@ -106,6 +111,21 @@ func (s *MemorySDK) ObjectEvents(_ context.Context, cursor slabs.Cursor, limit i
 		}
 	}
 	return filtered, nil
+}
+
+// PruneSlabs prunes slabs not associated with an object from the indexer.
+func (s *MemorySDK) PruneSlabs(ctx context.Context, opts ...api.URLQueryParameterOption) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneSlabsCalls++
+	return nil
+}
+
+// PruneSlabsCalls returns the number of times PruneSlabs has been invoked.
+func (s *MemorySDK) PruneSlabsCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.pruneSlabsCalls
 }
 
 // Upload stores an object in memory. It is not part of the SDK interface but
@@ -345,4 +365,42 @@ func TestDeleteOrphanedUploads(t *testing.T) {
 	// assert orphaned entries are removed
 	assertRemoved(obj2)
 	assertRemoved(uid2.String())
+}
+
+// TestPruneSlabs verifies that the Sia backend's background orphan processing
+// loop invokes PruneSlabs immediately on startup and once per interval
+// thereafter, so slab garbage left behind by previously-unpinned objects is
+// reclaimed promptly.
+func TestPruneSlabs(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		memSDK := NewMemorySDK()
+		log := zaptest.NewLogger(t)
+		dir := t.TempDir()
+		store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+
+		siaBackend, err := sia.New(t.Context(), memSDK, store, dir,
+			sia.WithUploadDisabled(), sia.WithLogger(log))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer siaBackend.Close()
+
+		synctest.Wait()
+		if got := memSDK.PruneSlabsCalls(); got != 1 {
+			t.Fatalf("after startup: expected 1 PruneSlabs call, got %d", got)
+		}
+
+		for i := 1; i <= 4; i++ {
+			time.Sleep(sia.OrphanLoopInterval)
+			synctest.Wait()
+			want := 1 + i
+			if got := memSDK.PruneSlabsCalls(); got != want {
+				t.Fatalf("after %d intervals: expected %d PruneSlabs calls, got %d", i, want, got)
+			}
+		}
+	})
 }

@@ -2,6 +2,9 @@ package sia
 
 import "context"
 
+// OrphanLoopInterval exports orphanLoopInterval for testing.
+const OrphanLoopInterval = orphanLoopInterval
+
 // SyncMetadata exports syncMetadata for testing.
 func (s *Sia) SyncMetadata(ctx context.Context) { //nolint:revive
 	s.syncMetadata(ctx)
