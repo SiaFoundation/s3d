@@ -289,12 +289,6 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 				zap.String("bucket", uploadObj.Bucket),
 				zap.String("name", uploadObj.Name),
 				zap.Error(err))
-			if delErr := s.sdk.DeleteObject(ctx, obj.ID()); delErr != nil {
-				s.logger.Error("failed to delete object after pin failure",
-					zap.String("bucket", uploadObj.Bucket),
-					zap.String("name", uploadObj.Name),
-					zap.Error(delErr))
-			}
 			continue
 		}
 
