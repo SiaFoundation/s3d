@@ -23,7 +23,7 @@ import (
 )
 
 func TestCreateMultipartUpload(t *testing.T) {
-	s3Tester := NewTester(t)
+	s3Tester := testutil.NewTester(t)
 
 	const (
 		bucket = "multipart-bucket"
@@ -62,7 +62,7 @@ func TestCreateMultipartUpload(t *testing.T) {
 }
 
 func TestAbortMultipartUpload(t *testing.T) {
-	s3Tester := NewTester(t)
+	s3Tester := testutil.NewTester(t)
 
 	const (
 		unknownID = "001f6350ae92ef759626ac909dbc027e"
@@ -113,7 +113,7 @@ func TestMultipartAddPart(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
-	s3Tester := NewCustomTester(t, dir, store, NewMemorySDK(), zap.NewNop())
+	s3Tester := testutil.NewCustomTester(t, dir, store, testutil.NewMemorySDK(), zap.NewNop())
 
 	const (
 		unknownID = "001f6350ae92ef759626ac909dbc027e"
@@ -219,7 +219,7 @@ func TestMultipartAddPart(t *testing.T) {
 }
 
 func TestMultipartListParts(t *testing.T) {
-	s3Tester := NewTester(t)
+	s3Tester := testutil.NewTester(t)
 
 	const (
 		bucket = "list-parts-bucket"
@@ -315,7 +315,7 @@ func TestCompleteMultipartUpload(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
-	s3Tester := NewCustomTester(t, dir, store, NewMemorySDK(), zap.NewNop())
+	s3Tester := testutil.NewCustomTester(t, dir, store, testutil.NewMemorySDK(), zap.NewNop())
 
 	const (
 		bucket = "complete-multipart-bucket"
@@ -507,7 +507,7 @@ func TestMultipartUpload(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	memSDK := NewMemorySDK()
+	memSDK := testutil.NewMemorySDK()
 	memSDK.SetSlabSize(24) // small slab so the test object meets the upload threshold
 	backend, err := sia.New(t.Context(), memSDK, store, dir,
 		sia.WithLogger(log))
@@ -618,7 +618,7 @@ func TestMultipartUploadPartCopy(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
-	s3Tester := NewCustomTester(t, dir, store, NewMemorySDK(), zap.NewNop())
+	s3Tester := testutil.NewCustomTester(t, dir, store, testutil.NewMemorySDK(), zap.NewNop())
 
 	const (
 		bucketSrc = "copy-src"

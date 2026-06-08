@@ -17,15 +17,10 @@ func TestBuckets(t *testing.T) {
 	)
 
 	run := func(t *testing.T, pathStyle bool) {
-		// prepare a backend with 2 keypairs
-		backend := testutil.NewMemoryBackend(
-			testutil.WithKeyPair(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey),
-			testutil.WithKeyPair("other", "foo", "bar"),
-		)
-
+		// prepare a tester with an additional keypair
 		s3Tester := testutil.NewTester(t, testutil.WithServiceOptions(func(o *service.Options) {
 			o.UsePathStyle = pathStyle
-		}), testutil.WithBackend(backend))
+		}), testutil.WithKeyPair("other", "foo", "bar"))
 
 		// create another valid keypair and a tester to use it
 		otherTester := s3Tester.ChangeAccessKey(t, "foo", "bar")

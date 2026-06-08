@@ -3,21 +3,26 @@ package testutil
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"github.com/SiaFoundation/s3d/sia"
+	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	service "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
 )
 
@@ -32,8 +37,7 @@ const (
 	Owner = "s3tester"
 )
 
-// S3Tester wraps an AWS S3 client configured to talk to an in-memory S3
-// backend.
+// S3Tester wraps an AWS S3 client configured to talk to an S3 backend.
 type S3Tester struct {
 	cfg     aws.Config
 	backend s3.Backend
@@ -64,7 +68,7 @@ func (t *S3Tester) Client() *service.Client {
 	return t.client
 }
 
-// AddObject adds an object to the in-memory S3 backend.
+// AddObject adds an object to the S3 backend.
 func (t *S3Tester) AddObject(bucket, object string, data []byte, metadata map[string]string) error {
 	_, err := t.backend.PutObject(context.Background(), AccessKeyID, bucket, object, bytes.NewReader(data), s3.PutObjectOptions{
 		ContentLength: int64(len(data)),
@@ -457,12 +461,32 @@ func (t *S3Tester) CompleteMultipartUpload(ctx context.Context, bucket, object, 
 
 type testerCfg struct {
 	backend     s3.Backend
+	keyPairs    []keyPair
 	serviceOpts []func(*service.Options)
 	tls         bool
 }
 
+type keyPair struct {
+	owner       string
+	accessKeyID string
+	secretKey   string
+}
+
 // TesterOption is an option for configuring the S3Tester.
 type TesterOption func(*testerCfg)
+
+// WithKeyPair registers an additional user and key pair with the backend. It
+// has no effect when an explicit backend is passed to NewTester via
+// WithBackend.
+func WithKeyPair(owner, accessKeyID, secretKey string) TesterOption {
+	return func(cfg *testerCfg) {
+		cfg.keyPairs = append(cfg.keyPairs, keyPair{
+			owner:       owner,
+			accessKeyID: accessKeyID,
+			secretKey:   secretKey,
+		})
+	}
+}
 
 // WithServiceOptions adds options to configure the AWS S3 client.
 func WithServiceOptions(opts ...func(*service.Options)) TesterOption {
@@ -485,6 +509,75 @@ func WithTLS() TesterOption {
 	}
 }
 
+// NewBackend creates a Sia backend backed by an in-memory SDK and a SQLite
+// store in a temporary directory. The default test key pair as well as any
+// key pairs provided via WithKeyPair are registered with the backend.
+func NewBackend(t testing.TB, opts ...TesterOption) *sia.Sia {
+	t.Helper()
+
+	cfg := &testerCfg{}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+	if cfg.backend != nil {
+		t.Fatal("WithBackend cannot be combined with NewBackend")
+	}
+
+	log := zaptest.NewLogger(t)
+	dir := t.TempDir()
+
+	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	return newSiaBackend(t, dir, store, NewMemorySDK(), log, cfg.keyPairs)
+}
+
+// NewCustomTester creates a new S3Tester using a Sia backend built from the
+// provided store and SDK.
+func NewCustomTester(t testing.TB, dir string, store sia.Store, sdk sia.SDK, log *zap.Logger, opts ...TesterOption) *S3Tester {
+	t.Helper()
+
+	cfg := &testerCfg{}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+	if cfg.backend != nil {
+		t.Fatal("WithBackend cannot be combined with NewCustomTester")
+	}
+
+	backend := newSiaBackend(t, dir, store, sdk, log, cfg.keyPairs)
+	return NewTester(t, append([]TesterOption{WithBackend(backend)}, opts...)...)
+}
+
+// newSiaBackend creates a Sia backend with the default test key pair and any
+// additional key pairs registered in the store.
+func newSiaBackend(t testing.TB, dir string, store sia.Store, sdk sia.SDK, log *zap.Logger, keyPairs []keyPair) *sia.Sia {
+	t.Helper()
+
+	// ensure the test users and access keys exist in the store
+	defaultKeyPair := keyPair{owner: Owner, accessKeyID: AccessKeyID, secretKey: SecretAccessKey}
+	for _, kp := range append([]keyPair{defaultKeyPair}, keyPairs...) {
+		if err := store.CreateUser(kp.owner); err != nil && !errors.Is(err, sia.ErrUserAlreadyExists) {
+			t.Fatal(err)
+		}
+		if err := store.CreateAccessKey(kp.owner, kp.accessKeyID, kp.secretKey); err != nil && !errors.Is(err, sia.ErrAccessKeyAlreadyExists) {
+			t.Fatal(err)
+		}
+	}
+
+	backend, err := sia.New(t.Context(), sdk, store, dir,
+		sia.WithUploadDisabled(),
+		sia.WithLogger(log))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { backend.Close() })
+	return backend
+}
+
 // NewTester creates a new S3Tester and a AWS client configured to talk to it.
 func NewTester(t testing.TB, opts ...TesterOption) *S3Tester {
 	t.Helper()
@@ -499,8 +592,7 @@ func NewTester(t testing.TB, opts ...TesterOption) *S3Tester {
 	}
 
 	if cfg.backend == nil {
-		backend := NewMemoryBackend(WithKeyPair(Owner, AccessKeyID, SecretAccessKey))
-		cfg.backend = backend
+		cfg.backend = NewBackend(t, opts...)
 	}
 
 	handler := s3.New(cfg.backend,

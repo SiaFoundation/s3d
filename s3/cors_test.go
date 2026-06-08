@@ -11,7 +11,7 @@ import (
 )
 
 func TestCORS(t *testing.T) {
-	backend := testutil.NewMemoryBackend(testutil.WithKeyPair(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey))
+	backend := testutil.NewBackend(t)
 	handler := s3.New(backend, s3.WithLogger(zaptest.NewLogger(t)))
 
 	assertCORSHeaders := func(t *testing.T, h http.Header) {

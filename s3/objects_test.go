@@ -402,20 +402,12 @@ func TestPutObject(t *testing.T) {
 	}
 
 	t.Run("http", func(t *testing.T) {
-		backend := testutil.NewMemoryBackend(
-			testutil.WithKeyPair(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey),
-			testutil.WithKeyPair("other", "foo", "bar"),
-		)
-		s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
+		s3Tester := testutil.NewTester(t, testutil.WithKeyPair("other", "foo", "bar"))
 		test(t, s3Tester)
 	})
 
 	t.Run("https", func(t *testing.T) {
-		backend := testutil.NewMemoryBackend(
-			testutil.WithKeyPair(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey),
-			testutil.WithKeyPair("other", "foo", "bar"),
-		)
-		s3Tester := testutil.NewTester(t, testutil.WithTLS(), testutil.WithBackend(backend))
+		s3Tester := testutil.NewTester(t, testutil.WithTLS(), testutil.WithKeyPair("other", "foo", "bar"))
 		test(t, s3Tester)
 	})
 }
