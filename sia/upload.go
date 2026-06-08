@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"path/filepath"
 	"sync"
 	"time"
@@ -198,6 +199,14 @@ func (s *Sia) uploadObjects(ctx context.Context) { //nolint:revive
 		return
 	}
 
+	// fetch the remaining storage
+	remaining := uint64(math.MaxUint64)
+	if account, err := s.sdk.Account(ctx); err != nil {
+		s.logger.Warn("failed to fetch account info, proceeding without remaining storage check", zap.Error(err))
+	} else {
+		remaining = account.RemainingStorage
+	}
+
 	var wg sync.WaitGroup
 	uploadsCh := make(chan uploadGroup, numUploadThreads)
 
@@ -220,8 +229,17 @@ func (s *Sia) uploadObjects(ctx context.Context) { //nolint:revive
 		})
 	}
 
-	// send uploads to workers
+	// send uploads to workers, skip groups that exceed the remaining
+	// storage space to avoid failed pin attempts after upload
 	for _, g := range groups {
+		if uint64(g.totalSize) > remaining {
+			s.logger.Warn("insufficient remaining storage, skipping upload group",
+				zap.Int64("groupSize", g.totalSize),
+				zap.Uint64("remainingStorage", remaining),
+				zap.Int("n", len(g.objects)))
+			continue
+		}
+		remaining -= uint64(g.totalSize)
 		uploadsCh <- g
 	}
 	close(uploadsCh)

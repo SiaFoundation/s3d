@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -22,6 +23,7 @@ import (
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/api"
+	"go.sia.tech/indexd/api/app"
 	"go.sia.tech/indexd/slabs"
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
@@ -41,6 +43,9 @@ type MemorySDK struct {
 	events   []sdk.ObjectEvent
 	slabSize int64
 
+	remainingStorage uint64
+	accountErr       error
+
 	pruneSlabsCalls int
 
 	objectCallCount int
@@ -49,10 +54,36 @@ type MemorySDK struct {
 
 func NewMemorySDK() *MemorySDK {
 	return &MemorySDK{
-		slabSize: 40 << 20,
-		appKey:   types.GeneratePrivateKey(),
-		objects:  make(map[types.Hash256]uploadedObject),
+		slabSize:         40 << 20,
+		appKey:           types.GeneratePrivateKey(),
+		objects:          make(map[types.Hash256]uploadedObject),
+		remainingStorage: math.MaxUint64,
 	}
+}
+
+// SetRemainingStorage overrides the remaining storage returned by Account.
+func (s *MemorySDK) SetRemainingStorage(remaining uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.remainingStorage = remaining
+}
+
+// SetAccountErr makes Account return the given error until cleared.
+func (s *MemorySDK) SetAccountErr(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.accountErr = err
+}
+
+func (s *MemorySDK) Account(_ context.Context) (app.AccountResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.accountErr != nil {
+		return app.AccountResponse{}, s.accountErr
+	}
+	return app.AccountResponse{
+		RemainingStorage: s.remainingStorage,
+	}, nil
 }
 
 func (s *MemorySDK) DeleteObject(ctx context.Context, id types.Hash256) error {
