@@ -218,12 +218,17 @@ func (s *Store) MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, sea
 			return objects.ErrObjectModified
 		}
 
-		if _, err := tx.Exec(`
+		res, err := tx.Exec(`
 			UPDATE objects
 			SET sia_object_id = $1, sia_object = $2, filename = NULL
-			WHERE bucket_id = $3 AND name = $4
-		`, sqlHash256(sealed.ID()), sqlSiaObject(sealed), bid, name); err != nil {
+			WHERE bucket_id = $3 AND name = $4 AND sia_object_id IS NULL
+		`, sqlHash256(sealed.ID()), sqlSiaObject(sealed), bid, name)
+		if err != nil {
 			return err
+		} else if n, err := res.RowsAffected(); err != nil {
+			return err
+		} else if n == 0 {
+			return objects.ErrObjectNotFound
 		}
 
 		if filename != nil {
