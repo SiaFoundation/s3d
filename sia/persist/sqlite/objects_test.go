@@ -1539,6 +1539,20 @@ func TestUploadStats(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// uploaded-but-not-pinned objects are tracked separately from pending uploads
+	assertStats(s3.UploadStats{
+		PendingObjects:  2,
+		PendingSize:     350,
+		UploadedObjects: 1,
+		UploadedSize:    500,
+		UnpinnedObjects: 1,
+	})
+
+	// pinning the uploaded object clears it from the unpinned count
+	if _, _, err := store.MarkObjectPinned(bucket, "obj3"); err != nil {
+		t.Fatal(err)
+	}
+
 	assertStats(s3.UploadStats{
 		PendingObjects:  2,
 		PendingSize:     350,

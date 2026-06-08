@@ -599,10 +599,11 @@ func (s *Store) UploadStats() (stats s3.UploadStats, err error) {
 				COALESCE(SUM(CASE WHEN filename IS NOT NULL AND sia_object_id IS NULL THEN size END), 0),
 				COUNT(sia_object_id),
 				COALESCE(SUM(CASE WHEN sia_object_id IS NOT NULL THEN size END), 0),
+				(SELECT COUNT(*) FROM unpinned_objects),
 				(SELECT COUNT(*) FROM orphaned_objects),
 				(SELECT COUNT(*) FROM multipart_uploads)
 			FROM objects
-		`).Scan(&stats.PendingObjects, &stats.PendingSize, &stats.UploadedObjects, &stats.UploadedSize, &stats.OrphanedObjects, &stats.MultipartUploads)
+		`).Scan(&stats.PendingObjects, &stats.PendingSize, &stats.UploadedObjects, &stats.UploadedSize, &stats.UnpinnedObjects, &stats.OrphanedObjects, &stats.MultipartUploads)
 	})
 	return
 }
