@@ -38,12 +38,23 @@ CREATE TABLE objects (
     sia_object BLOB,
     -- sia_object_id and sia_object are always set or nulled together
     CHECK ((sia_object_id IS NULL AND sia_object IS NULL) OR (sia_object_id IS NOT NULL AND sia_object IS NOT NULL)),
-    -- object is either on disk, on Sia, or empty
-    CHECK ((filename IS NOT NULL AND sia_object_id IS NULL) OR (filename IS NULL AND sia_object_id IS NOT NULL) OR (filename IS NULL AND sia_object_id IS NULL AND size = 0)),
+    -- empty objects have neither filename nor sia_object_id; non-empty objects
+    -- must have at least one (both is allowed: uploaded but not yet pinned)
+    CHECK ((size = 0 AND filename IS NULL AND sia_object_id IS NULL) OR (size > 0 AND (filename IS NOT NULL OR sia_object_id IS NOT NULL))),
     PRIMARY KEY (bucket_id, name)
 ) WITHOUT ROWID;
 CREATE INDEX objects_sia_object_id_idx ON objects(sia_object_id);
 CREATE INDEX objects_filename_idx ON objects(filename) WHERE filename IS NOT NULL;
+
+CREATE TABLE unpinned_objects (
+    bucket_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    pin_before INTEGER NOT NULL,
+    next_attempt_at INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (bucket_id, name) REFERENCES objects(bucket_id, name) ON DELETE CASCADE,
+    PRIMARY KEY (bucket_id, name)
+);
+CREATE INDEX unpinned_objects_next_attempt_at_idx ON unpinned_objects(next_attempt_at);
 
 CREATE TABLE multipart_uploads (
     upload_id BLOB PRIMARY KEY,
