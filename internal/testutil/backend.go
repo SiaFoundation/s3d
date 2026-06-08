@@ -752,6 +752,11 @@ func (b *MemoryBackend) ListBuckets(ctx context.Context, accessKeyID string) ([]
 	return buckets, nil
 }
 
+// UploadStats returns empty upload stats for the in-memory backend.
+func (b *MemoryBackend) UploadStats(_ context.Context) (s3.UploadStats, error) {
+	return s3.UploadStats{}, nil
+}
+
 // UserInfo returns user information for the given access key ID.
 func (b *MemoryBackend) UserInfo(_ context.Context, accessKeyID string) (*s3.UserInfo, error) {
 	ak, exists := b.accessKeys[accessKeyID]

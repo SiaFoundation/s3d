@@ -11,11 +11,13 @@ import (
 	"path/filepath"
 	"runtime"
 	"syscall"
+	"time"
 
 	"github.com/SiaFoundation/s3d/build"
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/sia"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
+	"go.sia.tech/jape"
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -54,7 +56,8 @@ Register this s3d instance with the indexer and obtain an app key.`
 )
 
 var cfg = Config{
-	ApiAddress: "127.0.0.1:8000",
+	ApiAddress:   "127.0.0.1:8000",
+	AdminAddress: "127.0.0.1:8001",
 	Log: Log{
 		File: FileLog{
 			Level:   zap.NewAtomicLevelAt(zapcore.InfoLevel),
@@ -291,6 +294,36 @@ func main() {
 		}
 	}()
 
+	// serve the admin API on a separate listener
+	if cfg.AdminAddress == "" {
+		checkFatalError("invalid admin configuration", errors.New("admin address must be set"))
+	} else if cfg.AdminAddress == cfg.ApiAddress {
+		checkFatalError("invalid admin configuration", errors.New("admin address must differ from the S3 API address"))
+	} else if cfg.AdminPassword == "" {
+		checkFatalError("invalid admin configuration", errors.New("admin password must be set"))
+	}
+
+	adminListener, err := startLocalhostListener(cfg.AdminAddress, log.Named("admin.listener"))
+	if err != nil {
+		checkFatalError("failed to start admin listener", err)
+	}
+	defer adminListener.Close()
+
+	adminHandler := jape.BasicAuth(cfg.AdminPassword)(s3.NewAdmin(backend, s3.WithLogger(log)))
+	adminServer := &http.Server{
+		Handler:      adminHandler,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+	}
+	defer adminServer.Close()
+
+	go func() {
+		log.Debug("starting admin server", zap.String("address", cfg.AdminAddress))
+		if err := adminServer.Serve(adminListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Error("failed to serve admin server", zap.Error(err))
+		}
+	}()
+
 	log.Info("server started", zap.Stringer("admin", adminAPIListener.Addr()), zap.Stringer("application", adminAPIListener.Addr()))
 	<-ctx.Done()
 	log.Info("shutdown signal received...attempting graceful shutdown...")
@@ -301,6 +334,9 @@ func main() {
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Error("failed to shutdown S3 API", zap.Error(err))
+	}
+	if err := adminServer.Shutdown(shutdownCtx); err != nil {
+		log.Error("failed to shutdown admin server", zap.Error(err))
 	}
 	select {
 	case <-shutdownCtx.Done():

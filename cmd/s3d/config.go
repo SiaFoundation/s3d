@@ -54,10 +54,16 @@ type (
 	// Config contains the configuration for S3d.
 	Config struct {
 		ApiAddress string `yaml:"apiAddress"`
-		Directory  string `yaml:"directory"`
-		Log        Log    `yaml:"log"`
-		Sia        Sia    `yaml:"sia"`
-		S3         S3     `yaml:"s3"`
+		// AdminAddress is the address the admin API is served on. It must
+		// differ from the S3 API address.
+		AdminAddress string `yaml:"adminAddress"`
+		// AdminPassword is the password required to access the admin API via
+		// HTTP Basic authentication. It must not be empty.
+		AdminPassword string `yaml:"adminPassword"`
+		Directory     string `yaml:"directory"`
+		Log           Log    `yaml:"log"`
+		Sia           Sia    `yaml:"sia"`
+		S3            S3     `yaml:"s3"`
 	}
 )
 
@@ -103,6 +109,8 @@ func runConfigCmd(fp string) {
 
 	fmt.Println("")
 	setDataDirectory()
+
+	setAdminAPI()
 
 	setAdvancedConfig()
 
@@ -221,10 +229,41 @@ func setAdvancedConfig() {
 	fmt.Println("You can leave these settings blank to use the defaults.")
 	fmt.Println("")
 
-	// http address of Admin API
+	// http address of the S3 API
 	fmt.Println("The HTTP address is used to serve the S3 API.")
 	fmt.Println("It should only be exposed to the public internet via an https reverse proxy")
 	setListenAddress("HTTP Address", &cfg.ApiAddress)
+}
+
+func setAdminAPI() {
+	fmt.Println("")
+	fmt.Println("The admin API serves Prometheus metrics about the upload pipeline on a separate HTTP address.")
+
+	if cfg.AdminAddress == "" {
+		cfg.AdminAddress = "127.0.0.1:8001"
+	}
+	for {
+		setListenAddress("Admin API Address", &cfg.AdminAddress)
+		if cfg.AdminAddress != cfg.ApiAddress {
+			break
+		}
+		stdoutError("The admin API address must differ from the S3 API address.")
+	}
+
+	for {
+		prompt := "Enter admin API password"
+		if cfg.AdminPassword != "" {
+			prompt += " (leave blank to keep the current password)"
+		}
+		password := readPasswordInput(prompt)
+		if password != "" {
+			cfg.AdminPassword = password
+			return
+		} else if cfg.AdminPassword != "" {
+			return
+		}
+		stdoutError("The admin API password must not be empty.")
+	}
 }
 
 func setListenAddress(context string, value *string) {

@@ -12,6 +12,7 @@ require (
 	go.sia.tech/core v0.21.0
 	go.sia.tech/coreutils v0.22.1-0.20260602072818-74eb647d67d8
 	go.sia.tech/indexd v0.2.3
+	go.sia.tech/jape v0.14.1
 	go.sia.tech/siastorage v0.1.1-0.20260604162030-173f981c9a8a
 	go.uber.org/zap v1.28.0
 	golang.org/x/term v0.43.0
@@ -63,7 +64,6 @@ require (
 	github.com/tinylib/msgp v1.6.1 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
 	go.etcd.io/bbolt v1.4.3 // indirect
-	go.sia.tech/jape v0.14.1 // indirect
 	go.sia.tech/mux v1.5.1 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
