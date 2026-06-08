@@ -1508,6 +1508,74 @@ func TestUploadStats(t *testing.T) {
 		OrphanedObjects:  1,
 		MultipartUploads: 1,
 	})
+
+	// clean up the orphan
+	if err := store.RemoveOrphanedObject(sealed.ID()); err != nil {
+		t.Fatal(err)
+	}
+
+	assertStats(s3.UploadStats{
+		PendingObjects:   2,
+		PendingSize:      350,
+		MultipartUploads: 1,
+	})
+
+	// complete the multipart upload, turning it into a pending object
+	if _, _, err := store.AddMultipartPart(accessKeyID, bucket, "mp1", uid, "p1", 1, frand.Entropy128(), 500); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.CompleteMultipartUpload(accessKeyID, bucket, "mp1", uid, frand.Entropy128(), 500); err != nil {
+		t.Fatal(err)
+	}
+
+	assertStats(s3.UploadStats{
+		PendingObjects: 3,
+		PendingSize:    850,
+	})
+
+	// copy a pending object, adding another pending object
+	if _, _, _, err := store.CopyObject(accessKeyID, bucket, "obj1", bucket, "copy1", nil, true); err != nil {
+		t.Fatal(err)
+	}
+
+	assertStats(s3.UploadStats{
+		PendingObjects: 4,
+		PendingSize:    950,
+	})
+
+	// overwrite a pending object with a smaller one
+	if _, _, err := store.PutObject(accessKeyID, bucket, "obj2", frand.Entropy128(), nil, 70, new(string)); err != nil {
+		t.Fatal(err)
+	}
+
+	assertStats(s3.UploadStats{
+		PendingObjects: 4,
+		PendingSize:    770,
+	})
+
+	// delete a pending object
+	if _, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "obj1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	assertStats(s3.UploadStats{
+		PendingObjects: 3,
+		PendingSize:    670,
+	})
+
+	// creating then aborting a multipart upload leaves the counters unchanged
+	uid2 := s3.NewUploadID()
+	if err := store.CreateMultipartUpload(accessKeyID, bucket, "mp2", uid2, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AbortMultipartUpload(accessKeyID, bucket, "mp2", uid2); err != nil {
+		t.Fatal(err)
+	}
+
+	assertStats(s3.UploadStats{
+		PendingObjects: 3,
+		PendingSize:    670,
+	})
 }
 
 func newTestObject() sdk.Object {

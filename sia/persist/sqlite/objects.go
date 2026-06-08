@@ -75,6 +75,18 @@ func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (
 			return s3errs.ErrPreconditionFailed
 		}
 
+		// an object is either pending (filename), uploaded (sia_object_id) or empty
+		if filename != nil {
+			if err := removePendingObject(tx, size); err != nil {
+				return err
+			}
+		}
+		if deletedID.Valid {
+			if err := removeUploadedObject(tx, size); err != nil {
+				return err
+			}
+		}
+
 		orphanFile, orphanSize, err = newOrphanedFile(tx, filename, size)
 		if err != nil {
 			return err
@@ -192,12 +204,12 @@ func (s *Store) MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, sea
 		}
 
 		var storedMD5 [16]byte
+		var filename *string
+		var size int64
 		err = tx.QueryRow(`
-			UPDATE objects
-			SET sia_object_id = $1, sia_object = $2, filename = NULL
-			WHERE bucket_id = $3 AND name = $4 AND sia_object_id IS NULL
-			RETURNING content_md5
-		`, sqlHash256(sealed.ID()), sqlSiaObject(sealed), bid, name).Scan((*sqlMD5)(&storedMD5))
+			SELECT content_md5, filename, size FROM objects
+			WHERE bucket_id = $1 AND name = $2 AND sia_object_id IS NULL
+		`, bid, name).Scan((*sqlMD5)(&storedMD5), &filename, &size)
 		if errors.Is(err, sql.ErrNoRows) {
 			return objects.ErrObjectNotFound
 		} else if err != nil {
@@ -205,7 +217,21 @@ func (s *Store) MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, sea
 		} else if storedMD5 != contentMD5 {
 			return objects.ErrObjectModified
 		}
-		return nil
+
+		if _, err := tx.Exec(`
+			UPDATE objects
+			SET sia_object_id = $1, sia_object = $2, filename = NULL
+			WHERE bucket_id = $3 AND name = $4
+		`, sqlHash256(sealed.ID()), sqlSiaObject(sealed), bid, name); err != nil {
+			return err
+		}
+
+		if filename != nil {
+			if err := removePendingObject(tx, size); err != nil {
+				return err
+			}
+		}
+		return addUploadedObject(tx, size)
 	})
 }
 
@@ -413,26 +439,17 @@ func (s *Store) OrphanedObjects(limit int) (ids []types.Hash256, err error) {
 // RemoveOrphanedObject removes an object ID from the orphaned_objects table.
 func (s *Store) RemoveOrphanedObject(objectID types.Hash256) error {
 	return s.transaction(func(tx *txn) error {
-		_, err := tx.Exec("DELETE FROM orphaned_objects WHERE sia_object_id = $1", sqlHash256(objectID))
-		return err
+		res, err := tx.Exec("DELETE FROM orphaned_objects WHERE sia_object_id = $1", sqlHash256(objectID))
+		if err != nil {
+			return err
+		}
+		if n, err := res.RowsAffected(); err != nil {
+			return err
+		} else if n > 0 {
+			return incrementStat(tx, statOrphanedObjects, -1)
+		}
+		return nil
 	})
-}
-
-// UploadStats returns statistics about the background upload pipeline.
-func (s *Store) UploadStats() (stats s3.UploadStats, err error) {
-	err = s.transaction(func(tx *txn) error {
-		return tx.QueryRow(`
-			SELECT
-				COUNT(filename),
-				COALESCE(SUM(CASE WHEN filename IS NOT NULL THEN size END), 0),
-				COUNT(sia_object_id),
-				COALESCE(SUM(CASE WHEN sia_object_id IS NOT NULL THEN size END), 0),
-				(SELECT COUNT(*) FROM orphaned_objects),
-				(SELECT COUNT(*) FROM multipart_uploads)
-			FROM objects
-		`).Scan(&stats.PendingObjects, &stats.PendingSize, &stats.UploadedObjects, &stats.UploadedSize, &stats.OrphanedObjects, &stats.MultipartUploads)
-	})
-	return
 }
 
 // ObjectsForUpload returns all objects stored on disk, ordered by size
@@ -498,6 +515,17 @@ func putObject(tx *txn, bid int64, name string, contentMD5 [16]byte, meta map[st
 		return "", 0, err
 	}
 
+	if fileName != nil {
+		if err := addPendingObject(tx, length); err != nil {
+			return "", 0, err
+		}
+	}
+	if siaObject != nil {
+		if err := addUploadedObject(tx, length); err != nil {
+			return "", 0, err
+		}
+	}
+
 	if oldID != nil && (siaObject == nil || *oldID != siaObject.ID) {
 		if err := insertOrphan(tx, *oldID); err != nil {
 			return "", 0, err
@@ -538,6 +566,17 @@ func deleteObject(tx *txn, bid int64, name string) (*types.Hash256, *string, int
 	} else if err != nil {
 		return nil, nil, 0, err
 	}
+	// an object is either pending (filename), uploaded (sia_object_id) or empty
+	if filename != nil {
+		if err := removePendingObject(tx, size); err != nil {
+			return nil, nil, 0, err
+		}
+	}
+	if id.Valid {
+		if err := removeUploadedObject(tx, size); err != nil {
+			return nil, nil, 0, err
+		}
+	}
 	if !id.Valid {
 		return nil, filename, size, nil
 	}
@@ -557,8 +596,16 @@ func insertOrphan(tx *txn, objectID types.Hash256) error {
 	if referenced {
 		return nil
 	}
-	_, err := tx.Exec("INSERT OR IGNORE INTO orphaned_objects (sia_object_id) VALUES ($1)", sqlHash256(objectID))
-	return err
+	res, err := tx.Exec("INSERT OR IGNORE INTO orphaned_objects (sia_object_id) VALUES ($1)", sqlHash256(objectID))
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n > 0 {
+		return incrementStat(tx, statOrphanedObjects, 1)
+	}
+	return nil
 }
 
 // ListObjects lists objects in the specified bucket, filtered by prefix and
