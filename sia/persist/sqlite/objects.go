@@ -15,9 +15,10 @@ import (
 	sdk "go.sia.tech/siastorage"
 )
 
-// DiskUsage returns the total bytes pending upload to Sia, across pending
-// objects and in-progress multipart parts. Pending objects sharing a filename
-// (e.g. via CopyObject) are counted once.
+// DiskUsage returns the total bytes currently held on disk in the uploads
+// directory, across objects with a staged filename (pending upload or uploaded
+// but not yet pinned) and in-progress multipart parts. Objects sharing a
+// filename (e.g. via CopyObject) are counted once.
 func (s *Store) DiskUsage() (usage uint64, err error) {
 	err = s.transaction(func(tx *txn) error {
 		var objectsSize, partsSize uint64
@@ -179,12 +180,14 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte,
 	return orphanFile, orphanSize, err
 }
 
-// MarkObjectUploaded transitions a pending upload to a Sia-backed object by
-// setting the object_id, sia_object and cached_at fields while clearing
-// filename. The update targets any pending object matching the bucket and name,
-// returning ErrObjectNotFound if no pending object exists or ErrObjectModified
-// if the stored content MD5 does not match the provided contentMD5.
-func (s *Store) MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, sealed sdk.SealedObject) error {
+// MarkObjectUploaded transitions a pending upload to an uploaded-but-not-yet-
+// pinned object by setting sia_object_id and sia_object on the objects row and
+// inserting a corresponding unpinned_objects row with the given pin_before
+// deadline. The filename is intentionally kept set so the file on disk remains
+// available as a backup until the pin completes. Returns ErrObjectNotFound if
+// no pending object exists for the bucket and name or ErrObjectModified if the
+// stored content MD5 does not match the provided contentMD5.
+func (s *Store) MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, sealed sdk.SealedObject, pinBefore time.Time) error {
 	return s.transaction(func(tx *txn) error {
 		bid, err := bucketIDByName(tx, bucket)
 		if err != nil {
@@ -194,7 +197,7 @@ func (s *Store) MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, sea
 		var storedMD5 [16]byte
 		err = tx.QueryRow(`
 			UPDATE objects
-			SET sia_object_id = $1, sia_object = $2, filename = NULL
+			SET sia_object_id = $1, sia_object = $2
 			WHERE bucket_id = $3 AND name = $4 AND sia_object_id IS NULL
 			RETURNING content_md5
 		`, sqlHash256(sealed.ID()), sqlSiaObject(sealed), bid, name).Scan((*sqlMD5)(&storedMD5))
@@ -204,6 +207,175 @@ func (s *Store) MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, sea
 			return err
 		} else if storedMD5 != contentMD5 {
 			return objects.ErrObjectModified
+		}
+
+		_, err = tx.Exec(`
+			INSERT INTO unpinned_objects (bucket_id, name, pin_before)
+			VALUES ($1, $2, $3)
+		`, bid, name, sqlTime(pinBefore))
+		return err
+	})
+}
+
+// MarkObjectPinned completes the upload lifecycle for an object that has been
+// successfully pinned in the indexer: the unpinned_objects row is removed and
+// the objects row's filename is cleared. If the filename is no longer
+// referenced by any object, it is returned for cleanup by the caller. Returns
+// ErrObjectNotFound if no unpinned_objects row exists for the bucket and name.
+func (s *Store) MarkObjectPinned(bucket, name string) (orphanFile string, orphanSize int64, _ error) {
+	err := s.transaction(func(tx *txn) error {
+		bid, err := bucketIDByName(tx, bucket)
+		if err != nil {
+			return err
+		}
+
+		res, err := tx.Exec(`DELETE FROM unpinned_objects WHERE bucket_id = $1 AND name = $2`, bid, name)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		} else if n == 0 {
+			return objects.ErrObjectNotFound
+		}
+
+		var filename *string
+		var size int64
+		err = tx.QueryRow(`SELECT filename, size FROM objects WHERE bucket_id = $1 AND name = $2`, bid, name).Scan(&filename, &size)
+		if err != nil {
+			return err
+		}
+		if filename == nil {
+			return nil
+		}
+		if _, err := tx.Exec(`UPDATE objects SET filename = NULL WHERE bucket_id = $1 AND name = $2`, bid, name); err != nil {
+			return err
+		}
+		orphanFile, orphanSize, err = newOrphanedFile(tx, filename, size)
+		return err
+	})
+	return orphanFile, orphanSize, err
+}
+
+// ScheduleObjectForReupload reverts an uploaded-but-not-pinned object back to
+// the pending-upload state. The unpinned_objects row is removed, the objects
+// row's sia_object_id and sia_object are cleared (with the prior Sia ID added
+// to orphaned_objects if no other object still references it), and the
+// filename is preserved so the next upload cycle re-uploads the file. Returns
+// ErrObjectNotFound if no unpinned_objects row exists for the bucket and name
+// or if the row's filename has already been cleared (no file on disk to
+// re-upload from).
+func (s *Store) ScheduleObjectForReupload(bucket, name string) error {
+	return s.transaction(func(tx *txn) error {
+		bid, err := bucketIDByName(tx, bucket)
+		if err != nil {
+			return err
+		}
+		res, err := tx.Exec(`DELETE FROM unpinned_objects WHERE bucket_id = $1 AND name = $2`, bid, name)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		} else if n == 0 {
+			return objects.ErrObjectNotFound
+		}
+
+		var id sql.Null[sqlHash256]
+		var filename *string
+		err = tx.QueryRow(`SELECT sia_object_id, filename FROM objects WHERE bucket_id = $1 AND name = $2`, bid, name).Scan(&id, &filename)
+		if err != nil {
+			return err
+		} else if filename == nil {
+			return objects.ErrObjectNotFound
+		}
+		if _, err := tx.Exec(`UPDATE objects SET sia_object_id = NULL, sia_object = NULL WHERE bucket_id = $1 AND name = $2`, bid, name); err != nil {
+			return err
+		} else if id.Valid {
+			return insertOrphan(tx, types.Hash256(id.V))
+		}
+		return nil
+	})
+}
+
+// ObjectsForPinning returns up to limit unpinned objects whose next_attempt_at
+// is at or before now, in ascending next_attempt_at order.
+func (s *Store) ObjectsForPinning(now time.Time, limit int) ([]objects.UnpinnedObject, error) {
+	var result []objects.UnpinnedObject
+	err := s.transaction(func(tx *txn) error {
+		result = result[:0]
+		rows, err := tx.Query(`
+			SELECT b.name, u.name, o.sia_object_id, o.sia_object, u.pin_before, u.next_attempt_at
+			FROM unpinned_objects u
+			JOIN objects o ON o.bucket_id = u.bucket_id AND o.name = u.name
+			JOIN buckets b ON b.id = u.bucket_id
+			WHERE u.next_attempt_at <= $1
+			ORDER BY u.next_attempt_at
+			LIMIT $2
+		`, sqlTime(now), limit)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var uo objects.UnpinnedObject
+			var id sqlHash256
+			var sealed sqlSiaObject
+			if err := rows.Scan(&uo.Bucket, &uo.Name, &id, &sealed, (*sqlTime)(&uo.PinBefore), (*sqlTime)(&uo.NextAttemptAt)); err != nil {
+				return err
+			}
+			uo.SiaObject = objects.SiaObject{
+				ID:     types.Hash256(id),
+				Sealed: sdk.SealedObject(sealed),
+			}
+			result = append(result, uo)
+		}
+		return rows.Err()
+	})
+	return result, err
+}
+
+// NextPinningAttempt returns the earliest next_attempt_at across all
+// unpinned_objects rows. The boolean is false when the table is empty.
+func (s *Store) NextPinningAttempt() (next time.Time, ok bool, err error) {
+	err = s.transaction(func(tx *txn) error {
+		var ts sql.NullInt64
+		if err := tx.QueryRow(`SELECT MIN(next_attempt_at) FROM unpinned_objects`).Scan(&ts); err != nil {
+			return err
+		}
+		if !ts.Valid {
+			ok = false
+			return nil
+		}
+		next = time.Unix(ts.Int64, 0)
+		ok = true
+		return nil
+	})
+	return
+}
+
+// RescheduleUnpinnedObject updates next_attempt_at for the given unpinned
+// object. Returns ErrObjectNotFound if no row exists for the bucket and name.
+func (s *Store) RescheduleUnpinnedObject(bucket, name string, nextAttemptAt time.Time) error {
+	return s.transaction(func(tx *txn) error {
+		bid, err := bucketIDByName(tx, bucket)
+		if err != nil {
+			return err
+		}
+		res, err := tx.Exec(`
+			UPDATE unpinned_objects SET next_attempt_at = $1
+			WHERE bucket_id = $2 AND name = $3
+		`, sqlTime(nextAttemptAt), bid, name)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		} else if n == 0 {
+			return objects.ErrObjectNotFound
 		}
 		return nil
 	})
@@ -423,8 +595,8 @@ func (s *Store) UploadStats() (stats s3.UploadStats, err error) {
 	err = s.transaction(func(tx *txn) error {
 		return tx.QueryRow(`
 			SELECT
-				COUNT(filename),
-				COALESCE(SUM(CASE WHEN filename IS NOT NULL THEN size END), 0),
+				COUNT(CASE WHEN filename IS NOT NULL AND sia_object_id IS NULL THEN 1 END),
+				COALESCE(SUM(CASE WHEN filename IS NOT NULL AND sia_object_id IS NULL THEN size END), 0),
 				COUNT(sia_object_id),
 				COALESCE(SUM(CASE WHEN sia_object_id IS NOT NULL THEN size END), 0),
 				(SELECT COUNT(*) FROM orphaned_objects),
@@ -445,7 +617,7 @@ func (s *Store) ObjectsForUpload() ([]objects.ObjectForUpload, error) {
 			SELECT b.name, o.name, o.filename, o.content_md5, o.size, o.parts_count > 0 AS has_parts
 			FROM objects o
 			JOIN buckets b ON b.id = o.bucket_id
-			WHERE o.filename IS NOT NULL
+			WHERE o.filename IS NOT NULL AND o.sia_object_id IS NULL
 			ORDER BY o.size DESC
 		`)
 		if err != nil {
