@@ -307,7 +307,7 @@ func (s *Store) ObjectsForPinning(now time.Time, limit int) ([]objects.UnpinnedO
 	err := s.transaction(func(tx *txn) error {
 		result = result[:0]
 		rows, err := tx.Query(`
-			SELECT b.name, u.name, o.sia_object_id, o.sia_object, u.pin_before, u.next_attempt_at
+			SELECT b.name, u.name, o.sia_object_id, o.sia_object, u.pin_before
 			FROM unpinned_objects u
 			JOIN objects o ON o.bucket_id = u.bucket_id AND o.name = u.name
 			JOIN buckets b ON b.id = u.bucket_id
@@ -323,7 +323,7 @@ func (s *Store) ObjectsForPinning(now time.Time, limit int) ([]objects.UnpinnedO
 			var uo objects.UnpinnedObject
 			var id sqlHash256
 			var sealed sqlSiaObject
-			if err := rows.Scan(&uo.Bucket, &uo.Name, &id, &sealed, (*sqlTime)(&uo.PinBefore), (*sqlTime)(&uo.NextAttemptAt)); err != nil {
+			if err := rows.Scan(&uo.Bucket, &uo.Name, &id, &sealed, (*sqlTime)(&uo.PinBefore)); err != nil {
 				return err
 			}
 			uo.SiaObject = objects.SiaObject{
@@ -341,16 +341,12 @@ func (s *Store) ObjectsForPinning(now time.Time, limit int) ([]objects.UnpinnedO
 // unpinned_objects rows. The boolean is false when the table is empty.
 func (s *Store) NextPinningAttempt() (next time.Time, ok bool, err error) {
 	err = s.transaction(func(tx *txn) error {
-		var ts sql.NullInt64
+		var ts sql.Null[sqlTime]
 		if err := tx.QueryRow(`SELECT MIN(next_attempt_at) FROM unpinned_objects`).Scan(&ts); err != nil {
 			return err
 		}
-		if !ts.Valid {
-			ok = false
-			return nil
-		}
-		next = time.Unix(ts.Int64, 0)
-		ok = true
+		next = time.Time(ts.V)
+		ok = ts.Valid
 		return nil
 	})
 	return

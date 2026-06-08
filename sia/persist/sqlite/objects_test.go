@@ -1713,9 +1713,21 @@ func TestObjectsForPinning(t *testing.T) {
 		t.Fatalf("expected 2 due rows with limit, got %d", len(due))
 	}
 
-	// the SiaObject is populated correctly
-	if due[0].SiaObject.ID != sealedA.ID() && due[0].Bucket != bucket {
-		t.Fatalf("expected sia object ID to round-trip, got %v", due[0].SiaObject.ID)
+	// the SiaObject is populated correctly via the join with objects
+	all, err := store.ObjectsForPinning(time.Now(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var foundA *objects.UnpinnedObject
+	for i, uo := range all {
+		if uo.Bucket == bucket && uo.Name == "a" {
+			foundA = &all[i]
+		}
+	}
+	if foundA == nil {
+		t.Fatal("expected 'a' in due rows")
+	} else if foundA.SiaObject.ID != sealedA.ID() {
+		t.Fatalf("expected sia object ID %v, got %v", sealedA.ID(), foundA.SiaObject.ID)
 	}
 
 	// push "a" into the future; only "b" and "c" remain due

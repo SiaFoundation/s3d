@@ -25,10 +25,6 @@ var migrations = []func(tx *txn, log *zap.Logger) error{
 		return err
 	},
 	func(tx *txn, _ *zap.Logger) error {
-		// Rebuild objects to relax the CHECK constraint: filename and
-		// sia_object_id may both be set when an object has been uploaded
-		// to Sia but not yet pinned (file is kept on disk as a backup
-		// until the pin completes).
 		_, err := tx.Exec(`
 CREATE TABLE objects_new (
     bucket_id INTEGER REFERENCES buckets(id) NOT NULL,
