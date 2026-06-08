@@ -245,8 +245,7 @@ func (s *Store) MarkObjectPinned(bucket, name string) (orphanFile string, orphan
 		err = tx.QueryRow(`SELECT filename, size FROM objects WHERE bucket_id = $1 AND name = $2`, bid, name).Scan(&filename, &size)
 		if err != nil {
 			return err
-		}
-		if filename == nil {
+		} else if filename == nil {
 			return nil
 		}
 		if _, err := tx.Exec(`UPDATE objects SET filename = NULL WHERE bucket_id = $1 AND name = $2`, bid, name); err != nil {
@@ -259,13 +258,16 @@ func (s *Store) MarkObjectPinned(bucket, name string) (orphanFile string, orphan
 }
 
 // ScheduleObjectForReupload reverts an uploaded-but-not-pinned object back to
-// the pending-upload state. The unpinned_objects row is removed, the objects
-// row's sia_object_id and sia_object are cleared (with the prior Sia ID added
-// to orphaned_objects if no other object still references it), and the
-// filename is preserved so the next upload cycle re-uploads the file. Returns
-// ErrObjectNotFound if no unpinned_objects row exists for the bucket and name
-// or if the row's filename has already been cleared (no file on disk to
-// re-upload from).
+// the pending-upload state. The unpinned_objects row is removed and the
+// objects row's sia_object_id and sia_object are cleared so the next upload
+// cycle re-uploads from the preserved filename. The previously-uploaded blob
+// on Sia is left to expire on its own TTL: it was never pinned, so the
+// indexer's DeleteObject does not apply. Returns ErrObjectNotFound if no
+// unpinned_objects row exists for the bucket and name, or if the row's
+// filename has already been cleared (no file on disk to re-upload from).
+// Returns an error if the objects row's sia_object_id is already NULL, which
+// would mean the object has already been pinned (sia_object_id is preserved
+// after pinning) or otherwise demoted.
 func (s *Store) ScheduleObjectForReupload(bucket, name string) error {
 	return s.transaction(func(tx *txn) error {
 		bid, err := bucketIDByName(tx, bucket)
@@ -283,18 +285,23 @@ func (s *Store) ScheduleObjectForReupload(bucket, name string) error {
 			return objects.ErrObjectNotFound
 		}
 
-		var id sql.Null[sqlHash256]
 		var filename *string
-		err = tx.QueryRow(`SELECT sia_object_id, filename FROM objects WHERE bucket_id = $1 AND name = $2`, bid, name).Scan(&id, &filename)
+		err = tx.QueryRow(`SELECT filename FROM objects WHERE bucket_id = $1 AND name = $2`, bid, name).Scan(&filename)
 		if err != nil {
 			return err
 		} else if filename == nil {
-			return objects.ErrObjectNotFound
+			return errors.New("object has no local file to re-upload from")
 		}
-		if _, err := tx.Exec(`UPDATE objects SET sia_object_id = NULL, sia_object = NULL WHERE bucket_id = $1 AND name = $2`, bid, name); err != nil {
+		res, err = tx.Exec(`
+			UPDATE objects SET sia_object_id = NULL, sia_object = NULL
+			WHERE bucket_id = $1 AND name = $2 AND sia_object_id IS NOT NULL
+		`, bid, name)
+		if err != nil {
 			return err
-		} else if id.Valid {
-			return insertOrphan(tx, types.Hash256(id.V))
+		} else if n, err := res.RowsAffected(); err != nil {
+			return err
+		} else if n == 0 {
+			return errors.New("object has no sia_object_id to clear; already pinned or demoted")
 		}
 		return nil
 	})

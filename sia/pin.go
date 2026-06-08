@@ -44,6 +44,8 @@ func (s *Sia) pinLoop(ctx context.Context) {
 		}
 
 		next, ok, err := s.store.NextPinningAttempt()
+
+		// upon error, retry again after a backoff delay
 		if err != nil {
 			s.logger.Error("failed to query next pinning attempt", zap.Error(err))
 			select {
@@ -55,8 +57,8 @@ func (s *Sia) pinLoop(ctx context.Context) {
 			continue
 		}
 
+		// if we ran out of pending pins, wait for a wake signal
 		if !ok {
-			// nothing to pin: sleep until a new upload wakes us
 			select {
 			case <-ctx.Done():
 				return
@@ -65,6 +67,7 @@ func (s *Sia) pinLoop(ctx context.Context) {
 			continue
 		}
 
+		// otherwise, sleep until the next attempt is due
 		delay := time.Until(next)
 		if delay <= 0 {
 			continue

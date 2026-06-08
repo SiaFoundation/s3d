@@ -38,8 +38,7 @@ CREATE TABLE objects (
     sia_object BLOB,
     -- sia_object_id and sia_object are always set or nulled together
     CHECK ((sia_object_id IS NULL AND sia_object IS NULL) OR (sia_object_id IS NOT NULL AND sia_object IS NOT NULL)),
-    -- non-empty objects must have a filename, a sia_object_id, or both (both
-    -- co-occurs transiently while an upload waits to be pinned)
+    -- non-empty objects must have a filename, a sia_object_id, or both (between uploading and pinning)
     CHECK ((size = 0 AND filename IS NULL AND sia_object_id IS NULL) OR (size > 0 AND (filename IS NOT NULL OR sia_object_id IS NOT NULL))),
     PRIMARY KEY (bucket_id, name)
 ) WITHOUT ROWID;

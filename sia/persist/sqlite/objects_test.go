@@ -1840,19 +1840,17 @@ func TestScheduleObjectForReupload(t *testing.T) {
 		t.Fatal("expected demoted object to appear in upload queue")
 	}
 
-	// the prior Sia ID is orphaned so the residual upload is cleaned up
+	// the prior (never-pinned) Sia upload is not orphaned: the indexer's
+	// DeleteObject does not apply to unpinned data, so we leave the blob to
+	// expire on its own TTL
 	orphans, err := store.OrphanedObjects(100)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var orphaned bool
 	for _, id := range orphans {
 		if id == sealed.ID() {
-			orphaned = true
+			t.Fatalf("expected unpinned sealed ID %v not to be orphaned", sealed.ID())
 		}
-	}
-	if !orphaned {
-		t.Fatalf("expected sealed ID %v to be orphaned, got %v", sealed.ID(), orphans)
 	}
 }
 
