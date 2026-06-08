@@ -60,3 +60,14 @@ type Part struct {
 	Size       int64
 	ContentMD5 [16]byte
 }
+
+// UnpinnedObject identifies an object that has been uploaded to Sia but not
+// yet pinned, along with the deadline before which it must be pinned and the
+// earliest time the pin should be re-attempted.
+type UnpinnedObject struct {
+	Bucket        string
+	Name          string
+	SiaObject     SiaObject
+	PinBefore     time.Time
+	NextAttemptAt time.Time
+}

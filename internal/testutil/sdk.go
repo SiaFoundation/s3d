@@ -31,6 +31,9 @@ type (
 		slabSize int64
 
 		pruneSlabsCalls int
+
+		pinErr      error // when non-nil, PinObject returns this error
+		pinAttempts int   // number of PinObject calls observed
 	}
 
 	uploadedObject struct {
@@ -178,7 +181,25 @@ func (s *MemorySDK) UploadPacked() (sia.PackedUpload, error) {
 
 // PinObject pins the given object.
 func (s *MemorySDK) PinObject(_ context.Context, obj sdk.Object) error {
-	return nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pinAttempts++
+	return s.pinErr
+}
+
+// SetPinError configures the error returned by future PinObject calls; pass
+// nil to restore the default no-op behavior.
+func (s *MemorySDK) SetPinError(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pinErr = err
+}
+
+// PinAttempts returns the number of times PinObject has been called.
+func (s *MemorySDK) PinAttempts() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.pinAttempts
 }
 
 // SealObject seals the object using the app key.

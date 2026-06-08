@@ -574,8 +574,10 @@ func TestMultipartUpload(t *testing.T) {
 		t.Fatal("data mismatch for completed multipart object")
 	}
 
-	// run the upload loop to upload the object to Sia
+	// run the upload loop to upload the object to Sia, then the pin loop
+	// to finalize the pin and release the on-disk file
 	backend.UploadObjects(t.Context())
+	backend.PinObjects(t.Context())
 
 	// verify the object is now on Sia
 	obj, err = store.GetObject(testutil.AccessKeyID, bucket, object, nil)
@@ -583,18 +585,15 @@ func TestMultipartUpload(t *testing.T) {
 		t.Fatal(err)
 	}
 	if obj.FileName != nil {
-		t.Fatal("expected filename to be nil after upload")
-	}
-	if obj.SiaObject == nil {
-		t.Fatal("expected object ID to be set after upload")
+		t.Fatal("expected filename to be nil after upload and pin")
 	}
 	if obj.SiaObject == nil {
 		t.Fatal("expected sia object to be set after upload")
 	}
 
-	// verify upload directory is removed from disk after upload
+	// verify upload directory is removed from disk after upload and pin
 	if _, err := os.Stat(uploadDir); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatal("expected upload directory to be removed after upload")
+		t.Fatal("expected upload directory to be removed after upload and pin")
 	}
 
 	// verify GetObject still serves the correct data, now from Sia

@@ -305,8 +305,10 @@ func TestPutObject(t *testing.T) {
 			t.Fatal("data mismatch before upload")
 		}
 
-		// run the upload loop
+		// run the upload loop, then the pin loop to finalize and release
+		// the file on disk
 		backend.UploadObjects(t.Context())
+		backend.PinObjects(t.Context())
 
 		// verify the object is now on Sia
 		obj, err = store.GetObject(testutil.AccessKeyID, bucket, "pending", nil)
@@ -314,7 +316,7 @@ func TestPutObject(t *testing.T) {
 			t.Fatal(err)
 		}
 		if obj.FileName != nil {
-			t.Fatal("expected filename to be nil after upload")
+			t.Fatal("expected filename to be nil after upload and pin")
 		}
 		if obj.SiaObject == nil {
 			t.Fatal("expected sia object to be set after upload")
@@ -322,7 +324,7 @@ func TestPutObject(t *testing.T) {
 
 		// verify upload file is removed from disk
 		if _, err := os.Stat(uploadPath); !errors.Is(err, fs.ErrNotExist) {
-			t.Fatal("expected upload file to be removed after upload")
+			t.Fatal("expected upload file to be removed after upload and pin")
 		}
 
 		// verify GetObject still serves correct data from Sia
@@ -797,7 +799,7 @@ func TestSyncMetadata(t *testing.T) {
 		t.Fatal("expected pending upload to have a filename")
 	}
 	sealed := memSDK.SealObject(siaObj)
-	if err := store.MarkObjectUploaded(bucket, "obj", obj.ContentMD5, sealed); err != nil {
+	if err := store.MarkObjectUploaded(bucket, "obj", obj.ContentMD5, sealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1109,7 +1111,11 @@ func TestDiskUsageLimit(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 
+	// the upload completes the data transfer to Sia but the file stays on
+	// disk until the pin loop releases it; both are required before the
+	// blocked PUT can fit under the limit
 	backend.UploadObjects(t.Context())
+	backend.PinObjects(t.Context())
 
 	select {
 	case err := <-done:
