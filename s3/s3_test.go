@@ -17,7 +17,7 @@ import (
 
 func newAdminServer(t *testing.T) (string, *http.Client) {
 	t.Helper()
-	backend := testutil.NewMemoryBackend(testutil.WithKeyPair(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey))
+	backend := testutil.NewBackend(t)
 	server := httptest.NewServer(s3.NewAdmin(backend))
 	t.Cleanup(server.Close)
 	return server.URL, server.Client()

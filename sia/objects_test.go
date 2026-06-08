@@ -29,7 +29,7 @@ import (
 
 func TestGetAndHeadObject(t *testing.T) {
 	now := time.Now().UTC().Add(-time.Second)
-	s3Tester := NewTester(t)
+	s3Tester := testutil.NewTester(t)
 
 	// prepare a bucket
 	bucket := "foo"
@@ -233,12 +233,12 @@ func TestPutObject(t *testing.T) {
 	}
 
 	t.Run("http", func(t *testing.T) {
-		s3Tester := NewTester(t)
+		s3Tester := testutil.NewTester(t)
 		test(t, s3Tester)
 	})
 
 	t.Run("https", func(t *testing.T) {
-		s3Tester := NewTester(t, testutil.WithTLS())
+		s3Tester := testutil.NewTester(t, testutil.WithTLS())
 		test(t, s3Tester)
 	})
 
@@ -257,7 +257,7 @@ func TestPutObject(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		memSDK := NewMemorySDK()
+		memSDK := testutil.NewMemorySDK()
 		memSDK.SetSlabSize(24)
 		backend, err := sia.New(t.Context(), memSDK, store, dir,
 			sia.WithLogger(log))
@@ -404,7 +404,7 @@ func TestPutObject(t *testing.T) {
 }
 
 func TestCopyObject(t *testing.T) {
-	s3Tester := NewTester(t)
+	s3Tester := testutil.NewTester(t)
 	data := frand.Bytes(100)
 	hash := md5.Sum(data)
 
@@ -495,7 +495,7 @@ func TestCopyObject(t *testing.T) {
 }
 
 func TestListObjects(t *testing.T) {
-	s3Tester := NewTester(t)
+	s3Tester := testutil.NewTester(t)
 
 	// prepare a bucket
 	bucket := "testbucket"
@@ -699,7 +699,7 @@ func TestListObjects(t *testing.T) {
 }
 
 func TestDeleteObjects(t *testing.T) {
-	s3Tester := NewTester(t)
+	s3Tester := testutil.NewTester(t)
 
 	// prepare a bucket
 	bucket := "foo"
@@ -817,7 +817,7 @@ func TestDeleteObjects(t *testing.T) {
 }
 
 func TestSyncMetadata(t *testing.T) {
-	memSDK := NewMemorySDK()
+	memSDK := testutil.NewMemorySDK()
 	log := zaptest.NewLogger(t)
 	dir := t.TempDir()
 	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
@@ -931,7 +931,7 @@ func TestCopyAndDeleteObject(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
-	s3Tester := NewCustomTester(t, dir, store, NewMemorySDK(), log)
+	s3Tester := testutil.NewCustomTester(t, dir, store, testutil.NewMemorySDK(), log)
 
 	const bucket = "bucket"
 	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
@@ -1008,7 +1008,7 @@ func TestOverwritePendingObjectCleansUpFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
-	s3Tester := NewCustomTester(t, dir, store, NewMemorySDK(), log)
+	s3Tester := testutil.NewCustomTester(t, dir, store, testutil.NewMemorySDK(), log)
 
 	const bucket = "bucket"
 	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
@@ -1126,7 +1126,7 @@ func TestDiskUsageLimit(t *testing.T) {
 	}
 
 	const limit = 500
-	memSDK := NewMemorySDK()
+	memSDK := testutil.NewMemorySDK()
 	memSDK.SetSlabSize(100)
 	backend, err := sia.New(t.Context(), memSDK, store, dir,
 		sia.WithUploadDisabled(),
@@ -1200,7 +1200,7 @@ func TestDiskUsageLimitOngoingMultipartUpload(t *testing.T) {
 	}
 
 	const limit = 20
-	backend, err := sia.New(t.Context(), NewMemorySDK(), store, dir,
+	backend, err := sia.New(t.Context(), testutil.NewMemorySDK(), store, dir,
 		sia.WithUploadDisabled(),
 		sia.WithDiskUsageLimit(limit),
 		sia.WithLogger(log))
@@ -1264,7 +1264,7 @@ func TestDiskUsageLimitOverwriteCleanup(t *testing.T) {
 	}
 
 	const limit = 200
-	backend, err := sia.New(t.Context(), NewMemorySDK(), store, dir,
+	backend, err := sia.New(t.Context(), testutil.NewMemorySDK(), store, dir,
 		sia.WithUploadDisabled(),
 		sia.WithDiskUsageLimit(limit),
 		sia.WithLogger(log))
@@ -1315,7 +1315,7 @@ func TestDiskUsageLimitOverwriteCleanup(t *testing.T) {
 }
 
 func TestDeleteObjectUnpin(t *testing.T) {
-	memSDK := NewMemorySDK()
+	memSDK := testutil.NewMemorySDK()
 	memSDK.SetSlabSize(32)
 	log := zaptest.NewLogger(t)
 	dir := t.TempDir()
@@ -1353,8 +1353,8 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	siaBackend.UploadObjects(t.Context())
 
 	// verify SDK has the object pinned
-	if len(memSDK.objects) != 1 {
-		t.Fatalf("expected 1 pinned object, got %d", len(memSDK.objects))
+	if memSDK.ObjectCount() != 1 {
+		t.Fatalf("expected 1 pinned object, got %d", memSDK.ObjectCount())
 	}
 
 	// copy A to B (shares same sia_object_id)
@@ -1368,8 +1368,8 @@ func TestDeleteObjectUnpin(t *testing.T) {
 		t.Fatal(err)
 	}
 	siaBackend.ProcessOrphans(t.Context())
-	if len(memSDK.objects) != 1 {
-		t.Fatalf("expected 1 pinned object after deleting A (B still references it), got %d", len(memSDK.objects))
+	if memSDK.ObjectCount() != 1 {
+		t.Fatalf("expected 1 pinned object after deleting A (B still references it), got %d", memSDK.ObjectCount())
 	}
 
 	// delete B - should unpin since no references remain
@@ -1377,8 +1377,8 @@ func TestDeleteObjectUnpin(t *testing.T) {
 		t.Fatal(err)
 	}
 	siaBackend.ProcessOrphans(t.Context())
-	if len(memSDK.objects) != 0 {
-		t.Fatalf("expected 0 pinned objects after deleting B, got %d", len(memSDK.objects))
+	if memSDK.ObjectCount() != 0 {
+		t.Fatalf("expected 0 pinned objects after deleting B, got %d", memSDK.ObjectCount())
 	}
 
 	// test empty object deletion does not attempt to unpin
@@ -1387,15 +1387,15 @@ func TestDeleteObjectUnpin(t *testing.T) {
 		t.Fatal(err)
 	}
 	siaBackend.ProcessOrphans(t.Context())
-	if len(memSDK.objects) != 0 {
-		t.Fatalf("expected 0 pinned objects for empty object, got %d", len(memSDK.objects))
+	if memSDK.ObjectCount() != 0 {
+		t.Fatalf("expected 0 pinned objects for empty object, got %d", memSDK.ObjectCount())
 	}
 	if err := s3Tester.DeleteObject(t.Context(), bucket, "empty"); err != nil {
 		t.Fatal(err)
 	}
 	siaBackend.ProcessOrphans(t.Context())
-	if len(memSDK.objects) != 0 {
-		t.Fatalf("expected 0 pinned objects after deleting empty object, got %d", len(memSDK.objects))
+	if memSDK.ObjectCount() != 0 {
+		t.Fatalf("expected 0 pinned objects after deleting empty object, got %d", memSDK.ObjectCount())
 	}
 
 	// test PutObject overwrite unpins old object
@@ -1405,8 +1405,8 @@ func TestDeleteObjectUnpin(t *testing.T) {
 		t.Fatal(err)
 	}
 	siaBackend.UploadObjects(t.Context())
-	if len(memSDK.objects) != 1 {
-		t.Fatalf("expected 1 pinned object, got %d", len(memSDK.objects))
+	if memSDK.ObjectCount() != 1 {
+		t.Fatalf("expected 1 pinned object, got %d", memSDK.ObjectCount())
 	}
 	// overwrite with different data (different sia_object_id)
 	_, err = s3Tester.PutObject(t.Context(), bucket, "C", bytes.NewReader(data2), nil)
@@ -1416,7 +1416,7 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	siaBackend.UploadObjects(t.Context())
 	siaBackend.ProcessOrphans(t.Context())
 	// old object should be unpinned, new one pinned
-	if len(memSDK.objects) != 1 {
-		t.Fatalf("expected 1 pinned object after overwrite, got %d", len(memSDK.objects))
+	if memSDK.ObjectCount() != 1 {
+		t.Fatalf("expected 1 pinned object after overwrite, got %d", memSDK.ObjectCount())
 	}
 }
