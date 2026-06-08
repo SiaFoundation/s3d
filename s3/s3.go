@@ -333,7 +333,8 @@ func NewAdmin(b Backend, opts ...Option) http.Handler {
 	}
 
 	return jape.Mux(map[string]jape.Handler{
-		"GET /prometheus": s3.handlePrometheus,
+		"GET /prometheus":   s3.handlePrometheus,
+		"GET /upload/stats": s3.handleGetUploadStats,
 	})
 }
 

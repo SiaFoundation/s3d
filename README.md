@@ -187,6 +187,15 @@ curl -u ":change-me" http://127.0.0.1:8001/prometheus
 | `s3d_upload_orphaned_objects` | Deleted or overwritten objects pending cleanup |
 | `s3d_upload_multipart_uploads` | In-progress multipart uploads |
 
+### `GET /upload/stats`
+
+Returns the same upload pipeline stats as the Prometheus endpoint, but in JSON.
+Used by `s3d status` for a basic overview without requiring a Prometheus stack.
+
+```sh
+curl -u ":change-me" http://127.0.0.1:8001/upload/stats
+```
+
 ## Compatibility
 
 `s3d` aims to be as compatible as possible with the S3 API. Authentication uses
@@ -264,6 +273,7 @@ generate one.
 | `version` | Print the version, commit hash, and build date |
 | `config` | Launch the interactive configuration wizard |
 | `login` | Prompts for recovery phrase and registers `s3d` with the Sia indexer |
+| `status` | Print a basic overview of the background upload pipeline |
 | `users` | Manage S3 users (create, delete, list) |
 | `keys` | Manage S3 access keys (create, delete, list) |
 

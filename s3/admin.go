@@ -65,3 +65,12 @@ func (s *s3) handlePrometheus(jc jape.Context) {
 		return
 	}
 }
+
+// handleGetUploadStats serves the background upload pipeline stats as JSON.
+func (s *s3) handleGetUploadStats(jc jape.Context) {
+	stats, err := s.backend.UploadStats(jc.Request.Context())
+	if jc.Check("failed to get upload stats", err) != nil {
+		return
+	}
+	jc.Encode(stats)
+}
