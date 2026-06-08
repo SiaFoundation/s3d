@@ -10,6 +10,7 @@ import (
 
 	"github.com/SiaFoundation/s3d/s3/auth"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"go.sia.tech/jape"
 	"go.uber.org/zap"
 )
 
@@ -231,6 +232,9 @@ type Backend interface {
 	//
 	// - If the last part is below the minimum size, [ErrEntityTooSmall] must be returned.
 	CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, object string, uploadID UploadID, parts []CompleteMultipartPart) (*CompleteMultipartUploadResult, error)
+
+	// UploadStats returns statistics about the background upload pipeline.
+	UploadStats(ctx context.Context) (UploadStats, error)
 }
 
 type s3 struct {
@@ -313,6 +317,23 @@ func corsMiddleware(handler http.Handler) http.Handler {
 			}
 		}
 		handler.ServeHTTP(w, r)
+	})
+}
+
+// NewAdmin creates an HTTP handler that serves the admin API using the provided
+// backend. Currently the only endpoint is /prometheus, which exposes the
+// background upload stats as Prometheus metrics.
+func NewAdmin(b Backend, opts ...Option) http.Handler {
+	s3 := &s3{
+		backend: b,
+		logger:  zap.NewNop(),
+	}
+	for _, opt := range opts {
+		opt(s3)
+	}
+
+	return jape.Mux(map[string]jape.Handler{
+		"GET /prometheus": s3.handlePrometheus,
 	})
 }
 

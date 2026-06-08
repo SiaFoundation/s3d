@@ -2,14 +2,53 @@ package s3_test
 
 import (
 	"bytes"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/SiaFoundation/s3d/internal/testutil"
+	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	service "github.com/aws/aws-sdk-go-v2/service/s3"
 )
+
+func newAdminServer(t *testing.T) (string, *http.Client) {
+	t.Helper()
+	backend := testutil.NewBackend(t)
+	server := httptest.NewServer(s3.NewAdmin(backend))
+	t.Cleanup(server.Close)
+	return server.URL, server.Client()
+}
+
+func TestPrometheus(t *testing.T) {
+	baseURL, httpClient := newAdminServer(t)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, baseURL+"/prometheus", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	} else if ct := resp.Header.Get("Content-Type"); ct != "text/plain; version=0.0.4" {
+		t.Fatalf("expected Prometheus Content-Type, got %q", ct)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	} else if !bytes.Contains(body, []byte("s3d_upload_pending_objects 0")) {
+		t.Fatalf("expected prometheus metrics, got %q", body)
+	}
+}
 
 // TestInvalidCredentials tests that API calls with invalid credentials fail.
 func TestInvalidCredentials(t *testing.T) {
