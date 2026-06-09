@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SiaFoundation/s3d/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3"
@@ -569,8 +570,7 @@ func TestMultipartUpload(t *testing.T) {
 	body, err := io.ReadAll(getObj.Body)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if !bytes.Equal(body, partData) {
+	} else if !bytes.Equal(body, partData) {
 		t.Fatal("data mismatch for completed multipart object")
 	}
 
@@ -591,8 +591,18 @@ func TestMultipartUpload(t *testing.T) {
 		t.Fatal("expected sia object to be set after upload")
 	}
 
-	// verify upload directory is removed from disk after upload and pin
-	if _, err := os.Stat(uploadDir); !errors.Is(err, fs.ErrNotExist) {
+	// verify upload directory is removed from disk after upload and pin.
+	// Removal can be deferred until the last reader of the upload releases
+	// its lock, so poll for the directory to disappear.
+	removed := false
+	for range 100 {
+		if _, err := os.Stat(uploadDir); errors.Is(err, fs.ErrNotExist) {
+			removed = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !removed {
 		t.Fatal("expected upload directory to be removed after upload and pin")
 	}
 
