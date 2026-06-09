@@ -224,6 +224,8 @@ func (s *Store) MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, sea
 // ErrObjectNotFound if no unpinned_objects row exists for the bucket and name.
 func (s *Store) MarkObjectPinned(bucket, name string) (orphanFile string, orphanSize int64, _ error) {
 	err := s.transaction(func(tx *txn) error {
+		orphanFile, orphanSize = "", 0 // reset per transaction attempt
+
 		bid, err := bucketIDByName(tx, bucket)
 		if err != nil {
 			return err

@@ -3,6 +3,7 @@ package sia
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"time"
 
@@ -38,9 +39,18 @@ func (s *Sia) pinLoop(ctx context.Context) {
 	}
 
 	for {
-		s.performObjectPinning(ctx)
+		err := s.performObjectPinning(ctx)
 		if ctx.Err() != nil {
 			return
+		} else if err != nil {
+			s.logger.Error("failed to pin objects", zap.Error(err))
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(pinRetryBackoff):
+			case <-s.pinWake:
+			}
+			continue
 		}
 
 		next, ok, err := s.store.NextPinningAttempt()
@@ -84,24 +94,24 @@ func (s *Sia) pinLoop(ctx context.Context) {
 	}
 }
 
-// performObjectPinning fetches due unpinned objects in batches and pins them. On a
-// per-object failure the row's next_attempt_at is bumped so the loop will
-// retry it later instead of blocking the rest of the queue. Rows whose
-// pin_before deadline has passed are scheduled for re-upload instead.
-func (s *Sia) performObjectPinning(ctx context.Context) {
+// performObjectPinning fetches due unpinned objects in batches and pins them.
+// Rows whose pin_before deadline has passed are scheduled for re-upload
+// instead. Unexpected database errors are returned so the pin loop can apply
+// a backoff before retrying; transient pin failures bump the row's
+// next_attempt_at so the rest of the queue keeps moving.
+func (s *Sia) performObjectPinning(ctx context.Context) error {
 	for ctx.Err() == nil {
 		now := time.Now()
 		toPin, err := s.store.ObjectsForPinning(now, pinBatchSize)
 		if err != nil {
-			s.logger.Error("failed to fetch unpinned objects", zap.Error(err))
-			return
+			return fmt.Errorf("failed to fetch unpinned objects: %w", err)
 		} else if len(toPin) == 0 {
-			return
+			return nil
 		}
 
 		for _, uo := range toPin {
 			if ctx.Err() != nil {
-				return
+				return nil
 			}
 			if !now.Before(uo.PinBefore) {
 				s.logger.Warn("upload expired before pinning; scheduling for re-upload",
@@ -109,31 +119,29 @@ func (s *Sia) performObjectPinning(ctx context.Context) {
 					zap.String("name", uo.Name),
 					zap.Time("pinBefore", uo.PinBefore))
 				if err := s.store.ScheduleObjectForReupload(uo.Bucket, uo.Name); err != nil && !errors.Is(err, objects.ErrObjectNotFound) {
-					s.logger.Error("failed to schedule expired object for re-upload",
-						zap.String("bucket", uo.Bucket),
-						zap.String("name", uo.Name),
-						zap.Error(err))
+					return fmt.Errorf("failed to schedule expired object for re-upload (bucket=%q name=%q): %w", uo.Bucket, uo.Name, err)
 				}
 				continue
 			}
-			s.pinObject(ctx, uo)
+			if err := s.pinObject(ctx, uo); err != nil {
+				return err
+			}
 		}
 
 		if len(toPin) < pinBatchSize {
-			return
+			return nil
 		}
 	}
+	return nil
 }
 
-func (s *Sia) pinObject(ctx context.Context, uo objects.UnpinnedObject) {
-	reschedulePin := func(uo objects.UnpinnedObject) {
+func (s *Sia) pinObject(ctx context.Context, uo objects.UnpinnedObject) error {
+	reschedulePin := func(uo objects.UnpinnedObject) error {
 		next := time.Now().Add(pinRetryBackoff)
 		if err := s.store.RescheduleUnpinnedObject(uo.Bucket, uo.Name, next); err != nil && !errors.Is(err, objects.ErrObjectNotFound) {
-			s.logger.Error("failed to reschedule unpinned object",
-				zap.String("bucket", uo.Bucket),
-				zap.String("name", uo.Name),
-				zap.Error(err))
+			return fmt.Errorf("failed to reschedule unpinned object (bucket=%q name=%q): %w", uo.Bucket, uo.Name, err)
 		}
+		return nil
 	}
 
 	sdkObj, err := s.sdk.UnsealObject(uo.SiaObject.Sealed)
@@ -142,8 +150,7 @@ func (s *Sia) pinObject(ctx context.Context, uo objects.UnpinnedObject) {
 			zap.String("bucket", uo.Bucket),
 			zap.String("name", uo.Name),
 			zap.Error(err))
-		reschedulePin(uo)
-		return
+		return reschedulePin(uo)
 	}
 
 	if err := s.sdk.PinObject(ctx, sdkObj); err != nil {
@@ -152,17 +159,12 @@ func (s *Sia) pinObject(ctx context.Context, uo objects.UnpinnedObject) {
 			zap.String("bucket", uo.Bucket),
 			zap.String("name", uo.Name),
 			zap.Error(err))
-		reschedulePin(uo)
-		return
+		return reschedulePin(uo)
 	}
 
 	orphanFile, orphanSize, err := s.store.MarkObjectPinned(uo.Bucket, uo.Name)
 	if err != nil {
-		s.logger.Error("failed to mark object pinned",
-			zap.String("bucket", uo.Bucket),
-			zap.String("name", uo.Name),
-			zap.Error(err))
-		return
+		return fmt.Errorf("failed to mark object pinned (bucket=%q name=%q): %w", uo.Bucket, uo.Name, err)
 	}
 
 	s.logger.Debug("object pinned",
@@ -172,4 +174,5 @@ func (s *Sia) pinObject(ctx context.Context, uo objects.UnpinnedObject) {
 	if orphanFile != "" {
 		s.cleanupOrphan(filepath.Join(s.uploadDir(), orphanFile), orphanSize)
 	}
+	return nil
 }
