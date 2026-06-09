@@ -16,8 +16,8 @@ func (s *Sia) UploadObjects(ctx context.Context) { //nolint:revive
 }
 
 // PinObjects runs a single pin cycle for testing.
-func (s *Sia) PinObjects(ctx context.Context) { //nolint:revive
-	s.performObjectPinning(ctx)
+func (s *Sia) PinObjects(ctx context.Context) error { //nolint:revive
+	return s.performObjectPinning(ctx)
 }
 
 // DeleteOrphanedUploads exports deleteOrphanedUploads for testing.

@@ -156,11 +156,11 @@ type Store interface {
 	OrphanedObjects(limit int) ([]types.Hash256, error)
 	PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string) (string, int64, error)
 	MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, sealed sdk.SealedObject, pinBefore time.Time) error
-	MarkObjectPinned(bucket, name string) (orphanFile string, orphanSize int64, _ error)
-	ScheduleObjectForReupload(bucket, name string) error
+	MarkObjectPinned(siaObjectID types.Hash256) ([]objects.OrphanedFile, error)
+	ScheduleObjectForReupload(siaObjectID types.Hash256) error
 	ObjectsForPinning(now time.Time, limit int) ([]objects.UnpinnedObject, error)
 	NextPinningAttempt() (time.Time, bool, error)
-	RescheduleUnpinnedObject(bucket, name string, nextAttemptAt time.Time) error
+	RescheduleUnpinnedObject(siaObjectID types.Hash256, nextAttemptAt time.Time) error
 	UpdateSiaObjects(siaObjects []objects.SiaObject) (int64, error)
 	RemoveOrphanedObject(objectID types.Hash256) error
 	AbortMultipartUpload(accessKeyID, bucket, name string, uploadID s3.UploadID) (int64, error)

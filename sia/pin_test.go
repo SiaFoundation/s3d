@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/SiaFoundation/s3d/internal/testutil"
+	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"lukechampine.com/frand"
 )
@@ -154,5 +155,50 @@ func TestPinLoopDemotesExpiredUploads(t *testing.T) {
 		if id == priorID {
 			t.Fatalf("expected unpinned prior sia object ID %v not to be orphaned", priorID)
 		}
+	}
+}
+
+// TestPinLoopPinsCopyAfterSourceDeleted verifies that a copy of an
+// uploaded-but-not-yet-pinned object remains pinnable after the source is
+// deleted before the pin loop runs. The copy shares the source's sia_object_id
+// and filename; once the source is gone the copy must still drive the pin
+// lifecycle (pin in indexer, clear filename, release on-disk file).
+func TestPinLoopPinsCopyAfterSourceDeleted(t *testing.T) {
+	memSDK := testutil.NewMemorySDK()
+	backend, store := testutil.NewBackend(t, testutil.WithSDK(memSDK))
+
+	const (
+		bucket  = "bucket"
+		srcName = "src"
+		dstName = "dst"
+	)
+	stageUpload(t, memSDK, store, bucket, srcName, time.Now().Add(time.Hour))
+
+	// copy src -> dst while src is uploaded but not yet pinned
+	if _, _, _, err := store.CopyObject(testutil.AccessKeyID, bucket, srcName, bucket, dstName, nil, true); err != nil {
+		t.Fatal(err)
+	}
+
+	// delete src before the pin loop has a chance to run; src's
+	// unpinned_objects row goes with it via FK cascade
+	if _, _, err := store.DeleteObject(testutil.AccessKeyID, bucket, s3.ObjectID{Key: srcName}); err != nil {
+		t.Fatal(err)
+	}
+
+	backend.PinObjects(t.Context())
+
+	// the indexer should have been asked to pin the object at least once
+	if got := memSDK.PinAttempts(); got == 0 {
+		t.Fatal("expected pin loop to pin the surviving copy, got 0 pin attempts")
+	}
+
+	// dst's on-disk file should have been released and its filename cleared
+	dst, err := store.GetObject(testutil.AccessKeyID, bucket, dstName, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if dst.SiaObject == nil {
+		t.Fatal("expected dst sia_object to remain set")
+	} else if dst.FileName != nil {
+		t.Fatalf("expected dst filename to be cleared after pin, got %q", *dst.FileName)
 	}
 }

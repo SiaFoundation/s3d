@@ -61,11 +61,16 @@ type Part struct {
 	ContentMD5 [16]byte
 }
 
-// UnpinnedObject identifies an object that has been uploaded to Sia but not
-// yet pinned, along with the deadline before which it must be pinned.
+// UnpinnedObject identifies a Sia object that has been uploaded but not yet
+// pinned, along with the deadline before which it must be pinned.
 type UnpinnedObject struct {
-	Bucket    string
-	Name      string
 	SiaObject SiaObject
 	PinBefore time.Time
+}
+
+// OrphanedFile identifies an on-disk upload file that is no longer referenced
+// by any object row.
+type OrphanedFile struct {
+	Filename string
+	Size     int64
 }

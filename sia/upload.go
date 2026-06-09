@@ -332,16 +332,6 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 					zap.String("name", uploadObj.Name),
 					zap.Error(err))
 			}
-
-			// the upload won't be pinned by the pin loop because no
-			// unpinned_objects row was inserted; drop the data from Sia
-			// so it doesn't linger until its TTL expires.
-			if err := s.sdk.DeleteObject(ctx, obj.ID()); err != nil {
-				s.logger.Error("failed to delete unreferenced object",
-					zap.String("bucket", uploadObj.Bucket),
-					zap.String("name", uploadObj.Name),
-					zap.Error(err))
-			}
 			continue
 		}
 

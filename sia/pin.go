@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/SiaFoundation/s3d/sia/objects"
+	"go.sia.tech/core/types"
 	"go.uber.org/zap"
 )
 
@@ -113,13 +114,13 @@ func (s *Sia) performObjectPinning(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return nil
 			}
+			id := uo.SiaObject.ID
 			if !now.Before(uo.PinBefore) {
 				s.logger.Warn("upload expired before pinning; scheduling for re-upload",
-					zap.String("bucket", uo.Bucket),
-					zap.String("name", uo.Name),
+					zap.Stringer("siaObjectID", &id),
 					zap.Time("pinBefore", uo.PinBefore))
-				if err := s.store.ScheduleObjectForReupload(uo.Bucket, uo.Name); err != nil && !errors.Is(err, objects.ErrObjectNotFound) {
-					return fmt.Errorf("failed to schedule expired object for re-upload (bucket=%q name=%q): %w", uo.Bucket, uo.Name, err)
+				if err := s.store.ScheduleObjectForReupload(id); err != nil && !errors.Is(err, objects.ErrObjectNotFound) {
+					return fmt.Errorf("failed to schedule expired object for re-upload (siaObjectID=%v): %w", id, err)
 				}
 				continue
 			}
@@ -135,44 +136,40 @@ func (s *Sia) performObjectPinning(ctx context.Context) error {
 	return nil
 }
 
-func (s *Sia) pinObject(ctx context.Context, uo objects.UnpinnedObject) error {
-	reschedulePin := func(uo objects.UnpinnedObject) error {
-		next := time.Now().Add(pinRetryBackoff)
-		if err := s.store.RescheduleUnpinnedObject(uo.Bucket, uo.Name, next); err != nil && !errors.Is(err, objects.ErrObjectNotFound) {
-			return fmt.Errorf("failed to reschedule unpinned object (bucket=%q name=%q): %w", uo.Bucket, uo.Name, err)
-		}
-		return nil
+func (s *Sia) reschedulePin(siaObjectID types.Hash256) error {
+	next := time.Now().Add(pinRetryBackoff)
+	if err := s.store.RescheduleUnpinnedObject(siaObjectID, next); err != nil && !errors.Is(err, objects.ErrObjectNotFound) {
+		return fmt.Errorf("failed to reschedule unpinned object (siaObjectID=%v): %w", siaObjectID, err)
 	}
+	return nil
+}
 
+func (s *Sia) pinObject(ctx context.Context, uo objects.UnpinnedObject) error {
+	id := uo.SiaObject.ID
 	sdkObj, err := s.sdk.UnsealObject(uo.SiaObject.Sealed)
 	if err != nil {
 		s.logger.Error("failed to unseal object for pinning",
-			zap.String("bucket", uo.Bucket),
-			zap.String("name", uo.Name),
+			zap.Stringer("siaObjectID", &id),
 			zap.Error(err))
-		return reschedulePin(uo)
+		return s.reschedulePin(id)
 	}
 
 	if err := s.sdk.PinObject(ctx, sdkObj); err != nil {
-		s.failedUploads.Add(1)
 		s.logger.Warn("failed to pin object",
-			zap.String("bucket", uo.Bucket),
-			zap.String("name", uo.Name),
+			zap.Stringer("siaObjectID", &id),
 			zap.Error(err))
-		return reschedulePin(uo)
+		return s.reschedulePin(id)
 	}
 
-	orphanFile, orphanSize, err := s.store.MarkObjectPinned(uo.Bucket, uo.Name)
+	orphans, err := s.store.MarkObjectPinned(id)
 	if err != nil {
-		return fmt.Errorf("failed to mark object pinned (bucket=%q name=%q): %w", uo.Bucket, uo.Name, err)
+		return fmt.Errorf("failed to mark object pinned (siaObjectID=%v): %w", id, err)
 	}
 
-	s.logger.Debug("object pinned",
-		zap.String("bucket", uo.Bucket),
-		zap.String("name", uo.Name))
+	s.logger.Debug("object pinned", zap.Stringer("siaObjectID", &id))
 
-	if orphanFile != "" {
-		s.cleanupOrphan(filepath.Join(s.uploadDir(), orphanFile), orphanSize)
+	for _, o := range orphans {
+		s.cleanupOrphan(filepath.Join(s.uploadDir(), o.Filename), o.Size)
 	}
 	return nil
 }

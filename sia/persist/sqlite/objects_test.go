@@ -107,7 +107,7 @@ func TestDiskUsage(t *testing.T) {
 	}
 
 	// once pinned, the file is released and no longer counts
-	if _, _, err := store.MarkObjectPinned(bucket, "uploaded"); err != nil {
+	if _, err := store.MarkObjectPinned(sealed.ID()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -194,7 +194,7 @@ func TestAllFilenames(t *testing.T) {
 	}
 
 	// once pinned, the filename is cleared
-	if _, _, err := store.MarkObjectPinned(bucket, "obj1"); err != nil {
+	if _, err := store.MarkObjectPinned(sealed.ID()); err != nil {
 		t.Fatal(err)
 	}
 	filenames, err = store.AllFilenames()
@@ -231,8 +231,7 @@ func TestAllFilenames(t *testing.T) {
 	mpSealed := mpObj.Seal(types.GeneratePrivateKey())
 	if err := store.MarkObjectUploaded(bucket, "mp1", mpMD5, mpSealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
-	}
-	if _, _, err := store.MarkObjectPinned(bucket, "mp1"); err != nil {
+	} else if _, err := store.MarkObjectPinned(mpSealed.ID()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -446,7 +445,7 @@ func TestGetObjectPartFields(t *testing.T) {
 	}
 
 	// after pinning: FileName is cleared
-	if _, _, err := store.MarkObjectPinned(bucket, name); err != nil {
+	if _, err := store.MarkObjectPinned(sealed.ID()); err != nil {
 		t.Fatal(err)
 	}
 	obj, err = store.GetObject(accessKeyID, bucket, name, aws.Int32(2))
@@ -1062,12 +1061,16 @@ func TestOrphanedObjects(t *testing.T) {
 		t.Fatalf("expected no orphans, got %d", len(orphans))
 	}
 
-	// put first object and mark it uploaded
+	// put first object, mark it uploaded, then pin it: only pinned data
+	// gets orphaned through the indexer; never-pinned uploads are left to
+	// expire on their TTL.
 	md5a := frand.Entropy128()
 	if _, _, err := store.PutObject(testAccessKeyID, bucket, "a", md5a, nil, 1, new(string)); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.MarkObjectUploaded(bucket, "a", md5a, sealed, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	} else if _, err := store.MarkObjectPinned(sealed.ID()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1130,12 +1133,16 @@ func TestPutObjectOrphan(t *testing.T) {
 	newObj := sdk.Object{}
 	newSealed := newObj.Seal(types.GeneratePrivateKey())
 
-	// put initial object and mark it uploaded
+	// put initial object, mark it uploaded, then pin it: never-pinned data
+	// is left to TTL-expire rather than being routed through the orphan
+	// path.
 	md5old := frand.Entropy128()
 	if _, _, err := store.PutObject(testAccessKeyID, bucket, "obj", md5old, nil, 1, new(string)); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.MarkObjectUploaded(bucket, "obj", md5old, oldSealed, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	} else if _, err := store.MarkObjectPinned(oldSealed.ID()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1164,11 +1171,13 @@ func TestPutObjectOrphan(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// mark new upload and overwrite again with same sia_object_id - should not orphan
+	// mark + pin a new upload, then overwrite: pinned data orphans
+	// correctly when its last reference disappears.
 	if err := store.MarkObjectUploaded(bucket, "obj", md5new, newSealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
-	}
-	if _, _, err := store.PutObject(testAccessKeyID, bucket, "obj", frand.Entropy128(), nil, 2, new(string)); err != nil {
+	} else if _, err := store.MarkObjectPinned(newSealed.ID()); err != nil {
+		t.Fatal(err)
+	} else if _, _, err := store.PutObject(testAccessKeyID, bucket, "obj", frand.Entropy128(), nil, 2, new(string)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1376,13 +1385,15 @@ func TestMarkObjectUploaded(t *testing.T) {
 	}
 
 	// pinning the object releases the file
-	orphan, size, err := store.MarkObjectPinned(bucket, object)
+	orphans, err := store.MarkObjectPinned(sealed.ID())
 	if err != nil {
 		t.Fatal(err)
-	} else if orphan != fileName {
-		t.Fatalf("expected orphan filename %q, got %q", fileName, orphan)
-	} else if size != 100 {
-		t.Fatalf("expected orphan size 100, got %d", size)
+	} else if len(orphans) != 1 {
+		t.Fatalf("expected 1 orphan, got %d", len(orphans))
+	} else if orphans[0].Filename != fileName {
+		t.Fatalf("expected orphan filename %q, got %q", fileName, orphans[0].Filename)
+	} else if orphans[0].Size != 100 {
+		t.Fatalf("expected orphan size 100, got %d", orphans[0].Size)
 	}
 
 	obj, err = store.GetObject(testAccessKeyID, bucket, object, nil)
@@ -1549,7 +1560,7 @@ func TestUploadStats(t *testing.T) {
 	})
 
 	// pinning the uploaded object clears it from the unpinned count
-	if _, _, err := store.MarkObjectPinned(bucket, "obj3"); err != nil {
+	if _, err := store.MarkObjectPinned(sealed.ID()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1600,7 +1611,8 @@ func TestMarkObjectPinned(t *testing.T) {
 	}
 
 	// pinning an object that was never uploaded returns ErrObjectNotFound
-	if _, _, err := store.MarkObjectPinned(bucket, "missing"); !errors.Is(err, objects.ErrObjectNotFound) {
+	missingID := types.Hash256(frand.Entropy256())
+	if _, err := store.MarkObjectPinned(missingID); !errors.Is(err, objects.ErrObjectNotFound) {
 		t.Fatalf("expected ErrObjectNotFound, got %v", err)
 	}
 
@@ -1615,18 +1627,20 @@ func TestMarkObjectPinned(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	orphan, size, err := store.MarkObjectPinned(bucket, name)
+	orphans, err := store.MarkObjectPinned(sealed.ID())
 	if err != nil {
 		t.Fatal(err)
-	} else if orphan != fileName {
-		t.Fatalf("expected orphan %q, got %q", fileName, orphan)
-	} else if size != 42 {
-		t.Fatalf("expected size 42, got %d", size)
+	} else if len(orphans) != 1 {
+		t.Fatalf("expected 1 orphan, got %d", len(orphans))
+	} else if orphans[0].Filename != fileName {
+		t.Fatalf("expected orphan %q, got %q", fileName, orphans[0].Filename)
+	} else if orphans[0].Size != 42 {
+		t.Fatalf("expected size 42, got %d", orphans[0].Size)
 	}
 
 	// the unpinned_objects row is gone, so a second call returns
 	// ErrObjectNotFound
-	if _, _, err := store.MarkObjectPinned(bucket, name); !errors.Is(err, objects.ErrObjectNotFound) {
+	if _, err := store.MarkObjectPinned(sealed.ID()); !errors.Is(err, objects.ErrObjectNotFound) {
 		t.Fatalf("expected ErrObjectNotFound on second pin, got %v", err)
 	}
 
@@ -1645,11 +1659,11 @@ func TestMarkObjectPinned(t *testing.T) {
 	if err := store.MarkObjectUploaded(bucket, "a", otherMD5, sealedA, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	orphan, _, err = store.MarkObjectPinned(bucket, "a")
+	orphans, err = store.MarkObjectPinned(sealedA.ID())
 	if err != nil {
 		t.Fatal(err)
-	} else if orphan != "" {
-		t.Fatalf("expected no orphan when filename is shared, got %q", orphan)
+	} else if len(orphans) != 0 {
+		t.Fatalf("expected no orphan when filename is shared, got %+v", orphans)
 	}
 }
 
@@ -1677,7 +1691,9 @@ func TestObjectsForPinning(t *testing.T) {
 		t.Fatal("expected no next attempt when empty")
 	}
 
-	// add three uploaded-but-not-pinned objects
+	// add three uploaded-but-not-pinned objects; use newTestObject so each
+	// gets a distinct sia_object_id (and therefore a distinct
+	// unpinned_objects row)
 	upload := func(name string) sdk.SealedObject {
 		t.Helper()
 		fn := name + ".upload"
@@ -1685,7 +1701,7 @@ func TestObjectsForPinning(t *testing.T) {
 		if _, _, err := store.PutObject(accessKeyID, bucket, name, md5, nil, 1, &fn); err != nil {
 			t.Fatal(err)
 		}
-		o := sdk.Object{}
+		o := newTestObject()
 		sealed := o.Seal(types.GeneratePrivateKey())
 		if err := store.MarkObjectUploaded(bucket, name, md5, sealed, time.Now().Add(time.Hour)); err != nil {
 			t.Fatal(err)
@@ -1694,8 +1710,8 @@ func TestObjectsForPinning(t *testing.T) {
 	}
 
 	sealedA := upload("a")
-	upload("b")
-	upload("c")
+	sealedB := upload("b")
+	sealedC := upload("c")
 
 	// the default next_attempt_at is 0 (epoch), so all three are due now
 	due, err = store.ObjectsForPinning(time.Now(), 10)
@@ -1720,19 +1736,17 @@ func TestObjectsForPinning(t *testing.T) {
 	}
 	var foundA *objects.UnpinnedObject
 	for i, uo := range all {
-		if uo.Bucket == bucket && uo.Name == "a" {
+		if uo.SiaObject.ID == sealedA.ID() {
 			foundA = &all[i]
 		}
 	}
 	if foundA == nil {
-		t.Fatal("expected 'a' in due rows")
-	} else if foundA.SiaObject.ID != sealedA.ID() {
-		t.Fatalf("expected sia object ID %v, got %v", sealedA.ID(), foundA.SiaObject.ID)
+		t.Fatal("expected sealed A's id in due rows")
 	}
 
 	// push "a" into the future; only "b" and "c" remain due
 	future := time.Now().Add(time.Hour)
-	if err := store.RescheduleUnpinnedObject(bucket, "a", future); err != nil {
+	if err := store.RescheduleUnpinnedObject(sealedA.ID(), future); err != nil {
 		t.Fatal(err)
 	}
 	due, err = store.ObjectsForPinning(time.Now(), 10)
@@ -1742,17 +1756,17 @@ func TestObjectsForPinning(t *testing.T) {
 		t.Fatalf("expected 2 due rows after rescheduling, got %d", len(due))
 	}
 	for _, uo := range due {
-		if uo.Name == "a" {
+		if uo.SiaObject.ID == sealedA.ID() {
 			t.Fatal("did not expect 'a' to be due after rescheduling")
 		}
 	}
 
 	// after pinning "b" and "c", only the future row remains and
 	// NextPinningAttempt reports its time
-	if _, _, err := store.MarkObjectPinned(bucket, "b"); err != nil {
+	if _, err := store.MarkObjectPinned(sealedB.ID()); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.MarkObjectPinned(bucket, "c"); err != nil {
+	if _, err := store.MarkObjectPinned(sealedC.ID()); err != nil {
 		t.Fatal(err)
 	}
 	due, err = store.ObjectsForPinning(time.Now(), 10)
@@ -1771,7 +1785,7 @@ func TestObjectsForPinning(t *testing.T) {
 	}
 
 	// rescheduling a non-existent row returns ErrObjectNotFound
-	if err := store.RescheduleUnpinnedObject(bucket, "missing", time.Now()); !errors.Is(err, objects.ErrObjectNotFound) {
+	if err := store.RescheduleUnpinnedObject(types.Hash256(frand.Entropy256()), time.Now()); !errors.Is(err, objects.ErrObjectNotFound) {
 		t.Fatalf("expected ErrObjectNotFound, got %v", err)
 	}
 }
@@ -1789,7 +1803,7 @@ func TestScheduleObjectForReupload(t *testing.T) {
 	}
 
 	// no row to demote
-	if err := store.ScheduleObjectForReupload(bucket, "missing"); !errors.Is(err, objects.ErrObjectNotFound) {
+	if err := store.ScheduleObjectForReupload(types.Hash256(frand.Entropy256())); !errors.Is(err, objects.ErrObjectNotFound) {
 		t.Fatalf("expected ErrObjectNotFound, got %v", err)
 	}
 
@@ -1805,7 +1819,7 @@ func TestScheduleObjectForReupload(t *testing.T) {
 	}
 
 	// demote the row
-	if err := store.ScheduleObjectForReupload(bucket, name); err != nil {
+	if err := store.ScheduleObjectForReupload(sealed.ID()); err != nil {
 		t.Fatal(err)
 	}
 
