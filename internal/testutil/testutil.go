@@ -459,6 +459,35 @@ func (t *S3Tester) CompleteMultipartUpload(ctx context.Context, bucket, object, 
 	return t.client.CompleteMultipartUpload(ctx, input)
 }
 
+// PutBucketLifecycleConfiguration is a convenience wrapper around the AWS SDK's
+// PutBucketLifecycleConfiguration API.
+func (t *S3Tester) PutBucketLifecycleConfiguration(ctx context.Context, bucket string, rules []types.LifecycleRule) error {
+	_, err := t.client.PutBucketLifecycleConfiguration(ctx, &service.PutBucketLifecycleConfigurationInput{
+		Bucket: aws.String(bucket),
+		LifecycleConfiguration: &types.BucketLifecycleConfiguration{
+			Rules: rules,
+		},
+	})
+	return err
+}
+
+// GetBucketLifecycleConfiguration is a convenience wrapper around the AWS SDK's
+// GetBucketLifecycleConfiguration API.
+func (t *S3Tester) GetBucketLifecycleConfiguration(ctx context.Context, bucket string) (*service.GetBucketLifecycleConfigurationOutput, error) {
+	return t.client.GetBucketLifecycleConfiguration(ctx, &service.GetBucketLifecycleConfigurationInput{
+		Bucket: aws.String(bucket),
+	})
+}
+
+// DeleteBucketLifecycle is a convenience wrapper around the AWS SDK's
+// DeleteBucketLifecycle API.
+func (t *S3Tester) DeleteBucketLifecycle(ctx context.Context, bucket string) error {
+	_, err := t.client.DeleteBucketLifecycle(ctx, &service.DeleteBucketLifecycleInput{
+		Bucket: aws.String(bucket),
+	})
+	return err
+}
+
 type testerCfg struct {
 	backend     s3.Backend
 	keyPairs    []keyPair

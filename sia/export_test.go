@@ -1,9 +1,17 @@
 package sia
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // OrphanLoopInterval exports orphanLoopInterval for testing.
 const OrphanLoopInterval = orphanLoopInterval
+
+// ApplyLifecycleRules exports applyLifecycleRules for testing.
+func (s *Sia) ApplyLifecycleRules(ctx context.Context, now time.Time) { //nolint:revive
+	s.applyLifecycleRules(ctx, now)
+}
 
 // SyncMetadata exports syncMetadata for testing.
 func (s *Sia) SyncMetadata(ctx context.Context) { //nolint:revive

@@ -44,6 +44,7 @@ CREATE TABLE objects (
 ) WITHOUT ROWID;
 CREATE INDEX objects_sia_object_id_idx ON objects(sia_object_id);
 CREATE INDEX objects_filename_idx ON objects(filename) WHERE filename IS NOT NULL;
+CREATE INDEX objects_bucket_id_updated_at_idx ON objects(bucket_id, updated_at);
 
 CREATE TABLE multipart_uploads (
     upload_id BLOB PRIMARY KEY,
@@ -55,6 +56,7 @@ CREATE TABLE multipart_uploads (
 );
 CREATE INDEX multipart_uploads_bucket_id_name_idx ON multipart_uploads(bucket_id, name);
 CREATE INDEX multipart_uploads_bucket_id_name_upload_id_idx ON multipart_uploads(bucket_id, name, upload_id);
+CREATE INDEX multipart_uploads_bucket_id_created_at_idx ON multipart_uploads(bucket_id, created_at);
 
 CREATE TABLE multipart_parts (
     upload_id BLOB NOT NULL,
@@ -81,6 +83,12 @@ CREATE TABLE object_parts (
 
 CREATE TABLE orphaned_objects (
     sia_object_id BLOB PRIMARY KEY
+);
+
+CREATE TABLE bucket_lifecycle_configurations (
+    bucket_id INTEGER PRIMARY KEY,
+    configuration TEXT NOT NULL,
+    FOREIGN KEY (bucket_id) REFERENCES buckets(id) ON DELETE CASCADE
 );
 
 CREATE TABLE global_settings (

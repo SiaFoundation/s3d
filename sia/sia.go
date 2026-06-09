@@ -28,6 +28,10 @@ const (
 	// processing orphaned objects runs.
 	orphanLoopInterval = time.Hour
 
+	// lifecycleLoopInterval is the interval at which the background lifecycle
+	// loop runs.
+	lifecycleLoopInterval = time.Hour
+
 	// UploadsDirectory is the directory name used for storing pending uploads.
 	UploadsDirectory = "uploads"
 )
@@ -165,6 +169,13 @@ type Store interface {
 	ListParts(accessKeyID, bucket, name string, uploadID s3.UploadID, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error)
 	MultipartParts(accessKeyID, bucket, name string, uploadID s3.UploadID) ([]objects.Part, error)
 	UploadStats() (s3.UploadStats, error)
+
+	PutBucketLifecycleConfiguration(accessKeyID, bucket, config string) error
+	GetBucketLifecycleConfiguration(accessKeyID, bucket string) (string, error)
+	DeleteBucketLifecycleConfiguration(accessKeyID, bucket string) error
+	AllBucketLifecycleConfigurations() ([]BucketLifecycleConfiguration, error)
+	AbortMultipartUploads(bucketID int64, prefix string, before time.Time, limit int) ([]AbortedUpload, error)
+	ExpireObjects(bucketID int64, prefix string, before time.Time, limit int) (int, []OrphanedFile, error)
 }
 
 // New creates a new Sia backend instance.
@@ -229,6 +240,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		launchBgLoop(sia.processOrphansLoop),
 		launchBgLoop(sia.syncMetadataLoop),
 		launchBgLoop(sia.uploadLoop),
+		launchBgLoop(sia.lifecycleLoop),
 	); err != nil {
 		return nil, err
 	}
