@@ -196,10 +196,9 @@ func (s *Sia) uploadObjects(ctx context.Context) { //nolint:revive
 	if len(groups) == 0 {
 		s.logger.Debug("not enough objects for upload")
 		return
-	} else {
-		s.logger.Info("found enough objects for upload",
-			zap.Int("groups", len(groups)))
 	}
+	s.logger.Debug("found enough objects for upload",
+		zap.Int("groups", len(groups)))
 
 	var wg sync.WaitGroup
 	uploadsCh := make(chan uploadGroup, numUploadThreads)
