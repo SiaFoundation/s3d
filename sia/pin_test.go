@@ -3,43 +3,13 @@ package sia_test
 import (
 	"bytes"
 	"errors"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/SiaFoundation/s3d/internal/testutil"
-	"github.com/SiaFoundation/s3d/sia"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
-	"go.uber.org/zap/zaptest"
 	"lukechampine.com/frand"
 )
-
-func newPinLoopBackend(t *testing.T, memSDK *testutil.MemorySDK) (*sia.Sia, *sqlite.Store) {
-	t.Helper()
-	log := zaptest.NewLogger(t)
-	dir := t.TempDir()
-
-	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { store.Close() })
-
-	if err := store.CreateUser(testutil.Owner); err != nil {
-		t.Fatal(err)
-	} else if err := store.CreateAccessKey(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey); err != nil {
-		t.Fatal(err)
-	}
-
-	backend, err := sia.New(t.Context(), memSDK, store, dir,
-		sia.WithUploadDisabled(), sia.WithLogger(log))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { backend.Close() })
-
-	return backend, store
-}
 
 // stageUpload simulates the state left behind by a completed
 // uploadObjectGroup: the data is in the SDK's in-memory map (so UnsealObject
@@ -75,7 +45,7 @@ func stageUpload(t *testing.T, memSDK *testutil.MemorySDK, store *sqlite.Store, 
 // again or dropping it.
 func TestPinLoopRetriesOnFailure(t *testing.T) {
 	memSDK := testutil.NewMemorySDK()
-	backend, store := newPinLoopBackend(t, memSDK)
+	backend, store := testutil.NewBackend(t, testutil.WithSDK(memSDK))
 
 	const (
 		bucket = "bucket"
@@ -127,7 +97,7 @@ func TestPinLoopRetriesOnFailure(t *testing.T) {
 // and reappears in the upload queue instead of being retried.
 func TestPinLoopDemotesExpiredUploads(t *testing.T) {
 	memSDK := testutil.NewMemorySDK()
-	backend, store := newPinLoopBackend(t, memSDK)
+	backend, store := testutil.NewBackend(t, testutil.WithSDK(memSDK))
 
 	const (
 		bucket = "bucket"

@@ -260,14 +260,7 @@ func (s *Store) MarkObjectPinned(bucket, name string) (orphanFile string, orphan
 // ScheduleObjectForReupload reverts an uploaded-but-not-pinned object back to
 // the pending-upload state. The unpinned_objects row is removed and the
 // objects row's sia_object_id and sia_object are cleared so the next upload
-// cycle re-uploads from the preserved filename. The previously-uploaded blob
-// on Sia is left to expire on its own TTL: it was never pinned, so the
-// indexer's DeleteObject does not apply. Returns ErrObjectNotFound if no
-// unpinned_objects row exists for the bucket and name, or if the row's
-// filename has already been cleared (no file on disk to re-upload from).
-// Returns an error if the objects row's sia_object_id is already NULL, which
-// would mean the object has already been pinned (sia_object_id is preserved
-// after pinning) or otherwise demoted.
+// cycle re-uploads from the preserved filename.
 func (s *Store) ScheduleObjectForReupload(bucket, name string) error {
 	return s.transaction(func(tx *txn) error {
 		bid, err := bucketIDByName(tx, bucket)
