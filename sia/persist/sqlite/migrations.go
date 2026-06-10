@@ -26,6 +26,9 @@ var migrations = []func(tx *txn, log *zap.Logger) error{
 	},
 	func(tx *txn, _ *zap.Logger) error {
 		_, err := tx.Exec(`
+CREATE TABLE object_parts_backup AS SELECT bucket_id, name, part_number, filename, content_md5, content_length, offset FROM object_parts;
+DROP TABLE object_parts;
+
 CREATE TABLE objects_new (
     bucket_id INTEGER REFERENCES buckets(id) NOT NULL,
     name TEXT NOT NULL,
@@ -47,6 +50,21 @@ DROP TABLE objects;
 ALTER TABLE objects_new RENAME TO objects;
 CREATE INDEX objects_sia_object_id_idx ON objects(sia_object_id);
 CREATE INDEX objects_filename_idx ON objects(filename) WHERE filename IS NOT NULL;
+
+CREATE TABLE object_parts (
+    bucket_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    part_number INTEGER NOT NULL,
+    filename TEXT NOT NULL,
+    content_md5 BLOB NOT NULL,
+    content_length INTEGER NOT NULL,
+    offset INTEGER NOT NULL,
+    FOREIGN KEY (bucket_id, name) REFERENCES objects(bucket_id, name) ON DELETE CASCADE,
+    PRIMARY KEY (bucket_id, name, part_number)
+);
+INSERT INTO object_parts (bucket_id, name, part_number, filename, content_md5, content_length, offset)
+    SELECT bucket_id, name, part_number, filename, content_md5, content_length, offset FROM object_parts_backup;
+DROP TABLE object_parts_backup;
 
 CREATE TABLE unpinned_objects (
     sia_object_id BLOB PRIMARY KEY,
