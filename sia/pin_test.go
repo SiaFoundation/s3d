@@ -144,17 +144,22 @@ func TestPinLoopDemotesExpiredUploads(t *testing.T) {
 		t.Fatal("expected demoted object to be picked up by ObjectsForUpload")
 	}
 
-	// the previous (never-pinned) Sia upload is not orphaned: it will
-	// expire on its own TTL since the indexer's DeleteObject only applies
-	// to pinned data
+	// the previous upload is orphaned: a pin attempt may have succeeded in
+	// the indexer without MarkObjectPinned committing, so the old id is
+	// conservatively routed through the orphan path (unpinning never-pinned
+	// data is a no-op)
 	orphans, err := store.OrphanedObjects(10)
 	if err != nil {
 		t.Fatal(err)
 	}
+	var orphaned bool
 	for _, id := range orphans {
 		if id == priorID {
-			t.Fatalf("expected unpinned prior sia object ID %v not to be orphaned", priorID)
+			orphaned = true
 		}
+	}
+	if !orphaned {
+		t.Fatalf("expected demoted prior sia object ID %v to be orphaned, got %v", priorID, orphans)
 	}
 }
 

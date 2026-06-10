@@ -1061,9 +1061,7 @@ func TestOrphanedObjects(t *testing.T) {
 		t.Fatalf("expected no orphans, got %d", len(orphans))
 	}
 
-	// put first object, mark it uploaded, then pin it: only pinned data
-	// gets orphaned through the indexer; never-pinned uploads are left to
-	// expire on their TTL.
+	// put first object, mark it uploaded, then pin it
 	md5a := frand.Entropy128()
 	if _, _, err := store.PutObject(testAccessKeyID, bucket, "a", md5a, nil, 1, new(string)); err != nil {
 		t.Fatal(err)
@@ -1133,9 +1131,7 @@ func TestPutObjectOrphan(t *testing.T) {
 	newObj := sdk.Object{}
 	newSealed := newObj.Seal(types.GeneratePrivateKey())
 
-	// put initial object, mark it uploaded, then pin it: never-pinned data
-	// is left to TTL-expire rather than being routed through the orphan
-	// path.
+	// put initial object, mark it uploaded, then pin it
 	md5old := frand.Entropy128()
 	if _, _, err := store.PutObject(testAccessKeyID, bucket, "obj", md5old, nil, 1, new(string)); err != nil {
 		t.Fatal(err)
@@ -1610,10 +1606,21 @@ func TestMarkObjectPinned(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// pinning an object that was never uploaded returns ErrObjectNotFound
+	// pinning an object without an unpinned_objects row or any references
+	// records it in orphaned_objects so the pin is eventually reverted
 	missingID := types.Hash256(frand.Entropy256())
-	if _, err := store.MarkObjectPinned(missingID); !errors.Is(err, objects.ErrObjectNotFound) {
-		t.Fatalf("expected ErrObjectNotFound, got %v", err)
+	if orphans, err := store.MarkObjectPinned(missingID); err != nil {
+		t.Fatal(err)
+	} else if len(orphans) != 0 {
+		t.Fatalf("expected no file orphans, got %+v", orphans)
+	}
+	if orphaned, err := store.OrphanedObjects(10); err != nil {
+		t.Fatal(err)
+	} else if len(orphaned) != 1 || orphaned[0] != missingID {
+		t.Fatalf("expected %v in orphaned_objects, got %v", missingID, orphaned)
+	}
+	if err := store.RemoveOrphanedObject(missingID); err != nil {
+		t.Fatal(err)
 	}
 
 	fileName := "obj.upload"
@@ -1638,10 +1645,17 @@ func TestMarkObjectPinned(t *testing.T) {
 		t.Fatalf("expected size 42, got %d", orphans[0].Size)
 	}
 
-	// the unpinned_objects row is gone, so a second call returns
-	// ErrObjectNotFound
-	if _, err := store.MarkObjectPinned(sealed.ID()); !errors.Is(err, objects.ErrObjectNotFound) {
-		t.Fatalf("expected ErrObjectNotFound on second pin, got %v", err)
+	// the unpinned_objects row is gone but the object is still referenced,
+	// so a second call is a no-op and must not orphan the object
+	if orphans, err := store.MarkObjectPinned(sealed.ID()); err != nil {
+		t.Fatal(err)
+	} else if len(orphans) != 0 {
+		t.Fatalf("expected no file orphans on second pin, got %+v", orphans)
+	}
+	if orphaned, err := store.OrphanedObjects(10); err != nil {
+		t.Fatal(err)
+	} else if len(orphaned) != 0 {
+		t.Fatalf("expected no orphaned objects after second pin, got %v", orphaned)
 	}
 
 	// a shared filename is not returned for cleanup because another object
@@ -1664,6 +1678,34 @@ func TestMarkObjectPinned(t *testing.T) {
 		t.Fatal(err)
 	} else if len(orphans) != 0 {
 		t.Fatalf("expected no orphan when filename is shared, got %+v", orphans)
+	}
+
+	// simulate a delete racing the pin: the object is deleted while the
+	// indexer pin is in flight, removing the unpinned_objects row; the id
+	// must end up in orphaned_objects so the pin gets reverted, and marking
+	// pinned afterwards must succeed without disturbing that
+	fnC := "c.upload"
+	md5C := frand.Entropy128()
+	if _, _, err := store.PutObject(accessKeyID, bucket, "c", md5C, nil, 7, &fnC); err != nil {
+		t.Fatal(err)
+	}
+	sdkObjC := newTestObject()
+	sealedC := sdkObjC.Seal(types.GeneratePrivateKey())
+	if err := store.MarkObjectUploaded(bucket, "c", md5C, sealedC, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "c"}); err != nil {
+		t.Fatal(err)
+	}
+	if orphans, err := store.MarkObjectPinned(sealedC.ID()); err != nil {
+		t.Fatal(err)
+	} else if len(orphans) != 0 {
+		t.Fatalf("expected no file orphans, got %+v", orphans)
+	}
+	if orphaned, err := store.OrphanedObjects(10); err != nil {
+		t.Fatal(err)
+	} else if len(orphaned) != 1 || orphaned[0] != sealedC.ID() {
+		t.Fatalf("expected %v in orphaned_objects, got %v", sealedC.ID(), orphaned)
 	}
 }
 
@@ -1854,17 +1896,48 @@ func TestScheduleObjectForReupload(t *testing.T) {
 		t.Fatal("expected demoted object to appear in upload queue")
 	}
 
-	// the prior (never-pinned) Sia upload is not orphaned: the indexer's
-	// DeleteObject does not apply to unpinned data, so we leave the blob to
-	// expire on its own TTL
+	// the prior upload is orphaned: a pin attempt may have succeeded in the
+	// indexer without MarkObjectPinned committing, so the old id is
+	// conservatively routed through the orphan path (unpinning never-pinned
+	// data is a no-op)
 	orphans, err := store.OrphanedObjects(100)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range orphans {
-		if id == sealed.ID() {
-			t.Fatalf("expected unpinned sealed ID %v not to be orphaned", sealed.ID())
-		}
+	if len(orphans) != 1 || orphans[0] != sealed.ID() {
+		t.Fatalf("expected demoted sealed ID %v to be orphaned, got %v", sealed.ID(), orphans)
+	}
+	if err := store.RemoveOrphanedObject(sealed.ID()); err != nil {
+		t.Fatal(err)
+	}
+
+	// simulate a delete racing the demotion: the object is deleted after the
+	// pin loop fetched the expired row but before it demotes it; the delete
+	// removes the unpinned_objects row and orphans the id, so the demotion
+	// must return ErrObjectNotFound (tolerated by the pin loop) and leave
+	// the orphan record in place
+	fileName2 := "obj2.upload"
+	md52 := frand.Entropy128()
+	if _, _, err := store.PutObject(accessKeyID, bucket, "obj2", md52, nil, 7, &fileName2); err != nil {
+		t.Fatal(err)
+	}
+	sdkObj2 := newTestObject()
+	sealed2 := sdkObj2.Seal(types.GeneratePrivateKey())
+	if err := store.MarkObjectUploaded(bucket, "obj2", md52, sealed2, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "obj2"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ScheduleObjectForReupload(sealed2.ID()); !errors.Is(err, objects.ErrObjectNotFound) {
+		t.Fatalf("expected ErrObjectNotFound, got %v", err)
+	}
+	orphans, err = store.OrphanedObjects(100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(orphans) != 1 || orphans[0] != sealed2.ID() {
+		t.Fatalf("expected deleted sealed ID %v to be orphaned, got %v", sealed2.ID(), orphans)
 	}
 }
 

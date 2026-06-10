@@ -226,8 +226,11 @@ func (s *Store) MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, sea
 // been successfully pinned in the indexer: the unpinned_objects row is removed
 // and filename is cleared on every objects row referencing the sia_object_id
 // (e.g. copies share one pin row). Filenames that are no longer referenced by
-// any objects row are returned for cleanup by the caller. Returns
-// ErrObjectNotFound if no unpinned_objects row exists for the sia_object_id.
+// any objects row are returned for cleanup by the caller. If no
+// unpinned_objects row exists the object was deleted while the pin was in
+// flight, so the sia_object_id is recorded in orphaned_objects for the orphan
+// loop to unpin; the pin must not be silently dropped since inserting into
+// orphaned_objects is the only mechanism that unpins objects.
 func (s *Store) MarkObjectPinned(siaObjectID types.Hash256) (orphans []objects.OrphanedFile, _ error) {
 	err := s.transaction(func(tx *txn) error {
 		orphans = nil // reset per transaction attempt
@@ -240,7 +243,10 @@ func (s *Store) MarkObjectPinned(siaObjectID types.Hash256) (orphans []objects.O
 		if err != nil {
 			return err
 		} else if n == 0 {
-			return objects.ErrObjectNotFound
+			// no unpinned_objects row means the object was deleted while the
+			// pin was in flight; mark the sia_object_id as orphaned so the
+			// orphan loop can unpin it.
+			return insertOrphan(tx, siaObjectID)
 		}
 
 		// snapshot the filenames currently referenced by this sia_object_id
@@ -291,8 +297,11 @@ func (s *Store) MarkObjectPinned(siaObjectID types.Hash256) (orphans []objects.O
 
 // ScheduleObjectForReupload reverts every objects row referencing the given
 // sia_object_id back to the pending-upload state and removes the
-// unpinned_objects row. Returns ErrObjectNotFound if no unpinned_objects row
-// exists for the sia_object_id.
+// unpinned_objects row. The old sia_object_id is recorded in orphaned_objects:
+// an earlier pin attempt may have succeeded in the indexer without
+// MarkObjectPinned having committed, and the re-upload always produces a new
+// id, so the old one is never referenced again. Returns ErrObjectNotFound if
+// no unpinned_objects row exists for the sia_object_id.
 func (s *Store) ScheduleObjectForReupload(siaObjectID types.Hash256) error {
 	return s.transaction(func(tx *txn) error {
 		res, err := tx.Exec(`DELETE FROM unpinned_objects WHERE sia_object_id = $1`, sqlHash256(siaObjectID))
@@ -305,11 +314,13 @@ func (s *Store) ScheduleObjectForReupload(siaObjectID types.Hash256) error {
 		} else if n == 0 {
 			return objects.ErrObjectNotFound
 		}
-		_, err = tx.Exec(`
+		if _, err := tx.Exec(`
 			UPDATE objects SET sia_object_id = NULL, sia_object = NULL
 			WHERE sia_object_id = $1
-		`, sqlHash256(siaObjectID))
-		return err
+		`, sqlHash256(siaObjectID)); err != nil {
+			return err
+		}
+		return insertOrphan(tx, siaObjectID)
 	})
 }
 
@@ -343,8 +354,9 @@ func (s *Store) ObjectsForPinning(now time.Time, limit int) ([]objects.UnpinnedO
 			}
 			if sealed == nil {
 				// no objects row references this sia_object_id anymore;
-				// the unpinned_objects row will be reaped on the next
-				// DeleteObject path. Skip it for now.
+				// insertOrphan drops the unpinned_objects row atomically
+				// with the last reference, so this shouldn't happen. Skip
+				// the row defensively rather than pinning it.
 				continue
 			}
 			uo.SiaObject = objects.SiaObject{
@@ -731,10 +743,14 @@ func deleteObject(tx *txn, bid int64, name string) (*types.Hash256, *string, int
 }
 
 // insertOrphan finalizes deletion of objectID when no rows in the objects
-// table still reference it. If the sia_object_id was still in unpinned_objects
-// the data was never pinned in the indexer, so we simply drop the pin queue
-// entry and let Sia expire the data via TTL. Otherwise the data is durably
-// pinned and needs to be unpinned via the orphan path.
+// table still reference it: the pin queue entry is dropped and the id is
+// recorded in orphaned_objects so the orphan loop unpins it. The orphan row
+// is inserted even when the object was still queued for pinning — a pin may
+// be in flight concurrently (or may already have succeeded without
+// MarkObjectPinned having committed), and skipping the insert would leak
+// that pin forever since the orphan loop is the only unpin mechanism. For
+// data that was truly never pinned the unpin is a no-op: the orphan loop
+// treats the indexer's "object not found" as success.
 func insertOrphan(tx *txn, objectID types.Hash256) error {
 	if objectID == (types.Hash256{}) {
 		return nil // skip zero-value (empty objects)
@@ -746,16 +762,10 @@ func insertOrphan(tx *txn, objectID types.Hash256) error {
 	if referenced {
 		return nil
 	}
-	res, err := tx.Exec(`DELETE FROM unpinned_objects WHERE sia_object_id = $1`, sqlHash256(objectID))
-	if err != nil {
+	if _, err := tx.Exec(`DELETE FROM unpinned_objects WHERE sia_object_id = $1`, sqlHash256(objectID)); err != nil {
 		return err
 	}
-	if n, err := res.RowsAffected(); err != nil {
-		return err
-	} else if n > 0 {
-		return nil // was never pinned; Sia TTL will expire it
-	}
-	_, err = tx.Exec("INSERT OR IGNORE INTO orphaned_objects (sia_object_id) VALUES ($1)", sqlHash256(objectID))
+	_, err := tx.Exec("INSERT OR IGNORE INTO orphaned_objects (sia_object_id) VALUES ($1)", sqlHash256(objectID))
 	return err
 }
 
