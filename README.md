@@ -315,7 +315,7 @@ log:
     format: json # log format (human, json)
     path: /var/log/s3d/s3d.log # log file path (defaults to <directory>/s3d.log)
 s3:
-  hostBases:
+  hostBases: # bases for virtual-hosted-style addressing ("localhost" is always included)
     - s3.example.com
 ```
 
