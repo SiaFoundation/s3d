@@ -94,7 +94,7 @@ func TestS3(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to listen: %v", err)
 	}
-	server := &http.Server{Handler: s3.New(backend, s3.WithHostBucketBases([]string{"localhost"}), s3.WithLogger(log.Named("s3")))}
+	server := &http.Server{Handler: s3.New(backend, s3.WithLogger(log.Named("s3")))}
 	errCh := make(chan error, 1)
 	go func() {
 		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
