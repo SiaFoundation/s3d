@@ -255,6 +255,8 @@ func main() {
 	defer log.Sync()
 	zap.RedirectStdLog(log.Named("stdlib"))
 
+	log.Info("s3d", zap.String("version", build.Version()), zap.String("commit", build.Commit()), zap.Time("buildDate", build.Time()))
+
 	adminAPIListener, err := startLocalhostListener(cfg.ApiAddress, log.Named("api.listener"))
 	if err != nil {
 		checkFatalError("failed to start S3 API listener", err)

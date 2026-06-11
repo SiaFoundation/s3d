@@ -2,18 +2,25 @@ package s3_test
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/SiaFoundation/s3d/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	service "github.com/aws/aws-sdk-go-v2/service/s3"
+	"go.uber.org/zap/zaptest"
 )
 
 func newAdminServer(t *testing.T) (string, *http.Client) {
@@ -152,4 +159,69 @@ func TestAccessDenied(t *testing.T) {
 		_, err := s3.ListMultipartUploads(t.Context(), "bucket", nil)
 		return err
 	})
+}
+
+// TestHostBucketStyles verifies that path-style and virtual-hosted-style
+// requests both work, with and without a port in the Host header.
+// "localhost" is implicitly available as a host bucket base.
+func TestHostBucketStyles(t *testing.T) {
+	backend := testutil.NewBackend(t)
+	handler := s3.New(backend, s3.WithLogger(zaptest.NewLogger(t)))
+
+	signer := v4.NewSigner()
+	creds := aws.Credentials{
+		AccessKeyID:     testutil.AccessKeyID,
+		SecretAccessKey: testutil.SecretAccessKey,
+	}
+
+	do := func(t *testing.T, method, host, path, body string) *httptest.ResponseRecorder {
+		t.Helper()
+
+		req := httptest.NewRequest(method, "http://"+host+path, strings.NewReader(body))
+		req.Host = host
+		if body != "" {
+			req.Header.Set("Content-Length", strconv.Itoa(len(body)))
+		}
+		payloadHash := sha256.Sum256([]byte(body))
+		hashHex := hex.EncodeToString(payloadHash[:])
+		req.Header.Set("X-Amz-Content-Sha256", hashHex)
+		if err := signer.SignHTTP(t.Context(), creds, req, hashHex, "s3", "us-east-1", time.Now()); err != nil {
+			t.Fatal(err)
+		}
+
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// create a bucket containing an object using path-style requests
+	if rec := do(t, http.MethodPut, "localhost:8000", "/bucket", ""); rec.Code != http.StatusOK {
+		t.Fatalf("failed to create bucket: %d %s", rec.Code, rec.Body)
+	}
+	if rec := do(t, http.MethodPut, "localhost:8000", "/bucket/object", "hello"); rec.Code != http.StatusOK {
+		t.Fatalf("failed to create object: %d %s", rec.Code, rec.Body)
+	}
+
+	tests := []struct {
+		name string
+		host string
+		path string
+	}{
+		{"path style with port", "localhost:8000", "/bucket/object"},
+		{"path style without port", "localhost", "/bucket/object"},
+		{"virtual-hosted style with port", "bucket.localhost:8000", "/object"},
+		{"virtual-hosted style without port", "bucket.localhost", "/object"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			rec := do(t, http.MethodGet, test.host, test.path, "")
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body)
+			} else if body, err := io.ReadAll(rec.Result().Body); err != nil {
+				t.Fatal(err)
+			} else if string(body) != "hello" {
+				t.Fatalf("expected body %q, got %q", "hello", body)
+			}
+		})
+	}
 }

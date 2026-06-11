@@ -134,7 +134,7 @@ func (s *Sia) prepareUploads() []uploadGroup {
 	for _, obj := range candidates {
 		totalSize += obj.Length
 	}
-	s.logger.Info("found objects for upload",
+	s.logger.Debug("potential objects for upload",
 		zap.Int("objects", len(candidates)),
 		zap.Int64("totalSize", totalSize))
 
@@ -194,9 +194,11 @@ func (s *Sia) uploadObjects(ctx context.Context) { //nolint:revive
 	// fetch and prepare objects for upload
 	groups := s.prepareUploads()
 	if len(groups) == 0 {
-		s.logger.Debug("upload loop tick")
+		s.logger.Debug("not enough objects for upload")
 		return
 	}
+	s.logger.Debug("found enough objects for upload",
+		zap.Int("groups", len(groups)))
 
 	var wg sync.WaitGroup
 	uploadsCh := make(chan uploadGroup, numUploadThreads)
@@ -308,12 +310,6 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 				zap.String("bucket", uploadObj.Bucket),
 				zap.String("name", uploadObj.Name),
 				zap.Error(err))
-			if delErr := s.sdk.DeleteObject(ctx, obj.ID()); delErr != nil {
-				s.logger.Error("failed to delete object after pin failure",
-					zap.String("bucket", uploadObj.Bucket),
-					zap.String("name", uploadObj.Name),
-					zap.Error(delErr))
-			}
 			continue
 		}
 
