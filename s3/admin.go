@@ -5,6 +5,14 @@ import (
 	"go.sia.tech/jape"
 )
 
+// BackupSQLite3Request is the request body for the [POST] /sqlite3/backup
+// endpoint.
+type BackupSQLite3Request struct {
+	// Path is the absolute filesystem path where the backup file will be
+	// written. It must not already exist.
+	Path string `json:"path"`
+}
+
 // UploadStats contains statistics about the background upload pipeline.
 type UploadStats struct {
 	PendingObjects   int64 `json:"pendingObjects"`
@@ -64,4 +72,15 @@ func (s *s3) handlePrometheus(jc jape.Context) {
 	if jc.Check("failed to marshal prometheus response", prometheus.NewEncoder(jc.ResponseWriter).Append(stats)) != nil {
 		return
 	}
+}
+
+// handleBackupSQLite3 creates a backup of the SQLite3 database at the path
+// provided in the request body. The backup is a consistent snapshot even if
+// the database is being written to concurrently.
+func (s *s3) handleBackupSQLite3(jc jape.Context) {
+	var req BackupSQLite3Request
+	if jc.Decode(&req) != nil {
+		return
+	}
+	jc.Check("failed to backup database", s.backend.BackupSQLite3(jc.Request.Context(), req.Path))
 }

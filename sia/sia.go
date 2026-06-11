@@ -165,6 +165,10 @@ type Store interface {
 	ListParts(accessKeyID, bucket, name string, uploadID s3.UploadID, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error)
 	MultipartParts(accessKeyID, bucket, name string, uploadID s3.UploadID) ([]objects.Part, error)
 	UploadStats() (s3.UploadStats, error)
+
+	// Backup creates a backup of the database at destPath using the SQLite
+	// backup API, which is safe to use with a live database.
+	Backup(ctx context.Context, destPath string) error
 }
 
 // New creates a new Sia backend instance.
@@ -240,6 +244,13 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 func (s *Sia) Close() error {
 	s.tg.Stop()
 	return nil
+}
+
+// BackupSQLite3 creates a backup of the SQLite3 database at destPath. The
+// backup is created using the SQLite backup API, which is safe to use with a
+// live database.
+func (s *Sia) BackupSQLite3(ctx context.Context, destPath string) error {
+	return s.store.Backup(ctx, destPath)
 }
 
 // processOrphansLoop periodically processes orphaned objects.

@@ -185,6 +185,21 @@ curl -u ":change-me" http://127.0.0.1:8001/prometheus
 | `s3d_upload_orphaned_objects` | Deleted or overwritten objects pending cleanup |
 | `s3d_upload_multipart_uploads` | In-progress multipart uploads |
 
+### `POST /sqlite3/backup`
+
+Creates a backup of the SQLite database using the SQLite online backup API.
+Unlike copying the database file directly, the backup is a consistent snapshot
+even while objects are being written. The request body specifies the
+destination path, which is resolved on the machine running `s3d` and should be
+an absolute path. The destination file must not already exist:
+
+```sh
+curl -u ":change-me" -X POST -d '{"path": "/backups/s3d.sqlite3"}' http://127.0.0.1:8001/sqlite3/backup
+```
+
+The backup only contains the metadata database, not the buffered objects that
+have not yet been uploaded to the Sia network.
+
 ## Compatibility
 
 `s3d` aims to be as compatible as possible with the S3 API. Authentication uses
