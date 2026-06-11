@@ -54,8 +54,10 @@ func backupDB(ctx context.Context, src *sql.DB, destPath string) (err error) {
 		// errors are ignored
 		dest.Close()
 		if err != nil {
-			// remove the destination file if an error occurred during backup
-			os.Remove(destPath)
+			// remove the destination file(s) if an error occurred during backup
+			_ = os.Remove(destPath)
+			_ = os.Remove(destPath + "-wal")
+			_ = os.Remove(destPath + "-shm")
 		}
 	}()
 
@@ -95,7 +97,7 @@ func backupDB(ctx context.Context, src *sql.DB, destPath string) (err error) {
 				default:
 				}
 
-				if done, err := backup.Step(-1); err != nil {
+				if done, err := backup.Step(128); err != nil {
 					return fmt.Errorf("backup step %d failed: %w", step, err)
 				} else if done {
 					break
@@ -115,14 +117,19 @@ func backupDB(ctx context.Context, src *sql.DB, destPath string) (err error) {
 func Backup(ctx context.Context, srcPath, destPath string) (err error) {
 	// ensure the source file exists
 	if _, err := os.Stat(srcPath); err != nil {
-		return fmt.Errorf("source file does not exist: %w", err)
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("source file does not exist: %w", err)
+		}
+		return fmt.Errorf("failed to stat source file: %w", err)
 	}
 
 	// prevent overwriting the destination file
 	if destPath == "" {
 		return errors.New("empty destination path")
-	} else if _, err := os.Stat(destPath); !errors.Is(err, os.ErrNotExist) {
+	} else if _, err := os.Stat(destPath); err == nil {
 		return errors.New("destination file already exists")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("failed to stat destination file: %w", err)
 	}
 
 	// open a new connection to the source database. We don't want to run

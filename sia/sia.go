@@ -250,6 +250,11 @@ func (s *Sia) Close() error {
 // backup is created using the SQLite backup API, which is safe to use with a
 // live database.
 func (s *Sia) BackupSQLite3(ctx context.Context, destPath string) error {
+	if destPath == "" {
+		return errors.New("empty destination path")
+	} else if !filepath.IsAbs(destPath) {
+		return fmt.Errorf("destination path must be absolute: %q", destPath)
+	}
 	return s.store.Backup(ctx, destPath)
 }
 
