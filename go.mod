@@ -1,4 +1,4 @@
-module github.com/SiaFoundation/s3d
+module github.com/SiaFoundation/s3d // v0.1.1
 
 go 1.26.0
 
