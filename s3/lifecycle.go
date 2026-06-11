@@ -1,12 +1,15 @@
 package s3
 
 import (
+	"encoding/hex"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"go.uber.org/zap"
+	"lukechampine.com/frand"
 )
 
 // Lifecycle rule statuses.
@@ -41,12 +44,13 @@ func (r LifecycleRule) EffectivePrefix() string {
 // to now. Objects last modified at or before the cutoff are expired. ok is false when
 // the expiration is not currently active (e.g. a future Date, or a rule that
 // only references ExpiredObjectDeleteMarker, which is unsupported without
-// versioning).
-func (e *LifecycleExpiration) ExpiryCutoff(now time.Time) (cutoff time.Time, ok bool) {
+// versioning). dayDuration is the wall-clock duration treated as a single
+// "day" when evaluating a Days window.
+func (e *LifecycleExpiration) ExpiryCutoff(now time.Time, dayDuration time.Duration) (cutoff time.Time, ok bool) {
 	if e == nil {
 		return time.Time{}, false
 	} else if e.Days > 0 {
-		return daysCutoff(now, e.Days), true
+		return daysCutoff(now, e.Days, dayDuration), true
 	} else if e.Date != "" {
 		date, err := parseLifecycleDate(e.Date)
 		if err != nil || now.Before(date) {
@@ -60,20 +64,27 @@ func (e *LifecycleExpiration) ExpiryCutoff(now time.Time) (cutoff time.Time, ok 
 
 // AbortCutoff returns the cutoff time for aborting incomplete multipart
 // uploads relative to now. Uploads initiated at or before the cutoff are
-// aborted.
-func (a *AbortIncompleteMultipartUpload) AbortCutoff(now time.Time) time.Time {
-	return daysCutoff(now, a.DaysAfterInitiation)
+// aborted. dayDuration is the wall-clock duration treated as a single "day".
+func (a *AbortIncompleteMultipartUpload) AbortCutoff(now time.Time, dayDuration time.Duration) time.Time {
+	return daysCutoff(now, a.DaysAfterInitiation, dayDuration)
 }
 
-// daysCutoff returns the cutoff matching S3's day rounding: an action scheduled
-// days after an event is due only once midnight UTC of (event time + days) has
-// passed. That is equivalent to a cutoff of (start of the current UTC day)
-// minus days, which honors the full days window rather than acting up to a day
-// early.
-func daysCutoff(now time.Time, days int) time.Time {
-	y, m, d := now.UTC().Date()
-	startOfDay := time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
-	return startOfDay.Add(-time.Duration(days) * 24 * time.Hour)
+// daysCutoff returns the cutoff for an action scheduled days after an event.
+// With the standard 24h day it follows S3's rounding, anchoring to the start of
+// the current UTC day so the full window is honored. A shortened dayDuration
+// (used by tests) drops the calendar anchoring for a flat now-minus-window.
+func daysCutoff(now time.Time, days int, dayDuration time.Duration) time.Time {
+	window := time.Duration(days) * dayDuration
+	if dayDuration == 24*time.Hour {
+		return startOfDayUTC(now).Add(-window)
+	}
+	return now.Add(-window)
+}
+
+// startOfDayUTC returns midnight UTC of the day containing t.
+func startOfDayUTC(t time.Time) time.Time {
+	y, m, d := t.UTC().Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
 }
 
 // parseLifecycleDate parses an ISO8601 lifecycle Date value.
@@ -86,13 +97,104 @@ func parseLifecycleDate(s string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("invalid lifecycle date %q", s)
 }
 
+// expiryDate returns the date an object last modified at lastModified expires
+// under this rule, adding Days and rounding up to the next midnight UTC per S3.
+// ok is false when the rule yields no fixed date. Unlike ExpiryCutoff it always
+// uses real calendar days, since it powers the advisory x-amz-expiration header.
+func (e *LifecycleExpiration) expiryDate(lastModified time.Time) (time.Time, bool) {
+	if e == nil {
+		return time.Time{}, false
+	} else if e.Days > 0 {
+		return ceilToMidnightUTC(lastModified.Add(time.Duration(e.Days) * 24 * time.Hour)), true
+	} else if e.Date != "" {
+		date, err := parseLifecycleDate(e.Date)
+		if err != nil {
+			return time.Time{}, false
+		}
+		return date, true
+	}
+	return time.Time{}, false
+}
+
+// ceilToMidnightUTC rounds t up to the next midnight UTC, leaving it unchanged
+// if it already falls on a midnight boundary.
+func ceilToMidnightUTC(t time.Time) time.Time {
+	midnight := startOfDayUTC(t)
+	if t.UTC().Equal(midnight) {
+		return midnight
+	}
+	return midnight.Add(24 * time.Hour)
+}
+
+// ExpirationHeader returns the x-amz-expiration response header value for an
+// object with the given key and last-modified time, or "" if no enabled
+// expiration rule applies. When several rules match, the soonest expiration
+// wins.
+func (c LifecycleConfiguration) ExpirationHeader(objectKey string, lastModified time.Time) string {
+	var (
+		soonest time.Time
+		ruleID  string
+		found   bool
+	)
+	for _, rule := range c.Rules {
+		if !rule.Enabled() || !strings.HasPrefix(objectKey, rule.EffectivePrefix()) {
+			continue
+		}
+		expiry, ok := rule.Expiration.expiryDate(lastModified)
+		if !ok {
+			continue
+		}
+		if !found || expiry.Before(soonest) {
+			soonest, ruleID, found = expiry, rule.ID, true
+		}
+	}
+	if !found {
+		return ""
+	}
+	return fmt.Sprintf("expiry-date=%q, rule-id=%q", soonest.Format(http.TimeFormat), ruleID)
+}
+
+// assignRuleIDs fills in a unique generated ID for every rule that was
+// submitted without one, mirroring S3's behavior of always returning a rule ID.
+func (c *LifecycleConfiguration) assignRuleIDs() {
+	used := make(map[string]bool)
+	for _, rule := range c.Rules {
+		if rule.ID != "" {
+			used[rule.ID] = true
+		}
+	}
+	for i := range c.Rules {
+		if c.Rules[i].ID != "" {
+			continue
+		}
+		id := newLifecycleRuleID()
+		for used[id] {
+			id = newLifecycleRuleID()
+		}
+		used[id] = true
+		c.Rules[i].ID = id
+	}
+}
+
+// newLifecycleRuleID returns a random, unique lifecycle rule ID.
+func newLifecycleRuleID() string {
+	return hex.EncodeToString(frand.Bytes(16))
+}
+
 // Validate checks that the lifecycle configuration is well-formed and only uses
 // features supported by this server.
 func (c LifecycleConfiguration) Validate() error {
 	if len(c.Rules) == 0 {
 		return fmt.Errorf("lifecycle configuration must contain at least one rule: %w", s3errs.ErrMalformedXML)
 	}
+	seen := make(map[string]bool)
 	for _, rule := range c.Rules {
+		if rule.ID != "" {
+			if seen[rule.ID] {
+				return fmt.Errorf("duplicate lifecycle rule ID %q: %w", rule.ID, s3errs.ErrInvalidArgument)
+			}
+			seen[rule.ID] = true
+		}
 		if err := rule.validate(); err != nil {
 			return err
 		}
@@ -101,7 +203,9 @@ func (c LifecycleConfiguration) Validate() error {
 }
 
 func (r LifecycleRule) validate() error {
-	if r.Status != LifecycleStatusEnabled && r.Status != LifecycleStatusDisabled {
+	if len(r.ID) > LifecycleRuleIDSizeLimit {
+		return fmt.Errorf("lifecycle rule ID exceeds %d characters: %w", LifecycleRuleIDSizeLimit, s3errs.ErrInvalidArgument)
+	} else if r.Status != LifecycleStatusEnabled && r.Status != LifecycleStatusDisabled {
 		return fmt.Errorf("invalid rule status %q: %w", r.Status, s3errs.ErrMalformedXML)
 	} else if r.Prefix != nil && r.Filter != nil {
 		return fmt.Errorf("rule may not specify both Prefix and Filter: %w", s3errs.ErrMalformedXML)
@@ -124,15 +228,19 @@ func (r LifecycleRule) validate() error {
 		} else if e.ExpiredObjectDeleteMarker != nil && (e.Days > 0 || e.Date != "") {
 			return fmt.Errorf("expiration may not specify ExpiredObjectDeleteMarker with Days or Date: %w", s3errs.ErrMalformedXML)
 		} else if e.Days < 0 {
-			return fmt.Errorf("expiration Days must be a positive integer: %w", s3errs.ErrMalformedXML)
+			return fmt.Errorf("expiration Days must be a positive integer: %w", s3errs.ErrInvalidArgument)
 		} else if e.Date != "" {
-			if _, err := parseLifecycleDate(e.Date); err != nil {
+			date, err := parseLifecycleDate(e.Date)
+			if err != nil {
 				return fmt.Errorf("%w: %w", err, s3errs.ErrMalformedXML)
+			} else if !date.Equal(date.Truncate(24 * time.Hour)) {
+				// S3 requires expiration dates to be at midnight UTC.
+				return fmt.Errorf("expiration Date must be at midnight UTC: %w", s3errs.ErrInvalidArgument)
 			}
 		} else if e.ExpiredObjectDeleteMarker != nil {
 			return fmt.Errorf("ExpiredObjectDeleteMarker lifecycle expiration is not supported: %w", s3errs.ErrNotImplemented)
 		} else if e.Days == 0 && e.ExpiredObjectDeleteMarker == nil {
-			return fmt.Errorf("expiration must specify Days or Date: %w", s3errs.ErrMalformedXML)
+			return fmt.Errorf("expiration Days must be a positive integer: %w", s3errs.ErrInvalidArgument)
 		}
 	}
 	if a := r.AbortIncompleteMultipartUpload; a != nil && a.DaysAfterInitiation <= 0 {
@@ -196,6 +304,7 @@ func (s *s3) putBucketLifecycle(w http.ResponseWriter, r *http.Request, accessKe
 	if err := config.Validate(); err != nil {
 		return err
 	}
+	config.assignRuleIDs()
 
 	return s.backend.PutBucketLifecycleConfiguration(r.Context(), accessKeyID, bucket, config)
 }

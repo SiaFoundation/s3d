@@ -28,9 +28,13 @@ const (
 	// processing orphaned objects runs.
 	orphanLoopInterval = time.Hour
 
-	// lifecycleLoopInterval is the interval at which the background lifecycle
-	// loop runs.
-	lifecycleLoopInterval = time.Hour
+	// defaultLifecycleLoopInterval is the default interval at which the
+	// background lifecycle loop runs.
+	defaultLifecycleLoopInterval = time.Hour
+
+	// defaultLifecycleDayDuration is the default wall-clock duration treated as
+	// a single "day" when evaluating lifecycle Days windows.
+	defaultLifecycleDayDuration = 24 * time.Hour
 
 	// UploadsDirectory is the directory name used for storing pending uploads.
 	UploadsDirectory = "uploads"
@@ -73,6 +77,23 @@ func WithUploadDisabled() Option {
 	}
 }
 
+// WithLifecycleLoopInterval sets how often the background lifecycle loop
+// evaluates bucket lifecycle rules.
+func WithLifecycleLoopInterval(d time.Duration) Option {
+	return func(s *Sia) {
+		s.lifecycleLoopInterval = d
+	}
+}
+
+// WithLifecycleDayDuration sets the wall-clock duration treated as a single
+// "day" when evaluating lifecycle Days windows. It defaults to 24 hours; tests
+// use a shorter value to exercise expiration without waiting real days.
+func WithLifecycleDayDuration(d time.Duration) Option {
+	return func(s *Sia) {
+		s.lifecycleDayDuration = d
+	}
+}
+
 // WithDiskUsageLimit sets the maximum number of bytes that can be stored on
 // disk pending upload to Sia. When the limit is reached, new uploads block
 // until existing data has been offloaded. A value of 0 disables the limit.
@@ -99,6 +120,9 @@ type Sia struct {
 	uploadDisabled    bool
 	uploadOptimalSize int64
 	uploadWastePct    float64
+
+	lifecycleLoopInterval time.Duration
+	lifecycleDayDuration  time.Duration
 
 	lockedUploadsMu sync.Mutex
 	lockedUploads   map[string]*lockedUpload
@@ -184,9 +208,11 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		sdk:   sdk,
 		store: store,
 
-		directory:      directory,
-		uploadWastePct: DefaultUploadWastePct,
-		lockedUploads:  make(map[string]*lockedUpload),
+		directory:             directory,
+		uploadWastePct:        DefaultUploadWastePct,
+		lifecycleLoopInterval: defaultLifecycleLoopInterval,
+		lifecycleDayDuration:  defaultLifecycleDayDuration,
+		lockedUploads:         make(map[string]*lockedUpload),
 
 		logger: zap.NewNop(),
 		tg:     threadgroup.New(),

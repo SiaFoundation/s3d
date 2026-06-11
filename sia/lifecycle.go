@@ -68,7 +68,7 @@ func (s *Sia) DeleteBucketLifecycleConfiguration(_ context.Context, accessKeyID,
 
 // lifecycleLoop periodically applies bucket lifecycle rules.
 func (s *Sia) lifecycleLoop(ctx context.Context) {
-	t := time.NewTicker(lifecycleLoopInterval)
+	t := time.NewTicker(s.lifecycleLoopInterval)
 	defer t.Stop()
 
 	for {
@@ -110,9 +110,9 @@ func (s *Sia) applyLifecycleRules(ctx context.Context, now time.Time) {
 			prefix := rule.EffectivePrefix()
 
 			if rule.AbortIncompleteMultipartUpload != nil {
-				s.abortIncompleteUploads(ctx, bc, prefix, rule.AbortIncompleteMultipartUpload.AbortCutoff(now))
+				s.abortIncompleteUploads(ctx, bc, prefix, rule.AbortIncompleteMultipartUpload.AbortCutoff(now, s.lifecycleDayDuration))
 			}
-			if cutoff, ok := rule.Expiration.ExpiryCutoff(now); ok {
+			if cutoff, ok := rule.Expiration.ExpiryCutoff(now, s.lifecycleDayDuration); ok {
 				s.expireObjects(ctx, bc, prefix, cutoff)
 			}
 		}
