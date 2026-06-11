@@ -2,6 +2,8 @@ package s3_test
 
 import (
 	"errors"
+	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +12,7 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	service "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
@@ -99,6 +102,85 @@ func TestBucketLifecycleConfiguration(t *testing.T) {
 		}},
 	}})
 	testutil.AssertS3Error(t, s3errs.ErrNotImplemented, err)
+}
+
+func TestLifecycleExpirationResponseHeader(t *testing.T) {
+	s3Tester := testutil.NewTester(t)
+	client := s3Tester.Client()
+
+	const bucket = "lifecycle-bucket"
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// a fixed future Date keeps the expected header deterministic regardless of
+	// when the object is created
+	expiry := time.Date(2999, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := s3Tester.PutBucketLifecycleConfiguration(t.Context(), bucket, []types.LifecycleRule{{
+		ID:         aws.String("expire-logs"),
+		Status:     types.ExpirationStatusEnabled,
+		Filter:     &types.LifecycleRuleFilter{Prefix: aws.String("logs/")},
+		Expiration: &types.LifecycleExpiration{Date: aws.Time(expiry)},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("expiry-date=%q, rule-id=%q", expiry.Format(http.TimeFormat), "expire-logs")
+
+	// PutObject, GetObject and HeadObject all advertise the applicable rule
+	const object = "logs/app.log"
+	put, err := client.PutObject(t.Context(), &service.PutObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(object),
+		Body:   strings.NewReader("hello"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if got := aws.ToString(put.Expiration); got != want {
+		t.Fatalf("expected PutObject expiration %q, got %q", want, got)
+	}
+
+	get, err := client.GetObject(t.Context(), &service.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(object),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	get.Body.Close()
+	if got := aws.ToString(get.Expiration); got != want {
+		t.Fatalf("expected GetObject expiration %q, got %q", want, got)
+	}
+
+	head, err := client.HeadObject(t.Context(), &service.HeadObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(object),
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if got := aws.ToString(head.Expiration); got != want {
+		t.Fatalf("expected HeadObject expiration %q, got %q", want, got)
+	}
+
+	// an object outside the rule's prefix carries no expiration header
+	const unmatched = "data/app.log"
+	if _, err := client.PutObject(t.Context(), &service.PutObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(unmatched),
+		Body:   strings.NewReader("hello"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	get, err = client.GetObject(t.Context(), &service.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(unmatched),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	get.Body.Close()
+	if get.Expiration != nil {
+		t.Fatalf("expected no expiration header, got %q", aws.ToString(get.Expiration))
+	}
 }
 
 func TestLifecycleCutoffs(t *testing.T) {
