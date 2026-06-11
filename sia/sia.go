@@ -81,7 +81,9 @@ func WithUploadDisabled() Option {
 // evaluates bucket lifecycle rules.
 func WithLifecycleLoopInterval(d time.Duration) Option {
 	return func(s *Sia) {
-		s.lifecycleLoopInterval = d
+		if d > 0 {
+			s.lifecycleLoopInterval = d
+		}
 	}
 }
 
@@ -90,7 +92,9 @@ func WithLifecycleLoopInterval(d time.Duration) Option {
 // use a shorter value to exercise expiration without waiting real days.
 func WithLifecycleDayDuration(d time.Duration) Option {
 	return func(s *Sia) {
-		s.lifecycleDayDuration = d
+		if d > 0 {
+			s.lifecycleDayDuration = d
+		}
 	}
 }
 
