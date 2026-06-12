@@ -216,7 +216,7 @@ func (s *Store) MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, sea
 		var size int64
 		err = tx.QueryRow(`
 			SELECT content_md5, filename, size FROM objects
-			WHERE bucket_id = $1 AND name = $2 AND sia_object_id IS NULL
+			WHERE bucket_id = $1 AND name = $2 AND sia_object_id IS NULL AND filename IS NOT NULL
 		`, bid, name).Scan((*sqlMD5)(&storedMD5), &filename, &size)
 		if errors.Is(err, sql.ErrNoRows) {
 			return objects.ErrObjectNotFound
@@ -231,7 +231,7 @@ func (s *Store) MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, sea
 		if _, err := tx.Exec(`
 			UPDATE objects
 			SET sia_object_id = $1, sia_object = $2
-			WHERE bucket_id = $3 AND name = $4 AND sia_object_id IS NULL
+			WHERE bucket_id = $3 AND name = $4 AND sia_object_id IS NULL AND filename IS NOT NULL
 		`, sqlHash256(sealed.ID()), sqlSiaObject(sealed), bid, name); err != nil {
 			return err
 		}

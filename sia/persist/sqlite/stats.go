@@ -70,6 +70,7 @@ func removeUploadedObject(tx *txn, size int64) error {
 // from the incrementally maintained stats table.
 func (s *Store) UploadStats() (stats s3.UploadStats, err error) {
 	err = s.transaction(func(tx *txn) error {
+		stats = s3.UploadStats{} // reset per transaction attempt
 		rows, err := tx.Query(`SELECT stat, stat_value FROM stats`)
 		if err != nil {
 			return err
