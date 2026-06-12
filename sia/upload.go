@@ -231,18 +231,25 @@ func (s *Sia) uploadObjects(ctx context.Context) { //nolint:revive
 
 	// send uploads to workers, skip groups that exceed the remaining
 	// storage space to avoid failed pin attempts after upload
+	var skippedGroups int
+	var skippedSize int64
 	for _, g := range groups {
 		if uint64(g.totalSize) > remaining {
-			s.logger.Warn("insufficient remaining storage, skipping upload group",
-				zap.Int64("groupSize", g.totalSize),
-				zap.Uint64("remainingStorage", remaining),
-				zap.Int("n", len(g.objects)))
+			skippedGroups++
+			skippedSize += g.totalSize
 			continue
 		}
 		remaining -= uint64(g.totalSize)
 		uploadsCh <- g
 	}
 	close(uploadsCh)
+
+	if skippedGroups > 0 {
+		s.logger.Warn("insufficient remaining storage, skipped upload groups",
+			zap.Int("groups", skippedGroups),
+			zap.Int64("skippedSize", skippedSize),
+			zap.Uint64("remainingStorage", remaining))
+	}
 
 	wg.Wait()
 }
