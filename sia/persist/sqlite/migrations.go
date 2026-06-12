@@ -24,4 +24,55 @@ var migrations = []func(tx *txn, log *zap.Logger) error{
 		_, err = tx.Exec(`UPDATE objects SET parts_count = (SELECT COUNT(*) FROM object_parts WHERE object_parts.bucket_id = objects.bucket_id AND object_parts.name = objects.name)`)
 		return err
 	},
+	func(tx *txn, _ *zap.Logger) error {
+		_, err := tx.Exec(`
+CREATE TABLE object_parts_backup AS SELECT bucket_id, name, part_number, filename, content_md5, content_length, offset FROM object_parts;
+DROP TABLE object_parts;
+
+CREATE TABLE objects_new (
+    bucket_id INTEGER REFERENCES buckets(id) NOT NULL,
+    name TEXT NOT NULL,
+    content_md5 BLOB NOT NULL,
+    metadata TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    parts_count INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL,
+    filename TEXT,
+    sia_object_id BLOB,
+    sia_object BLOB,
+    CHECK ((sia_object_id IS NULL AND sia_object IS NULL) OR (sia_object_id IS NOT NULL AND sia_object IS NOT NULL)),
+    CHECK ((size = 0 AND filename IS NULL AND sia_object_id IS NULL) OR (size > 0 AND (filename IS NOT NULL OR sia_object_id IS NOT NULL))),
+    PRIMARY KEY (bucket_id, name)
+) WITHOUT ROWID;
+INSERT INTO objects_new (bucket_id, name, content_md5, metadata, size, parts_count, updated_at, filename, sia_object_id, sia_object)
+    SELECT bucket_id, name, content_md5, metadata, size, parts_count, updated_at, filename, sia_object_id, sia_object FROM objects;
+DROP TABLE objects;
+ALTER TABLE objects_new RENAME TO objects;
+CREATE INDEX objects_sia_object_id_idx ON objects(sia_object_id);
+CREATE INDEX objects_filename_idx ON objects(filename) WHERE filename IS NOT NULL;
+
+CREATE TABLE object_parts (
+    bucket_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    part_number INTEGER NOT NULL,
+    filename TEXT NOT NULL,
+    content_md5 BLOB NOT NULL,
+    content_length INTEGER NOT NULL,
+    offset INTEGER NOT NULL,
+    FOREIGN KEY (bucket_id, name) REFERENCES objects(bucket_id, name) ON DELETE CASCADE,
+    PRIMARY KEY (bucket_id, name, part_number)
+);
+INSERT INTO object_parts (bucket_id, name, part_number, filename, content_md5, content_length, offset)
+    SELECT bucket_id, name, part_number, filename, content_md5, content_length, offset FROM object_parts_backup;
+DROP TABLE object_parts_backup;
+
+CREATE TABLE unpinned_objects (
+    sia_object_id BLOB PRIMARY KEY,
+    pin_before INTEGER NOT NULL,
+    next_attempt_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX unpinned_objects_next_attempt_at_idx ON unpinned_objects(next_attempt_at);
+`)
+		return err
+	},
 }

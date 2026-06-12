@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -26,6 +25,12 @@ const (
 	// DefaultMaxGroupSize is the maximum total size of a single upload
 	// group. Objects are batched together until this limit is reached.
 	DefaultMaxGroupSize = 1 << 30 // 1 GiB
+
+	// pinDeadline is how long after a packed upload completes the data on
+	// Sia is guaranteed to remain available before it must be pinned. If
+	// pinning has not succeeded by this deadline, the upload is considered
+	// expired and the object will need to be re-uploaded.
+	pinDeadline = 24 * time.Hour
 
 	numUploadThreads = 8
 )
@@ -326,19 +331,19 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 		return fmt.Errorf("unexpected number of results: expected %d, got %d", len(objIdx), len(results))
 	}
 
-	// pin object and finalize in store
+	// record uploads in the store; the pin loop is responsible for pinning
+	// them in the indexer and cleaning up the on-disk file once pinned.
+	pinBefore := time.Now().Add(pinDeadline)
+	var queued int
+	defer func() {
+		if queued > 0 {
+			s.wakePinLoop()
+		}
+	}()
+
 	for i, obj := range results {
 		uploadObj := group.objects[objIdx[i]]
-		if err := s.sdk.PinObject(ctx, obj); err != nil {
-			s.failedUploads.Add(1)
-			s.logger.Error("failed to pin object",
-				zap.String("bucket", uploadObj.Bucket),
-				zap.String("name", uploadObj.Name),
-				zap.Error(err))
-			continue
-		}
-
-		if err := s.store.MarkObjectUploaded(uploadObj.Bucket, uploadObj.Name, uploadObj.ContentMD5, s.sdk.SealObject(obj)); err != nil {
+		if err := s.store.MarkObjectUploaded(uploadObj.Bucket, uploadObj.Name, uploadObj.ContentMD5, s.sdk.SealObject(obj), pinBefore); err != nil {
 			if errors.Is(err, objects.ErrObjectNotFound) {
 				s.logger.Warn("object was deleted during upload, skipping",
 					zap.String("bucket", uploadObj.Bucket),
@@ -354,23 +359,13 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 					zap.String("name", uploadObj.Name),
 					zap.Error(err))
 			}
-
-			// delete pinned object
-			if err := s.sdk.DeleteObject(ctx, obj.ID()); err != nil {
-				s.logger.Error("failed to delete pinned object after finalize failure",
-					zap.String("bucket", uploadObj.Bucket),
-					zap.String("name", uploadObj.Name),
-					zap.Error(err))
-			}
 			continue
 		}
 
-		s.logger.Debug("object uploaded to Sia",
+		s.logger.Debug("object uploaded to Sia, awaiting pin",
 			zap.String("bucket", uploadObj.Bucket),
 			zap.String("name", uploadObj.Name))
-
-		s.cleanupOrphan(filepath.Join(s.uploadDir(), uploadObj.Filename), uploadObj.Length)
+		queued++
 	}
-
 	return nil
 }

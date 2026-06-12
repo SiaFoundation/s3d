@@ -24,7 +24,7 @@ import (
 
 func newAdminServer(t *testing.T) (string, *http.Client) {
 	t.Helper()
-	backend := testutil.NewBackend(t)
+	backend, _ := testutil.NewBackend(t)
 	server := httptest.NewServer(s3.NewAdmin(backend))
 	t.Cleanup(server.Close)
 	return server.URL, server.Client()
@@ -137,7 +137,7 @@ func TestAccessDenied(t *testing.T) {
 // requests both work, with and without a port in the Host header.
 // "localhost" is implicitly available as a host bucket base.
 func TestHostBucketStyles(t *testing.T) {
-	backend := testutil.NewBackend(t)
+	backend, _ := testutil.NewBackend(t)
 	handler := s3.New(backend, s3.WithLogger(zaptest.NewLogger(t)))
 
 	signer := v4.NewSigner()
