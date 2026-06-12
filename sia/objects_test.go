@@ -374,6 +374,7 @@ func TestPutObject(t *testing.T) {
 		// free up storage and try again
 		memSDK.SetRemainingStorage(uint64(len(blocked)))
 		backend.UploadObjects(t.Context())
+		backend.PinObjects(t.Context())
 
 		// assert object was uploaded
 		blockedObj, err = store.GetObject(testutil.AccessKeyID, bucket, "blocked", nil)
@@ -390,6 +391,7 @@ func TestPutObject(t *testing.T) {
 		// mock account call failure
 		memSDK.SetAccountErr(errors.New("account failure"))
 		backend.UploadObjects(t.Context())
+		backend.PinObjects(t.Context())
 		memSDK.SetAccountErr(nil)
 
 		blockedObj, err = store.GetObject(testutil.AccessKeyID, bucket, "blocked", nil)
