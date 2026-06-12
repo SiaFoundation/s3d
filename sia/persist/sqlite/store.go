@@ -18,9 +18,8 @@ import (
 type (
 	// A Store is a persistent store that uses a SQL database as its backend.
 	Store struct {
-		db   *sql.DB
-		path string
-		log  *zap.Logger
+		db  *sql.DB
+		log *zap.Logger
 	}
 )
 
@@ -120,9 +119,8 @@ func OpenDatabase(fp string, log *zap.Logger) (*Store, error) {
 	db.SetMaxOpenConns(1)
 
 	store := &Store{
-		db:   db,
-		path: fp,
-		log:  log,
+		db:  db,
+		log: log,
 	}
 	if err := store.init(int64(len(migrations) + 1)); err != nil {
 		return nil, err

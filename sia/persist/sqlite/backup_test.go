@@ -12,7 +12,6 @@ import (
 func TestBackup(t *testing.T) {
 	log := zaptest.NewLogger(t)
 	store := initTestDB(t, log)
-	srcPath := store.path
 
 	// add some data to the database on top of the user and access key created
 	// by initTestDB
@@ -65,7 +64,7 @@ func TestBackup(t *testing.T) {
 		}
 	}
 
-	t.Run("Store.Backup", func(t *testing.T) {
+	t.Run("Backup", func(t *testing.T) {
 		destPath := filepath.Join(t.TempDir(), "backup.sqlite")
 		if err := store.Backup(context.Background(), destPath); err != nil {
 			t.Fatal(err)
@@ -73,35 +72,20 @@ func TestBackup(t *testing.T) {
 		checkDatabase(t, destPath)
 	})
 
-	t.Run("Backup", func(t *testing.T) {
-		destPath := filepath.Join(t.TempDir(), "backup.sqlite")
-		if err := Backup(context.Background(), srcPath, destPath); err != nil {
-			t.Fatal(err)
-		}
-		checkDatabase(t, destPath)
-	})
-
 	t.Run("EmptyDestination", func(t *testing.T) {
-		if err := Backup(context.Background(), srcPath, ""); err == nil {
+		if err := store.Backup(context.Background(), ""); err == nil {
 			t.Fatal("expected error for empty destination path")
 		}
 	})
 
 	t.Run("ExistingDestination", func(t *testing.T) {
 		destPath := filepath.Join(t.TempDir(), "backup.sqlite")
-		if err := Backup(context.Background(), srcPath, destPath); err != nil {
+		if err := store.Backup(context.Background(), destPath); err != nil {
 			t.Fatal(err)
 		}
 		// a second backup to the same path must fail rather than overwrite
-		if err := Backup(context.Background(), srcPath, destPath); err == nil {
+		if err := store.Backup(context.Background(), destPath); err == nil {
 			t.Fatal("expected error for existing destination path")
-		}
-	})
-
-	t.Run("MissingSource", func(t *testing.T) {
-		destPath := filepath.Join(t.TempDir(), "backup.sqlite")
-		if err := Backup(context.Background(), filepath.Join(t.TempDir(), "does-not-exist.sqlite"), destPath); err == nil {
-			t.Fatal("expected error for missing source path")
 		}
 	})
 }

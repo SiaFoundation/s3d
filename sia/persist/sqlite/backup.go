@@ -10,12 +10,6 @@ import (
 	"github.com/mattn/go-sqlite3"
 )
 
-// Backup creates a backup of the open database. The backup is created using
-// the SQLite backup API, which is safe to use with a live database.
-func (s *Store) Backup(ctx context.Context, destPath string) error {
-	return Backup(ctx, s.path, destPath)
-}
-
 // sqlConn returns a dedicated connection from db.
 func sqlConn(ctx context.Context, db *sql.DB) (*sql.Conn, error) {
 	if err := db.PingContext(ctx); err != nil {
@@ -41,10 +35,20 @@ func withSQLiteConn(conn *sql.Conn, fn func(*sqlite3.SQLiteConn) error) error {
 	})
 }
 
-// backupDB is a helper function that creates a backup of the source database at
-// the specified path. The backup is created using the SQLite backup API, which
-// is safe to use with a live database.
-func backupDB(ctx context.Context, src *sql.DB, destPath string) (err error) {
+// Backup creates a backup of the open database at destPath using the SQLite
+// backup API. The backup runs over the store's own connection, so writes to
+// the database are blocked for the duration of the backup but the snapshot is
+// always consistent.
+func (s *Store) Backup(ctx context.Context, destPath string) (err error) {
+	// prevent overwriting the destination file
+	if destPath == "" {
+		return errors.New("empty destination path")
+	} else if _, err := os.Stat(destPath); err == nil {
+		return errors.New("destination file already exists")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("failed to stat destination file: %w", err)
+	}
+
 	// create the destination database
 	dest, err := sql.Open("sqlite3", sqliteFilepath(destPath))
 	if err != nil {
@@ -62,7 +66,7 @@ func backupDB(ctx context.Context, src *sql.DB, destPath string) (err error) {
 	}()
 
 	// initialize the source conn
-	srcConn, err := sqlConn(ctx, src)
+	srcConn, err := sqlConn(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("failed to create source connection: %w", err)
 	}
@@ -97,7 +101,9 @@ func backupDB(ctx context.Context, src *sql.DB, destPath string) (err error) {
 				default:
 				}
 
-				if done, err := backup.Step(128); err != nil {
+				// copy a batch of pages per step rather than the whole
+				// database at once so we can honor context cancellation
+				if done, err := backup.Step(100); err != nil {
 					return fmt.Errorf("backup step %d failed: %w", step, err)
 				} else if done {
 					break
@@ -106,40 +112,4 @@ func backupDB(ctx context.Context, src *sql.DB, destPath string) (err error) {
 			return nil
 		})
 	})
-}
-
-// Backup creates a backup of the database at the specified path. The backup is
-// created using the SQLite backup API, which is safe to use with a
-// live database.
-//
-// This function should be used if the database is not already open in the
-// current process. If the database is already open, use Store.Backup.
-func Backup(ctx context.Context, srcPath, destPath string) (err error) {
-	// ensure the source file exists
-	if _, err := os.Stat(srcPath); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("source file does not exist: %w", err)
-		}
-		return fmt.Errorf("failed to stat source file: %w", err)
-	}
-
-	// prevent overwriting the destination file
-	if destPath == "" {
-		return errors.New("empty destination path")
-	} else if _, err := os.Stat(destPath); err == nil {
-		return errors.New("destination file already exists")
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("failed to stat destination file: %w", err)
-	}
-
-	// open a new connection to the source database. We don't want to run
-	// any migrations or other operations on the source database since it
-	// might be open in another process.
-	src, err := sql.Open("sqlite3", sqliteFilepath(srcPath))
-	if err != nil {
-		return fmt.Errorf("failed to open source database: %w", err)
-	}
-	defer src.Close()
-
-	return backupDB(ctx, src, destPath)
 }
