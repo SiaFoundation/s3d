@@ -339,6 +339,69 @@ func TestPutObject(t *testing.T) {
 		if !bytes.Equal(body, data) {
 			t.Fatal("data mismatch after upload")
 		}
+
+		// mock insufficient remaining storage
+		blocked := frand.Bytes(24)
+		memSDK.SetRemainingStorage(uint64(len(blocked) - 1))
+
+		// add the pending object
+		if _, err := s3Tester.PutObject(t.Context(), bucket, "blocked", bytes.NewReader(blocked), nil); err != nil {
+			t.Fatal(err)
+		}
+		blockedObj, err := store.GetObject(testutil.AccessKeyID, bucket, "blocked", nil)
+		if err != nil {
+			t.Fatal(err)
+		} else if blockedObj.FileName == nil {
+			t.Fatal("expected filename to be set for blocked object")
+		}
+		blockedPath := filepath.Join(dir, sia.UploadsDirectory, *blockedObj.FileName)
+
+		// upload objects
+		backend.UploadObjects(t.Context())
+
+		// assert blocked object was not uploaded
+		blockedObj, err = store.GetObject(testutil.AccessKeyID, bucket, "blocked", nil)
+		if err != nil {
+			t.Fatal(err)
+		} else if blockedObj.FileName == nil {
+			t.Fatal("expected blocked object to remain on disk")
+		} else if blockedObj.SiaObject != nil {
+			t.Fatal("expected blocked object to not have a sia object")
+		} else if _, err := os.Stat(blockedPath); err != nil {
+			t.Fatal("expected blocked upload file to still exist:", err)
+		}
+
+		// free up storage and try again
+		memSDK.SetRemainingStorage(uint64(len(blocked)))
+		backend.UploadObjects(t.Context())
+
+		// assert object was uploaded
+		blockedObj, err = store.GetObject(testutil.AccessKeyID, bucket, "blocked", nil)
+		if err != nil {
+			t.Fatal(err)
+		} else if blockedObj.FileName != nil {
+			t.Fatal("expected filename to be nil after upload")
+		} else if blockedObj.SiaObject == nil {
+			t.Fatal("expected sia object to be set after upload")
+		} else if _, err := os.Stat(blockedPath); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatal("expected blocked upload file to be removed after upload")
+		}
+
+		// mock account call failure
+		memSDK.SetAccountErr(errors.New("account failure"))
+		backend.UploadObjects(t.Context())
+		memSDK.SetAccountErr(nil)
+
+		blockedObj, err = store.GetObject(testutil.AccessKeyID, bucket, "blocked", nil)
+		if err != nil {
+			t.Fatal(err)
+		} else if blockedObj.FileName != nil {
+			t.Fatal("expected filename to be nil after upload despite account error")
+		} else if blockedObj.SiaObject == nil {
+			t.Fatal("expected sia object to be set after upload despite account error")
+		} else if _, err := os.Stat(blockedPath); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatal("expected blocked upload file to be removed after upload")
+		}
 	})
 }
 

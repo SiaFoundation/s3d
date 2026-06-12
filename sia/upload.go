@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"sync"
 	"time"
 
@@ -139,7 +140,7 @@ func (s *Sia) prepareUploads() []uploadGroup {
 	for _, obj := range candidates {
 		totalSize += obj.Length
 	}
-	s.logger.Info("found objects for upload",
+	s.logger.Debug("potential objects for upload",
 		zap.Int("objects", len(candidates)),
 		zap.Int64("totalSize", totalSize))
 
@@ -199,8 +200,18 @@ func (s *Sia) uploadObjects(ctx context.Context) { //nolint:revive
 	// fetch and prepare objects for upload
 	groups := s.prepareUploads()
 	if len(groups) == 0 {
-		s.logger.Debug("upload loop tick")
+		s.logger.Debug("not enough objects for upload")
 		return
+	}
+	s.logger.Debug("found enough objects for upload",
+		zap.Int("groups", len(groups)))
+
+	// fetch the remaining storage
+	remaining := uint64(math.MaxUint64)
+	if account, err := s.sdk.Account(ctx); err != nil {
+		s.logger.Warn("failed to fetch account info, proceeding without remaining storage check", zap.Error(err))
+	} else {
+		remaining = account.RemainingStorage
 	}
 
 	var wg sync.WaitGroup
@@ -225,11 +236,27 @@ func (s *Sia) uploadObjects(ctx context.Context) { //nolint:revive
 		})
 	}
 
-	// send uploads to workers
+	// send uploads to workers, skip groups that exceed the remaining
+	// storage space to avoid failed pin attempts after upload
+	var skippedGroups int
+	var skippedSize int64
 	for _, g := range groups {
+		if uint64(g.totalSize) > remaining {
+			skippedGroups++
+			skippedSize += g.totalSize
+			continue
+		}
+		remaining -= uint64(g.totalSize)
 		uploadsCh <- g
 	}
 	close(uploadsCh)
+
+	if skippedGroups > 0 {
+		s.logger.Warn("insufficient remaining storage, skipped upload groups",
+			zap.Int("groups", skippedGroups),
+			zap.Int64("skippedSize", skippedSize),
+			zap.Uint64("remainingStorage", remaining))
+	}
 
 	wg.Wait()
 }

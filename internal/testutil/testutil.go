@@ -609,7 +609,6 @@ func NewTester(t testing.TB, opts ...TesterOption) *S3Tester {
 	}
 
 	handler := s3.New(cfg.backend,
-		s3.WithHostBucketBases([]string{"localhost"}),
 		s3.WithLogger(zaptest.NewLogger(t)))
 
 	server := httptest.NewUnstartedServer(handler)
