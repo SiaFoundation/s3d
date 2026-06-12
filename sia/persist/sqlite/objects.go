@@ -76,6 +76,20 @@ func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (
 			return s3errs.ErrPreconditionFailed
 		}
 
+		// an object is pending (filename, no sia_object_id), uploaded
+		// (sia_object_id, possibly still keeping its filename as a backup
+		// until pinned) or empty.
+		if filename != nil && !deletedID.Valid {
+			if err := removePendingObject(tx, size); err != nil {
+				return err
+			}
+		}
+		if deletedID.Valid {
+			if err := removeUploadedObject(tx, size); err != nil {
+				return err
+			}
+		}
+
 		orphanFile, orphanSize, err = newOrphanedFile(tx, filename, size)
 		if err != nil {
 			return err
@@ -198,12 +212,12 @@ func (s *Store) MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, sea
 		}
 
 		var storedMD5 [16]byte
+		var filename *string
+		var size int64
 		err = tx.QueryRow(`
-			UPDATE objects
-			SET sia_object_id = $1, sia_object = $2
-			WHERE bucket_id = $3 AND name = $4 AND sia_object_id IS NULL
-			RETURNING content_md5
-		`, sqlHash256(sealed.ID()), sqlSiaObject(sealed), bid, name).Scan((*sqlMD5)(&storedMD5))
+			SELECT content_md5, filename, size FROM objects
+			WHERE bucket_id = $1 AND name = $2 AND sia_object_id IS NULL AND filename IS NOT NULL
+		`, bid, name).Scan((*sqlMD5)(&storedMD5), &filename, &size)
 		if errors.Is(err, sql.ErrNoRows) {
 			return objects.ErrObjectNotFound
 		} else if err != nil {
@@ -212,13 +226,46 @@ func (s *Store) MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, sea
 			return objects.ErrObjectModified
 		}
 
-		_, err = tx.Exec(`
+		// keep the filename set so the file on disk remains available as a
+		// backup until the pin completes.
+		if _, err := tx.Exec(`
+			UPDATE objects
+			SET sia_object_id = $1, sia_object = $2
+			WHERE bucket_id = $3 AND name = $4 AND sia_object_id IS NULL AND filename IS NOT NULL
+		`, sqlHash256(sealed.ID()), sqlSiaObject(sealed), bid, name); err != nil {
+			return err
+		}
+
+		// the object transitioned from pending to uploaded.
+		if filename != nil {
+			if err := removePendingObject(tx, size); err != nil {
+				return err
+			}
+		}
+		if err := addUploadedObject(tx, size); err != nil {
+			return err
+		}
+
+		// upsert the unpinned_objects row, counting a new unpinned object only
+		// when a row is actually inserted; copies sharing a sia_object_id reuse
+		// the existing row (and an upsert reports a changed row either way, so
+		// detect the insert by checking for the row beforehand).
+		var exists bool
+		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM unpinned_objects WHERE sia_object_id = $1)`, sqlHash256(sealed.ID())).Scan(&exists); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`
 			INSERT INTO unpinned_objects (sia_object_id, pin_before)
 			VALUES ($1, $2)
 			ON CONFLICT (sia_object_id) DO UPDATE
 				SET pin_before = max(unpinned_objects.pin_before, excluded.pin_before)
-		`, sqlHash256(sealed.ID()), sqlTime(pinBefore))
-		return err
+		`, sqlHash256(sealed.ID()), sqlTime(pinBefore)); err != nil {
+			return err
+		}
+		if !exists {
+			return incrementStat(tx, statUnpinnedObjects, 1)
+		}
+		return nil
 	})
 }
 
@@ -247,6 +294,12 @@ func (s *Store) MarkObjectPinned(siaObjectID types.Hash256) (orphans []objects.O
 			// pin was in flight; mark the sia_object_id as orphaned so the
 			// orphan loop can unpin it.
 			return insertOrphan(tx, siaObjectID)
+		}
+
+		// the object is now pinned; it stays counted as uploaded but is no
+		// longer unpinned.
+		if err := incrementStat(tx, statUnpinnedObjects, -1); err != nil {
+			return err
 		}
 
 		// snapshot the filenames currently referenced by this sia_object_id
@@ -314,12 +367,42 @@ func (s *Store) ScheduleObjectForReupload(siaObjectID types.Hash256) error {
 		} else if n == 0 {
 			return objects.ErrObjectNotFound
 		}
+		if err := incrementStat(tx, statUnpinnedObjects, -1); err != nil {
+			return err
+		}
+
+		// the rows about to revert are currently counted as uploaded; once
+		// their sia_object_id is cleared they become pending again (their
+		// backup files are still on disk).
+		var count, totalSize int64
+		if err := tx.QueryRow(`
+			SELECT COUNT(*), COALESCE(SUM(size), 0) FROM objects WHERE sia_object_id = $1
+		`, sqlHash256(siaObjectID)).Scan(&count, &totalSize); err != nil {
+			return err
+		}
+
 		if _, err := tx.Exec(`
 			UPDATE objects SET sia_object_id = NULL, sia_object = NULL
 			WHERE sia_object_id = $1
 		`, sqlHash256(siaObjectID)); err != nil {
 			return err
 		}
+
+		if count > 0 {
+			if err := incrementStat(tx, statUploadedObjects, -count); err != nil {
+				return err
+			}
+			if err := incrementStat(tx, statUploadedSize, -totalSize); err != nil {
+				return err
+			}
+			if err := incrementStat(tx, statPendingObjects, count); err != nil {
+				return err
+			}
+			if err := incrementStat(tx, statPendingSize, totalSize); err != nil {
+				return err
+			}
+		}
+
 		return insertOrphan(tx, siaObjectID)
 	})
 }
@@ -610,27 +693,17 @@ func (s *Store) OrphanedObjects(limit int) (ids []types.Hash256, err error) {
 // RemoveOrphanedObject removes an object ID from the orphaned_objects table.
 func (s *Store) RemoveOrphanedObject(objectID types.Hash256) error {
 	return s.transaction(func(tx *txn) error {
-		_, err := tx.Exec("DELETE FROM orphaned_objects WHERE sia_object_id = $1", sqlHash256(objectID))
-		return err
+		res, err := tx.Exec("DELETE FROM orphaned_objects WHERE sia_object_id = $1", sqlHash256(objectID))
+		if err != nil {
+			return err
+		}
+		if n, err := res.RowsAffected(); err != nil {
+			return err
+		} else if n > 0 {
+			return incrementStat(tx, statOrphanedObjects, -1)
+		}
+		return nil
 	})
-}
-
-// UploadStats returns statistics about the background upload pipeline.
-func (s *Store) UploadStats() (stats s3.UploadStats, err error) {
-	err = s.transaction(func(tx *txn) error {
-		return tx.QueryRow(`
-			SELECT
-				COUNT(CASE WHEN filename IS NOT NULL AND sia_object_id IS NULL THEN 1 END),
-				COALESCE(SUM(CASE WHEN filename IS NOT NULL AND sia_object_id IS NULL THEN size END), 0),
-				COUNT(sia_object_id),
-				COALESCE(SUM(CASE WHEN sia_object_id IS NOT NULL THEN size END), 0),
-				(SELECT COUNT(*) FROM unpinned_objects),
-				(SELECT COUNT(*) FROM orphaned_objects),
-				(SELECT COUNT(*) FROM multipart_uploads)
-			FROM objects
-		`).Scan(&stats.PendingObjects, &stats.PendingSize, &stats.UploadedObjects, &stats.UploadedSize, &stats.UnpinnedObjects, &stats.OrphanedObjects, &stats.MultipartUploads)
-	})
-	return
 }
 
 // ObjectsForUpload returns all objects stored on disk, ordered by size
@@ -696,6 +769,20 @@ func putObject(tx *txn, bid int64, name string, contentMD5 [16]byte, meta map[st
 		return "", 0, err
 	}
 
+	// an object with a sia_object_id counts as uploaded even when it still
+	// keeps a filename as a backup (e.g. a copy of a not-yet-pinned object);
+	// only a filename without a sia_object_id is pending.
+	if fileName != nil && siaObject == nil {
+		if err := addPendingObject(tx, length); err != nil {
+			return "", 0, err
+		}
+	}
+	if siaObject != nil {
+		if err := addUploadedObject(tx, length); err != nil {
+			return "", 0, err
+		}
+	}
+
 	if oldID != nil && (siaObject == nil || *oldID != siaObject.ID) {
 		if err := insertOrphan(tx, *oldID); err != nil {
 			return "", 0, err
@@ -736,6 +823,19 @@ func deleteObject(tx *txn, bid int64, name string) (*types.Hash256, *string, int
 	} else if err != nil {
 		return nil, nil, 0, err
 	}
+	// an object is pending (filename, no sia_object_id), uploaded
+	// (sia_object_id, possibly still keeping its filename as a backup until
+	// pinned) or empty.
+	if filename != nil && !id.Valid {
+		if err := removePendingObject(tx, size); err != nil {
+			return nil, nil, 0, err
+		}
+	}
+	if id.Valid {
+		if err := removeUploadedObject(tx, size); err != nil {
+			return nil, nil, 0, err
+		}
+	}
 	if !id.Valid {
 		return nil, filename, size, nil
 	}
@@ -762,11 +862,28 @@ func insertOrphan(tx *txn, objectID types.Hash256) error {
 	if referenced {
 		return nil
 	}
-	if _, err := tx.Exec(`DELETE FROM unpinned_objects WHERE sia_object_id = $1`, sqlHash256(objectID)); err != nil {
+	// drop the pin queue entry; if it existed the object was still unpinned.
+	res, err := tx.Exec(`DELETE FROM unpinned_objects WHERE sia_object_id = $1`, sqlHash256(objectID))
+	if err != nil {
 		return err
 	}
-	_, err := tx.Exec("INSERT OR IGNORE INTO orphaned_objects (sia_object_id) VALUES ($1)", sqlHash256(objectID))
-	return err
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n > 0 {
+		if err := incrementStat(tx, statUnpinnedObjects, -1); err != nil {
+			return err
+		}
+	}
+	res, err = tx.Exec("INSERT OR IGNORE INTO orphaned_objects (sia_object_id) VALUES ($1)", sqlHash256(objectID))
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n > 0 {
+		return incrementStat(tx, statOrphanedObjects, 1)
+	}
+	return nil
 }
 
 // ListObjects lists objects in the specified bucket, filtered by prefix and

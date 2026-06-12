@@ -75,4 +75,26 @@ CREATE INDEX unpinned_objects_next_attempt_at_idx ON unpinned_objects(next_attem
 `)
 		return err
 	},
+	func(tx *txn, _ *zap.Logger) error {
+		if _, err := tx.Exec(`CREATE TABLE stats (
+    stat TEXT PRIMARY KEY NOT NULL,
+    stat_value INTEGER NOT NULL CHECK (stat_value >= 0)
+)`); err != nil {
+			return err
+		}
+		// backfill the stat counters from existing data. An object is pending
+		// only while it has a filename and no sia_object_id; once uploaded it
+		// keeps its filename as a backup until the pin completes, so uploaded
+		// objects must be excluded from the pending counts.
+		_, err := tx.Exec(`
+			INSERT INTO stats (stat, stat_value)
+			SELECT 'pending_objects', COUNT(CASE WHEN filename IS NOT NULL AND sia_object_id IS NULL THEN 1 END) FROM objects
+			UNION ALL SELECT 'pending_size', COALESCE(SUM(CASE WHEN filename IS NOT NULL AND sia_object_id IS NULL THEN size END), 0) FROM objects
+			UNION ALL SELECT 'uploaded_objects', COUNT(sia_object_id) FROM objects
+			UNION ALL SELECT 'uploaded_size', COALESCE(SUM(CASE WHEN sia_object_id IS NOT NULL THEN size END), 0) FROM objects
+			UNION ALL SELECT 'unpinned_objects', (SELECT COUNT(*) FROM unpinned_objects)
+			UNION ALL SELECT 'orphaned_objects', (SELECT COUNT(*) FROM orphaned_objects)
+			UNION ALL SELECT 'multipart_uploads', (SELECT COUNT(*) FROM multipart_uploads)`)
+		return err
+	},
 }

@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -191,6 +192,29 @@ func TestMigrationConsistency(t *testing.T) {
 		t.Fatal(err)
 	} else if partsCount != 2 {
 		t.Fatalf("expected parts_count 2, got %d", partsCount)
+	}
+
+	// the stats table must have been backfilled from the seeded data. The
+	// single seeded object has a filename and no sia_object_id (size 10), so it
+	// is a pending upload; everything else is empty.
+	expectedStats := map[string]int64{
+		"pending_objects":   1,
+		"pending_size":      10,
+		"uploaded_objects":  0,
+		"uploaded_size":     0,
+		"unpinned_objects":  0,
+		"orphaned_objects":  0,
+		"multipart_uploads": 0,
+	}
+	for stat, want := range expectedStats {
+		var got int64
+		if err := store.db.QueryRow(`SELECT stat_value FROM stats WHERE stat = ?`, stat).Scan(&got); errors.Is(err, sql.ErrNoRows) {
+			t.Errorf("stat %q missing from stats table", stat)
+		} else if err != nil {
+			t.Fatal(err)
+		} else if got != want {
+			t.Errorf("stat %q: expected %d, got %d", stat, want, got)
+		}
 	}
 
 	fp2 := filepath.Join(t.TempDir(), "hostd.sqlite3")
