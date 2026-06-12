@@ -195,6 +195,8 @@ AWS Signature V4 exclusively. SigV4A is not implemented. Supported
 (`s3.example.com/bucket/object`) and virtual-hosted-style
 (`bucket.s3.example.com/object`) addressing are supported.
 
+Bucket lifecycle configuration supports prefix-based `AbortIncompleteMultipartUpload` rules and current-object `Expiration` rules.
+
 ### Operations
 
 | Operation | Status |
@@ -211,8 +213,9 @@ AWS Signature V4 exclusively. SigV4A is not implemented. Supported
 | PutBucketAcl | ✗ |
 | GetBucketPolicy | ✗ |
 | PutBucketPolicy | ✗ |
-| GetBucketLifecycle | ✗ |
-| PutBucketLifecycle | ✗ |
+| GetBucketLifecycle | ✓ |
+| PutBucketLifecycle | ✓ |
+| DeleteBucketLifecycle | ✓ |
 | GetBucketCors | ✗ |
 | PutBucketCors | ✗ |
 | GetBucketTagging | ✗ |

@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/sia"
@@ -84,7 +85,15 @@ func TestS3(t *testing.T) {
 			t.Fatalf("failed to create access key: %v", err)
 		}
 	}
-	backend, err := sia.New(t.Context(), sia.NewSDK(sdkClient), store, dir, sia.WithLogger(log.Named("backend")))
+	// run the lifecycle loop every second and treat a "day" as 11s so the
+	// expiration tests observe objects expiring without waiting real days. The
+	// 11s window keeps a Days=5 rule live at the tests' 40s check but expired
+	// by their 70s check.
+	backend, err := sia.New(t.Context(), sia.NewSDK(sdkClient), store, dir,
+		sia.WithLogger(log.Named("backend")),
+		sia.WithLifecycleLoopInterval(time.Second),
+		sia.WithLifecycleDayDuration(11*time.Second),
+	)
 	if err != nil {
 		t.Fatalf("failed to create Sia backend: %v", err)
 	}
@@ -147,8 +156,12 @@ func TestS3(t *testing.T) {
 	t.Run("test_s3", func(t *testing.T) {
 		runTox(t, confPath, testsDir,
 			"s3tests/functional/test_s3.py",
-			"-m", "not s3d_not_implemented and not s3d_not_supported and not bucket_logging and not encryption and not sse_s3 and not bucket_encryption and not lifecycle and not lifecycle_expiration and not lifecycle_transition and not tagging and not bucket_policy and not conditional_write and not object_ownership and not checksum and not cloud_transition and not cloud_restore and not iam_user and not iam_account and not delete_marker",
-			"-k", "not _acl and not versioning and not post_object and not _torrent and not cors and not object_lock and not retention and not legal_hold and not notification and not replication and not website and not _select and not bucket_recreate_not_overriding",
+			"-m", "not s3d_not_implemented and not s3d_not_supported and not bucket_logging and not encryption and not sse_s3 and not bucket_encryption and not lifecycle_transition and not tagging and not bucket_policy and not conditional_write and not object_ownership and not checksum and not cloud_transition and not cloud_restore and not iam_user and not iam_account and not delete_marker",
+			// the lifecycle exclusions drop tests for lifecycle features s3d
+			// does not implement: tag and object-size filters, versioning and
+			// noncurrent-version actions, delete-marker expiration, and
+			// transitions.
+			"-k", "not _acl and not versioning and not post_object and not _torrent and not cors and not object_lock and not retention and not legal_hold and not notification and not replication and not website and not _select and not bucket_recreate_not_overriding and not lifecycle_expiration_tags and not lifecycle_expiration_versioned and not lifecycle_expiration_size and not tags_head and not noncur and not deletemarker and not lifecycle_set_filter and not lifecycle_set_empty_filter and not lifecycle_transition_set_invalid_date",
 		)
 	})
 

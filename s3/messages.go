@@ -409,3 +409,77 @@ type (
 		Initiated    ContentTime  `xml:"Initiated"`
 	}
 )
+
+// Types related to bucket lifecycle routes
+type (
+	// LifecycleConfiguration is the S3 bucket lifecycle configuration document.
+	//
+	// https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketLifecycleConfiguration.html
+	LifecycleConfiguration struct {
+		XMLName xml.Name `xml:"LifecycleConfiguration"`
+		// Xmlns is omitempty, unlike other messages, because the configuration
+		// is also marshaled for persistence, where the namespace attribute is
+		// left out.
+		Xmlns string          `xml:"xmlns,attr,omitempty"`
+		Rules []LifecycleRule `xml:"Rule"`
+	}
+
+	// LifecycleRule is a single lifecycle rule.
+	LifecycleRule struct {
+		ID     string `xml:"ID,omitempty"`
+		Status string `xml:"Status"`
+		// Prefix is the deprecated rule-level prefix. Newer clients use Filter
+		// instead. At most one of Prefix and Filter may be set.
+		Prefix                         *string                         `xml:"Prefix,omitempty"`
+		Filter                         *LifecycleFilter                `xml:"Filter,omitempty"`
+		Expiration                     *LifecycleExpiration            `xml:"Expiration,omitempty"`
+		AbortIncompleteMultipartUpload *AbortIncompleteMultipartUpload `xml:"AbortIncompleteMultipartUpload,omitempty"`
+		// The remaining actions are parsed only so they can be rejected during
+		// validation; dropping an action a client asked for would misrepresent
+		// the stored configuration.
+		Transitions                  []LifecycleUnsupportedAction `xml:"Transition,omitempty"`
+		NoncurrentVersionTransitions []LifecycleUnsupportedAction `xml:"NoncurrentVersionTransition,omitempty"`
+		NoncurrentVersionExpiration  *LifecycleUnsupportedAction  `xml:"NoncurrentVersionExpiration,omitempty"`
+	}
+
+	// LifecycleUnsupportedAction marks the presence of a lifecycle action this
+	// server does not support. Its contents are not modeled; presence alone
+	// causes validation to fail.
+	LifecycleUnsupportedAction struct{}
+
+	// LifecycleFilter restricts the objects a rule applies to.
+	LifecycleFilter struct {
+		Prefix                *string               `xml:"Prefix,omitempty"`
+		Tag                   *LifecycleTag         `xml:"Tag,omitempty"`
+		And                   *LifecycleAndOperator `xml:"And,omitempty"`
+		ObjectSizeGreaterThan *int64                `xml:"ObjectSizeGreaterThan,omitempty"`
+		ObjectSizeLessThan    *int64                `xml:"ObjectSizeLessThan,omitempty"`
+	}
+
+	// LifecycleTag is an object tag used in a lifecycle filter.
+	LifecycleTag struct {
+		Key   string `xml:"Key"`
+		Value string `xml:"Value"`
+	}
+
+	// LifecycleAndOperator combines multiple filter predicates.
+	LifecycleAndOperator struct {
+		Prefix                *string        `xml:"Prefix,omitempty"`
+		Tags                  []LifecycleTag `xml:"Tag"`
+		ObjectSizeGreaterThan *int64         `xml:"ObjectSizeGreaterThan,omitempty"`
+		ObjectSizeLessThan    *int64         `xml:"ObjectSizeLessThan,omitempty"`
+	}
+
+	// LifecycleExpiration describes when current object versions expire.
+	LifecycleExpiration struct {
+		Days                      int    `xml:"Days,omitempty"`
+		Date                      string `xml:"Date,omitempty"`
+		ExpiredObjectDeleteMarker *bool  `xml:"ExpiredObjectDeleteMarker,omitempty"`
+	}
+
+	// AbortIncompleteMultipartUpload describes when incomplete multipart
+	// uploads are aborted.
+	AbortIncompleteMultipartUpload struct {
+		DaysAfterInitiation int `xml:"DaysAfterInitiation"`
+	}
+)

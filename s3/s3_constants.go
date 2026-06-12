@@ -36,6 +36,10 @@ const (
 	// KB in size. The size of user-defined metadata is measured by taking the
 	// sum of the number of bytes in the UTF-8 encoding of each key and value.
 	MetadataSizeLimit = 2000
+
+	// LifecycleRuleIDSizeLimit defines the maximum length of a lifecycle rule
+	// ID. AWS allows rule IDs of up to 255 characters.
+	LifecycleRuleIDSizeLimit = 255
 )
 
 const (
