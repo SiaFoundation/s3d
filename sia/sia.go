@@ -18,6 +18,7 @@ import (
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/threadgroup"
 	"go.sia.tech/indexd/api"
+	"go.sia.tech/indexd/api/app"
 	"go.sia.tech/indexd/slabs"
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
@@ -107,6 +108,7 @@ type Sia struct {
 
 // SDK describes the SDK used to interact with Sia.
 type SDK interface {
+	Account(ctx context.Context) (app.AccountResponse, error)
 	DeleteObject(ctx context.Context, id types.Hash256) error
 	Download(obj sdk.Object, rnge *s3.ObjectRange) (io.ReadCloser, error)
 	ObjectEvents(ctx context.Context, cursor slabs.Cursor, limit int) ([]sdk.ObjectEvent, error)
