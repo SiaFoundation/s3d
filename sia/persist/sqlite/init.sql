@@ -38,12 +38,19 @@ CREATE TABLE objects (
     sia_object BLOB,
     -- sia_object_id and sia_object are always set or nulled together
     CHECK ((sia_object_id IS NULL AND sia_object IS NULL) OR (sia_object_id IS NOT NULL AND sia_object IS NOT NULL)),
-    -- object is either on disk, on Sia, or empty
-    CHECK ((filename IS NOT NULL AND sia_object_id IS NULL) OR (filename IS NULL AND sia_object_id IS NOT NULL) OR (filename IS NULL AND sia_object_id IS NULL AND size = 0)),
+    -- non-empty objects must have a filename, a sia_object_id, or both (between uploading and pinning)
+    CHECK ((size = 0 AND filename IS NULL AND sia_object_id IS NULL) OR (size > 0 AND (filename IS NOT NULL OR sia_object_id IS NOT NULL))),
     PRIMARY KEY (bucket_id, name)
 ) WITHOUT ROWID;
 CREATE INDEX objects_sia_object_id_idx ON objects(sia_object_id);
 CREATE INDEX objects_filename_idx ON objects(filename) WHERE filename IS NOT NULL;
+
+CREATE TABLE unpinned_objects (
+    sia_object_id BLOB PRIMARY KEY,
+    pin_before INTEGER NOT NULL,
+    next_attempt_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX unpinned_objects_next_attempt_at_idx ON unpinned_objects(next_attempt_at);
 
 CREATE TABLE multipart_uploads (
     upload_id BLOB PRIMARY KEY,
@@ -94,6 +101,7 @@ INSERT INTO stats (stat, stat_value) VALUES
     ('pending_size', 0),
     ('uploaded_objects', 0),
     ('uploaded_size', 0),
+    ('unpinned_objects', 0),
     ('orphaned_objects', 0),
     ('multipart_uploads', 0);
 

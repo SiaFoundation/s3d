@@ -4,8 +4,6 @@
 
 A lightweight, S3-compatible Renter for the Sia network
 
-⚠️ Work in Progress — This project is not yet ready for use. Breaking changes should be expected.
-
 ## Overview
 
 `s3d` is a lightweight daemon built by the Sia Foundation that translates AWS
@@ -317,7 +315,7 @@ log:
     format: json # log format (human, json)
     path: /var/log/s3d/s3d.log # log file path (defaults to <directory>/s3d.log)
 s3:
-  hostBases:
+  hostBases: # bases for virtual-hosted-style addressing ("localhost" is always included)
     - s3.example.com
 ```
 

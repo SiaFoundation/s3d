@@ -101,7 +101,15 @@ CREATE TABLE global_settings (
 );
 
 -- initialize the global settings table
-INSERT INTO global_settings (id, db_version) VALUES (0, 1); -- should not be changed`
+INSERT INTO global_settings (id, db_version) VALUES (0, 1); -- should not be changed
+
+-- seed data to verify migrations preserve existing rows
+INSERT INTO users (id, name) VALUES (1, 'user');
+INSERT INTO buckets (id, created_at, name, user_id) VALUES (1, 0, 'bucket', 1);
+INSERT INTO objects (bucket_id, name, content_md5, metadata, size, updated_at, filename) VALUES (1, 'obj', x'00', '{}', 10, 0, 'obj.dat');
+INSERT INTO object_parts (bucket_id, name, part_number, filename, content_md5, content_length, offset) VALUES
+    (1, 'obj', 1, 'part1.dat', x'01', 5, 0),
+    (1, 'obj', 2, 'part2.dat', x'02', 5, 5);`
 
 func initDBVersion(tb testing.TB, fp string, target int64, log *zap.Logger) *Store {
 	db, err := sql.Open("sqlite3", sqliteFilepath(fp))
@@ -169,6 +177,20 @@ func TestMigrationConsistency(t *testing.T) {
 	v = getDBVersion(store.db)
 	if v != expectedVersion {
 		t.Fatalf("expected version %d, got %d", expectedVersion, v)
+	}
+
+	// ensure the seeded object parts survived the migrations
+	var partCount int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM object_parts WHERE bucket_id = 1 AND name = 'obj'`).Scan(&partCount); err != nil {
+		t.Fatal(err)
+	} else if partCount != 2 {
+		t.Fatalf("expected 2 object parts, got %d", partCount)
+	}
+	var partsCount int
+	if err := store.db.QueryRow(`SELECT parts_count FROM objects WHERE bucket_id = 1 AND name = 'obj'`).Scan(&partsCount); err != nil {
+		t.Fatal(err)
+	} else if partsCount != 2 {
+		t.Fatalf("expected parts_count 2, got %d", partsCount)
 	}
 
 	fp2 := filepath.Join(t.TempDir(), "hostd.sqlite3")

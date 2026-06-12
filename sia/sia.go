@@ -18,6 +18,7 @@ import (
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/threadgroup"
 	"go.sia.tech/indexd/api"
+	"go.sia.tech/indexd/api/app"
 	"go.sia.tech/indexd/slabs"
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
@@ -96,6 +97,8 @@ type Sia struct {
 	uploadOptimalSize int64
 	uploadWastePct    float64
 
+	pinWake chan struct{}
+
 	lockedUploadsMu sync.Mutex
 	lockedUploads   map[string]*lockedUpload
 
@@ -107,6 +110,7 @@ type Sia struct {
 
 // SDK describes the SDK used to interact with Sia.
 type SDK interface {
+	Account(ctx context.Context) (app.AccountResponse, error)
 	DeleteObject(ctx context.Context, id types.Hash256) error
 	Download(obj sdk.Object, rnge *s3.ObjectRange) (io.ReadCloser, error)
 	ObjectEvents(ctx context.Context, cursor slabs.Cursor, limit int) ([]sdk.ObjectEvent, error)
@@ -153,7 +157,12 @@ type Store interface {
 	ObjectsForUpload() ([]objects.ObjectForUpload, error)
 	OrphanedObjects(limit int) ([]types.Hash256, error)
 	PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string) (string, int64, error)
-	MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, sealed sdk.SealedObject) error
+	MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, sealed sdk.SealedObject, pinBefore time.Time) error
+	MarkObjectPinned(siaObjectID types.Hash256) ([]objects.OrphanedFile, error)
+	ScheduleObjectForReupload(siaObjectID types.Hash256) error
+	ObjectsForPinning(now time.Time, limit int) ([]objects.UnpinnedObject, error)
+	NextPinningAttempt() (time.Time, bool, error)
+	RescheduleUnpinnedObject(siaObjectID types.Hash256, nextAttemptAt time.Time) error
 	UpdateSiaObjects(siaObjects []objects.SiaObject) (int64, error)
 	RemoveOrphanedObject(objectID types.Hash256) error
 	AbortMultipartUpload(accessKeyID, bucket, name string, uploadID s3.UploadID) (int64, error)
@@ -181,6 +190,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		tg:     threadgroup.New(),
 	}
 	sia.diskUsageWake = make(chan struct{})
+	sia.pinWake = make(chan struct{}, 1)
 	for _, opt := range opts {
 		opt(sia)
 	}
@@ -229,6 +239,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		launchBgLoop(sia.processOrphansLoop),
 		launchBgLoop(sia.syncMetadataLoop),
 		launchBgLoop(sia.uploadLoop),
+		launchBgLoop(sia.pinLoop),
 	); err != nil {
 		return nil, err
 	}

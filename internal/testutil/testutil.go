@@ -461,6 +461,7 @@ func (t *S3Tester) CompleteMultipartUpload(ctx context.Context, bucket, object, 
 
 type testerCfg struct {
 	backend     s3.Backend
+	sdk         sia.SDK
 	keyPairs    []keyPair
 	serviceOpts []func(*service.Options)
 	tls         bool
@@ -502,6 +503,14 @@ func WithBackend(backend s3.Backend) TesterOption {
 	}
 }
 
+// WithSDK sets the Sia SDK used by NewBackend. It has no effect when an
+// explicit backend is passed via WithBackend.
+func WithSDK(sdk sia.SDK) TesterOption {
+	return func(cfg *testerCfg) {
+		cfg.sdk = sdk
+	}
+}
+
 // WithTLS configures the tester to use TLS.
 func WithTLS() TesterOption {
 	return func(cfg *testerCfg) {
@@ -512,7 +521,7 @@ func WithTLS() TesterOption {
 // NewBackend creates a Sia backend backed by an in-memory SDK and a SQLite
 // store in a temporary directory. The default test key pair as well as any
 // key pairs provided via WithKeyPair are registered with the backend.
-func NewBackend(t testing.TB, opts ...TesterOption) *sia.Sia {
+func NewBackend(t testing.TB, opts ...TesterOption) (*sia.Sia, *sqlite.Store) {
 	t.Helper()
 
 	cfg := &testerCfg{}
@@ -532,7 +541,11 @@ func NewBackend(t testing.TB, opts ...TesterOption) *sia.Sia {
 	}
 	t.Cleanup(func() { store.Close() })
 
-	return newSiaBackend(t, dir, store, NewMemorySDK(), log, cfg.keyPairs)
+	sdk := cfg.sdk
+	if sdk == nil {
+		sdk = NewMemorySDK()
+	}
+	return newSiaBackend(t, dir, store, sdk, log, cfg.keyPairs), store
 }
 
 // NewCustomTester creates a new S3Tester using a Sia backend built from the
@@ -592,11 +605,10 @@ func NewTester(t testing.TB, opts ...TesterOption) *S3Tester {
 	}
 
 	if cfg.backend == nil {
-		cfg.backend = NewBackend(t, opts...)
+		cfg.backend, _ = NewBackend(t, opts...)
 	}
 
 	handler := s3.New(cfg.backend,
-		s3.WithHostBucketBases([]string{"localhost"}),
 		s3.WithLogger(zaptest.NewLogger(t)))
 
 	server := httptest.NewUnstartedServer(handler)

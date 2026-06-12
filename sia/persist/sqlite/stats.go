@@ -13,6 +13,7 @@ const (
 	statPendingSize      = "pending_size"
 	statUploadedObjects  = "uploaded_objects"
 	statUploadedSize     = "uploaded_size"
+	statUnpinnedObjects  = "unpinned_objects"
 	statOrphanedObjects  = "orphaned_objects"
 	statMultipartUploads = "multipart_uploads"
 )
@@ -89,6 +90,8 @@ func (s *Store) UploadStats() (stats s3.UploadStats, err error) {
 				stats.UploadedObjects = value
 			case statUploadedSize:
 				stats.UploadedSize = value
+			case statUnpinnedObjects:
+				stats.UnpinnedObjects = value
 			case statOrphanedObjects:
 				stats.OrphanedObjects = value
 			case statMultipartUploads:

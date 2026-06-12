@@ -530,7 +530,7 @@ func (s *s3) completeMultipartUpload(w http.ResponseWriter, r *http.Request, acc
 	}
 
 	var location string
-	if len(s.hostBucketBases) > 0 {
+	if _, ok := s.bucketFromHost(r.Host); ok {
 		location = fmt.Sprintf("%s://%s/%s", protocol, r.Host, object)
 	} else {
 		location = fmt.Sprintf("%s://%s/%s/%s", protocol, r.Host, bucket, object)
