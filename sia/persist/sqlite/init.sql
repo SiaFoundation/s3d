@@ -90,6 +90,21 @@ CREATE TABLE orphaned_objects (
     sia_object_id BLOB PRIMARY KEY
 );
 
+CREATE TABLE stats (
+    stat TEXT PRIMARY KEY NOT NULL,
+    stat_value INTEGER NOT NULL CHECK (stat_value >= 0)
+);
+
+-- initialize the upload pipeline stat counters
+INSERT INTO stats (stat, stat_value) VALUES
+    ('pending_objects', 0),
+    ('pending_size', 0),
+    ('uploaded_objects', 0),
+    ('uploaded_size', 0),
+    ('unpinned_objects', 0),
+    ('orphaned_objects', 0),
+    ('multipart_uploads', 0);
+
 CREATE TABLE global_settings (
 	id INTEGER PRIMARY KEY NOT NULL DEFAULT 0 CHECK (id = 0), -- enforce a single row
 	db_version INTEGER NOT NULL, -- used for migrations
