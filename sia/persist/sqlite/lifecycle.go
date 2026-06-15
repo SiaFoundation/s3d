@@ -135,6 +135,11 @@ func (s *Store) AbortMultipartUploads(bucketID int64, prefix string, before time
 				return err
 			}
 		}
+		if len(found) > 0 {
+			if err := incrementStat(tx, statMultipartUploads, -int64(len(found))); err != nil {
+				return err
+			}
+		}
 		aborted = found
 		return nil
 	})
