@@ -4,44 +4,18 @@ import (
 	"bytes"
 	"errors"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/SiaFoundation/s3d/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
-	"github.com/SiaFoundation/s3d/sia"
-	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"go.uber.org/zap/zaptest"
 )
 
 func TestApplyLifecycleRules(t *testing.T) {
 	ctx := t.Context()
-	log := zaptest.NewLogger(t)
-	// build the backend by hand instead of using testutil.NewBackend so the
-	// data directory is known and the on-disk cleanup can be asserted
-	dir := t.TempDir()
-	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { store.Close() })
-
-	if err := store.CreateUser(testutil.Owner); err != nil {
-		t.Fatal(err)
-	} else if err := store.CreateAccessKey(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey); err != nil {
-		t.Fatal(err)
-	}
-
-	backend, err := sia.New(ctx, testutil.NewMemorySDK(), store, dir,
-		sia.WithUploadDisabled(),
-		sia.WithLogger(log))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { backend.Close() })
+	backend := testutil.NewBackend(t)
 
 	const bucket = "lifecycle-bucket"
 	if err := backend.CreateBucket(ctx, testutil.AccessKeyID, bucket); err != nil {
@@ -136,7 +110,7 @@ func TestApplyLifecycleRules(t *testing.T) {
 	if _, err := backend.ListParts(ctx, testutil.AccessKeyID, bucket, "uploads/u", upload.UploadID, s3.ListPartsPage{MaxParts: 10}); !errors.Is(err, s3errs.ErrNoSuchUpload) {
 		t.Fatalf("expected upload to be aborted, got %v", err)
 	}
-	uploadDir := filepath.Join(dir, sia.UploadsDirectory, upload.UploadID.String())
+	uploadDir := backend.UploadDir(upload.UploadID)
 	if _, err := os.Stat(uploadDir); !os.IsNotExist(err) {
 		t.Fatalf("expected upload directory %q to be removed, got %v", uploadDir, err)
 	}

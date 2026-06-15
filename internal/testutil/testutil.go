@@ -538,10 +538,22 @@ func WithTLS() TesterOption {
 	}
 }
 
+// Sia wraps a *sia.Sia backend created by NewBackend, additionally exposing the
+// temporary data directory so tests can assert on the backend's on-disk state.
+type Sia struct {
+	*sia.Sia
+	Dir string
+}
+
+// UploadDir returns the on-disk directory for the given multipart upload.
+func (s *Sia) UploadDir(uploadID s3.UploadID) string {
+	return filepath.Join(s.Dir, sia.UploadsDirectory, uploadID.String())
+}
+
 // NewBackend creates a Sia backend backed by an in-memory SDK and a SQLite
 // store in a temporary directory. The default test key pair as well as any
 // key pairs provided via WithKeyPair are registered with the backend.
-func NewBackend(t testing.TB, opts ...TesterOption) *sia.Sia {
+func NewBackend(t testing.TB, opts ...TesterOption) *Sia {
 	t.Helper()
 
 	cfg := &testerCfg{}
@@ -561,7 +573,10 @@ func NewBackend(t testing.TB, opts ...TesterOption) *sia.Sia {
 	}
 	t.Cleanup(func() { store.Close() })
 
-	return newSiaBackend(t, dir, store, NewMemorySDK(), log, cfg.keyPairs)
+	return &Sia{
+		Sia: newSiaBackend(t, dir, store, NewMemorySDK(), log, cfg.keyPairs),
+		Dir: dir,
+	}
 }
 
 // NewCustomTester creates a new S3Tester using a Sia backend built from the
