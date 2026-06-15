@@ -31,7 +31,7 @@ func (s *Store) CreateMultipartUpload(accessKeyID, bucket, name string, uploadID
 			`, sqlUploadID(uploadID), bid, name, sqlMetaJSON(meta), sqlTime(time.Now())); err != nil {
 			return fmt.Errorf("failed to insert multipart upload: %w", err)
 		}
-		return nil
+		return incrementStat(tx, statMultipartUploads, 1)
 	})
 }
 
@@ -108,6 +108,11 @@ func (s *Store) CompleteMultipartUpload(accessKeyID, bucket, name string, upload
 			return err
 		}
 
+		// the completed object is stored on disk pending upload to Sia
+		if err := addPendingObject(tx, contentLength); err != nil {
+			return err
+		}
+
 		if oldID != nil {
 			if err := insertOrphan(tx, *oldID); err != nil {
 				return err
@@ -130,6 +135,9 @@ func (s *Store) CompleteMultipartUpload(accessKeyID, bucket, name string, upload
 
 		// delete the multipart upload
 		if _, err := tx.Exec(`DELETE FROM multipart_uploads WHERE upload_id = $1`, sqlUploadID(uploadID)); err != nil {
+			return err
+		}
+		if err := incrementStat(tx, statMultipartUploads, -1); err != nil {
 			return err
 		}
 
@@ -164,7 +172,7 @@ func (s *Store) AbortMultipartUpload(accessKeyID, bucket, name string, uploadID 
 		} else if n == 0 {
 			return s3errs.ErrNoSuchUpload
 		}
-		return nil
+		return incrementStat(tx, statMultipartUploads, -1)
 	})
 	return size, err
 }

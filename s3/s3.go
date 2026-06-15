@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -287,7 +288,8 @@ func WithLogger(logger *zap.Logger) Option {
 // WithHostBucketBases sets the host bucket bases for the S3 API handler.
 // e.g. if you run the handler on "s3.example.com", you would set the base to
 // "s3.example.com" to make sure that requests to "mybucket.s3.example.com" are
-// routed to the "mybucket" bucket.
+// routed to the "mybucket" bucket. "localhost" is always included as a base, so
+// virtual-hosted-style requests work out of the box on local setups.
 func WithHostBucketBases(bases []string) Option {
 	return func(s *s3) {
 		s.hostBucketBases = bases
@@ -313,13 +315,18 @@ func New(b Backend, opts ...Option) http.Handler {
 		opt(s3)
 	}
 
+	// "localhost" is reserved (RFC 6761) and should therefore never collide
+	// with a configured base, so it is always added to support
+	// virtual-hosted-style requests during local development.
+	if !slices.Contains(s3.hostBucketBases, "localhost") {
+		s3.hostBucketBases = append(s3.hostBucketBases, "localhost")
+	}
+
 	// base router
 	handler := auth.AuthenticatedHandler(auth.AuthenticatedHandlerFunc(s3.routeBase))
 
 	// handle virtual-hosted style bucket URLs
-	if len(s3.hostBucketBases) > 0 {
-		handler = s3.hostBucketBaseMiddleware(handler)
-	}
+	handler = s3.hostBucketBaseMiddleware(handler)
 
 	// wrap authentication in CORS so unauthenticated preflight requests are
 	// handled before they reach the authentication middleware
@@ -400,36 +407,34 @@ func (s s3) authMiddleware(handler auth.AuthenticatedHandler) http.Handler {
 	})
 }
 
-// hostBucketBaseMiddleware forces the server to use VirtualHost-style bucket URLs:
+// bucketFromHost returns the bucket name if the given host addresses a bucket
+// as a subdomain of one of the configured host bucket bases. The host may
+// contain a port.
+func (s *s3) bucketFromHost(host string) (bucket string, ok bool) {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	} // otherwise the host contains no port, e.g. behind a reverse proxy
+	// listening on 80/443
+
+	for _, base := range s.hostBucketBases {
+		suffix := "." + strings.Trim(base, ".")
+		if !strings.HasSuffix(host, suffix) {
+			continue
+		}
+		bucket = host[:len(host)-len(suffix)]
+		if bucket == "" || strings.IndexByte(bucket, '.') >= 0 {
+			continue
+		}
+		return bucket, true
+	}
+	return "", false
+}
+
+// hostBucketBaseMiddleware handles VirtualHost-style bucket URLs:
 // https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingBucket.html
 func (s *s3) hostBucketBaseMiddleware(handler auth.AuthenticatedHandler) auth.AuthenticatedHandler {
-	bases := make([]string, len(s.hostBucketBases))
-	for idx, base := range s.hostBucketBases {
-		bases[idx] = "." + strings.Trim(base, ".")
-	}
-
-	matchBucket := func(host string) (bucket string, ok bool) {
-		for _, base := range bases {
-			if !strings.HasSuffix(host, base) {
-				continue
-			}
-			bucket = host[:len(host)-len(base)]
-			if idx := strings.IndexByte(bucket, '.'); idx >= 0 {
-				continue
-			}
-			return bucket, true
-		}
-		return "", false
-	}
-
 	return auth.AuthenticatedHandlerFunc(func(w http.ResponseWriter, rq *http.Request, accessKeyID *string) {
-		host, _, err := net.SplitHostPort(rq.Host)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		bucket, ok := matchBucket(host)
+		bucket, ok := s.bucketFromHost(rq.Host)
 		if !ok {
 			handler.ServeHTTP(w, rq, accessKeyID)
 			return

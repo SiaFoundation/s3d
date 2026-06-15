@@ -15,7 +15,7 @@ import (
 
 func TestApplyLifecycleRules(t *testing.T) {
 	ctx := t.Context()
-	backend := testutil.NewBackend(t)
+	backend, _ := testutil.NewBackend(t)
 
 	const bucket = "lifecycle-bucket"
 	if err := backend.CreateBucket(ctx, testutil.AccessKeyID, bucket); err != nil {
