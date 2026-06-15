@@ -26,5 +26,9 @@ jobs:
       - uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7.0.1
         with:
           skip-cache: true
+      - name: Validate OpenAPI spec
+        run: |
+          npm install --global swagger-spec-validator@5.0.0
+          swagger-spec-validator openapi.yml
   test:
     uses: SiaFoundation/workflows/.github/workflows/go-test.yml@dddded471aae1c7b6f0fbc388d603b8b16336f6f # master
