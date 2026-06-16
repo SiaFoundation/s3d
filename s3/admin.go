@@ -1,8 +1,10 @@
 package s3
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 
 	"github.com/SiaFoundation/s3d/internal/prometheus"
@@ -99,6 +101,12 @@ func (s *s3) handleBackupSQLite3(jc jape.Context) {
 		return
 	} else if !filepath.IsAbs(req.Path) {
 		jc.Error(fmt.Errorf("path must be absolute: %q", req.Path), http.StatusBadRequest)
+		return
+	} else if _, err := os.Stat(req.Path); err == nil {
+		jc.Error(fmt.Errorf("destination already exists: %q", req.Path), http.StatusBadRequest)
+		return
+	} else if !errors.Is(err, os.ErrNotExist) {
+		jc.Error(fmt.Errorf("failed to stat destination: %w", err), http.StatusBadRequest)
 		return
 	}
 	jc.Check("failed to backup database", s.backend.BackupSQLite3(jc.Request.Context(), req.Path))
