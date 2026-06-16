@@ -201,7 +201,7 @@ func (s *Sia) uploadLoop(ctx context.Context) {
 // FlushObjects uploads every pending object to Sia regardless of padding,
 // rather than waiting for the background loop to batch them into efficiently
 // packed slabs. It blocks until the uploads complete and returns an error if
-// any object remains buffered locally.
+// any pending object remains buffered locally.
 func (s *Sia) FlushObjects(ctx context.Context) error {
 	s.uploadObjects(ctx, true)
 	if err := ctx.Err(); err != nil {

@@ -68,7 +68,7 @@ paths:
         immediately, regardless of padding. Normally the background pipeline
         holds small objects back so they can be batched into efficiently packed
         slabs; flushing bypasses that batching, accepting the wasted space in
-        exchange for ensuring nothing remains buffered locally (for example
+        exchange for ensuring no pending objects remain buffered locally (for example
         before taking a backup). The request blocks until the uploads complete.
       operationId: flushObjects
       responses:
