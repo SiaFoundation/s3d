@@ -459,6 +459,35 @@ func (t *S3Tester) CompleteMultipartUpload(ctx context.Context, bucket, object, 
 	return t.client.CompleteMultipartUpload(ctx, input)
 }
 
+// PutBucketLifecycleConfiguration is a convenience wrapper around the AWS SDK's
+// PutBucketLifecycleConfiguration API.
+func (t *S3Tester) PutBucketLifecycleConfiguration(ctx context.Context, bucket string, rules []types.LifecycleRule) error {
+	_, err := t.client.PutBucketLifecycleConfiguration(ctx, &service.PutBucketLifecycleConfigurationInput{
+		Bucket: aws.String(bucket),
+		LifecycleConfiguration: &types.BucketLifecycleConfiguration{
+			Rules: rules,
+		},
+	})
+	return err
+}
+
+// GetBucketLifecycleConfiguration is a convenience wrapper around the AWS SDK's
+// GetBucketLifecycleConfiguration API.
+func (t *S3Tester) GetBucketLifecycleConfiguration(ctx context.Context, bucket string) (*service.GetBucketLifecycleConfigurationOutput, error) {
+	return t.client.GetBucketLifecycleConfiguration(ctx, &service.GetBucketLifecycleConfigurationInput{
+		Bucket: aws.String(bucket),
+	})
+}
+
+// DeleteBucketLifecycle is a convenience wrapper around the AWS SDK's
+// DeleteBucketLifecycle API.
+func (t *S3Tester) DeleteBucketLifecycle(ctx context.Context, bucket string) error {
+	_, err := t.client.DeleteBucketLifecycle(ctx, &service.DeleteBucketLifecycleInput{
+		Bucket: aws.String(bucket),
+	})
+	return err
+}
+
 type testerCfg struct {
 	backend     s3.Backend
 	sdk         sia.SDK
@@ -518,10 +547,22 @@ func WithTLS() TesterOption {
 	}
 }
 
+// Sia wraps a *sia.Sia backend created by NewBackend, additionally exposing the
+// temporary data directory so tests can assert on the backend's on-disk state.
+type Sia struct {
+	*sia.Sia
+	Dir string
+}
+
+// UploadDir returns the on-disk directory for the given multipart upload.
+func (s *Sia) UploadDir(uploadID s3.UploadID) string {
+	return filepath.Join(s.Dir, sia.UploadsDirectory, uploadID.String())
+}
+
 // NewBackend creates a Sia backend backed by an in-memory SDK and a SQLite
 // store in a temporary directory. The default test key pair as well as any
 // key pairs provided via WithKeyPair are registered with the backend.
-func NewBackend(t testing.TB, opts ...TesterOption) (*sia.Sia, *sqlite.Store) {
+func NewBackend(t testing.TB, opts ...TesterOption) (*Sia, *sqlite.Store) {
 	t.Helper()
 
 	cfg := &testerCfg{}
@@ -545,7 +586,10 @@ func NewBackend(t testing.TB, opts ...TesterOption) (*sia.Sia, *sqlite.Store) {
 	if sdk == nil {
 		sdk = NewMemorySDK()
 	}
-	return newSiaBackend(t, dir, store, sdk, log, cfg.keyPairs), store
+	return &Sia{
+		Sia: newSiaBackend(t, dir, store, sdk, log, cfg.keyPairs),
+		Dir: dir,
+	}, store
 }
 
 // NewCustomTester creates a new S3Tester using a Sia backend built from the

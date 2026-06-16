@@ -97,4 +97,15 @@ CREATE INDEX unpinned_objects_next_attempt_at_idx ON unpinned_objects(next_attem
 			UNION ALL SELECT 'multipart_uploads', (SELECT COUNT(*) FROM multipart_uploads)`)
 		return err
 	},
+	func(tx *txn, _ *zap.Logger) error {
+		_, err := tx.Exec(`
+			CREATE TABLE bucket_lifecycle_configurations (
+				bucket_id INTEGER PRIMARY KEY,
+				configuration TEXT NOT NULL,
+				FOREIGN KEY (bucket_id) REFERENCES buckets(id) ON DELETE CASCADE
+			);
+			CREATE INDEX IF NOT EXISTS objects_bucket_id_updated_at_idx ON objects(bucket_id, updated_at);
+			CREATE INDEX IF NOT EXISTS multipart_uploads_bucket_id_created_at_idx ON multipart_uploads(bucket_id, created_at);`)
+		return err
+	},
 }
