@@ -61,7 +61,7 @@ func TestPrometheus(t *testing.T) {
 func TestUploadStats(t *testing.T) {
 	baseURL, httpClient := newAdminServer(t)
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, baseURL+"/upload/stats", nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, baseURL+"/stats/uploads", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

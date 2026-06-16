@@ -168,7 +168,7 @@ password; the username is ignored.
 
 The admin API is documented in [`openapi.yml`](openapi.yml). It exposes
 `GET /prometheus` for upload pipeline metrics in the Prometheus text exposition
-format, and `GET /upload/stats` for the same stats as JSON, which `s3d status`
+format, and `GET /stats/uploads` for the same stats as JSON, which `s3d status`
 uses for a basic overview without requiring a Prometheus stack.
 
 ```sh

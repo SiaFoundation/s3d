@@ -46,7 +46,7 @@ func runStatus(ctx context.Context, cmd *flag.FlagSet) {
 }
 
 func fetchUploadStats(ctx context.Context, addr, password string) (s3.UploadStats, error) {
-	url := "http://" + addr + "/upload/stats"
+	url := "http://" + addr + "/stats/uploads"
 
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()

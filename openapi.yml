@@ -39,7 +39,7 @@ paths:
             text/plain:
               schema:
                 type: string
-  /upload/stats:
+  /stats/uploads:
     get:
       tags:
         - metrics
