@@ -1,9 +1,21 @@
 package s3
 
 import (
+	"fmt"
+	"net/http"
+	"path/filepath"
+
 	"github.com/SiaFoundation/s3d/internal/prometheus"
 	"go.sia.tech/jape"
 )
+
+// BackupSQLite3Request is the request body for the [POST] /system/sqlite3/backup
+// endpoint.
+type BackupSQLite3Request struct {
+	// Path is the absolute filesystem path where the backup file will be
+	// written. It must not already exist.
+	Path string `json:"path"`
+}
 
 // UploadStats contains statistics about the background upload pipeline.
 type UploadStats struct {
@@ -73,4 +85,21 @@ func (s *s3) handleGetUploadStats(jc jape.Context) {
 		return
 	}
 	jc.Encode(stats)
+}
+
+// handleBackupSQLite3 creates a backup of the SQLite3 database at the path
+// provided in the request body. The backup is a consistent snapshot even if
+// the database is being written to concurrently.
+func (s *s3) handleBackupSQLite3(jc jape.Context) {
+	var req BackupSQLite3Request
+	if jc.Decode(&req) != nil {
+		return
+	} else if req.Path == "" {
+		jc.Error(fmt.Errorf("path must not be empty"), http.StatusBadRequest)
+		return
+	} else if !filepath.IsAbs(req.Path) {
+		jc.Error(fmt.Errorf("path must be absolute: %q", req.Path), http.StatusBadRequest)
+		return
+	}
+	jc.Check("failed to backup database", s.backend.BackupSQLite3(jc.Request.Context(), req.Path))
 }
