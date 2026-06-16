@@ -96,6 +96,8 @@ type Sia struct {
 	uploadOptimalSize int64
 	uploadWastePct    float64
 
+	uploadMu sync.Mutex
+
 	lockedUploadsMu sync.Mutex
 	lockedUploads   map[string]*lockedUpload
 

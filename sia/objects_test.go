@@ -340,6 +340,98 @@ func TestPutObject(t *testing.T) {
 	})
 }
 
+func TestFlushObjects(t *testing.T) {
+	log := zaptest.NewLogger(t)
+	dir := t.TempDir()
+	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	if err := store.CreateUser(testutil.Owner); err != nil {
+		t.Fatal(err)
+	} else if err := store.CreateAccessKey(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey); err != nil {
+		t.Fatal(err)
+	}
+
+	// a large slab size makes a small object exceed the waste threshold so a
+	// normal cycle won't upload it; disable the loop to control cycles manually
+	memSDK := testutil.NewMemorySDK()
+	memSDK.SetSlabSize(1 << 20)
+	backend, err := sia.New(t.Context(), memSDK, store, dir, sia.WithUploadDisabled(), sia.WithLogger(log))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { backend.Close() })
+	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
+
+	const bucket = "flush-bucket"
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	data := frand.Bytes(100)
+	if _, err := s3Tester.PutObject(t.Context(), bucket, "small", bytes.NewReader(data), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	assertPending := func(want int64) {
+		t.Helper()
+		if stats, err := store.UploadStats(); err != nil {
+			t.Fatal(err)
+		} else if stats.PendingObjects != want {
+			t.Fatalf("expected %d pending object(s), got %d", want, stats.PendingObjects)
+		}
+	}
+
+	// a normal upload cycle holds the object back because flushing it would
+	// waste too much slab space
+	backend.UploadObjects(t.Context())
+	assertPending(1)
+
+	// a failed upload leaves the object buffered locally and is reported
+	memSDK.SetFailUploads(true)
+	if err := backend.FlushObjects(t.Context()); err == nil {
+		t.Fatal("expected error when an object cannot be flushed, got nil")
+	}
+	assertPending(1)
+
+	// once uploads succeed, flushing uploads the object regardless of padding
+	memSDK.SetFailUploads(false)
+	if err := backend.FlushObjects(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if stats, err := store.UploadStats(); err != nil {
+		t.Fatal(err)
+	} else if stats.PendingObjects != 0 {
+		t.Fatalf("expected 0 pending objects after flush, got %d", stats.PendingObjects)
+	} else if stats.UploadedObjects != 1 {
+		t.Fatalf("expected 1 uploaded object after flush, got %d", stats.UploadedObjects)
+	}
+
+	// the object should now be served from Sia
+	obj, err := store.GetObject(testutil.AccessKeyID, bucket, "small", nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if obj.FileName != nil {
+		t.Fatal("expected filename to be nil after flush")
+	} else if obj.SiaObject == nil {
+		t.Fatal("expected sia object to be set after flush")
+	}
+
+	getObj, err := s3Tester.GetObject(t.Context(), bucket, "small", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(getObj.Body)
+	if err != nil {
+		t.Fatal(err)
+	} else if !bytes.Equal(body, data) {
+		t.Fatal("data mismatch after flush")
+	}
+}
+
 func TestCopyObject(t *testing.T) {
 	s3Tester := testutil.NewTester(t)
 	data := frand.Bytes(100)

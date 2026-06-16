@@ -74,3 +74,8 @@ func (s *s3) handleGetUploadStats(jc jape.Context) {
 	}
 	jc.Encode(stats)
 }
+
+// handleFlushObjects flushes all pending objects to Sia via Backend.FlushObjects.
+func (s *s3) handleFlushObjects(jc jape.Context) {
+	jc.Check("failed to flush objects", s.backend.FlushObjects(jc.Request.Context()))
+}

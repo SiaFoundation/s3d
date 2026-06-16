@@ -121,7 +121,11 @@ func (s *Sia) newUploadGroup(initial objects.ObjectForUpload) uploadGroup {
 	}
 }
 
-func (s *Sia) prepareUploads() []uploadGroup {
+// prepareUploads groups pending objects into upload groups. Unless flush is
+// set, groups whose wasted space exceeds the configured threshold are held
+// back so they can be batched with future objects. When flush is set every
+// pending object is uploaded regardless of padding.
+func (s *Sia) prepareUploads(flush bool) []uploadGroup {
 	candidates, err := s.store.ObjectsForUpload()
 	if err != nil {
 		s.logger.Error("failed to fetch objects for upload", zap.Error(err))
@@ -153,11 +157,15 @@ func (s *Sia) prepareUploads() []uploadGroup {
 		}
 	}
 
-	// filter groups that meet the waste threshold
-	filtered := groups[:0]
-	for _, g := range groups {
-		if g.wastePct() < s.uploadWastePct {
-			filtered = append(filtered, g)
+	// filter groups that meet the waste threshold, unless flushing in which
+	// case every pending object is uploaded regardless of padding
+	filtered := groups
+	if !flush {
+		filtered = groups[:0]
+		for _, g := range groups {
+			if g.wastePct() < s.uploadWastePct {
+				filtered = append(filtered, g)
+			}
 		}
 	}
 
@@ -185,14 +193,37 @@ func (s *Sia) uploadLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			s.uploadObjects(ctx)
+			s.uploadObjects(ctx, false)
 		}
 	}
 }
 
-func (s *Sia) uploadObjects(ctx context.Context) { //nolint:revive
+// FlushObjects uploads every pending object to Sia regardless of padding,
+// rather than waiting for the background loop to batch them into efficiently
+// packed slabs. It blocks until the uploads complete and returns an error if
+// any object remains buffered locally.
+func (s *Sia) FlushObjects(ctx context.Context) error {
+	s.uploadObjects(ctx, true)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	stats, err := s.store.UploadStats()
+	if err != nil {
+		return fmt.Errorf("failed to check pending objects after flush: %w", err)
+	} else if stats.PendingObjects > 0 {
+		return fmt.Errorf("%d object(s) remain pending after flush", stats.PendingObjects)
+	}
+	return nil
+}
+
+func (s *Sia) uploadObjects(ctx context.Context, flush bool) { //nolint:revive
+	// serialize upload cycles so a manual flush and the background loop don't
+	// pick up the same objects and waste work uploading them twice
+	s.uploadMu.Lock()
+	defer s.uploadMu.Unlock()
+
 	// fetch and prepare objects for upload
-	groups := s.prepareUploads()
+	groups := s.prepareUploads(flush)
 	if len(groups) == 0 {
 		s.logger.Debug("not enough objects for upload")
 		return
