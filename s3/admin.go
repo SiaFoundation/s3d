@@ -11,6 +11,7 @@ type UploadStats struct {
 	PendingSize      int64 `json:"pendingSize"`
 	UploadedObjects  int64 `json:"uploadedObjects"`
 	UploadedSize     int64 `json:"uploadedSize"`
+	UnpinnedObjects  int64 `json:"unpinnedObjects"`
 	FailedUploads    int64 `json:"failedUploads"`
 	OrphanedObjects  int64 `json:"orphanedObjects"`
 	MultipartUploads int64 `json:"multipartUploads"`
@@ -35,6 +36,10 @@ func (s UploadStats) PrometheusMetric() []prometheus.Metric {
 		{
 			Name:  "s3d_upload_uploaded_size_bytes",
 			Value: float64(s.UploadedSize),
+		},
+		{
+			Name:  "s3d_upload_unpinned_objects",
+			Value: float64(s.UnpinnedObjects),
 		},
 		{
 			Name:  "s3d_upload_failed_uploads",

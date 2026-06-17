@@ -234,6 +234,36 @@ type Backend interface {
 	// - If the last part is below the minimum size, [ErrEntityTooSmall] must be returned.
 	CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, object string, uploadID UploadID, parts []CompleteMultipartPart) (*CompleteMultipartUploadResult, error)
 
+	// PutBucketLifecycleConfiguration sets the lifecycle configuration for the
+	// specified bucket, replacing any existing configuration.
+	//
+	// - If the access key does not have permission to configure the bucket,
+	//   [ErrAccessDenied] must be returned.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	PutBucketLifecycleConfiguration(ctx context.Context, accessKeyID, bucket string, config LifecycleConfiguration) error
+
+	// GetBucketLifecycleConfiguration returns the lifecycle configuration for
+	// the specified bucket.
+	//
+	// - If the access key does not have permission to read the bucket
+	//   configuration, [ErrAccessDenied] must be returned.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	//
+	// - If the bucket has no lifecycle configuration,
+	//   [ErrNoSuchLifecycleConfiguration] must be returned.
+	GetBucketLifecycleConfiguration(ctx context.Context, accessKeyID, bucket string) (LifecycleConfiguration, error)
+
+	// DeleteBucketLifecycleConfiguration removes the lifecycle configuration
+	// for the specified bucket. It is not an error if no configuration exists.
+	//
+	// - If the access key does not have permission to configure the bucket,
+	//   [ErrAccessDenied] must be returned.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	DeleteBucketLifecycleConfiguration(ctx context.Context, accessKeyID, bucket string) error
+
 	// UploadStats returns statistics about the background upload pipeline.
 	UploadStats(ctx context.Context) (UploadStats, error)
 }
