@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -54,6 +55,33 @@ func TestPrometheus(t *testing.T) {
 		t.Fatal(err)
 	} else if !bytes.Contains(body, []byte("s3d_upload_pending_objects 0")) {
 		t.Fatalf("expected prometheus metrics, got %q", body)
+	}
+}
+
+func TestUploadStats(t *testing.T) {
+	baseURL, httpClient := newAdminServer(t)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, baseURL+"/stats/uploads", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	} else if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("expected JSON Content-Type, got %q", ct)
+	}
+
+	var stats s3.UploadStats
+	if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
+		t.Fatal(err)
+	} else if (stats != s3.UploadStats{}) {
+		t.Fatal("expected zero-value stats on an empty backend", stats)
 	}
 }
 

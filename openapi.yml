@@ -1,0 +1,97 @@
+openapi: "3.0.0"
+info:
+  title: s3d Admin API
+  description: >
+    s3d serves an admin API on a separate HTTP address for monitoring the
+    background upload pipeline. It is always enabled and defaults to
+    127.0.0.1:8001. Requests are authenticated via HTTP Basic authentication
+    using the configured admin password; the username is ignored.
+  version: 0.1.1
+
+servers:
+  - url: http://127.0.0.1:8001
+
+security:
+  - basicAuth: []
+
+tags:
+  - name: metrics
+    description: Background upload pipeline statistics for monitoring.
+
+paths:
+  /prometheus:
+    get:
+      tags:
+        - metrics
+      summary: Get upload metrics in Prometheus exposition format
+      description: >
+        Returns metrics about the background upload pipeline in the Prometheus
+        text-based exposition format. The exposed series are
+        s3d_upload_pending_objects, s3d_upload_pending_size_bytes,
+        s3d_upload_uploaded_objects, s3d_upload_uploaded_size_bytes,
+        s3d_upload_failed_uploads, s3d_upload_orphaned_objects, and
+        s3d_upload_multipart_uploads.
+      operationId: getPrometheus
+      responses:
+        "200":
+          description: Metrics in Prometheus exposition format.
+          content:
+            text/plain:
+              schema:
+                type: string
+  /stats/uploads:
+    get:
+      tags:
+        - metrics
+      summary: Get upload pipeline stats as JSON
+      description: >
+        Returns the same upload pipeline stats as the Prometheus endpoint, but
+        in JSON. Used by `s3d status` for a basic overview without requiring a
+        Prometheus stack.
+      operationId: getUploadStats
+      responses:
+        "200":
+          description: Current upload pipeline stats.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadStats"
+
+components:
+  securitySchemes:
+    basicAuth:
+      type: http
+      scheme: basic
+  schemas:
+    UploadStats:
+      type: object
+      description: Statistics about the background upload pipeline.
+      properties:
+        pendingObjects:
+          type: integer
+          format: int64
+          description: Objects buffered on disk waiting to be uploaded to Sia.
+        pendingSize:
+          type: integer
+          format: int64
+          description: Total size of pending objects in bytes.
+        uploadedObjects:
+          type: integer
+          format: int64
+          description: Objects fully uploaded to the Sia network.
+        uploadedSize:
+          type: integer
+          format: int64
+          description: Total size of uploaded objects in bytes.
+        failedUploads:
+          type: integer
+          format: int64
+          description: Failed upload attempts since the process started.
+        orphanedObjects:
+          type: integer
+          format: int64
+          description: Deleted or overwritten objects pending cleanup.
+        multipartUploads:
+          type: integer
+          format: int64
+          description: In-progress multipart uploads.

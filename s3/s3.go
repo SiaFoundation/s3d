@@ -358,8 +358,8 @@ func corsMiddleware(handler http.Handler) http.Handler {
 }
 
 // NewAdmin creates an HTTP handler that serves the admin API using the provided
-// backend. Currently the only endpoint is /prometheus, which exposes the
-// background upload stats as Prometheus metrics.
+// backend. It exposes /prometheus, which serves the background upload stats as
+// Prometheus metrics, and /stats/uploads, which serves the same stats as JSON.
 func NewAdmin(b Backend, opts ...Option) http.Handler {
 	s3 := &s3{
 		backend: b,
@@ -370,7 +370,8 @@ func NewAdmin(b Backend, opts ...Option) http.Handler {
 	}
 
 	return jape.Mux(map[string]jape.Handler{
-		"GET /prometheus": s3.handlePrometheus,
+		"GET /prometheus":    s3.handlePrometheus,
+		"GET /stats/uploads": s3.handleGetUploadStats,
 	})
 }
 

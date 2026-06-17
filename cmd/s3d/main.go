@@ -37,6 +37,7 @@ Commands:
 	version		Print the s3d version
 	config		Interactively configure s3d
 	login		Register this s3d instance with the indexer
+	status		Print a basic overview of the running s3d instance
 	users		Manage users
 	keys		Manage S3 access keys
 `
@@ -87,6 +88,7 @@ func main() {
 	versionCmd := flagg.New("version", versionUsage)
 	configCmd := flagg.New("config", configUsage)
 	loginCmd := flagg.New("login", loginUsage)
+	statusCmd := flagg.New("status", statusUsage)
 
 	usersCmd := flagg.New("users", usersUsage)
 	usersCreateCmd := flagg.New("create", usersCreateUsage)
@@ -119,6 +121,7 @@ func main() {
 			{Cmd: versionCmd},
 			{Cmd: configCmd},
 			{Cmd: loginCmd},
+			{Cmd: statusCmd},
 			{
 				Cmd: usersCmd,
 				Sub: []flagg.Tree{
@@ -164,6 +167,9 @@ func main() {
 		}
 
 		runLoginCmd(ctx, configPath)
+		return
+	case statusCmd:
+		runStatus(ctx, statusCmd)
 		return
 	case usersCmd:
 		cmd.Usage()

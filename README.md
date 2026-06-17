@@ -166,24 +166,14 @@ adminPassword: change-me # required
 Requests are authenticated via HTTP Basic authentication using the configured
 password; the username is ignored.
 
-### `GET /prometheus`
-
-Returns metrics about the background upload pipeline in the Prometheus text
-exposition format:
+The admin API is documented in [`openapi.yml`](openapi.yml). It exposes
+`GET /prometheus` for upload pipeline metrics in the Prometheus text exposition
+format, and `GET /stats/uploads` for the same stats as JSON, which `s3d status`
+uses for a basic overview without requiring a Prometheus stack.
 
 ```sh
 curl -u ":change-me" http://127.0.0.1:8001/prometheus
 ```
-
-| Metric | Description |
-|--------|-------------|
-| `s3d_upload_pending_objects` | Objects buffered on disk waiting to be uploaded to Sia |
-| `s3d_upload_pending_size_bytes` | Total size of pending objects in bytes |
-| `s3d_upload_uploaded_objects` | Objects fully uploaded to the Sia network |
-| `s3d_upload_uploaded_size_bytes` | Total size of uploaded objects in bytes |
-| `s3d_upload_failed_uploads` | Failed upload attempts since the process started |
-| `s3d_upload_orphaned_objects` | Deleted or overwritten objects pending cleanup |
-| `s3d_upload_multipart_uploads` | In-progress multipart uploads |
 
 ## Compatibility
 
@@ -265,6 +255,7 @@ generate one.
 | `version` | Print the version, commit hash, and build date |
 | `config` | Launch the interactive configuration wizard |
 | `login` | Prompts for recovery phrase and registers `s3d` with the Sia indexer |
+| `status` | Print a basic overview of the background upload pipeline |
 | `users` | Manage S3 users (create, delete, list) |
 | `keys` | Manage S3 access keys (create, delete, list) |
 

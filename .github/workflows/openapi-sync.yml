@@ -1,0 +1,17 @@
+name: Sync OpenAPI Versions
+
+permissions:
+  contents: write
+  pull-requests: write
+
+on:
+  release:
+    types: [published, edited]
+  workflow_dispatch:
+
+jobs:
+  sync:
+    uses: SiaFoundation/workflows/.github/workflows/sync-openapi-version.yml@dddded471aae1c7b6f0fbc388d603b8b16336f6f # master
+    with:
+      spec_paths: |
+        openapi.yml
