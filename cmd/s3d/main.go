@@ -319,9 +319,8 @@ func main() {
 
 	adminHandler := jape.BasicAuth(cfg.AdminPassword)(s3.NewAdmin(backend, s3.WithLogger(log)))
 	adminServer := &http.Server{
-		Handler:      adminHandler,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 300 * time.Second,
+		Handler:     adminHandler,
+		ReadTimeout: 30 * time.Second,
 	}
 	defer adminServer.Close()
 
