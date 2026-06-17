@@ -40,6 +40,7 @@ func runStatus(ctx context.Context, cmd *flag.FlagSet) {
 	fmt.Printf("  Pending Size:      %s\n", humanBytes(stats.PendingSize))
 	fmt.Printf("  Uploaded Objects:  %d\n", stats.UploadedObjects)
 	fmt.Printf("  Uploaded Size:     %s\n", humanBytes(stats.UploadedSize))
+	fmt.Printf("  Unpinned Objects:  %d\n", stats.UnpinnedObjects)
 	fmt.Printf("  Failed Uploads:    %d\n", stats.FailedUploads)
 	fmt.Printf("  Orphaned Objects:  %d\n", stats.OrphanedObjects)
 	fmt.Printf("  Multipart Uploads: %d\n", stats.MultipartUploads)

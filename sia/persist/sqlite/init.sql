@@ -38,12 +38,20 @@ CREATE TABLE objects (
     sia_object BLOB,
     -- sia_object_id and sia_object are always set or nulled together
     CHECK ((sia_object_id IS NULL AND sia_object IS NULL) OR (sia_object_id IS NOT NULL AND sia_object IS NOT NULL)),
-    -- object is either on disk, on Sia, or empty
-    CHECK ((filename IS NOT NULL AND sia_object_id IS NULL) OR (filename IS NULL AND sia_object_id IS NOT NULL) OR (filename IS NULL AND sia_object_id IS NULL AND size = 0)),
+    -- non-empty objects must have a filename, a sia_object_id, or both (between uploading and pinning)
+    CHECK ((size = 0 AND filename IS NULL AND sia_object_id IS NULL) OR (size > 0 AND (filename IS NOT NULL OR sia_object_id IS NOT NULL))),
     PRIMARY KEY (bucket_id, name)
 ) WITHOUT ROWID;
 CREATE INDEX objects_sia_object_id_idx ON objects(sia_object_id);
 CREATE INDEX objects_filename_idx ON objects(filename) WHERE filename IS NOT NULL;
+CREATE INDEX objects_bucket_id_updated_at_idx ON objects(bucket_id, updated_at);
+
+CREATE TABLE unpinned_objects (
+    sia_object_id BLOB PRIMARY KEY,
+    pin_before INTEGER NOT NULL,
+    next_attempt_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX unpinned_objects_next_attempt_at_idx ON unpinned_objects(next_attempt_at);
 
 CREATE TABLE multipart_uploads (
     upload_id BLOB PRIMARY KEY,
@@ -55,6 +63,7 @@ CREATE TABLE multipart_uploads (
 );
 CREATE INDEX multipart_uploads_bucket_id_name_idx ON multipart_uploads(bucket_id, name);
 CREATE INDEX multipart_uploads_bucket_id_name_upload_id_idx ON multipart_uploads(bucket_id, name, upload_id);
+CREATE INDEX multipart_uploads_bucket_id_created_at_idx ON multipart_uploads(bucket_id, created_at);
 
 CREATE TABLE multipart_parts (
     upload_id BLOB NOT NULL,
@@ -82,6 +91,27 @@ CREATE TABLE object_parts (
 CREATE TABLE orphaned_objects (
     sia_object_id BLOB PRIMARY KEY
 );
+
+CREATE TABLE bucket_lifecycle_configurations (
+    bucket_id INTEGER PRIMARY KEY,
+    configuration TEXT NOT NULL,
+    FOREIGN KEY (bucket_id) REFERENCES buckets(id) ON DELETE CASCADE
+);
+
+CREATE TABLE stats (
+    stat TEXT PRIMARY KEY NOT NULL,
+    stat_value INTEGER NOT NULL CHECK (stat_value >= 0)
+);
+
+-- initialize the upload pipeline stat counters
+INSERT INTO stats (stat, stat_value) VALUES
+    ('pending_objects', 0),
+    ('pending_size', 0),
+    ('uploaded_objects', 0),
+    ('uploaded_size', 0),
+    ('unpinned_objects', 0),
+    ('orphaned_objects', 0),
+    ('multipart_uploads', 0);
 
 CREATE TABLE global_settings (
 	id INTEGER PRIMARY KEY NOT NULL DEFAULT 0 CHECK (id = 0), -- enforce a single row

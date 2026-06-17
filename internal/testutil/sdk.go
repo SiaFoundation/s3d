@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"reflect"
 	"slices"
 	"sync"
@@ -15,6 +16,7 @@ import (
 	"github.com/SiaFoundation/s3d/sia"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/api"
+	"go.sia.tech/indexd/api/app"
 	"go.sia.tech/indexd/slabs"
 	sdk "go.sia.tech/siastorage"
 	"lukechampine.com/frand"
@@ -31,7 +33,13 @@ type (
 		slabSize    int64
 		failUploads bool
 
-		pruneSlabsCalls int
+		accountErr       error
+		pruneSlabsCalls  int
+		remainingStorage uint64
+
+		pinErr      error // when non-nil, PinObject returns this error
+		pinAttempts int   // number of PinObject calls observed
+
 	}
 
 	uploadedObject struct {
@@ -51,10 +59,37 @@ type (
 // NewMemorySDK creates a new in-memory SDK for testing.
 func NewMemorySDK() *MemorySDK {
 	return &MemorySDK{
-		slabSize: 40 << 20,
-		appKey:   types.GeneratePrivateKey(),
-		objects:  make(map[types.Hash256]uploadedObject),
+		slabSize:         40 << 20,
+		appKey:           types.GeneratePrivateKey(),
+		objects:          make(map[types.Hash256]uploadedObject),
+		remainingStorage: math.MaxUint64,
 	}
+}
+
+// Account returns the account info, including the remaining storage.
+func (s *MemorySDK) Account(_ context.Context) (app.AccountResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.accountErr != nil {
+		return app.AccountResponse{}, s.accountErr
+	}
+	return app.AccountResponse{
+		RemainingStorage: s.remainingStorage,
+	}, nil
+}
+
+// SetAccountErr makes Account return the given error until cleared.
+func (s *MemorySDK) SetAccountErr(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.accountErr = err
+}
+
+// SetRemainingStorage overrides the remaining storage returned by Account.
+func (s *MemorySDK) SetRemainingStorage(remaining uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.remainingStorage = remaining
 }
 
 // DeleteObject deletes the object with the given key.
@@ -191,7 +226,25 @@ func (s *MemorySDK) UploadPacked() (sia.PackedUpload, error) {
 
 // PinObject pins the given object.
 func (s *MemorySDK) PinObject(_ context.Context, obj sdk.Object) error {
-	return nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pinAttempts++
+	return s.pinErr
+}
+
+// SetPinError configures the error returned by future PinObject calls; pass
+// nil to restore the default no-op behavior.
+func (s *MemorySDK) SetPinError(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pinErr = err
+}
+
+// PinAttempts returns the number of times PinObject has been called.
+func (s *MemorySDK) PinAttempts() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.pinAttempts
 }
 
 // SealObject seals the object using the app key.

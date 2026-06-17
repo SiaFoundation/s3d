@@ -8,6 +8,7 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/api"
+	"go.sia.tech/indexd/api/app"
 	"go.sia.tech/indexd/slabs"
 	sdk "go.sia.tech/siastorage"
 )
@@ -48,6 +49,11 @@ func NewSDK(sdk *sdk.SDK, opts ...SDKOption) *IndexdSDK {
 		opt(indexd)
 	}
 	return indexd
+}
+
+// Account retrieves account information for the connected app key.
+func (s *IndexdSDK) Account(ctx context.Context) (app.AccountResponse, error) {
+	return s.inner.Account(ctx)
 }
 
 // Download downloads an object from indexd.
