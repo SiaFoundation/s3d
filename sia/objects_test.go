@@ -457,11 +457,9 @@ func TestFlushObjects(t *testing.T) {
 	backend.UploadObjects(t.Context())
 	assertPending(1)
 
-	// a failed upload leaves the object buffered locally and is reported
+	// a failed upload leaves the object buffered locally
 	memSDK.SetFailUploads(true)
-	if err := backend.FlushObjects(t.Context()); err == nil {
-		t.Fatal("expected error when an object cannot be flushed, got nil")
-	}
+	backend.FlushObjects(t.Context())
 	assertPending(1)
 
 	// once uploads succeed, flushing uploads the object regardless of padding

@@ -206,20 +206,17 @@ func (s *Sia) uploadLoop(ctx context.Context) {
 
 // FlushObjects uploads every pending object to Sia regardless of padding,
 // rather than waiting for the background loop to batch them into efficiently
-// packed slabs. It blocks until the uploads complete and returns an error if
-// any pending object remains buffered locally.
+// packed slabs, and pins the uploaded objects so their local backup files are
+// removed. It blocks until the uploads and pins complete.
 func (s *Sia) FlushObjects(ctx context.Context) error {
 	s.uploadObjects(ctx, true)
 	if err := ctx.Err(); err != nil {
 		return err
+	} else if err := s.performObjectPinning(ctx); err != nil {
+		// don't wait for the pinning loop
+		return fmt.Errorf("failed to pin objects after flush: %w", err)
 	}
-	stats, err := s.store.UploadStats()
-	if err != nil {
-		return fmt.Errorf("failed to check pending objects after flush: %w", err)
-	} else if stats.PendingObjects > 0 {
-		return fmt.Errorf("%d object(s) remain pending after flush", stats.PendingObjects)
-	}
-	return nil
+	return ctx.Err()
 }
 
 func (s *Sia) uploadObjects(ctx context.Context, flush bool) { //nolint:revive
