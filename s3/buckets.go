@@ -17,7 +17,6 @@ var unsupportedBucketSubresources = map[string]struct{}{
 	"encryption":          {},
 	"intelligent-tiering": {},
 	"inventory":           {},
-	"lifecycle":           {},
 	"logging":             {},
 	"metrics":             {},
 	"notification":        {},
@@ -45,6 +44,10 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *st
 		if _, ok := unsupportedBucketSubresources[param]; ok {
 			return fmt.Errorf("unsupported query subresource %q: %w", param, s3errs.ErrNotImplemented)
 		}
+	}
+
+	if _, ok := q["lifecycle"]; ok {
+		return s.routeBucketLifecycle(w, r, validatedKey, bucket)
 	}
 
 	switch r.Method {
@@ -113,8 +116,6 @@ func (s *s3) createBucket(w http.ResponseWriter, r *http.Request, accessKeyID, b
 		return s3errs.ErrNotImplemented // ACLs are not implemented
 	} else if _, hasPolicy := q["policy"]; hasPolicy {
 		return s3errs.ErrNotImplemented // Bucket policies are not implemented
-	} else if _, hasLifecycle := q["lifecycle"]; hasLifecycle {
-		return s3errs.ErrNotImplemented // Bucket lifecycles are not implemented
 	}
 
 	if err := s.backend.CreateBucket(r.Context(), accessKeyID, bucket); err != nil {

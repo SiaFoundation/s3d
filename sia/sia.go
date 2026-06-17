@@ -18,6 +18,7 @@ import (
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/threadgroup"
 	"go.sia.tech/indexd/api"
+	"go.sia.tech/indexd/api/app"
 	"go.sia.tech/indexd/slabs"
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
@@ -27,6 +28,14 @@ const (
 	// orphanLoopInterval is the interval at which the background loop for
 	// processing orphaned objects runs.
 	orphanLoopInterval = time.Hour
+
+	// defaultLifecycleLoopInterval is the default interval at which the
+	// background lifecycle loop runs.
+	defaultLifecycleLoopInterval = time.Hour
+
+	// defaultLifecycleDayDuration is the default wall-clock duration treated as
+	// a single "day" when evaluating lifecycle Days windows.
+	defaultLifecycleDayDuration = 24 * time.Hour
 
 	// UploadsDirectory is the directory name used for storing pending uploads.
 	UploadsDirectory = "uploads"
@@ -69,6 +78,27 @@ func WithUploadDisabled() Option {
 	}
 }
 
+// WithLifecycleLoopInterval sets how often the background lifecycle loop
+// evaluates bucket lifecycle rules.
+func WithLifecycleLoopInterval(d time.Duration) Option {
+	return func(s *Sia) {
+		if d > 0 {
+			s.lifecycleLoopInterval = d
+		}
+	}
+}
+
+// WithLifecycleDayDuration sets the wall-clock duration treated as a single
+// "day" when evaluating lifecycle Days windows. It defaults to 24 hours; tests
+// use a shorter value to exercise expiration without waiting real days.
+func WithLifecycleDayDuration(d time.Duration) Option {
+	return func(s *Sia) {
+		if d > 0 {
+			s.lifecycleDayDuration = d
+		}
+	}
+}
+
 // WithDiskUsageLimit sets the maximum number of bytes that can be stored on
 // disk pending upload to Sia. When the limit is reached, new uploads block
 // until existing data has been offloaded. A value of 0 disables the limit.
@@ -96,6 +126,11 @@ type Sia struct {
 	uploadOptimalSize int64
 	uploadWastePct    float64
 
+	lifecycleLoopInterval time.Duration
+	lifecycleDayDuration  time.Duration
+
+	pinWake chan struct{}
+
 	lockedUploadsMu sync.Mutex
 	lockedUploads   map[string]*lockedUpload
 
@@ -107,6 +142,7 @@ type Sia struct {
 
 // SDK describes the SDK used to interact with Sia.
 type SDK interface {
+	Account(ctx context.Context) (app.AccountResponse, error)
 	DeleteObject(ctx context.Context, id types.Hash256) error
 	Download(obj sdk.Object, rnge *s3.ObjectRange) (io.ReadCloser, error)
 	ObjectEvents(ctx context.Context, cursor slabs.Cursor, limit int) ([]sdk.ObjectEvent, error)
@@ -153,7 +189,12 @@ type Store interface {
 	ObjectsForUpload() ([]objects.ObjectForUpload, error)
 	OrphanedObjects(limit int) ([]types.Hash256, error)
 	PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string) (string, int64, error)
-	MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, sealed sdk.SealedObject) error
+	MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, sealed sdk.SealedObject, pinBefore time.Time) error
+	MarkObjectPinned(siaObjectID types.Hash256) ([]objects.OrphanedFile, error)
+	ScheduleObjectForReupload(siaObjectID types.Hash256) error
+	ObjectsForPinning(now time.Time, limit int) ([]objects.UnpinnedObject, error)
+	NextPinningAttempt() (time.Time, bool, error)
+	RescheduleUnpinnedObject(siaObjectID types.Hash256, nextAttemptAt time.Time) error
 	UpdateSiaObjects(siaObjects []objects.SiaObject) (int64, error)
 	RemoveOrphanedObject(objectID types.Hash256) error
 	AbortMultipartUpload(accessKeyID, bucket, name string, uploadID s3.UploadID) (int64, error)
@@ -166,8 +207,13 @@ type Store interface {
 	MultipartParts(accessKeyID, bucket, name string, uploadID s3.UploadID) ([]objects.Part, error)
 	UploadStats() (s3.UploadStats, error)
 
-	// Backup creates a backup of the database at destPath using the SQLite
-	// backup API, which is safe to use with a live database.
+	PutBucketLifecycleConfiguration(accessKeyID, bucket, config string) error
+	GetBucketLifecycleConfiguration(accessKeyID, bucket string) (string, error)
+	DeleteBucketLifecycleConfiguration(accessKeyID, bucket string) error
+	AllBucketLifecycleConfigurations() ([]BucketLifecycleConfiguration, error)
+	AbortMultipartUploads(bucketID int64, prefix string, before time.Time, limit int) ([]AbortedUpload, error)
+	ExpireObjects(bucketID int64, prefix string, before time.Time, limit int) (int, []OrphanedFile, error)
+
 	Backup(ctx context.Context, destPath string) error
 }
 
@@ -177,14 +223,17 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		sdk:   sdk,
 		store: store,
 
-		directory:      directory,
-		uploadWastePct: DefaultUploadWastePct,
-		lockedUploads:  make(map[string]*lockedUpload),
+		directory:             directory,
+		uploadWastePct:        DefaultUploadWastePct,
+		lifecycleLoopInterval: defaultLifecycleLoopInterval,
+		lifecycleDayDuration:  defaultLifecycleDayDuration,
+		lockedUploads:         make(map[string]*lockedUpload),
 
 		logger: zap.NewNop(),
 		tg:     threadgroup.New(),
 	}
 	sia.diskUsageWake = make(chan struct{})
+	sia.pinWake = make(chan struct{}, 1)
 	for _, opt := range opts {
 		opt(sia)
 	}
@@ -233,6 +282,8 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		launchBgLoop(sia.processOrphansLoop),
 		launchBgLoop(sia.syncMetadataLoop),
 		launchBgLoop(sia.uploadLoop),
+		launchBgLoop(sia.lifecycleLoop),
+		launchBgLoop(sia.pinLoop),
 	); err != nil {
 		return nil, err
 	}

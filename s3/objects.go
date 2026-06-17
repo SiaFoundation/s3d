@@ -1,6 +1,7 @@
 package s3
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/xml"
@@ -334,6 +335,9 @@ func (s *s3) getObject(w http.ResponseWriter, r *http.Request, accessKeyID *stri
 	defer obj.Body.Close()
 
 	// write headers
+	if accessKeyID != nil {
+		s.setLifecycleExpirationHeader(r.Context(), w, *accessKeyID, bucket, object, obj.LastModified)
+	}
 	if err := writeGetOrHeadObjectHeaders(obj, w, r); err != nil {
 		return err
 	}
@@ -380,6 +384,9 @@ func (s *s3) headObject(w http.ResponseWriter, r *http.Request, accessKeyID *str
 	}
 
 	// write headers
+	if accessKeyID != nil {
+		s.setLifecycleExpirationHeader(r.Context(), w, *accessKeyID, bucket, object, obj.LastModified)
+	}
 	return writeGetOrHeadObjectHeaders(obj, w, r)
 }
 
@@ -658,6 +665,7 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID strin
 		return err
 	}
 
+	s.setLifecycleExpirationHeader(r.Context(), w, accessKeyID, bucket, object, time.Now())
 	w.Header().Set("ETag", FormatETag(res.ContentMD5[:], 0))
 	return nil
 }
@@ -973,6 +981,19 @@ func parseRangeHeader(s string) (*ObjectRangeRequest, error) {
 	}
 
 	return &o, nil
+}
+
+// setLifecycleExpirationHeader sets the x-amz-expiration response header when an
+// enabled lifecycle expiration rule applies to the object. It is best-effort:
+// any error fetching the configuration is swallowed so the request is unaffected.
+func (s *s3) setLifecycleExpirationHeader(ctx context.Context, w http.ResponseWriter, accessKeyID, bucket, object string, lastModified time.Time) {
+	config, err := s.backend.GetBucketLifecycleConfiguration(ctx, accessKeyID, bucket)
+	if err != nil {
+		return
+	}
+	if v := config.ExpirationHeader(object, lastModified); v != "" {
+		w.Header().Set("x-amz-expiration", v)
+	}
 }
 
 // writeGetOrHeadObjectHeaders contains shared logic for constructing headers for
