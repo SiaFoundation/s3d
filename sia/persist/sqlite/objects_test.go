@@ -77,7 +77,7 @@ func TestDiskUsage(t *testing.T) {
 	}
 
 	// copy "a" - shared filename should not double-count
-	if _, _, _, err := store.CopyObject(accessKeyID, bucket, "a", bucket, "a-copy", nil, false); err != nil {
+	if _, _, err := store.CopyObject(accessKeyID, bucket, "a", s3.NoVersion(), bucket, "a-copy", nil, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -95,7 +95,7 @@ func TestDiskUsage(t *testing.T) {
 	}
 	sealObj := sdk.Object{}
 	sealed := sealObj.Seal(types.GeneratePrivateKey())
-	if err := store.MarkObjectUploaded(bucket, "uploaded", contentMD5, sealed, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, "uploaded", "", contentMD5, sealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -178,7 +178,7 @@ func TestAllFilenames(t *testing.T) {
 	if _, _, err := store.PutObject(accessKeyID, bucket, "obj1", md5, nil, 100, &fn); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.MarkObjectUploaded(bucket, "obj1", md5, sealed, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, "obj1", "", md5, sealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -229,7 +229,7 @@ func TestAllFilenames(t *testing.T) {
 	// filename is released
 	mpObj := sdk.Object{}
 	mpSealed := mpObj.Seal(types.GeneratePrivateKey())
-	if err := store.MarkObjectUploaded(bucket, "mp1", mpMD5, mpSealed, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, "mp1", "", mpMD5, mpSealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	} else if _, err := store.MarkObjectPinned(mpSealed.ID()); err != nil {
 		t.Fatal(err)
@@ -305,7 +305,7 @@ func TestGetObject(t *testing.T) {
 	}
 
 	// get object without part number
-	obj, err := store.GetObject(testAccessKeyID, bucket, object, nil)
+	obj, err := store.GetObject(testAccessKeyID, bucket, object, s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.SiaObject != nil {
@@ -319,12 +319,12 @@ func TestGetObject(t *testing.T) {
 	}
 
 	// mark the object as uploaded
-	if err := store.MarkObjectUploaded(bucket, object, obj.ContentMD5, objSealed, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, object, "", obj.ContentMD5, objSealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
 	// re-fetch and verify the sia_object_id is now set
-	obj, err = store.GetObject(testAccessKeyID, bucket, object, nil)
+	obj, err = store.GetObject(testAccessKeyID, bucket, object, s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.SiaObject == nil || obj.SiaObject.ID != objSealed.ID() {
@@ -332,7 +332,7 @@ func TestGetObject(t *testing.T) {
 	}
 
 	// get object with part number 1
-	objPart1, err := store.GetObject(testAccessKeyID, bucket, object, aws.Int32(1))
+	objPart1, err := store.GetObject(testAccessKeyID, bucket, object, s3.NoVersion(), aws.Int32(1))
 	if err != nil {
 		t.Fatal(err)
 	} else if objPart1.SiaObject == nil || objPart1.SiaObject.ID != objSealed.ID() {
@@ -354,13 +354,13 @@ func TestGetObject(t *testing.T) {
 	}
 
 	// mark multipart object as uploaded
-	if err := store.MarkObjectUploaded(bucket, multipart, multipartMD5, multipartSealed, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, multipart, "", multipartMD5, multipartSealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
 	// get multipart object with part number 2
 	mpID := multipartSealed.ID()
-	multipartPart2, err := store.GetObject(testAccessKeyID, bucket, multipart, aws.Int32(2))
+	multipartPart2, err := store.GetObject(testAccessKeyID, bucket, multipart, s3.NoVersion(), aws.Int32(2))
 	if err != nil {
 		t.Fatal(err)
 	} else if multipartPart2.SiaObject == nil || multipartPart2.SiaObject.ID != mpID {
@@ -380,7 +380,7 @@ func TestGetObject(t *testing.T) {
 	}
 
 	// get object with invalid part number
-	_, err = store.GetObject(testAccessKeyID, bucket, object, aws.Int32(3))
+	_, err = store.GetObject(testAccessKeyID, bucket, object, s3.NoVersion(), aws.Int32(3))
 	if !errors.Is(err, s3errs.ErrInvalidPart) {
 		t.Fatal("unexpected error", err)
 	}
@@ -415,7 +415,7 @@ func TestGetObjectPartFields(t *testing.T) {
 	}
 
 	// pending multipart: fetching part 1 should populate FileName
-	obj, err := store.GetObject(accessKeyID, bucket, name, aws.Int32(1))
+	obj, err := store.GetObject(accessKeyID, bucket, name, s3.NoVersion(), aws.Int32(1))
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.FileName == nil {
@@ -428,12 +428,12 @@ func TestGetObjectPartFields(t *testing.T) {
 	sealKey := types.GeneratePrivateKey()
 	sdkObj := sdk.NewEmptyObject()
 	sealed := sdkObj.Seal(sealKey)
-	if err := store.MarkObjectUploaded(bucket, name, contentMD5, sealed, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, name, "", contentMD5, sealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
 	// after upload: SiaObject is populated and FileName remains until pinning
-	obj, err = store.GetObject(accessKeyID, bucket, name, aws.Int32(2))
+	obj, err = store.GetObject(accessKeyID, bucket, name, s3.NoVersion(), aws.Int32(2))
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.FileName == nil {
@@ -448,7 +448,7 @@ func TestGetObjectPartFields(t *testing.T) {
 	if _, err := store.MarkObjectPinned(sealed.ID()); err != nil {
 		t.Fatal(err)
 	}
-	obj, err = store.GetObject(accessKeyID, bucket, name, aws.Int32(2))
+	obj, err = store.GetObject(accessKeyID, bucket, name, s3.NoVersion(), aws.Int32(2))
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.FileName != nil {
@@ -1066,19 +1066,19 @@ func TestOrphanedObjects(t *testing.T) {
 	if _, _, err := store.PutObject(testAccessKeyID, bucket, "a", md5a, nil, 1, new(string)); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.MarkObjectUploaded(bucket, "a", md5a, sealed, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, "a", "", md5a, sealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	} else if _, err := store.MarkObjectPinned(sealed.ID()); err != nil {
 		t.Fatal(err)
 	}
 
 	// copy object to a second key
-	if _, _, _, err := store.CopyObject(testAccessKeyID, bucket, "a", bucket, "b", nil, false); err != nil {
+	if _, _, err := store.CopyObject(testAccessKeyID, bucket, "a", s3.NoVersion(), bucket, "b", nil, false); err != nil {
 		t.Fatal(err)
 	}
 
 	// delete first object - references still exist, nothing orphaned
-	if _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "a"}); err != nil {
+	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "a"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1090,7 +1090,7 @@ func TestOrphanedObjects(t *testing.T) {
 	}
 
 	// delete second object - last reference gone, should be orphaned
-	if _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "b"}); err != nil {
+	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "b"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1136,7 +1136,7 @@ func TestPutObjectOrphan(t *testing.T) {
 	if _, _, err := store.PutObject(testAccessKeyID, bucket, "obj", md5old, nil, 1, new(string)); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.MarkObjectUploaded(bucket, "obj", md5old, oldSealed, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, "obj", "", md5old, oldSealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	} else if _, err := store.MarkObjectPinned(oldSealed.ID()); err != nil {
 		t.Fatal(err)
@@ -1169,7 +1169,7 @@ func TestPutObjectOrphan(t *testing.T) {
 
 	// mark + pin a new upload, then overwrite: pinned data orphans
 	// correctly when its last reference disappears.
-	if err := store.MarkObjectUploaded(bucket, "obj", md5new, newSealed, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, "obj", "", md5new, newSealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	} else if _, err := store.MarkObjectPinned(newSealed.ID()); err != nil {
 		t.Fatal(err)
@@ -1272,7 +1272,7 @@ func TestUpdateSiaObjects(t *testing.T) {
 		contentMD5 := frand.Entropy128()
 		if _, _, err := store.PutObject(testAccessKeyID, bucket, key, contentMD5, nil, 1, new(string)); err != nil {
 			t.Fatal(err)
-		} else if err := store.MarkObjectUploaded(bucket, key, contentMD5, sealed, time.Now().Add(time.Hour)); err != nil {
+		} else if err := store.MarkObjectUploaded(bucket, key, "", contentMD5, sealed, time.Now().Add(time.Hour)); err != nil {
 			t.Fatal(err)
 		}
 		return sealed
@@ -1296,7 +1296,7 @@ func TestUpdateSiaObjects(t *testing.T) {
 	}
 
 	// delete the first object
-	if _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "obj1"}); err != nil {
+	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "obj1"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1315,7 +1315,7 @@ func TestUpdateSiaObjects(t *testing.T) {
 	}
 
 	// verify the second object was updated
-	obj, err := store.GetObject(testAccessKeyID, bucket, "obj2", nil)
+	obj, err := store.GetObject(testAccessKeyID, bucket, "obj2", s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.SiaObject == nil {
@@ -1350,19 +1350,19 @@ func TestMarkObjectUploaded(t *testing.T) {
 
 	// marking with a different content MD5 should return ErrObjectModified
 	wrongMD5 := frand.Entropy128()
-	err := store.MarkObjectUploaded(bucket, object, wrongMD5, sealed, time.Now().Add(time.Hour))
+	err := store.MarkObjectUploaded(bucket, object, "", wrongMD5, sealed, time.Now().Add(time.Hour))
 	if !errors.Is(err, objects.ErrObjectModified) {
 		t.Fatalf("expected ErrObjectModified, got %v", err)
 	}
 
 	// marking with the correct content MD5 should succeed
-	if err := store.MarkObjectUploaded(bucket, object, contentMD5, sealed, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, object, "", contentMD5, sealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
 	// verify the object is now on Sia but its filename is preserved on
 	// disk pending the pin
-	obj, err := store.GetObject(testAccessKeyID, bucket, object, nil)
+	obj, err := store.GetObject(testAccessKeyID, bucket, object, s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.FileName == nil || *obj.FileName != fileName {
@@ -1375,7 +1375,7 @@ func TestMarkObjectUploaded(t *testing.T) {
 	// already uploaded
 	sdkObj2 := sdk.Object{}
 	sealed2 := sdkObj2.Seal(types.GeneratePrivateKey())
-	err = store.MarkObjectUploaded(bucket, object, contentMD5, sealed2, time.Now().Add(time.Hour))
+	err = store.MarkObjectUploaded(bucket, object, "", contentMD5, sealed2, time.Now().Add(time.Hour))
 	if !errors.Is(err, objects.ErrObjectNotFound) {
 		t.Fatalf("expected ErrObjectNotFound, got %v", err)
 	}
@@ -1392,7 +1392,7 @@ func TestMarkObjectUploaded(t *testing.T) {
 		t.Fatalf("expected orphan size 100, got %d", orphans[0].Size)
 	}
 
-	obj, err = store.GetObject(testAccessKeyID, bucket, object, nil)
+	obj, err = store.GetObject(testAccessKeyID, bucket, object, s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.FileName != nil {
@@ -1438,7 +1438,7 @@ func TestObjectsForUpload(t *testing.T) {
 	}
 	sealObj := sdk.Object{}
 	sealed := sealObj.Seal(types.GeneratePrivateKey())
-	if err := store.MarkObjectUploaded(bucket, "uploaded", uploadedMD5, sealed, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, "uploaded", "", uploadedMD5, sealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1542,7 +1542,7 @@ func TestUploadStats(t *testing.T) {
 	}
 	sealObj := sdk.Object{}
 	sealed := sealObj.Seal(types.GeneratePrivateKey())
-	if err := store.MarkObjectUploaded(bucket, "obj3", contentMD5, sealed, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, "obj3", "", contentMD5, sealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1582,7 +1582,7 @@ func TestUploadStats(t *testing.T) {
 	})
 
 	// delete uploaded object to create an orphan
-	if _, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "obj3"}); err != nil {
+	if _, _, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "obj3"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1618,7 +1618,7 @@ func TestUploadStats(t *testing.T) {
 	})
 
 	// copy a pending object, adding another pending object
-	if _, _, _, err := store.CopyObject(accessKeyID, bucket, "obj1", bucket, "copy1", nil, true); err != nil {
+	if _, _, err := store.CopyObject(accessKeyID, bucket, "obj1", s3.NoVersion(), bucket, "copy1", nil, true); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1638,7 +1638,7 @@ func TestUploadStats(t *testing.T) {
 	})
 
 	// delete a pending object
-	if _, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "obj1"}); err != nil {
+	if _, _, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "obj1"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1698,7 +1698,7 @@ func TestMarkObjectPinned(t *testing.T) {
 	}
 	sdkObj := sdk.Object{}
 	sealed := sdkObj.Seal(types.GeneratePrivateKey())
-	if err := store.MarkObjectUploaded(bucket, name, md5, sealed, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, name, "", md5, sealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1738,7 +1738,7 @@ func TestMarkObjectPinned(t *testing.T) {
 	}
 	sdkObjA := sdk.Object{}
 	sealedA := sdkObjA.Seal(types.GeneratePrivateKey())
-	if err := store.MarkObjectUploaded(bucket, "a", otherMD5, sealedA, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, "a", "", otherMD5, sealedA, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	orphans, err = store.MarkObjectPinned(sealedA.ID())
@@ -1759,10 +1759,10 @@ func TestMarkObjectPinned(t *testing.T) {
 	}
 	sdkObjC := newTestObject()
 	sealedC := sdkObjC.Seal(types.GeneratePrivateKey())
-	if err := store.MarkObjectUploaded(bucket, "c", md5C, sealedC, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, "c", "", md5C, sealedC, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "c"}); err != nil {
+	if _, _, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "c"}); err != nil {
 		t.Fatal(err)
 	}
 	if orphans, err := store.MarkObjectPinned(sealedC.ID()); err != nil {
@@ -1813,7 +1813,7 @@ func TestObjectsForPinning(t *testing.T) {
 		}
 		o := newTestObject()
 		sealed := o.Seal(types.GeneratePrivateKey())
-		if err := store.MarkObjectUploaded(bucket, name, md5, sealed, time.Now().Add(time.Hour)); err != nil {
+		if err := store.MarkObjectUploaded(bucket, name, "", md5, sealed, time.Now().Add(time.Hour)); err != nil {
 			t.Fatal(err)
 		}
 		return sealed
@@ -1924,7 +1924,7 @@ func TestScheduleObjectForReupload(t *testing.T) {
 	}
 	sdkObj := sdk.Object{}
 	sealed := sdkObj.Seal(types.GeneratePrivateKey())
-	if err := store.MarkObjectUploaded(bucket, name, md5, sealed, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, name, "", md5, sealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1941,7 +1941,7 @@ func TestScheduleObjectForReupload(t *testing.T) {
 	}
 
 	// the object reappears in the upload queue with sia_object_id cleared
-	obj, err := store.GetObject(accessKeyID, bucket, name, nil)
+	obj, err := store.GetObject(accessKeyID, bucket, name, s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.FileName == nil || *obj.FileName != fileName {
@@ -1991,10 +1991,10 @@ func TestScheduleObjectForReupload(t *testing.T) {
 	}
 	sdkObj2 := newTestObject()
 	sealed2 := sdkObj2.Seal(types.GeneratePrivateKey())
-	if err := store.MarkObjectUploaded(bucket, "obj2", md52, sealed2, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, "obj2", "", md52, sealed2, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "obj2"}); err != nil {
+	if _, _, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "obj2"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.ScheduleObjectForReupload(sealed2.ID()); !errors.Is(err, objects.ErrObjectNotFound) {

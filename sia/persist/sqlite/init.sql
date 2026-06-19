@@ -21,6 +21,7 @@ CREATE TABLE buckets (
     created_at INTEGER NOT NULL,
     name TEXT NOT NULL UNIQUE,
     user_id INTEGER NOT NULL,
+    versioning_status TEXT NOT NULL DEFAULT '' CHECK (versioning_status IN ('', 'Enabled', 'Suspended')),
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
 CREATE INDEX buckets_user_id_idx ON buckets(user_id);
@@ -28,6 +29,9 @@ CREATE INDEX buckets_user_id_idx ON buckets(user_id);
 CREATE TABLE objects (
     bucket_id INTEGER REFERENCES buckets(id) NOT NULL,
     name TEXT NOT NULL,
+    version_id TEXT NOT NULL DEFAULT '',
+    seq INTEGER NOT NULL,
+    is_delete_marker INTEGER NOT NULL DEFAULT FALSE,
     content_md5 BLOB NOT NULL,
     metadata TEXT NOT NULL,
     size INTEGER NOT NULL,
@@ -40,11 +44,13 @@ CREATE TABLE objects (
     CHECK ((sia_object_id IS NULL AND sia_object IS NULL) OR (sia_object_id IS NOT NULL AND sia_object IS NOT NULL)),
     -- non-empty objects must have a filename, a sia_object_id, or both (between uploading and pinning)
     CHECK ((size = 0 AND filename IS NULL AND sia_object_id IS NULL) OR (size > 0 AND (filename IS NOT NULL OR sia_object_id IS NOT NULL))),
-    PRIMARY KEY (bucket_id, name)
+    CHECK (is_delete_marker IN (FALSE, TRUE)),
+    PRIMARY KEY (bucket_id, name, version_id)
 ) WITHOUT ROWID;
 CREATE INDEX objects_sia_object_id_idx ON objects(sia_object_id);
 CREATE INDEX objects_filename_idx ON objects(filename) WHERE filename IS NOT NULL;
 CREATE INDEX objects_bucket_id_updated_at_idx ON objects(bucket_id, updated_at);
+CREATE INDEX objects_bucket_name_seq_idx ON objects(bucket_id, name, seq DESC);
 
 CREATE TABLE unpinned_objects (
     sia_object_id BLOB PRIMARY KEY,
@@ -79,13 +85,14 @@ CREATE TABLE multipart_parts (
 CREATE TABLE object_parts (
     bucket_id INTEGER NOT NULL,
     name TEXT NOT NULL,
+    version_id TEXT NOT NULL DEFAULT '',
     part_number INTEGER NOT NULL,
     filename TEXT NOT NULL,
     content_md5 BLOB NOT NULL,
     content_length INTEGER NOT NULL,
     offset INTEGER NOT NULL,
-    FOREIGN KEY (bucket_id, name) REFERENCES objects(bucket_id, name) ON DELETE CASCADE,
-    PRIMARY KEY (bucket_id, name, part_number)
+    FOREIGN KEY (bucket_id, name, version_id) REFERENCES objects(bucket_id, name, version_id) ON DELETE CASCADE,
+    PRIMARY KEY (bucket_id, name, version_id, part_number)
 );
 
 CREATE TABLE orphaned_objects (

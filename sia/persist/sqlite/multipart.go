@@ -40,9 +40,14 @@ func (s *Store) CreateMultipartUpload(accessKeyID, bucket, name string, uploadID
 // object's ID has no remaining references, it is inserted into the
 // orphaned_objects table. If the overwrite leaves a previously pending file
 // unreferenced, its filename is returned so the caller can remove it from disk.
-func (s *Store) CompleteMultipartUpload(accessKeyID, bucket, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64) (orphanFile string, orphanSize int64, _ error) {
+func (s *Store) CompleteMultipartUpload(accessKeyID, bucket, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64) (versionID string, orphan objects.OrphanedFile, _ error) {
 	err := s.transaction(func(tx *txn) error {
+		versionID, orphan = "", objects.OrphanedFile{} // reset per attempt
 		bid, err := bucketID(tx, accessKeyID, bucket)
+		if err != nil {
+			return err
+		}
+		status, err := bucketVersioning(tx, bid)
 		if err != nil {
 			return err
 		}
@@ -89,46 +94,30 @@ func (s *Store) CompleteMultipartUpload(accessKeyID, bucket, name string, upload
 			return fmt.Errorf("found %d parts smaller than minimum size (%d bytes)", smallParts, s3.MinUploadPartSize)
 		}
 
-		// delete any existing upload at this key
-		oldID, oldFilename, oldSize, err := deleteObject(tx, bid, name)
+		// write the completed object, carrying the upload's metadata. The
+		// upload_id serves as the filename, since the assembled parts live under
+		// the upload directory until the object is uploaded to Sia.
+		var meta map[string]string
+		if err := tx.QueryRow(`SELECT metadata FROM multipart_uploads WHERE upload_id = $1`,
+			sqlUploadID(uploadID)).Scan((*sqlMetaJSON)(&meta)); err != nil {
+			return err
+		}
+		filename := uploadID.String()
+		res, err := putObject(tx, bid, name, status, contentMD5, meta, contentLength, int32(partCount), &filename, nil)
 		if err != nil {
 			return err
-		}
-
-		// insert object with metadata from multipart upload
-		// the upload_id serves as the filename since parts are stored
-		// under the upload directory
-		_, err = tx.Exec(`
-			INSERT INTO objects (bucket_id, name, content_md5, metadata, size, parts_count, updated_at, filename)
-			SELECT bucket_id, name, $1, metadata, $2, $3, $4, $5
-			FROM multipart_uploads
-			WHERE upload_id = $6
-		`, sqlMD5(contentMD5), contentLength, partCount, sqlTime(time.Now()), uploadID.String(), sqlUploadID(uploadID))
-		if err != nil {
-			return err
-		}
-
-		// the completed object is stored on disk pending upload to Sia
-		if err := addPendingObject(tx, contentLength); err != nil {
-			return err
-		}
-
-		if oldID != nil {
-			if err := insertOrphan(tx, *oldID); err != nil {
-				return err
-			}
 		}
 
 		// move parts to object_parts
 		_, err = tx.Exec(`
-			INSERT INTO object_parts (bucket_id, name, part_number, filename, content_md5, content_length, offset)
-			SELECT $1, $2, part_number, filename, content_md5, content_length,
+			INSERT INTO object_parts (bucket_id, name, version_id, part_number, filename, content_md5, content_length, offset)
+			SELECT $1, $2, $3, part_number, filename, content_md5, content_length,
 				(SELECT COALESCE(SUM(content_length), 0)
 				FROM multipart_parts mp
-				WHERE mp.upload_id = $3 AND mp.part_number < multipart_parts.part_number)
+				WHERE mp.upload_id = $4 AND mp.part_number < multipart_parts.part_number)
 			FROM multipart_parts
-			WHERE upload_id = $3
-		`, bid, name, sqlUploadID(uploadID))
+			WHERE upload_id = $4
+		`, bid, name, res.dbVersionID, sqlUploadID(uploadID))
 		if err != nil {
 			return err
 		}
@@ -141,10 +130,10 @@ func (s *Store) CompleteMultipartUpload(accessKeyID, bucket, name string, upload
 			return err
 		}
 
-		orphanFile, orphanSize, err = newOrphanedFile(tx, oldFilename, oldSize)
-		return err
+		versionID, orphan = res.reportVersionID, res.orphanFile
+		return nil
 	})
-	return orphanFile, orphanSize, err
+	return versionID, orphan, err
 }
 
 // AbortMultipartUpload removes a multipart upload from the store and returns

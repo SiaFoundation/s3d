@@ -59,6 +59,9 @@ type UploadPartResult struct {
 type UploadPartCopyResult struct {
 	ContentMD5   [16]byte
 	LastModified time.Time
+	// SourceVersionID is the wire-encoded version that was copied ("" when the
+	// source bucket is unversioned, so no header is emitted).
+	SourceVersionID string
 }
 
 // ListPartsPage specifies pagination options when listing the parts of an
@@ -101,6 +104,9 @@ type CompletedPart struct {
 type CompleteMultipartUploadResult struct {
 	ETag       string
 	ContentMD5 [16]byte
+	// VersionID is the wire-encoded version to report to the client, or "" on a
+	// suspended or unversioned bucket (no header emitted).
+	VersionID string
 }
 
 // ListMultipartUploadsOptions contains options for listing in-progress
@@ -342,17 +348,25 @@ func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, accessKeyID, dstBu
 	log.Debug("copy part")
 
 	// parse source
-	srcBucket, srcObject, err := parseSource(source)
+	srcBucket, srcObject, srcVersion, err := parseSource(source)
 	if err != nil {
 		return err
 	}
 
 	// fetch source metadata to determine size and validate range
-	obj, err := s.backend.HeadObject(r.Context(), &accessKeyID, srcBucket, srcObject, nil, nil)
+	obj, err := s.backend.HeadObject(r.Context(), &accessKeyID, srcBucket, srcObject, srcVersion, nil, nil)
 	if err != nil {
 		return err
 	} else if obj.Body != nil {
 		obj.Body.Close()
+	}
+
+	// a delete marker has no data to copy
+	if obj.IsDeleteMarker {
+		if srcVersion.Specified {
+			return s3errs.ErrInvalidRequest
+		}
+		return s3errs.ErrNoSuchKey
 	}
 
 	// parse range
@@ -361,7 +375,7 @@ func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, accessKeyID, dstBu
 		return err
 	}
 
-	result, err := s.backend.UploadPartCopy(r.Context(), accessKeyID, srcBucket, srcObject, dstBucket, dstObject, uploadID, UploadPartCopyOptions{
+	result, err := s.backend.UploadPartCopy(r.Context(), accessKeyID, srcBucket, srcObject, srcVersion, dstBucket, dstObject, uploadID, UploadPartCopyOptions{
 		PartNumber: partNumber,
 		Range:      objRange,
 	})
@@ -371,6 +385,9 @@ func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, accessKeyID, dstBu
 
 	etag := FormatETag(result.ContentMD5[:], 0)
 	w.Header().Set("ETag", etag)
+	if result.SourceVersionID != "" {
+		w.Header().Set("x-amz-copy-source-version-id", result.SourceVersionID)
+	}
 	return writeXMLResponse(w, http.StatusOK, PartCopyResult{
 		ETag:         etag,
 		LastModified: NewContentTime(result.LastModified),
@@ -537,6 +554,9 @@ func (s *s3) completeMultipartUpload(w http.ResponseWriter, r *http.Request, acc
 	}
 
 	w.Header().Set("ETag", res.ETag)
+	if res.VersionID != "" {
+		w.Header().Set("x-amz-version-id", res.VersionID)
+	}
 	return writeXMLResponse(w, http.StatusOK, CompleteMultipartUploadResponse{
 		Xmlns:    "http://s3.amazonaws.com/doc/2006-03-01/",
 		Location: location,

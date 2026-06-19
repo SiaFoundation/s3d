@@ -175,9 +175,9 @@ func TestBucketOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// alice creating the same bucket again returns BucketAlreadyOwnedByYou
-	if err := store.CreateBucket("ALICE_KEY", "shared-name"); !errors.Is(err, s3errs.ErrBucketAlreadyOwnedByYou) {
-		t.Fatal("expected ErrBucketAlreadyOwnedByYou", err)
+	// alice re-creating her own bucket is idempotent
+	if err := store.CreateBucket("ALICE_KEY", "shared-name"); err != nil {
+		t.Fatal("expected idempotent re-create, got", err)
 	}
 
 	// bob creating the same bucket returns BucketAlreadyExists

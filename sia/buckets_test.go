@@ -63,9 +63,13 @@ func TestBuckets(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// re-creating an owned bucket should fail with BucketAlreadyOwnedByYou
+		// re-creating an owned bucket is idempotent and preserves its
+		// contents; the not-empty delete check below confirms the object and
+		// multipart upload above survived.
 		err = s3Tester.CreateBucket(t.Context(), bucket)
-		testutil.AssertS3Error(t, s3errs.ErrBucketAlreadyOwnedByYou, err)
+		if err != nil {
+			t.Fatal(err)
+		}
 
 		// creating a bucket with invalid name should fail
 		err = s3Tester.CreateBucket(t.Context(), "invalid_bucket")
