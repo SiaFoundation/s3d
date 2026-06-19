@@ -35,7 +35,7 @@ func stageUpload(t *testing.T, memSDK *testutil.MemorySDK, store *sqlite.Store, 
 	if _, _, err := store.PutObject(testutil.AccessKeyID, bucket, name, md5, nil, int64(len(data)), &fn); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.MarkObjectUploaded(bucket, name, md5, sealed, pinBefore); err != nil {
+	if err := store.MarkObjectUploaded(bucket, name, "", md5, sealed, pinBefore); err != nil {
 		t.Fatal(err)
 	}
 	return sealed.ID()
@@ -83,7 +83,7 @@ func TestPinLoopRetriesOnFailure(t *testing.T) {
 
 	// the object is still uploaded (sia_object_id set) - failure didn't
 	// demote it, just delayed the retry
-	obj, err := store.GetObject(testutil.AccessKeyID, bucket, name, nil)
+	obj, err := store.GetObject(testutil.AccessKeyID, bucket, name, s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.SiaObject == nil {
@@ -121,7 +121,7 @@ func TestPinLoopDemotesExpiredUploads(t *testing.T) {
 	}
 
 	// the object should be back in the upload queue with sia_object_id cleared
-	obj, err := store.GetObject(testutil.AccessKeyID, bucket, name, nil)
+	obj, err := store.GetObject(testutil.AccessKeyID, bucket, name, s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.SiaObject != nil {
@@ -180,13 +180,13 @@ func TestPinLoopPinsCopyAfterSourceDeleted(t *testing.T) {
 	stageUpload(t, memSDK, store, bucket, srcName, time.Now().Add(time.Hour))
 
 	// copy src -> dst while src is uploaded but not yet pinned
-	if _, _, _, err := store.CopyObject(testutil.AccessKeyID, bucket, srcName, bucket, dstName, nil, true); err != nil {
+	if _, _, err := store.CopyObject(testutil.AccessKeyID, bucket, srcName, s3.NoVersion(), bucket, dstName, nil, true); err != nil {
 		t.Fatal(err)
 	}
 
 	// delete src before the pin loop has a chance to run; src's
 	// unpinned_objects row goes with it via FK cascade
-	if _, _, err := store.DeleteObject(testutil.AccessKeyID, bucket, s3.ObjectID{Key: srcName}); err != nil {
+	if _, _, _, err := store.DeleteObject(testutil.AccessKeyID, bucket, s3.ObjectID{Key: srcName}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -198,7 +198,7 @@ func TestPinLoopPinsCopyAfterSourceDeleted(t *testing.T) {
 	}
 
 	// dst's on-disk file should have been released and its filename cleared
-	dst, err := store.GetObject(testutil.AccessKeyID, bucket, dstName, nil)
+	dst, err := store.GetObject(testutil.AccessKeyID, bucket, dstName, s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if dst.SiaObject == nil {

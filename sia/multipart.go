@@ -200,16 +200,29 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object string
 }
 
 // UploadPartCopy uploads a part by copying data from an existing object.
-func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, uploadID s3.UploadID, opts s3.UploadPartCopyOptions) (_ *s3.UploadPartCopyResult, err error) {
+func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObject string, srcVersion s3.VersionRequest, dstBucket, dstObject string, uploadID s3.UploadID, opts s3.UploadPartCopyOptions) (_ *s3.UploadPartCopyResult, err error) {
 	// check if the multipart upload exists
 	if _, err := s.store.HasMultipartUpload(accessKeyID, dstBucket, dstObject, uploadID); err != nil {
 		return nil, err
 	}
 
-	// fetch source object metadata
-	obj, err := s.store.GetObject(accessKeyID, srcBucket, srcObject, nil)
+	// fetch source object metadata (the requested version, or the current
+	// version when unspecified)
+	obj, err := s.store.GetObject(accessKeyID, srcBucket, srcObject, srcVersion, nil)
 	if err != nil {
 		return nil, err
+	} else if obj.IsDeleteMarker {
+		// a delete marker has nothing to copy
+		if srcVersion.Specified {
+			return nil, s3errs.ErrInvalidRequest
+		}
+		return nil, s3errs.ErrNoSuchKey
+	}
+
+	// the copied source version, reported only for a versioned source bucket
+	var srcVersionWire string
+	if obj.BucketVersioned {
+		srcVersionWire = s3.VersionForWire(obj.VersionID)
 	}
 
 	// validate range
@@ -237,7 +250,7 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 	// open a reader for the requested range of the source object
 	var src io.ReadCloser
 	if obj.FileName != nil {
-		src, err = s.openUpload(srcBucket, srcObject, obj.FileName, obj.IsMultipart(), &opts.Range)
+		src, err = s.openUpload(srcBucket, srcObject, obj.VersionID, obj.FileName, obj.IsMultipart(), &opts.Range)
 		if err != nil {
 			return nil, fmt.Errorf("failed to open source upload: %w", err)
 		}
@@ -309,8 +322,9 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 	}
 
 	return &s3.UploadPartCopyResult{
-		ContentMD5:   contentMD5,
-		LastModified: obj.LastModified,
+		ContentMD5:      contentMD5,
+		LastModified:    obj.LastModified,
+		SourceVersionID: srcVersionWire,
 	}, nil
 }
 
@@ -378,13 +392,11 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 	}
 
 	// complete the multipart upload in the database
-	orphanFile, orphanSize, err := s.store.CompleteMultipartUpload(accessKeyID, bucket, object, uploadID, contentMD5, contentLength)
+	versionID, orphan, err := s.store.CompleteMultipartUpload(accessKeyID, bucket, object, uploadID, contentMD5, contentLength)
 	if err != nil {
 		return nil, fmt.Errorf("failed to complete multipart upload in store: %w", err)
 	}
-	if orphanFile != "" {
-		s.cleanupOrphan(filepath.Join(s.uploadDir(), orphanFile), orphanSize)
-	}
+	s.cleanupOrphanFile(orphan)
 
 	// calculate ETag
 	etag := s3.FormatETag(contentMD5[:], len(completed))
@@ -392,6 +404,7 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 	return &s3.CompleteMultipartUploadResult{
 		ETag:       etag,
 		ContentMD5: contentMD5,
+		VersionID:  versionID,
 	}, nil
 }
 

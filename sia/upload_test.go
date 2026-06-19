@@ -156,7 +156,7 @@ func TestOpenAndRemoveUpload(t *testing.T) {
 	}
 
 	// open the upload through the real entry point; this should acquire the lock
-	rc, err := s.openUpload("", "", &fileName, false, nil)
+	rc, err := s.openUpload("", "", "", &fileName, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestOpenAndRemoveUpload(t *testing.T) {
 
 	// open a second reader on the same file; the deferred deletion should
 	// not fire until both are closed
-	rc2, err := s.openUpload("", "", &fileName, false, nil)
+	rc2, err := s.openUpload("", "", "", &fileName, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

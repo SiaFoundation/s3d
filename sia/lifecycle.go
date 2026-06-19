@@ -28,12 +28,6 @@ type AbortedUpload struct {
 	Size     int64
 }
 
-// OrphanedFile identifies an on-disk file orphaned by lifecycle expiration.
-type OrphanedFile struct {
-	Filename string
-	Size     int64
-}
-
 // PutBucketLifecycleConfiguration stores the lifecycle configuration for a
 // bucket, replacing any existing configuration.
 func (s *Sia) PutBucketLifecycleConfiguration(_ context.Context, accessKeyID, bucket string, config s3.LifecycleConfiguration) error {

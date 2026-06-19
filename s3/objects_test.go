@@ -710,9 +710,15 @@ func TestListObjects(t *testing.T) {
 			})
 
 			t.Run("ListObjectVersions", func(t *testing.T) {
-				resp, err := s3Tester.ListObjectVersions(t.Context(), bucket, tc.prefix, tc.delimiter, s3.ListObjectsPage{
-					Marker:  tc.marker,
-					MaxKeys: tc.maxKeys,
+				var maxKeys *int32
+				if tc.maxKeys > 0 {
+					maxKeys = aws.Int32(int32(tc.maxKeys))
+				}
+				resp, err := s3Tester.ListObjectVersionsPage(t.Context(), bucket, &service.ListObjectVersionsInput{
+					Prefix:    tc.prefix,
+					Delimiter: tc.delimiter,
+					KeyMarker: tc.marker,
+					MaxKeys:   maxKeys,
 				})
 				if err != nil {
 					t.Fatal(err)

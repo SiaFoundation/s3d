@@ -79,10 +79,10 @@ func TestApplyLifecycleRules(t *testing.T) {
 	backend.ApplyLifecycleRules(ctx, time.Now())
 
 	accessKeyID := testutil.AccessKeyID
-	if _, err := backend.GetObject(ctx, &accessKeyID, bucket, "logs/old", nil, nil); !errors.Is(err, s3errs.ErrNoSuchKey) {
+	if _, err := backend.GetObject(ctx, &accessKeyID, bucket, "logs/old", s3.NoVersion(), nil, nil); !errors.Is(err, s3errs.ErrNoSuchKey) {
 		t.Fatalf("expected logs/old to be expired, got %v", err)
 	}
-	obj, err := backend.GetObject(ctx, &accessKeyID, bucket, "days/obj", nil, nil)
+	obj, err := backend.GetObject(ctx, &accessKeyID, bucket, "days/obj", s3.NoVersion(), nil, nil)
 	if err != nil {
 		t.Fatalf("expected days/obj to survive, got %v", err)
 	}
@@ -95,12 +95,12 @@ func TestApplyLifecycleRules(t *testing.T) {
 	// abort the upload, but still skip the disabled rule
 	backend.ApplyLifecycleRules(ctx, time.Now().AddDate(0, 0, 31))
 
-	if _, err := backend.GetObject(ctx, &accessKeyID, bucket, "days/obj", nil, nil); !errors.Is(err, s3errs.ErrNoSuchKey) {
+	if _, err := backend.GetObject(ctx, &accessKeyID, bucket, "days/obj", s3.NoVersion(), nil, nil); !errors.Is(err, s3errs.ErrNoSuchKey) {
 		t.Fatalf("expected days/obj to be expired, got %v", err)
 	}
 
 	// data/keep should survive (rule disabled)
-	obj, err = backend.GetObject(ctx, &accessKeyID, bucket, "data/keep", nil, nil)
+	obj, err = backend.GetObject(ctx, &accessKeyID, bucket, "data/keep", s3.NoVersion(), nil, nil)
 	if err != nil {
 		t.Fatalf("expected data/keep to survive, got %v", err)
 	}
