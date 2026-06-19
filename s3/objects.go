@@ -882,12 +882,12 @@ func parseSource(source string) (bucket, object string, version VersionRequest, 
 
 	srcObject, err := url.QueryUnescape(objAndQuery[0])
 	if err != nil {
-		return "", "", NoVersion(), err
+		return "", "", NoVersion(), s3errs.ErrInvalidArgument
 	}
 	if len(objAndQuery) == 2 {
 		q, err := url.ParseQuery(objAndQuery[1])
 		if err != nil {
-			return "", "", NoVersion(), err
+			return "", "", NoVersion(), s3errs.ErrInvalidArgument
 		}
 		version = VersionFromQuery(q["versionId"])
 	}
