@@ -1080,15 +1080,16 @@ func (s *Store) ListObjects(accessKeyID, bucket string, prefix s3.Prefix, page s
 			return fmt.Errorf("failed to get bucket ID: %w", err)
 		}
 
+		innerMarker := marker
 		for {
-			next, more, err := listObjectsPage(tx, bid, prefix, marker, maxObjsPerQuery, result)
+			next, more, err := listObjectsPage(tx, bid, prefix, innerMarker, maxObjsPerQuery, result)
 			if err != nil {
 				return err
 			}
 			if !more {
 				break
 			}
-			marker = next
+			innerMarker = next
 		}
 
 		if !result.IsTruncated {
