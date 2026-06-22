@@ -254,6 +254,7 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, version s3.
 // longer referenced (the latter returned so the caller can remove it from disk).
 func (s *Store) PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string) (versionID string, orphan objects.OrphanedFile, _ error) {
 	err := s.transaction(func(tx *txn) error {
+		versionID, orphan = "", objects.OrphanedFile{} // reset per attempt
 		bid, err := bucketID(tx, accessKeyID, bucket)
 		if err != nil {
 			return err
