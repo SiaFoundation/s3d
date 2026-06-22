@@ -120,6 +120,7 @@ type (
 
 	// ListObjectsV1Result is the response to a ListObjects (v1) request.
 	ListObjectsV1Result struct {
+		XMLName xml.Name `xml:"ListBucketResult"`
 		ListObjectsResultBase
 
 		// Indicates where in the bucket listing begins. Echoed from the
@@ -134,6 +135,7 @@ type (
 
 	// ListObjectsV2Result is the response to a ListObjectsV2 request.
 	ListObjectsV2Result struct {
+		XMLName xml.Name `xml:"ListBucketResult"`
 		ListObjectsResultBase
 
 		// If ContinuationToken was sent with the request, it is included in the
@@ -153,7 +155,8 @@ type (
 		StartAfter string `xml:"StartAfter,omitempty"`
 	}
 
-	// Version represents a version of an S3 object.
+	// Version represents a version of an S3 object in a ListObjectVersions
+	// response.
 	Version struct {
 		XMLName      xml.Name    `xml:"Version"`
 		Key          string      `xml:"Key"`
@@ -169,16 +172,29 @@ type (
 		Owner *UserInfo `xml:"Owner,omitempty"`
 	}
 
+	// DeleteMarker represents a delete marker in a ListObjectVersions response.
+	DeleteMarker struct {
+		XMLName      xml.Name    `xml:"DeleteMarker"`
+		Key          string      `xml:"Key"`
+		VersionID    string      `xml:"VersionId"`
+		IsLatest     bool        `xml:"IsLatest"`
+		LastModified ContentTime `xml:"LastModified,omitempty"`
+		Owner        *UserInfo   `xml:"Owner,omitempty"`
+	}
+
+	// VersionListEntry is a Version or DeleteMarker. They share one slice so
+	// their interleaved order is preserved; xml emits each under its own XMLName.
+	VersionListEntry interface {
+		isVersionListEntry()
+	}
+
 	// ListObjectVersionsResult is the response to a ListObjectVersions request.
 	ListObjectVersionsResult struct {
-		XMLName        xml.Name       `xml:"ListObjectVersionsResult"`
-		Xmlns          string         `xml:"xmlns,attr"`
-		Name           string         `xml:"Name"`
-		Delimiter      string         `xml:"Delimiter,omitempty"`
-		Prefix         string         `xml:"Prefix,omitempty"`
-		CommonPrefixes []CommonPrefix `xml:"CommonPrefixes,omitempty"`
-		IsTruncated    bool           `xml:"IsTruncated"`
-		MaxKeys        int64          `xml:"MaxKeys"`
+		XMLName xml.Name `xml:"ListVersionsResult"`
+		ListObjectsResultBase
+
+		KeyMarker       string `xml:"KeyMarker"`
+		VersionIDMarker string `xml:"VersionIdMarker"`
 
 		// When the number of responses exceeds the value of MaxKeys, NextKeyMarker
 		// specifies the first key not returned that satisfies the search criteria.
@@ -186,35 +202,22 @@ type (
 		// request.
 		NextKeyMarker string `xml:"NextKeyMarker,omitempty"`
 
-		// Marks the last version of the Key returned in a truncated response.
-		VersionIDMarker string `xml:"VersionIdMarker,omitempty"`
-
 		// When the number of responses exceeds the value of MaxKeys,
 		// NextVersionIdMarker specifies the first object version not returned that
 		// satisfies the search criteria. Use this value for the version-id-marker
 		// request parameter in a subsequent request.
-		NextVersionIDMarker *string `xml:"NextVersionIdMarker,omitempty"`
+		NextVersionIDMarker string `xml:"NextVersionIdMarker,omitempty"`
 
-		// AWS responds with a list of either <Version> or <DeleteMarker> objects. The order
-		// needs to be preserved:
-		//	<ListBucketVersionsResult>
-		//		<DeleteMarker ... />
-		//		<Version ... />
-		//		<DeleteMarker ... />
-		//		<Version ... />
-		//	</ListBucketVersionsResult>
-		Versions []Version
-
-		// prefixes maintains an index of prefixes that have already been seen.
-		// This is a convenience for backend implementers like s3bolt and s3mem,
-		// which operate on a full, flat list of keys.
-		prefixes map[string]bool
+		// Versions holds the Version and DeleteMarker elements interleaved in
+		// response order: key ascending, then newest version first.
+		Versions []VersionListEntry
 	}
 
-	// ListObjectsResultBase is the common part of a listing response.
+	// ListObjectsResultBase is the common part of a listing response. The
+	// concrete result types declare their own XMLName so they can be marshalled
+	// under the correct root element.
 	ListObjectsResultBase struct {
-		XMLName xml.Name `xml:"ListBucketResult"`
-		Xmlns   string   `xml:"xmlns,attr"`
+		Xmlns string `xml:"xmlns,attr"`
 
 		// Name of the bucket.
 		Name string `xml:"Name"`
@@ -247,6 +250,9 @@ type (
 	// it defaults to "STANDARD".
 	StorageClass string
 )
+
+func (Version) isVersionListEntry()      {}
+func (DeleteMarker) isVersionListEntry() {}
 
 // MarshalXML implements custom XML marshalling for StorageClass to override the
 // empty value.
@@ -288,9 +294,22 @@ type (
 
 	// ObjectsDeleteResult contains the response from a multi delete operation.
 	ObjectsDeleteResult struct {
-		XMLName xml.Name      `xml:"DeleteResult"`
-		Deleted []ObjectID    `xml:"Deleted"`
-		Error   []ErrorResult `xml:",omitempty"`
+		XMLName xml.Name        `xml:"DeleteResult"`
+		Deleted []DeletedObject `xml:"Deleted"`
+		Error   []ErrorResult   `xml:",omitempty"`
+	}
+
+	// DeletedObject describes a single successfully deleted object in a multi
+	// delete response.
+	DeletedObject struct {
+		Key       string `xml:"Key"`
+		VersionID string `xml:"VersionId,omitempty"`
+		// DeleteMarker is true when the delete created a delete marker or the
+		// deleted version was itself a delete marker.
+		DeleteMarker bool `xml:"DeleteMarker,omitempty"`
+		// DeleteMarkerVersionID is the version ID of the delete marker created
+		// or removed by the delete.
+		DeleteMarkerVersionID string `xml:"DeleteMarkerVersionId,omitempty"`
 	}
 
 	// ErrorResult represents an error encountered while deleting an object
@@ -483,5 +502,23 @@ type (
 	// uploads are aborted.
 	AbortIncompleteMultipartUpload struct {
 		DaysAfterInitiation int `xml:"DaysAfterInitiation"`
+	}
+)
+
+// Types related to bucket versioning routes
+type (
+	// VersioningConfiguration is the S3 bucket versioning configuration
+	// document used by PutBucketVersioning and GetBucketVersioning.
+	//
+	// https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketVersioning.html
+	VersioningConfiguration struct {
+		XMLName xml.Name `xml:"VersioningConfiguration"`
+		Xmlns   string   `xml:"xmlns,attr,omitempty"`
+		// Status is the versioning state of the bucket: "Enabled" or
+		// "Suspended". It is omitted when the bucket has never been configured.
+		Status string `xml:"Status,omitempty"`
+		// MfaDelete reflects the MFA delete state. MFA delete is not supported,
+		// so this is only parsed to reject attempts to enable it.
+		MfaDelete string `xml:"MfaDelete,omitempty"`
 	}
 )

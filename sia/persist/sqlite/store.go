@@ -9,9 +9,7 @@ import (
 	"strings"
 	"time"
 
-	// The "github.com/SiaFoundation/s3d/sia" import is removed here along with
-	// the sia.Store assertion below; both are in the follow-up branch
-	// (versioning-3).
+	"github.com/SiaFoundation/s3d/sia"
 	"github.com/mattn/go-sqlite3"
 	"go.uber.org/zap"
 	"lukechampine.com/frand"
@@ -132,6 +130,4 @@ func OpenDatabase(fp string, log *zap.Logger) (*Store, error) {
 	return store, nil
 }
 
-// Disabled for the versioning-3-sqlite split: the sia.Store interface this
-// must satisfy is in the follow-up branch (versioning-3), which restores it.
-// var _ sia.Store = &Store{}
+var _ sia.Store = &Store{}

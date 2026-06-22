@@ -333,29 +333,6 @@ func (t *S3Tester) ListObjectsV2(ctx context.Context, bucket string, prefix, del
 	return resp, nil
 }
 
-// ListObjectVersions is a convenience wrapper around the AWS SDK's ListObjectVersions API.
-func (t *S3Tester) ListObjectVersions(ctx context.Context, bucket string, prefix, delimiter *string, page s3.ListObjectsPage) (*service.ListObjectVersionsOutput, error) {
-	var maxKeys *int32
-	if page.MaxKeys > 0 {
-		maxKeys = aws.Int32(int32(page.MaxKeys))
-	}
-	resp, err := t.client.ListObjectVersions(ctx, &service.ListObjectVersionsInput{
-		Bucket:          aws.String(bucket),
-		Delimiter:       delimiter,
-		KeyMarker:       page.Marker,
-		MaxKeys:         maxKeys,
-		Prefix:          prefix,
-		VersionIdMarker: nil, // versions not supported
-	})
-	if err != nil {
-		return nil, err
-	}
-	for i := range resp.Versions {
-		*resp.Versions[i].ETag = strings.Trim(*resp.Versions[i].ETag, `"`)
-	}
-	return resp, nil
-}
-
 // PutObject is a convenience wrapper around the AWS SDK's PutObject API.
 func (t *S3Tester) PutObject(ctx context.Context, bucket, object string, r io.Reader, meta map[string]string) ([]byte, error) {
 	resp, err := t.client.PutObject(ctx, &service.PutObjectInput{
@@ -486,6 +463,101 @@ func (t *S3Tester) DeleteBucketLifecycle(ctx context.Context, bucket string) err
 		Bucket: aws.String(bucket),
 	})
 	return err
+}
+
+// PutBucketVersioning sets the versioning status of a bucket.
+func (t *S3Tester) PutBucketVersioning(ctx context.Context, bucket string, status types.BucketVersioningStatus) error {
+	_, err := t.client.PutBucketVersioning(ctx, &service.PutBucketVersioningInput{
+		Bucket:                  aws.String(bucket),
+		VersioningConfiguration: &types.VersioningConfiguration{Status: status},
+	})
+	return err
+}
+
+// GetBucketVersioning returns the versioning status of a bucket.
+func (t *S3Tester) GetBucketVersioning(ctx context.Context, bucket string) (types.BucketVersioningStatus, error) {
+	resp, err := t.client.GetBucketVersioning(ctx, &service.GetBucketVersioningInput{
+		Bucket: aws.String(bucket),
+	})
+	if err != nil {
+		return "", err
+	}
+	return resp.Status, nil
+}
+
+// PutObjectVersion puts an object and returns the version ID assigned by the
+// backend ("" when the bucket is unversioned).
+func (t *S3Tester) PutObjectVersion(ctx context.Context, bucket, object string, data []byte) (string, error) {
+	resp, err := t.client.PutObject(ctx, &service.PutObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(object),
+		Body:   bytes.NewReader(data),
+	})
+	if err != nil {
+		return "", err
+	}
+	return aws.ToString(resp.VersionId), nil
+}
+
+// GetObjectVersion fetches a specific version of an object (the current version
+// when versionID is nil) and returns its body.
+func (t *S3Tester) GetObjectVersion(ctx context.Context, bucket, object string, versionID *string) ([]byte, error) {
+	resp, err := t.client.GetObject(ctx, &service.GetObjectInput{
+		Bucket:    aws.String(bucket),
+		Key:       aws.String(object),
+		VersionId: versionID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(resp.Body)
+}
+
+// DeleteObjectVersion deletes a specific version of an object (the current
+// version when versionID is nil).
+func (t *S3Tester) DeleteObjectVersion(ctx context.Context, bucket, object string, versionID *string) (*service.DeleteObjectOutput, error) {
+	return t.client.DeleteObject(ctx, &service.DeleteObjectInput{
+		Bucket:    aws.String(bucket),
+		Key:       aws.String(object),
+		VersionId: versionID,
+	})
+}
+
+// CopyObjectVersion copies a source object onto the destination key, optionally
+// addressing a specific source version when srcVersionID is non-nil.
+func (t *S3Tester) CopyObjectVersion(ctx context.Context, srcBucket, srcObject string, srcVersionID *string, dstBucket, dstObject string) (*service.CopyObjectOutput, error) {
+	source := fmt.Sprintf("%s/%s", srcBucket, url.QueryEscape(srcObject))
+	if srcVersionID != nil {
+		source += "?versionId=" + url.QueryEscape(*srcVersionID)
+	}
+	return t.client.CopyObject(ctx, &service.CopyObjectInput{
+		CopySource: aws.String(source),
+		Bucket:     aws.String(dstBucket),
+		Key:        aws.String(dstObject),
+	})
+}
+
+// ListObjectVersionsPage issues a single ListObjectVersions request from the
+// given input (its Bucket is set automatically). Unlike ListObjectVersions it
+// exposes the full input, including the key and version-id markers needed to
+// paginate. The caller's input is not modified.
+func (t *S3Tester) ListObjectVersionsPage(ctx context.Context, bucket string, in *service.ListObjectVersionsInput) (*service.ListObjectVersionsOutput, error) {
+	var req service.ListObjectVersionsInput
+	if in != nil {
+		req = *in
+	}
+	req.Bucket = aws.String(bucket)
+	resp, err := t.client.ListObjectVersions(ctx, &req)
+	if err != nil {
+		return nil, err
+	}
+	for i := range resp.Versions {
+		if resp.Versions[i].ETag != nil {
+			*resp.Versions[i].ETag = strings.Trim(*resp.Versions[i].ETag, `"`)
+		}
+	}
+	return resp, nil
 }
 
 type testerCfg struct {
