@@ -29,3 +29,13 @@ func (s *Sia) HeadBucket(ctx context.Context, accessKeyID, name string) error {
 func (s *Sia) ListBuckets(ctx context.Context, accessKeyID string) ([]s3.BucketInfo, error) {
 	return s.store.ListBuckets(accessKeyID)
 }
+
+// PutBucketVersioning sets the versioning state of the bucket.
+func (s *Sia) PutBucketVersioning(ctx context.Context, accessKeyID, bucket, status string) error {
+	return s.store.PutBucketVersioning(accessKeyID, bucket, status)
+}
+
+// GetBucketVersioning returns the versioning state of the bucket.
+func (s *Sia) GetBucketVersioning(ctx context.Context, accessKeyID, bucket string) (string, error) {
+	return s.store.GetBucketVersioning(accessKeyID, bucket)
+}

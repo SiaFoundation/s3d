@@ -37,22 +37,21 @@ func writeErrorResponse(w http.ResponseWriter, err error) {
 	if s3Err.HTTPStatus == http.StatusNotModified {
 		// 304 must preserve ETag/Last-Modified but must not include a body
 		// or headers that trigger body parsing in SDKs
-		etag := w.Header().Get("ETag")
-		lastMod := w.Header().Get("Last-Modified")
-		clearHeadersExceptCORS(w.Header())
-		if etag != "" {
-			w.Header().Set("ETag", etag)
-		}
-		if lastMod != "" {
-			w.Header().Set("Last-Modified", lastMod)
-		}
+		clearHeadersExceptCORS(w.Header(), "ETag", "Last-Modified")
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
 
+	// a delete-marker error must still carry x-amz-delete-marker (and, for 405,
+	// Last-Modified/Allow) so clients can tell it apart from a missing object.
+	var keep []string
+	if w.Header().Get("x-amz-delete-marker") != "" {
+		keep = []string{"X-Amz-Delete-Marker", "X-Amz-Version-Id", "Last-Modified", "Allow"}
+	}
+
 	// clear any headers that may have been set before the error was detected
 	// (e.g. conditional GET sets ETag and metadata before checking If-Match)
-	clearHeadersExceptCORS(w.Header())
+	clearHeadersExceptCORS(w.Header(), keep...)
 
 	writeXMLResponse(w, s3Err.HTTPStatus, ErrorResponse{
 		Code:      s3Err.Code,
@@ -64,13 +63,23 @@ func writeErrorResponse(w http.ResponseWriter, err error) {
 
 // clearHeadersExceptCORS removes every header from h except CORS headers set
 // by corsMiddleware (Vary and Access-Control-*). Without this, error responses
-// drop the CORS headers and browser clients see opaque failures.
-func clearHeadersExceptCORS(h http.Header) {
+// drop the CORS headers and browser clients see opaque failures. The current
+// values of any headers named in keep are also preserved.
+func clearHeadersExceptCORS(h http.Header, keep ...string) {
+	saved := make(map[string]string, len(keep))
+	for _, k := range keep {
+		if v := h.Get(k); v != "" {
+			saved[k] = v
+		}
+	}
 	for k := range h {
 		if k == "Vary" || strings.HasPrefix(k, "Access-Control-") {
 			continue
 		}
 		h.Del(k)
+	}
+	for k, v := range saved {
+		h.Set(k, v)
 	}
 }
 

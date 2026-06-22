@@ -29,6 +29,17 @@ type Object struct {
 	Range        *ObjectRange
 	Size         int64
 
+	// VersionID is the version ID of the object, or "" for the null version.
+	VersionID string
+
+	// Versioned reports whether the object's bucket has versioning
+	// configured (Enabled or Suspended). When false, no version header is
+	// emitted.
+	Versioned bool
+
+	// IsDeleteMarker is true when the requested version is a delete marker.
+	IsDeleteMarker bool
+
 	// PartsCount will be set for objects that are multipart uploads, but only
 	// if a multipart part number is specified.
 	PartsCount *int32
@@ -57,9 +68,8 @@ type DeleteObjectResult struct {
 	// created.
 	IsDeleteMarker bool
 
-	// Returns the version ID of the delete marker created as a result of the
-	// DELETE operation. If you delete a specific object version, the value
-	// returned by this header is the version ID of the object version deleted.
+	// VersionID is the wire-encoded version affected by the delete, or "" when
+	// no version applies (unversioned bucket).
 	VersionID string
 }
 
@@ -112,6 +122,10 @@ func prefixFromQuery(query url.Values) Prefix {
 type PutObjectResult struct {
 	// ContentMD5 is the MD5 checksum of the object data.
 	ContentMD5 [16]byte
+
+	// VersionID is the wire-encoded version to report, or "" on a suspended or
+	// unversioned bucket.
+	VersionID string
 }
 
 // PutObjectOptions contains options for a PutObject operation.
@@ -150,9 +164,9 @@ func (s *s3) routeObject(w http.ResponseWriter, r *http.Request, accessKeyID *st
 	// routes with optional authentication
 	switch r.Method {
 	case http.MethodGet:
-		return s.getObject(w, r, accessKeyID, bucket, object, "")
+		return s.getObject(w, r, accessKeyID, bucket, object, NoVersion())
 	case http.MethodHead:
-		return s.headObject(w, r, accessKeyID, bucket, object, "")
+		return s.headObject(w, r, accessKeyID, bucket, object, NoVersion())
 	default:
 	}
 
@@ -166,7 +180,7 @@ func (s *s3) routeObject(w http.ResponseWriter, r *http.Request, accessKeyID *st
 	case http.MethodPut:
 		return s.putObject(w, r, validatedKey, bucket, object)
 	case http.MethodDelete:
-		return s.deleteObject(w, r, validatedKey, bucket, object)
+		return s.deleteObject(w, r, validatedKey, bucket, object, NoVersion())
 	default:
 		return s3errs.ErrMethodNotAllowed
 	}
@@ -185,14 +199,15 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, accessKeyID, dst
 	}
 
 	// parse source
-	srcBucket, srcObject, err := parseSource(source)
+	srcBucket, srcObject, srcVersion, err := parseSource(source)
 	if err != nil {
 		return err
 	}
 
-	// copying to the same key without REPLACE is not allowed
+	// copying to the same key without REPLACE is not allowed, unless a specific
+	// source version is addressed (a version restore).
 	replace := r.Header.Get("x-amz-metadata-directive") == "REPLACE"
-	if srcBucket == dstBucket && srcObject == dstObject && !replace {
+	if srcBucket == dstBucket && srcObject == dstObject && !replace && !srcVersion.Specified {
 		return s3errs.ErrInvalidRequest
 	}
 
@@ -200,10 +215,22 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, accessKeyID, dst
 	ifMatch := r.Header.Get("X-Amz-Copy-Source-If-Match")
 	ifNoneMatch := r.Header.Get("X-Amz-Copy-Source-If-None-Match")
 	if ifMatch != "" || ifNoneMatch != "" {
-		obj, err := s.backend.HeadObject(r.Context(), &accessKeyID, srcBucket, srcObject, nil, nil)
+		obj, err := s.backend.HeadObject(r.Context(), &accessKeyID, srcBucket, srcObject, srcVersion, nil, nil)
 		if err != nil {
 			return err
+		} else if obj.Body != nil {
+			obj.Body.Close()
 		}
+
+		// a delete marker has no data to copy. Resolve this before the ETag
+		// preconditions, which would otherwise match its zeroed ETag.
+		if obj.IsDeleteMarker {
+			if srcVersion.Specified {
+				return s3errs.ErrInvalidRequest
+			}
+			return s3errs.ErrNoSuchKey
+		}
+
 		var partsCount int
 		if obj.PartsCount != nil {
 			partsCount = int(*obj.PartsCount)
@@ -217,14 +244,16 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, accessKeyID, dst
 		}
 	}
 
-	result, err := s.backend.CopyObject(r.Context(), accessKeyID, srcBucket, srcObject, dstBucket, dstObject, replace, meta)
+	result, err := s.backend.CopyObject(r.Context(), accessKeyID, srcBucket, srcObject, srcVersion, dstBucket, dstObject, replace, meta)
 	if err != nil {
 		return err
 	}
 
 	if result.VersionID != "" {
-		w.Header().Set("x-amz-copy-source-version-id", string(result.VersionID))
-		w.Header().Set("x-amz-version-id", string(result.VersionID))
+		w.Header().Set("x-amz-version-id", result.VersionID)
+	}
+	if result.SourceVersionID != "" {
+		w.Header().Set("x-amz-copy-source-version-id", result.SourceVersionID)
 	}
 
 	etag := FormatETag(result.ContentMD5[:], int(result.PartsCount))
@@ -235,13 +264,18 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, accessKeyID, dst
 	})
 }
 
-func (s *s3) deleteObject(w http.ResponseWriter, r *http.Request, accessKeyID string, bucket, object string) error {
+func (s *s3) deleteObject(w http.ResponseWriter, r *http.Request, accessKeyID string, bucket, object string, version VersionRequest) error {
 	log := s.logger.With(zap.String("bucket", bucket),
-		zap.String("object", object))
+		zap.String("object", object),
+		zap.String("version", version.LogValue()))
 	log.Debug("delete object")
 
 	// check preconditions
 	oid := ObjectID{Key: object}
+	if version.Specified {
+		id := version.ID
+		oid.VersionID = &id
+	}
 	if v, exists := r.Header["X-Amz-If-Match-Last-Modified-Time"]; exists {
 		t, err := time.Parse(http.TimeFormat, v[0])
 		if err != nil {
@@ -268,9 +302,11 @@ func (s *s3) deleteObject(w http.ResponseWriter, r *http.Request, accessKeyID st
 		return err
 	}
 
-	w.Header().Set("x-amz-delete-marker", fmt.Sprint(result.IsDeleteMarker))
+	if result.IsDeleteMarker {
+		w.Header().Set("x-amz-delete-marker", "true")
+	}
 	if result.VersionID != "" {
-		w.Header().Set("x-amz-version-id", string(result.VersionID))
+		w.Header().Set("x-amz-version-id", result.VersionID)
 	}
 
 	w.WriteHeader(http.StatusNoContent)
@@ -310,11 +346,27 @@ func (s *s3) deleteObjects(w http.ResponseWriter, r *http.Request, accessKeyID s
 	return writeXMLResponse(w, http.StatusOK, res)
 }
 
-func (s *s3) getObject(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket, object, version string) error {
+func (s *s3) getObject(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket, object string, version VersionRequest) error {
+	return s.serveObject(w, r, accessKeyID, bucket, object, version, false)
+}
+
+func (s *s3) headObject(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket, object string, version VersionRequest) error {
+	return s.serveObject(w, r, accessKeyID, bucket, object, version, true)
+}
+
+// serveObject implements the shared logic for GET and HEAD on a /bucket/object
+// URL. The only meaningful difference is that HEAD never streams the body. When
+// head is true, the backend's HeadObject is used and any returned body is
+// closed; otherwise GetObject is used and the body is streamed to the response.
+func (s *s3) serveObject(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket, object string, version VersionRequest, head bool) error {
 	log := s.logger.With(zap.String("bucket", bucket),
 		zap.String("object", object),
-		zap.String("version", version))
-	log.Debug("get object")
+		zap.String("version", version.LogValue()))
+	if head {
+		log.Debug("head object")
+	} else {
+		log.Debug("get object")
+	}
 
 	partNumber, err := parsePartNumber(r.URL.Query().Get("partNumber"))
 	if err != nil {
@@ -328,19 +380,31 @@ func (s *s3) getObject(w http.ResponseWriter, r *http.Request, accessKeyID *stri
 		return s3errs.ErrInvalidRequest // can't combine range and partNumber
 	}
 
-	// retrieve object
+	// retrieve object (HEAD fetches metadata only)
 	var obj *Object
-	if version == "" {
-		obj, err = s.backend.GetObject(r.Context(), accessKeyID, bucket, object, rnge, partNumber)
+	if head {
+		obj, err = s.backend.HeadObject(r.Context(), accessKeyID, bucket, object, version, rnge, partNumber)
 	} else {
-		return s3errs.ErrNotImplemented // versioning not supported
+		obj, err = s.backend.GetObject(r.Context(), accessKeyID, bucket, object, version, rnge, partNumber)
 	}
 	if err != nil {
 		return err
 	}
-	defer obj.Body.Close()
+	// the body is only consumed on the successful GET path below; close it on
+	// every other path (HEAD, delete marker, error)
+	defer func() {
+		if obj.Body != nil {
+			obj.Body.Close()
+		}
+	}()
+
+	// a delete marker has no data and cannot be retrieved with GET or HEAD.
+	if obj.IsDeleteMarker {
+		return deleteMarkerError(w, obj, version)
+	}
 
 	// write headers
+	setVersionHeaders(w, obj)
 	if accessKeyID != nil {
 		s.setLifecycleExpirationHeader(r.Context(), w, *accessKeyID, bucket, object, obj.LastModified)
 	}
@@ -348,52 +412,52 @@ func (s *s3) getObject(w http.ResponseWriter, r *http.Request, accessKeyID *stri
 		return err
 	}
 
-	// write body
-	if _, err := io.Copy(w, obj.Body); err != nil {
-		// at this point we can't inform the client of the error anymore so
-		// we just log it
-		s.logger.Error("failed to write object body", zap.Error(err))
+	// write body (GET only)
+	if !head {
+		if _, err := io.Copy(w, obj.Body); err != nil {
+			// at this point we can't inform the client of the error anymore so
+			// we just log it
+			s.logger.Error("failed to write object body", zap.Error(err))
+		}
 	}
 	return nil
 }
 
-func (s *s3) headObject(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket, object, version string) error {
-	log := s.logger.With(zap.String("bucket", bucket),
-		zap.String("object", object),
-		zap.String("version", version))
-	log.Debug("head object")
+// setVersionHeaders sets x-amz-version-id (for versioned objects) and
+// x-amz-delete-marker (for delete markers) on the response.
+func setVersionHeaders(w http.ResponseWriter, obj *Object) {
+	if obj.Versioned {
+		w.Header().Set("x-amz-version-id", FormatVersion(obj.VersionID))
+	}
+	if obj.IsDeleteMarker {
+		w.Header().Set("x-amz-delete-marker", "true")
+	}
+}
 
-	partNumber, err := parsePartNumber(r.URL.Query().Get("partNumber"))
-	if err != nil {
-		return err
+// deleteMarkerError returns the error for a GET/HEAD that resolved to a delete
+// marker: 404 (NoSuchKey) for the current version, 405 (MethodNotAllowed) for a
+// specific version.
+func deleteMarkerError(w http.ResponseWriter, obj *Object, version VersionRequest) error {
+	setVersionHeaders(w, obj)
+	if !version.Specified {
+		return s3errs.ErrNoSuchKey
 	}
+	w.Header().Set("Last-Modified", obj.LastModified.UTC().Format(http.TimeFormat))
+	w.Header().Set("Allow", "DELETE")
+	return s3errs.ErrMethodNotAllowed
+}
 
-	rnge, err := parseRangeHeader(r.Header.Get("Range"))
-	if err != nil {
-		return err
-	} else if rnge != nil && partNumber != nil {
-		return s3errs.ErrInvalidRequest // can't combine range and partNumber
-	}
+// prefixSet tracks the common prefixes already rolled up into a listing result,
+// so a prefix repeated across rows is only emitted once.
+type prefixSet map[string]bool
 
-	// retrieve object metadata
-	var obj *Object
-	if version == "" {
-		obj, err = s.backend.HeadObject(r.Context(), accessKeyID, bucket, object, rnge, partNumber)
-	} else {
-		return s3errs.ErrNotImplemented // versioning not supported
+// Add records prefix as seen, returning false if it had already been added.
+func (s prefixSet) Add(prefix string) bool {
+	if s[prefix] {
+		return false
 	}
-	if err != nil {
-		return err
-	}
-	if obj.Body != nil {
-		_ = obj.Body.Close() // just in case
-	}
-
-	// write headers
-	if accessKeyID != nil {
-		s.setLifecycleExpirationHeader(r.Context(), w, *accessKeyID, bucket, object, obj.LastModified)
-	}
-	return writeGetOrHeadObjectHeaders(obj, w, r)
+	s[prefix] = true
+	return true
 }
 
 // ObjectsListResult contains the result of a ListObjects operation.
@@ -406,7 +470,7 @@ type ObjectsListResult struct {
 	// prefixes maintains an index of prefixes that have already been seen.
 	// This is a convenience for backend implementers like s3bolt and s3mem,
 	// which operate on a full, flat list of keys.
-	prefixes map[string]bool
+	prefixes prefixSet
 	maxKeys  int64
 }
 
@@ -434,12 +498,12 @@ func (b *ObjectsListResult) Add(item *Content) {
 // added, this is a no-op.
 func (b *ObjectsListResult) AddPrefix(prefix string) {
 	if b.prefixes == nil {
-		b.prefixes = map[string]bool{}
-	} else if b.prefixes[prefix] {
+		b.prefixes = prefixSet{}
+	}
+	if !b.prefixes.Add(prefix) {
 		return
 	}
 	if len(b.Contents)+len(b.CommonPrefixes) < int(b.maxKeys) {
-		b.prefixes[prefix] = true
 		b.CommonPrefixes = append(b.CommonPrefixes, CommonPrefix{Prefix: prefix})
 	}
 	if len(b.Contents)+len(b.CommonPrefixes) >= int(b.maxKeys) {
@@ -584,40 +648,120 @@ func (s *s3) listObjectVersions(w http.ResponseWriter, r *http.Request, accessKe
 		return err
 	}
 
-	// list objects
-	objects, err := s.backend.ListObjects(r.Context(), accessKeyID, bucket, prefix, page)
+	versions, err := s.backend.ListObjectVersions(r.Context(), accessKeyID, bucket, prefix, page)
 	if err != nil {
 		return err
 	}
 
-	// prepare result
+	encodeURL := q.Get("encoding-type") == "url"
+	escape := func(s string) string {
+		if encodeURL {
+			return urlEscape(s)
+		}
+		return s
+	}
+
 	result := ListObjectVersionsResult{
-		Xmlns:          "http://s3.amazonaws.com/doc/2006-03-01/",
-		Name:           bucket,
-		CommonPrefixes: objects.CommonPrefixes,
-		Versions:       []Version{},
-		IsTruncated:    objects.IsTruncated,
-		Delimiter:      prefix.Delimiter,
-		Prefix:         prefix.Prefix,
-		MaxKeys:        page.MaxKeys,
-		NextKeyMarker:  objects.NextMarker,
+		ListObjectsResultBase: ListObjectsResultBase{
+			Xmlns:       "http://s3.amazonaws.com/doc/2006-03-01/",
+			Name:        bucket,
+			Prefix:      escape(prefix.Prefix),
+			MaxKeys:     page.MaxKeys,
+			Delimiter:   escape(prefix.Delimiter),
+			IsTruncated: versions.IsTruncated,
+		},
+		KeyMarker:       escape(q.Get("key-marker")),
+		VersionIDMarker: q.Get("version-id-marker"),
+		Versions:        []VersionListEntry{},
 	}
-	if objects.IsTruncated {
-		empty := ""
-		result.NextVersionIDMarker = &empty // versioning not supported
+	if encodeURL {
+		result.EncodingType = "url"
 	}
-	for _, obj := range objects.Contents {
+	if versions.IsTruncated {
+		result.NextKeyMarker = escape(versions.NextKeyMarker)
+		// NextVersionIDMarker is already wire-encoded by the backend ("null" for
+		// the null version, "" for a common-prefix boundary).
+		result.NextVersionIDMarker = versions.NextVersionIDMarker
+	}
+	for _, v := range versions.Versions {
+		if v.IsDeleteMarker {
+			result.Versions = append(result.Versions, DeleteMarker{
+				Key:          escape(v.Key),
+				VersionID:    FormatVersion(v.VersionID),
+				IsLatest:     v.IsLatest,
+				LastModified: NewContentTime(v.LastModified),
+				Owner:        v.Owner,
+			})
+			continue
+		}
 		result.Versions = append(result.Versions, Version{
-			Key:          obj.Key,
-			VersionID:    Null, // versioning not supported
-			IsLatest:     true, // versioning not supported
-			LastModified: obj.LastModified,
-			Size:         obj.Size,
-			ETag:         obj.ETag,
-			Owner:        obj.Owner,
+			Key:          escape(v.Key),
+			VersionID:    FormatVersion(v.VersionID),
+			IsLatest:     v.IsLatest,
+			LastModified: NewContentTime(v.LastModified),
+			Size:         v.Size,
+			ETag:         v.ETag,
+			Owner:        v.Owner,
 		})
 	}
+	result.CommonPrefixes = versions.CommonPrefixes
+	for i := range result.CommonPrefixes {
+		result.CommonPrefixes[i].Prefix = escape(result.CommonPrefixes[i].Prefix)
+	}
 	return writeXMLResponse(w, http.StatusOK, result)
+}
+
+// FormatVersion renders an internal version ID for an S3 response. The null
+// version (the empty string) is rendered as the literal "null".
+func FormatVersion(versionID string) string {
+	if versionID == "" {
+		return Null
+	}
+	return versionID
+}
+
+// VersionRequest identifies which version of an object an operation addresses.
+// It distinguishes "no version was specified" (target the current version) from
+// "the null version was specified", a distinction a raw version string cannot
+// make.
+type VersionRequest struct {
+	// Specified reports whether the request addressed a particular version. When
+	// false the operation targets the current version.
+	Specified bool
+	// ID is the internal version ID when Specified is true; "" is the null
+	// version.
+	ID string
+}
+
+// NoVersion returns a VersionRequest addressing the current version.
+func NoVersion() VersionRequest { return VersionRequest{} }
+
+// SpecificVersion returns a VersionRequest addressing the given internal version
+// ID ("" is the null version).
+func SpecificVersion(id string) VersionRequest {
+	return VersionRequest{Specified: true, ID: id}
+}
+
+// VersionFromQuery resolves the ?versionId= subresource into a VersionRequest.
+// An absent or empty value addresses the current version; the wire value "null"
+// (sent by Boto) addresses the null version, represented internally as "".
+func VersionFromQuery(qv []string) VersionRequest {
+	if len(qv) == 0 || qv[0] == "" {
+		return NoVersion()
+	}
+	if qv[0] == Null {
+		return SpecificVersion("") // the null version
+	}
+	return SpecificVersion(qv[0])
+}
+
+// LogValue renders the requested version for logging: empty when no version was
+// specified, otherwise the wire encoding.
+func (v VersionRequest) LogValue() string {
+	if !v.Specified {
+		return ""
+	}
+	return FormatVersion(v.ID)
 }
 
 func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID string, bucket, object string) (err error) {
@@ -672,6 +816,9 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID strin
 	}
 
 	s.setLifecycleExpirationHeader(r.Context(), w, accessKeyID, bucket, object, time.Now())
+	if res.VersionID != "" {
+		w.Header().Set("x-amz-version-id", res.VersionID)
+	}
 	w.Header().Set("ETag", FormatETag(res.ContentMD5[:], 0))
 	return nil
 }
@@ -720,21 +867,29 @@ func etagMatches(header, etag string) bool {
 	return false
 }
 
-// parseSource parses an X-Amz-Copy-Source string and returns the bucket and
-// object.
-func parseSource(source string) (bucket, object string, err error) {
+// parseSource parses an X-Amz-Copy-Source string and returns the bucket,
+// object and the source version from a "?versionId=<id>" suffix (the current
+// version when absent).
+func parseSource(source string) (bucket, object string, version VersionRequest, err error) {
 	parts := strings.SplitN(strings.TrimPrefix(source, "/"), "/", 2)
 	if len(parts) != 2 {
-		return "", "", s3errs.ErrInvalidArgument
+		return "", "", NoVersion(), s3errs.ErrInvalidArgument
 	}
 	srcBucket := parts[0]
-	srcObjectEsc := strings.SplitN(parts[1], "?", 2)[0]
+	objAndQuery := strings.SplitN(parts[1], "?", 2)
 
-	srcObject, err := url.QueryUnescape(srcObjectEsc)
+	srcObject, err := url.QueryUnescape(objAndQuery[0])
 	if err != nil {
-		return "", "", err
+		return "", "", NoVersion(), s3errs.ErrInvalidArgument
 	}
-	return srcBucket, srcObject, nil
+	if len(objAndQuery) == 2 {
+		q, err := url.ParseQuery(objAndQuery[1])
+		if err != nil {
+			return "", "", NoVersion(), s3errs.ErrInvalidArgument
+		}
+		version = VersionFromQuery(q["versionId"])
+	}
+	return srcBucket, srcObject, version, nil
 }
 
 // metadataHeaders extracts S3 metadata headers from the given HTTP headers.
@@ -802,6 +957,97 @@ type ListObjectsPage struct {
 	// key-marker and version-id-marker.
 	//
 	MaxKeys int64
+}
+
+// ListObjectVersionsPage specifies pagination options for listing object
+// versions in a bucket.
+type ListObjectVersionsPage struct {
+	// FetchOwner specifies whether owner information should be included.
+	FetchOwner *bool
+
+	// KeyMarker is the key to resume listing after, or nil to start from the
+	// beginning.
+	KeyMarker *string
+
+	// VersionIDMarker is the wire-encoded version to resume within KeyMarker, or
+	// nil for all of KeyMarker's versions. The wire value "null" represents the
+	// null version.
+	VersionIDMarker *string
+
+	// MaxKeys sets the maximum number of versions returned in the response.
+	MaxKeys int64
+}
+
+// ObjectVersion is a single version (or delete marker) of an object, as
+// returned by ListObjectVersions.
+type ObjectVersion struct {
+	Key            string
+	VersionID      string // "" represents the null version
+	IsLatest       bool
+	IsDeleteMarker bool
+	LastModified   time.Time
+	ETag           string // empty for delete markers
+	Size           int64
+	Owner          *UserInfo
+}
+
+// ObjectVersionsListResult contains the result of a ListObjectVersions
+// operation. Versions are ordered by key ascending, then by version creation
+// order descending (newest first), with delete markers interleaved.
+type ObjectVersionsListResult struct {
+	CommonPrefixes []CommonPrefix
+	Versions       []ObjectVersion
+	IsTruncated    bool
+	NextKeyMarker  string
+	// NextVersionIDMarker is wire-encoded: "null" for the null version, "" when
+	// the truncation boundary is a common prefix (no version applies).
+	NextVersionIDMarker string
+
+	// prefixes maintains an index of common prefixes that have already been
+	// rolled up, so repeated keys under the same prefix are deduped.
+	prefixes prefixSet
+	maxKeys  int64
+}
+
+// NewObjectVersionsListResult creates a new, empty ObjectVersionsListResult. Use
+// AddVersion and AddPrefix to populate it.
+func NewObjectVersionsListResult(maxKeys int64) *ObjectVersionsListResult {
+	return &ObjectVersionsListResult{maxKeys: maxKeys}
+}
+
+// Count returns the number of versions and common prefixes added so far.
+func (r *ObjectVersionsListResult) Count() int64 {
+	return int64(len(r.Versions) + len(r.CommonPrefixes))
+}
+
+// AddVersion appends a version (or delete marker), or marks the result truncated
+// if the page is already full.
+func (r *ObjectVersionsListResult) AddVersion(v ObjectVersion) {
+	if r.Count() >= r.maxKeys {
+		r.IsTruncated = true
+		return
+	}
+	r.Versions = append(r.Versions, v)
+	// wire-encode the marker; an empty null-version value would be dropped by
+	// the encoder, breaking mid-key resumption.
+	r.NextKeyMarker, r.NextVersionIDMarker = v.Key, FormatVersion(v.VersionID)
+}
+
+// AddPrefix rolls a key up under a common prefix (deduping repeats), or marks
+// the result truncated if the page is already full.
+func (r *ObjectVersionsListResult) AddPrefix(prefix string) {
+	if r.prefixes == nil {
+		r.prefixes = prefixSet{}
+	}
+	if !r.prefixes.Add(prefix) {
+		return
+	}
+	if r.Count() >= r.maxKeys {
+		r.IsTruncated = true
+		return
+	}
+	r.CommonPrefixes = append(r.CommonPrefixes, CommonPrefix{Prefix: prefix})
+	r.NextKeyMarker, r.NextVersionIDMarker = prefix, ""
 }
 
 // ObjectRange specifies a byte range within an object. The backend can derive
@@ -895,15 +1141,30 @@ func listObjectsPageFromQuery(query url.Values) (page ListObjectsPage, rerr erro
 	return page, nil
 }
 
-func listObjectVersionsPageFromQuery(query url.Values) (page ListObjectsPage, rerr error) {
+func listObjectVersionsPageFromQuery(query url.Values) (page ListObjectVersionsPage, rerr error) {
 	maxKeys, err := parseClampedInt(query.Get("max-keys"), DefaultMaxBucketKeys, 0, MaxBucketKeys)
 	if err != nil {
 		return page, err
 	}
 
 	page.MaxKeys = maxKeys
-	page.Marker = aws.String(query.Get("key-marker"))
-	page.FetchOwner = aws.Bool(true) // always fetch owner for versions endpoint
+	page.FetchOwner = aws.Bool(true) // always fetch owner for the versions endpoint
+
+	if _, ok := query["key-marker"]; ok {
+		page.KeyMarker = aws.String(query.Get("key-marker"))
+	}
+	if _, ok := query["version-id-marker"]; ok {
+		// a version-id marker is meaningless without a key marker
+		if page.KeyMarker == nil {
+			return page, s3errs.ErrInvalidArgument
+		}
+		// the wire value "null" addresses the null version internally.
+		v := query.Get("version-id-marker")
+		if v == Null {
+			v = ""
+		}
+		page.VersionIDMarker = &v
+	}
 
 	return page, nil
 }

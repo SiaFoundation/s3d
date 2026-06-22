@@ -137,7 +137,7 @@ func (s *Sia) lockUpload(path string) func() {
 	}
 }
 
-func (s *Sia) openUpload(bucket, name string, filename *string, multipart bool, r *s3.ObjectRange) (_ io.ReadCloser, err error) {
+func (s *Sia) openUpload(bucket, name, versionID string, filename *string, multipart bool, r *s3.ObjectRange) (_ io.ReadCloser, err error) {
 	if filename == nil {
 		return nil, os.ErrNotExist
 	}
@@ -157,7 +157,7 @@ func (s *Sia) openUpload(bucket, name string, filename *string, multipart bool, 
 	var reader io.Reader
 	var closer io.Closer
 	if multipart {
-		parts, err := s.store.ObjectPartsByName(bucket, name)
+		parts, err := s.store.ObjectPartsByName(bucket, name, versionID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get object parts: %w", err)
 		}
@@ -207,41 +207,40 @@ func (s *Sia) cleanupOrphan(path string, size int64) {
 	s.releaseDiskUsage(size)
 }
 
+// cleanupOrphanFile removes the orphaned upload file and releases its disk
+// usage. A zero OrphanedFile is a no-op.
+func (s *Sia) cleanupOrphanFile(o objects.OrphanedFile) {
+	if o.Filename == "" {
+		return
+	}
+	s.cleanupOrphan(filepath.Join(s.uploadDir(), o.Filename), o.Size)
+}
+
 // CopyObject copies an object from the source bucket and object key to the
 // destination bucket and object key. The provided metadata map contains any
 // metadata that should be merged into the copied object except for the
 // x-amz-acl header.
-func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, replace bool, meta map[string]string) (*s3.CopyObjectResult, error) {
-	obj, orphanFile, orphanSize, err := s.store.CopyObject(accessKeyID, srcBucket, srcObject, dstBucket, dstObject, meta, replace)
+func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject string, srcVersion s3.VersionRequest, dstBucket, dstObject string, replace bool, meta map[string]string) (*s3.CopyObjectResult, error) {
+	result, orphan, err := s.store.CopyObject(accessKeyID, srcBucket, srcObject, srcVersion, dstBucket, dstObject, meta, replace)
 	if err != nil {
 		return nil, err
 	}
-	if orphanFile != "" {
-		s.cleanupOrphan(filepath.Join(s.uploadDir(), orphanFile), orphanSize)
-	}
-
-	return &s3.CopyObjectResult{
-		ContentMD5:   obj.ContentMD5,
-		LastModified: obj.LastModified,
-		VersionID:    "", // versioning isn't supported
-		PartsCount:   obj.PartsCount,
-	}, nil
+	s.cleanupOrphanFile(orphan)
+	return result, nil
 }
 
 // DeleteObject deletes the object with the given key from the specified
 // bucket for the user identified by the given access key.
 func (s *Sia) DeleteObject(ctx context.Context, accessKeyID, bucket string, object s3.ObjectID) (*s3.DeleteObjectResult, error) {
-	orphanFile, orphanSize, err := s.store.DeleteObject(accessKeyID, bucket, object)
+	versionID, isDeleteMarker, orphan, err := s.store.DeleteObject(accessKeyID, bucket, object)
 	if err != nil {
 		return nil, err
 	}
-	if orphanFile != "" {
-		s.cleanupOrphan(filepath.Join(s.uploadDir(), orphanFile), orphanSize)
-	}
+	s.cleanupOrphanFile(orphan)
 
 	return &s3.DeleteObjectResult{
-		IsDeleteMarker: false,
-		VersionID:      "",
+		IsDeleteMarker: isDeleteMarker,
+		VersionID:      versionID,
 	}, nil
 }
 
@@ -255,9 +254,9 @@ func (s *Sia) DeleteObjects(ctx context.Context, accessKeyID, bucket string, obj
 	var result s3.ObjectsDeleteResult
 
 	for _, obj := range objects {
-		orphanFile, orphanSize, err := s.store.DeleteObject(accessKeyID, bucket, obj)
-		if err == nil && orphanFile != "" {
-			s.cleanupOrphan(filepath.Join(s.uploadDir(), orphanFile), orphanSize)
+		versionID, isDeleteMarker, orphan, err := s.store.DeleteObject(accessKeyID, bucket, obj)
+		if err == nil {
+			s.cleanupOrphanFile(orphan)
 		}
 
 		if err != nil && !errors.Is(err, s3errs.ErrNoSuchKey) {
@@ -266,13 +265,18 @@ func (s *Sia) DeleteObjects(ctx context.Context, accessKeyID, bucket string, obj
 				Code:    s3errs.ErrorCode(err),
 				Message: err.Error(),
 			})
-		} else {
-			result.Deleted = append(result.Deleted, s3.ObjectID{
-				Key: obj.Key,
-				// VersionID is now *string; the follow-up branch (versioning-3)
-				// rewrites this method.
-			})
+			continue
 		}
+
+		deleted := s3.DeletedObject{Key: obj.Key}
+		if obj.VersionID != nil {
+			deleted.VersionID = versionID
+		}
+		if isDeleteMarker {
+			deleted.DeleteMarker = true
+			deleted.DeleteMarkerVersionID = versionID
+		}
+		result.Deleted = append(result.Deleted, deleted)
 	}
 	return &result, nil
 }
@@ -280,56 +284,54 @@ func (s *Sia) DeleteObjects(ctx context.Context, accessKeyID, bucket string, obj
 // GetObject retrieves the object with the given key from the specified
 // bucket for the user identified by the given access key. The provided
 // range is either nil if no range was requested, or contains the requested,
-// byte range.
-func (s *Sia) GetObject(ctx context.Context, accessKeyID *string, bucket, object string, rnge *s3.ObjectRangeRequest, partNumber *int32) (*s3.Object, error) {
-	return s.headOrGetObject(ctx, accessKeyID, bucket, object, rnge, partNumber, false)
+// byte range. version selects a specific version, or the current version when
+// unspecified.
+func (s *Sia) GetObject(ctx context.Context, accessKeyID *string, bucket, object string, version s3.VersionRequest, rnge *s3.ObjectRangeRequest, partNumber *int32) (*s3.Object, error) {
+	return s.headOrGetObject(ctx, accessKeyID, bucket, object, version, rnge, partNumber, false)
 }
 
 // HeadObject is like GetObject but only retrieves the metadata of the
 // object and returns an empty body.
-func (s *Sia) HeadObject(ctx context.Context, accessKeyID *string, bucket, object string, rnge *s3.ObjectRangeRequest, partNumber *int32) (*s3.Object, error) {
-	return s.headOrGetObject(ctx, accessKeyID, bucket, object, rnge, partNumber, true)
+func (s *Sia) HeadObject(ctx context.Context, accessKeyID *string, bucket, object string, version s3.VersionRequest, rnge *s3.ObjectRangeRequest, partNumber *int32) (*s3.Object, error) {
+	return s.headOrGetObject(ctx, accessKeyID, bucket, object, version, rnge, partNumber, true)
 }
 
-func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, object string, requestedRange *s3.ObjectRangeRequest, partNumber *int32, head bool) (*s3.Object, error) {
+func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, object string, version s3.VersionRequest, requestedRange *s3.ObjectRangeRequest, partNumber *int32, head bool) (*s3.Object, error) {
 	if accessKeyID == nil {
 		return nil, s3errs.ErrAccessDenied
 	}
 
-	obj, err := s.store.GetObject(*accessKeyID, bucket, object, partNumber)
+	obj, err := s.store.GetObject(*accessKeyID, bucket, object, version, partNumber)
 	if err != nil {
 		return nil, err
 	}
 
-	var resp *s3.Object
-	if partNumber != nil {
-		partsCount := max(obj.PartsCount, 1)
-		resp = &s3.Object{
-			Body:         nil,
-			ContentMD5:   obj.ContentMD5,
-			LastModified: obj.LastModified,
-			Metadata:     obj.Meta,
-			Range:        &s3.ObjectRange{Start: obj.Offset, Length: obj.Length},
-			Size:         obj.Size,
-			PartsCount:   aws.Int32(partsCount),
-		}
-	} else {
+	resp := &s3.Object{
+		ContentMD5:     obj.ContentMD5,
+		LastModified:   obj.LastModified,
+		Metadata:       obj.Meta,
+		VersionID:      obj.VersionID,
+		Versioned:      obj.Versioned,
+		IsDeleteMarker: obj.IsDeleteMarker,
+	}
+	switch {
+	case obj.IsDeleteMarker:
+		// a delete marker carries no data; skip range/part validation
+		resp.Size = obj.Length
+		return resp, nil
+	case partNumber != nil:
+		resp.Range = &s3.ObjectRange{Start: obj.Offset, Length: obj.Length}
+		resp.Size = obj.Size
+		resp.PartsCount = aws.Int32(max(obj.PartsCount, 1))
+	default:
 		rnge, err := requestedRange.Range(obj.Length)
 		if err != nil {
 			return nil, err
 		}
-		var partsCount *int32
+		resp.Range = rnge
+		resp.Size = obj.Length
 		if obj.PartsCount > 0 {
-			partsCount = aws.Int32(obj.PartsCount)
-		}
-		resp = &s3.Object{
-			Body:         nil,
-			ContentMD5:   obj.ContentMD5,
-			LastModified: obj.LastModified,
-			Metadata:     obj.Meta,
-			Range:        rnge,
-			Size:         obj.Length,
-			PartsCount:   partsCount,
+			resp.PartsCount = aws.Int32(obj.PartsCount)
 		}
 	}
 
@@ -346,15 +348,16 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 
 	// read from disk if the object hasn't been uploaded yet
 	if obj.FileName != nil {
-		rc, err := s.openUpload(bucket, object, obj.FileName, obj.IsMultipart(), resp.Range)
+		rc, err := s.openUpload(bucket, object, obj.VersionID, obj.FileName, obj.IsMultipart(), resp.Range)
 		if errors.Is(err, fs.ErrNotExist) {
 			// the upload loop moved the file to Sia between our GetObject
-			// and file open, re-fetch to get the updated metadata and retry
-			obj, err = s.store.GetObject(*accessKeyID, bucket, object, partNumber)
+			// and file open, re-fetch the same version to get the updated
+			// metadata and retry
+			obj, err = s.store.GetObject(*accessKeyID, bucket, object, s3.SpecificVersion(obj.VersionID), partNumber)
 			if err != nil {
 				return nil, err
 			} else if obj.FileName != nil {
-				rc, err = s.openUpload(bucket, object, obj.FileName, obj.IsMultipart(), resp.Range)
+				rc, err = s.openUpload(bucket, object, obj.VersionID, obj.FileName, obj.IsMultipart(), resp.Range)
 			}
 		}
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -406,6 +409,33 @@ func (s *Sia) ListObjects(ctx context.Context, accessKeyID *string, bucket strin
 		}
 		for i := range result.Contents {
 			result.Contents[i].Owner = owner
+		}
+	}
+	return result, nil
+}
+
+// ListObjectVersions lists all versions (including delete markers) of the
+// objects in the specified bucket for the user identified by the given access
+// key.
+func (s *Sia) ListObjectVersions(ctx context.Context, accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectVersionsPage) (*s3.ObjectVersionsListResult, error) {
+	if accessKeyID == nil {
+		// anonymous access is not supported yet
+		return nil, s3errs.ErrAccessDenied
+	}
+
+	result, err := s.store.ListObjectVersions(*accessKeyID, bucket, prefix, page)
+	if err != nil {
+		return nil, err
+	}
+
+	// populate owner info if requested
+	if page.FetchOwner != nil && *page.FetchOwner {
+		owner, err := s.UserInfo(ctx, *accessKeyID)
+		if err != nil {
+			return nil, err
+		}
+		for i := range result.Versions {
+			result.Versions[i].Owner = owner
 		}
 	}
 	return result, nil
@@ -484,15 +514,14 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	}
 
 	// store the object in the database
-	orphanFile, orphanSize, err := s.store.PutObject(accessKeyID, bucket, object, contentMD5, opts.Meta, size, fileName)
+	versionID, orphan, err := s.store.PutObject(accessKeyID, bucket, object, contentMD5, opts.Meta, size, fileName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to store object metadata: %w", err)
 	}
-	if orphanFile != "" {
-		s.cleanupOrphan(filepath.Join(s.uploadDir(), orphanFile), orphanSize)
-	}
+	s.cleanupOrphanFile(orphan)
 
 	return &s3.PutObjectResult{
 		ContentMD5: contentMD5,
+		VersionID:  versionID,
 	}, nil
 }
