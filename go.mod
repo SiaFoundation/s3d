@@ -6,8 +6,8 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.42.0
 	github.com/aws/aws-sdk-go-v2/config v1.32.25
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.24
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.103.3
-	github.com/mattn/go-sqlite3 v1.14.45
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.104.0
+	github.com/mattn/go-sqlite3 v1.14.47
 	github.com/minio/minio-go/v7 v7.2.0
 	go.sia.tech/core v0.21.1
 	go.sia.tech/coreutils v0.22.1-0.20260602072818-74eb647d67d8
