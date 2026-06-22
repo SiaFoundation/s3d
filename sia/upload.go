@@ -199,7 +199,9 @@ func (s *Sia) uploadLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			s.uploadObjects(ctx, false)
+			// errors are logged per group inside uploadObjects; the
+			// background loop retries on the next tick
+			_ = s.uploadObjects(ctx, false)
 		}
 	}
 }
@@ -209,8 +211,9 @@ func (s *Sia) uploadLoop(ctx context.Context) {
 // packed slabs, and pins the uploaded objects so their local backup files are
 // removed. It blocks until the uploads and pins complete.
 func (s *Sia) FlushObjects(ctx context.Context) error {
-	s.uploadObjects(ctx, true)
-	if err := ctx.Err(); err != nil {
+	if err := s.uploadObjects(ctx, true); err != nil {
+		return fmt.Errorf("failed to upload objects: %w", err)
+	} else if err := ctx.Err(); err != nil {
 		return err
 	} else if err := s.performObjectPinning(ctx); err != nil {
 		// don't wait for the pinning loop
@@ -219,7 +222,7 @@ func (s *Sia) FlushObjects(ctx context.Context) error {
 	return ctx.Err()
 }
 
-func (s *Sia) uploadObjects(ctx context.Context, flush bool) { //nolint:revive
+func (s *Sia) uploadObjects(ctx context.Context, flush bool) error { //nolint:revive
 	// serialize upload cycles so a manual flush and the background loop don't
 	// pick up the same objects and waste work uploading them twice
 	s.uploadMu.Lock()
@@ -229,7 +232,7 @@ func (s *Sia) uploadObjects(ctx context.Context, flush bool) { //nolint:revive
 	groups := s.prepareUploads(flush)
 	if len(groups) == 0 {
 		s.logger.Debug("not enough objects for upload")
-		return
+		return nil
 	}
 	s.logger.Debug("found enough objects for upload",
 		zap.Int("groups", len(groups)))
@@ -246,7 +249,8 @@ func (s *Sia) uploadObjects(ctx context.Context, flush bool) { //nolint:revive
 	uploadsCh := make(chan uploadGroup, numUploadThreads)
 
 	// start upload workers
-	for range numUploadThreads {
+	errs := make([]error, numUploadThreads)
+	for i := range numUploadThreads {
 		wg.Go(func() {
 			for g := range uploadsCh {
 				s.logger.Info("uploading object group",
@@ -259,6 +263,7 @@ func (s *Sia) uploadObjects(ctx context.Context, flush bool) { //nolint:revive
 				err := s.uploadObjectGroup(ctx, g)
 				if err != nil {
 					s.logger.Error("failed to upload object group", zap.Error(err))
+					errs[i] = errors.Join(errs[i], err)
 				}
 			}
 		})
@@ -287,6 +292,8 @@ func (s *Sia) uploadObjects(ctx context.Context, flush bool) { //nolint:revive
 	}
 
 	wg.Wait()
+
+	return errors.Join(errs...)
 }
 
 // UploadStats returns statistics about the background upload pipeline.
