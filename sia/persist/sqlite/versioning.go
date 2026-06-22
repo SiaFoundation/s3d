@@ -27,7 +27,7 @@ func reportedWriteVersion(status, v string) string {
 	if status != s3.VersioningStatusEnabled {
 		return ""
 	}
-	return s3.VersionForWire(v)
+	return s3.FormatVersion(v)
 }
 
 // reportedDeleteVersion is the version ID to report for a delete. A suspended
@@ -37,7 +37,7 @@ func reportedDeleteVersion(status, v string) string {
 	if status == "" {
 		return ""
 	}
-	return s3.VersionForWire(v)
+	return s3.FormatVersion(v)
 }
 
 // objectMutationResult carries every effect of a write or delete transition the
@@ -203,7 +203,7 @@ func deleteSpecificVersion(tx *txn, bid int64, name string, version string, obje
 	}
 	return objectMutationResult{
 		dbVersionID:     version,
-		reportVersionID: s3.VersionForWire(version),
+		reportVersionID: s3.FormatVersion(version),
 		deleteMarker:    row.isDeleteMarker,
 		orphanFile:      orphan,
 	}, nil

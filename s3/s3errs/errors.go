@@ -46,6 +46,7 @@ var (
 	ErrAuthorizationQueryParametersError              = Error{"AuthorizationQueryParametersError", "The authorization query parameters are not valid.", http.StatusBadRequest}
 	ErrBadDigest                                      = Error{"BadDigest", "Provided Content-MD5/checksum does not match what the server received.", http.StatusBadRequest}
 	ErrBucketAlreadyExists                            = Error{"BucketAlreadyExists", "Requested bucket name is not available; the namespace is shared.", http.StatusConflict}
+	ErrBucketAlreadyOwnedByYou                        = Error{"BucketAlreadyOwnedByYou", "Bucket already exists and is owned by you.", http.StatusConflict}
 	ErrBucketHasAccessPointsAttached                  = Error{"BucketHasAccessPointsAttached", "Bucket to delete has access points attached; delete them first.", http.StatusBadRequest}
 	ErrBucketNotEmpty                                 = Error{"BucketNotEmpty", "Bucket you tried to delete is not empty.", http.StatusConflict}
 	ErrClientTokenConflict                            = Error{"ClientTokenConflict", "Multi-Region Access Point idempotency token was already used for a different request.", http.StatusConflict}

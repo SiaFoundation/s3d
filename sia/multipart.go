@@ -221,8 +221,8 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 
 	// the copied source version, reported only for a versioned source bucket
 	var srcVersionWire string
-	if obj.BucketVersioned {
-		srcVersionWire = s3.VersionForWire(obj.VersionID)
+	if obj.Versioned {
+		srcVersionWire = s3.FormatVersion(obj.VersionID)
 	}
 
 	// validate range

@@ -32,10 +32,10 @@ type Object struct {
 	// VersionID is the version ID of the object, or "" for the null version.
 	VersionID string
 
-	// BucketVersioned reports whether the object's bucket has versioning
+	// Versioned reports whether the object's bucket has versioning
 	// configured (Enabled or Suspended). When false, no version header is
 	// emitted.
-	BucketVersioned bool
+	Versioned bool
 
 	// IsDeleteMarker is true when the requested version is a delete marker.
 	IsDeleteMarker bool
@@ -390,21 +390,17 @@ func (s *s3) serveObject(w http.ResponseWriter, r *http.Request, accessKeyID *st
 	if err != nil {
 		return err
 	}
-
-	// HEAD never streams a body; close it immediately if one was returned.
-	if head && obj.Body != nil {
-		_ = obj.Body.Close() // just in case
-	}
+	// the body is only consumed on the successful GET path below; close it on
+	// every other path (HEAD, delete marker, error)
+	defer func() {
+		if obj.Body != nil {
+			obj.Body.Close()
+		}
+	}()
 
 	// a delete marker has no data and cannot be retrieved with GET or HEAD.
 	if obj.IsDeleteMarker {
-		if !head && obj.Body != nil {
-			_ = obj.Body.Close()
-		}
 		return deleteMarkerError(w, obj, version)
-	}
-	if !head {
-		defer obj.Body.Close()
 	}
 
 	// write headers
@@ -430,8 +426,8 @@ func (s *s3) serveObject(w http.ResponseWriter, r *http.Request, accessKeyID *st
 // setVersionHeaders sets x-amz-version-id (for versioned objects) and
 // x-amz-delete-marker (for delete markers) on the response.
 func setVersionHeaders(w http.ResponseWriter, obj *Object) {
-	if obj.BucketVersioned {
-		w.Header().Set("x-amz-version-id", VersionForWire(obj.VersionID))
+	if obj.Versioned {
+		w.Header().Set("x-amz-version-id", FormatVersion(obj.VersionID))
 	}
 	if obj.IsDeleteMarker {
 		w.Header().Set("x-amz-delete-marker", "true")
@@ -666,14 +662,16 @@ func (s *s3) listObjectVersions(w http.ResponseWriter, r *http.Request, accessKe
 	}
 
 	result := ListObjectVersionsResult{
-		Xmlns:           "http://s3.amazonaws.com/doc/2006-03-01/",
-		Name:            bucket,
-		Prefix:          escape(prefix.Prefix),
+		ListObjectsResultBase: ListObjectsResultBase{
+			Xmlns:       "http://s3.amazonaws.com/doc/2006-03-01/",
+			Name:        bucket,
+			Prefix:      escape(prefix.Prefix),
+			MaxKeys:     page.MaxKeys,
+			Delimiter:   escape(prefix.Delimiter),
+			IsTruncated: versions.IsTruncated,
+		},
 		KeyMarker:       escape(q.Get("key-marker")),
 		VersionIDMarker: q.Get("version-id-marker"),
-		MaxKeys:         page.MaxKeys,
-		Delimiter:       escape(prefix.Delimiter),
-		IsTruncated:     versions.IsTruncated,
 		Versions:        []VersionListEntry{},
 	}
 	if encodeURL {
@@ -689,7 +687,7 @@ func (s *s3) listObjectVersions(w http.ResponseWriter, r *http.Request, accessKe
 		if v.IsDeleteMarker {
 			result.Versions = append(result.Versions, DeleteMarker{
 				Key:          escape(v.Key),
-				VersionID:    VersionForWire(v.VersionID),
+				VersionID:    FormatVersion(v.VersionID),
 				IsLatest:     v.IsLatest,
 				LastModified: NewContentTime(v.LastModified),
 				Owner:        v.Owner,
@@ -698,7 +696,7 @@ func (s *s3) listObjectVersions(w http.ResponseWriter, r *http.Request, accessKe
 		}
 		result.Versions = append(result.Versions, Version{
 			Key:          escape(v.Key),
-			VersionID:    VersionForWire(v.VersionID),
+			VersionID:    FormatVersion(v.VersionID),
 			IsLatest:     v.IsLatest,
 			LastModified: NewContentTime(v.LastModified),
 			Size:         v.Size,
@@ -713,9 +711,9 @@ func (s *s3) listObjectVersions(w http.ResponseWriter, r *http.Request, accessKe
 	return writeXMLResponse(w, http.StatusOK, result)
 }
 
-// VersionForWire renders an internal version ID for an S3 response. The null
+// FormatVersion renders an internal version ID for an S3 response. The null
 // version (the empty string) is rendered as the literal "null".
-func VersionForWire(versionID string) string {
+func FormatVersion(versionID string) string {
 	if versionID == "" {
 		return Null
 	}
@@ -763,7 +761,7 @@ func (v VersionRequest) LogValue() string {
 	if !v.Specified {
 		return ""
 	}
-	return VersionForWire(v.ID)
+	return FormatVersion(v.ID)
 }
 
 func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID string, bucket, object string) (err error) {
@@ -1031,7 +1029,7 @@ func (r *ObjectVersionsListResult) AddVersion(v ObjectVersion) {
 	r.Versions = append(r.Versions, v)
 	// wire-encode the marker; an empty null-version value would be dropped by
 	// the encoder, breaking mid-key resumption.
-	r.NextKeyMarker, r.NextVersionIDMarker = v.Key, VersionForWire(v.VersionID)
+	r.NextKeyMarker, r.NextVersionIDMarker = v.Key, FormatVersion(v.VersionID)
 }
 
 // AddPrefix rolls a key up under a common prefix (deduping repeats), or marks

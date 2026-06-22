@@ -120,6 +120,7 @@ type (
 
 	// ListObjectsV1Result is the response to a ListObjects (v1) request.
 	ListObjectsV1Result struct {
+		XMLName xml.Name `xml:"ListBucketResult"`
 		ListObjectsResultBase
 
 		// Indicates where in the bucket listing begins. Echoed from the
@@ -134,6 +135,7 @@ type (
 
 	// ListObjectsV2Result is the response to a ListObjectsV2 request.
 	ListObjectsV2Result struct {
+		XMLName xml.Name `xml:"ListBucketResult"`
 		ListObjectsResultBase
 
 		// If ContinuationToken was sent with the request, it is included in the
@@ -188,12 +190,11 @@ type (
 
 	// ListObjectVersionsResult is the response to a ListObjectVersions request.
 	ListObjectVersionsResult struct {
-		XMLName         xml.Name `xml:"ListVersionsResult"`
-		Xmlns           string   `xml:"xmlns,attr"`
-		Name            string   `xml:"Name"`
-		Prefix          string   `xml:"Prefix"`
-		KeyMarker       string   `xml:"KeyMarker"`
-		VersionIDMarker string   `xml:"VersionIdMarker"`
+		XMLName xml.Name `xml:"ListVersionsResult"`
+		ListObjectsResultBase
+
+		KeyMarker       string `xml:"KeyMarker"`
+		VersionIDMarker string `xml:"VersionIdMarker"`
 
 		// When the number of responses exceeds the value of MaxKeys, NextKeyMarker
 		// specifies the first key not returned that satisfies the search criteria.
@@ -207,22 +208,16 @@ type (
 		// request parameter in a subsequent request.
 		NextVersionIDMarker string `xml:"NextVersionIdMarker,omitempty"`
 
-		MaxKeys     int64  `xml:"MaxKeys"`
-		Delimiter   string `xml:"Delimiter,omitempty"`
-		IsTruncated bool   `xml:"IsTruncated"`
-
 		// Versions holds the Version and DeleteMarker elements interleaved in
 		// response order: key ascending, then newest version first.
 		Versions []VersionListEntry
-
-		CommonPrefixes []CommonPrefix `xml:"CommonPrefixes,omitempty"`
-		EncodingType   string         `xml:"EncodingType,omitempty"`
 	}
 
-	// ListObjectsResultBase is the common part of a listing response.
+	// ListObjectsResultBase is the common part of a listing response. The
+	// concrete result types declare their own XMLName so they can be marshalled
+	// under the correct root element.
 	ListObjectsResultBase struct {
-		XMLName xml.Name `xml:"ListBucketResult"`
-		Xmlns   string   `xml:"xmlns,attr"`
+		Xmlns string `xml:"xmlns,attr"`
 
 		// Name of the bucket.
 		Name string `xml:"Name"`

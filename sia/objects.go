@@ -307,12 +307,12 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 	}
 
 	resp := &s3.Object{
-		ContentMD5:      obj.ContentMD5,
-		LastModified:    obj.LastModified,
-		Metadata:        obj.Meta,
-		VersionID:       obj.VersionID,
-		BucketVersioned: obj.BucketVersioned,
-		IsDeleteMarker:  obj.IsDeleteMarker,
+		ContentMD5:     obj.ContentMD5,
+		LastModified:   obj.LastModified,
+		Metadata:       obj.Meta,
+		VersionID:      obj.VersionID,
+		Versioned:      obj.Versioned,
+		IsDeleteMarker: obj.IsDeleteMarker,
 	}
 	switch {
 	case obj.IsDeleteMarker:

@@ -69,7 +69,7 @@ func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (
 			version := *objectID.VersionID
 			res, err := deleteSpecificVersion(tx, bid, objectID.Key, version, objectID)
 			if errors.Is(err, sql.ErrNoRows) {
-				versionID = s3.VersionForWire(version) // idempotent: report as deleted
+				versionID = s3.FormatVersion(version) // idempotent: report as deleted
 				return nil
 			} else if err != nil {
 				return err
@@ -153,7 +153,7 @@ func (s *Store) GetObject(accessKeyID, bucket, name string, version s3.VersionRe
 		if err != nil {
 			return err
 		}
-		obj.BucketVersioned = status != ""
+		obj.Versioned = status != ""
 		return nil
 	}); errors.Is(err, sql.ErrNoRows) {
 		if version.Specified {
@@ -625,7 +625,7 @@ func (s *Store) CopyObject(accessKeyID, srcBucket, srcName string, srcVersion s3
 		}
 		srcInternalVersion := obj.VersionID
 		if srcStatus != "" {
-			srcVersionWire = s3.VersionForWire(srcInternalVersion)
+			srcVersionWire = s3.FormatVersion(srcInternalVersion)
 		}
 
 		if replace {

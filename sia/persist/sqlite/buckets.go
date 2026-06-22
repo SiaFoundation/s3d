@@ -31,9 +31,7 @@ func (s *Store) CreateBucket(accessKeyID, bucket string) error {
 			if err := tx.QueryRow("SELECT user_id FROM buckets WHERE name = $1", bucket).Scan(&ownerID); err != nil {
 				return err
 			} else if ownerID == uid {
-				// re-creating a bucket you already own is idempotent and
-				// preserves its contents, matching the AWS default region.
-				return nil
+				return s3errs.ErrBucketAlreadyOwnedByYou
 			}
 			return s3errs.ErrBucketAlreadyExists
 		}

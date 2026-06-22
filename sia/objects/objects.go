@@ -24,17 +24,17 @@ type Object struct {
 	FileName  *string
 	Name      string
 	VersionID string // "" represents the null version
-	// BucketVersioned reports whether the bucket has versioning configured
+	// Versioned reports whether the bucket has versioning configured
 	// (Enabled or Suspended).
-	BucketVersioned bool
-	IsDeleteMarker  bool
-	PartsCount      int32
-	Meta            map[string]string
-	Offset          int64
-	Length          int64
-	Size            int64
-	ContentMD5      [16]byte
-	LastModified    time.Time
+	Versioned      bool
+	IsDeleteMarker bool
+	PartsCount     int32
+	Meta           map[string]string
+	Offset         int64
+	Length         int64
+	Size           int64
+	ContentMD5     [16]byte
+	LastModified   time.Time
 }
 
 // SiaObject pairs a Sia object ID with its sealed metadata.
