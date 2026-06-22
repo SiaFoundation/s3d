@@ -33,7 +33,7 @@ func paginateVersions(t *testing.T, s3Tester *testutil.S3Tester, bucket string, 
 func TestBucketVersioningConfiguration(t *testing.T) {
 	s3Tester := testutil.NewTester(t)
 
-	t.Run("get and put", func(t *testing.T) {
+	t.Run("GetAndPut", func(t *testing.T) {
 		bucket := "versioning"
 		if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 			t.Fatal(err)
@@ -60,7 +60,7 @@ func TestBucketVersioningConfiguration(t *testing.T) {
 		}
 	})
 
-	t.Run("rejects MFA delete", func(t *testing.T) {
+	t.Run("RejectsMFADelete", func(t *testing.T) {
 		bucket := "mfa-delete"
 		if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 			t.Fatal(err)
@@ -79,7 +79,7 @@ func TestBucketVersioningConfiguration(t *testing.T) {
 func TestVersionedObjects(t *testing.T) {
 	s3Tester := testutil.NewTester(t)
 
-	t.Run("lifecycle", func(t *testing.T) {
+	t.Run("Lifecycle", func(t *testing.T) {
 		bucket := "versioned-object"
 		if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 			t.Fatal(err)
@@ -177,7 +177,7 @@ func TestVersionedObjects(t *testing.T) {
 		}
 	})
 
-	t.Run("missing version", func(t *testing.T) {
+	t.Run("MissingVersion", func(t *testing.T) {
 		bucket := "missing-version"
 		if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 			t.Fatal(err)
@@ -191,7 +191,7 @@ func TestVersionedObjects(t *testing.T) {
 		testutil.AssertS3Error(t, s3errs.ErrNoSuchVersion, err)
 	})
 
-	t.Run("delete marker returns 405", func(t *testing.T) {
+	t.Run("DeleteMarkerReturns405", func(t *testing.T) {
 		bucket := "delete-marker-status"
 		if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 			t.Fatal(err)
@@ -238,7 +238,7 @@ func TestVersionedObjects(t *testing.T) {
 		testutil.AssertS3Error(t, s3errs.ErrNoSuchKey, err)
 	})
 
-	t.Run("multi-object delete", func(t *testing.T) {
+	t.Run("MultiObjectDelete", func(t *testing.T) {
 		bucket := "multi-object-delete"
 		if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 			t.Fatal(err)
@@ -275,7 +275,7 @@ func TestVersionedObjects(t *testing.T) {
 		}
 	})
 
-	t.Run("multipart upload", func(t *testing.T) {
+	t.Run("MultipartUpload", func(t *testing.T) {
 		bucket := "multipart-version"
 		if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 			t.Fatal(err)
@@ -315,7 +315,7 @@ func TestVersionedObjects(t *testing.T) {
 func TestSuspendedVersioning(t *testing.T) {
 	s3Tester := testutil.NewTester(t)
 
-	t.Run("writes use null version", func(t *testing.T) {
+	t.Run("WritesUseNullVersion", func(t *testing.T) {
 		bucket := "suspended"
 		if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 			t.Fatal(err)
@@ -377,7 +377,7 @@ func TestSuspendedVersioning(t *testing.T) {
 		}
 	})
 
-	t.Run("null version addressing", func(t *testing.T) {
+	t.Run("NullVersionAddressing", func(t *testing.T) {
 		bucket := "null-version-addressing"
 		if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 			t.Fatal(err)
@@ -445,7 +445,7 @@ func TestSuspendedVersioning(t *testing.T) {
 func TestListObjectVersions(t *testing.T) {
 	s3Tester := testutil.NewTester(t)
 
-	t.Run("pagination", func(t *testing.T) {
+	t.Run("Pagination", func(t *testing.T) {
 		bucket := "version-pagination"
 		if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 			t.Fatal(err)
@@ -500,7 +500,7 @@ func TestListObjectVersions(t *testing.T) {
 		}
 	})
 
-	t.Run("delimiter pagination", func(t *testing.T) {
+	t.Run("DelimiterPagination", func(t *testing.T) {
 		bucket := "delimiter-pagination"
 		if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 			t.Fatal(err)
@@ -536,7 +536,7 @@ func TestListObjectVersions(t *testing.T) {
 		}
 	})
 
-	t.Run("version-id marker without key marker", func(t *testing.T) {
+	t.Run("VersionIDMarkerWithoutKeyMarker", func(t *testing.T) {
 		bucket := "version-id-marker"
 		if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 			t.Fatal(err)
@@ -552,7 +552,7 @@ func TestListObjectVersions(t *testing.T) {
 		testutil.AssertS3Error(t, s3errs.ErrInvalidArgument, err)
 	})
 
-	t.Run("max-keys zero", func(t *testing.T) {
+	t.Run("MaxKeysZero", func(t *testing.T) {
 		bucket := "max-keys-zero"
 		if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 			t.Fatal(err)
@@ -578,7 +578,7 @@ func TestListObjectVersions(t *testing.T) {
 func TestRestoreViaCopy(t *testing.T) {
 	s3Tester := testutil.NewTester(t)
 
-	t.Run("previous version", func(t *testing.T) {
+	t.Run("PreviousVersion", func(t *testing.T) {
 		bucket := "restore-previous"
 		if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 			t.Fatal(err)
@@ -609,7 +609,7 @@ func TestRestoreViaCopy(t *testing.T) {
 		}
 	})
 
-	t.Run("null version in suspended bucket", func(t *testing.T) {
+	t.Run("NullVersionInSuspendedBucket", func(t *testing.T) {
 		bucket := "restore-null"
 		if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 			t.Fatal(err)
@@ -646,7 +646,7 @@ func TestRestoreViaCopy(t *testing.T) {
 		}
 	})
 
-	t.Run("self copy without version rejected", func(t *testing.T) {
+	t.Run("SelfCopyWithoutVersionRejected", func(t *testing.T) {
 		bucket := "self-copy"
 		if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 			t.Fatal(err)

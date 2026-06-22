@@ -627,7 +627,7 @@ func TestListObjects(t *testing.T) {
 	}
 
 	// test pagination with continuation token
-	t.Run("pagination", func(t *testing.T) {
+	t.Run("Pagination", func(t *testing.T) {
 		// first request
 		resp, err := s3Tester.ListObjectsV2(t.Context(), bucket, nil, nil, s3.ListObjectsPage{
 			MaxKeys: 2,

@@ -2009,6 +2009,385 @@ func TestScheduleObjectForReupload(t *testing.T) {
 	}
 }
 
+func TestVersioning(t *testing.T) {
+	const accessKeyID = testAccessKeyID
+
+	store := initTestDB(t, zaptest.NewLogger(t))
+
+	t.Run("BucketConfiguration", func(t *testing.T) {
+		const bucket = "config"
+		if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+			t.Fatal(err)
+		}
+
+		// an unconfigured bucket reports no status
+		if status, err := store.GetBucketVersioning(accessKeyID, bucket); err != nil {
+			t.Fatal(err)
+		} else if status != "" {
+			t.Fatalf("expected empty status, got %q", status)
+		}
+
+		// status round-trips through put/get
+		for _, want := range []string{s3.VersioningStatusEnabled, s3.VersioningStatusSuspended} {
+			if err := store.PutBucketVersioning(accessKeyID, bucket, want); err != nil {
+				t.Fatal(err)
+			}
+			if got, err := store.GetBucketVersioning(accessKeyID, bucket); err != nil {
+				t.Fatal(err)
+			} else if got != want {
+				t.Fatalf("expected status %q, got %q", want, got)
+			}
+		}
+	})
+
+	t.Run("EnabledLifecycle", func(t *testing.T) {
+		const (
+			bucket = "enabled"
+			key    = "key"
+		)
+		if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+			t.Fatal(err)
+		} else if err := store.PutBucketVersioning(accessKeyID, bucket, s3.VersioningStatusEnabled); err != nil {
+			t.Fatal(err)
+		}
+
+		put := func() string {
+			t.Helper()
+			v, _, err := store.PutObject(accessKeyID, bucket, key, frand.Entropy128(), nil, 1, new(string))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return v
+		}
+
+		// two writes produce two distinct, non-empty version IDs
+		v1 := put()
+		v2 := put()
+		if v1 == "" || v2 == "" {
+			t.Fatalf("expected non-empty version IDs, got %q and %q", v1, v2)
+		} else if v1 == v2 {
+			t.Fatalf("expected distinct version IDs, both were %q", v1)
+		}
+
+		// the current version is the latest write, and the object reports as versioned
+		if obj, err := store.GetObject(accessKeyID, bucket, key, s3.NoVersion(), nil); err != nil {
+			t.Fatal(err)
+		} else if obj.VersionID != v2 {
+			t.Fatalf("expected current version %q, got %q", v2, obj.VersionID)
+		} else if !obj.Versioned {
+			t.Fatal("expected object to be reported as versioned")
+		}
+
+		// each version is independently retrievable
+		if obj, err := store.GetObject(accessKeyID, bucket, key, s3.SpecificVersion(v1), nil); err != nil {
+			t.Fatal(err)
+		} else if obj.VersionID != v1 {
+			t.Fatalf("expected version %q, got %q", v1, obj.VersionID)
+		}
+
+		// an unknown version is reported as missing
+		if _, err := store.GetObject(accessKeyID, bucket, key, s3.SpecificVersion("does-not-exist"), nil); !errors.Is(err, s3errs.ErrNoSuchVersion) {
+			t.Fatalf("expected ErrNoSuchVersion, got %v", err)
+		}
+
+		// a simple delete inserts a delete marker that becomes the current version
+		marker, isDeleteMarker, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: key})
+		if err != nil {
+			t.Fatal(err)
+		} else if !isDeleteMarker {
+			t.Fatal("expected a delete marker on simple delete")
+		} else if marker == "" {
+			t.Fatal("expected a delete marker version ID")
+		}
+		if obj, err := store.GetObject(accessKeyID, bucket, key, s3.NoVersion(), nil); err != nil {
+			t.Fatal(err)
+		} else if !obj.IsDeleteMarker {
+			t.Fatal("expected current version to be a delete marker")
+		}
+
+		// deleting the delete marker by version restores the previous version
+		if _, _, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: key, VersionID: &marker}); err != nil {
+			t.Fatal(err)
+		}
+		if obj, err := store.GetObject(accessKeyID, bucket, key, s3.NoVersion(), nil); err != nil {
+			t.Fatal(err)
+		} else if obj.IsDeleteMarker {
+			t.Fatal("expected the object to be restored")
+		} else if obj.VersionID != v2 {
+			t.Fatalf("expected restored current version %q, got %q", v2, obj.VersionID)
+		}
+
+		// permanently deleting a specific version removes only that version
+		if _, _, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: key, VersionID: &v1}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.GetObject(accessKeyID, bucket, key, s3.SpecificVersion(v1), nil); !errors.Is(err, s3errs.ErrNoSuchVersion) {
+			t.Fatalf("expected ErrNoSuchVersion for deleted version, got %v", err)
+		}
+		if obj, err := store.GetObject(accessKeyID, bucket, key, s3.NoVersion(), nil); err != nil {
+			t.Fatal(err)
+		} else if obj.VersionID != v2 {
+			t.Fatalf("expected remaining version %q to stay current, got %q", v2, obj.VersionID)
+		}
+	})
+
+	t.Run("SuspendedNullVersion", func(t *testing.T) {
+		const (
+			bucket = "suspended"
+			key    = "key"
+		)
+		if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+			t.Fatal(err)
+		}
+
+		// create a non-null version while enabled
+		if err := store.PutBucketVersioning(accessKeyID, bucket, s3.VersioningStatusEnabled); err != nil {
+			t.Fatal(err)
+		}
+		v1, _, err := store.PutObject(accessKeyID, bucket, key, frand.Entropy128(), nil, 1, new(string))
+		if err != nil {
+			t.Fatal(err)
+		} else if v1 == "" {
+			t.Fatal("expected a version ID while enabled")
+		}
+
+		// suspended writes report no version and reuse the null version in place
+		if err := store.PutBucketVersioning(accessKeyID, bucket, s3.VersioningStatusSuspended); err != nil {
+			t.Fatal(err)
+		}
+		if v, _, err := store.PutObject(accessKeyID, bucket, key, frand.Entropy128(), nil, 1, new(string)); err != nil {
+			t.Fatal(err)
+		} else if v != "" {
+			t.Fatalf("expected no version ID while suspended, got %q", v)
+		}
+		if _, _, err := store.PutObject(accessKeyID, bucket, key, frand.Entropy128(), nil, 1, new(string)); err != nil {
+			t.Fatal(err)
+		}
+
+		// only the null version and the original non-null version remain
+		result, err := store.ListObjectVersions(accessKeyID, bucket, s3.Prefix{}, s3.ListObjectVersionsPage{MaxKeys: 100})
+		if err != nil {
+			t.Fatal(err)
+		} else if len(result.Versions) != 2 {
+			t.Fatalf("expected 2 versions (null + original), got %d", len(result.Versions))
+		}
+		var nullCount int
+		for _, v := range result.Versions {
+			if v.VersionID == "" {
+				nullCount++
+			}
+		}
+		if nullCount != 1 {
+			t.Fatalf("expected exactly one null version, got %d", nullCount)
+		}
+
+		// the null version is current and addressable as the empty version ID
+		if obj, err := store.GetObject(accessKeyID, bucket, key, s3.NoVersion(), nil); err != nil {
+			t.Fatal(err)
+		} else if obj.VersionID != "" {
+			t.Fatalf("expected the null version to be current, got %q", obj.VersionID)
+		}
+		if _, err := store.GetObject(accessKeyID, bucket, key, s3.SpecificVersion(""), nil); err != nil {
+			t.Fatalf("expected the null version to be addressable, got %v", err)
+		}
+		// the original non-null version is still retrievable
+		if obj, err := store.GetObject(accessKeyID, bucket, key, s3.SpecificVersion(v1), nil); err != nil {
+			t.Fatal(err)
+		} else if obj.VersionID != v1 {
+			t.Fatalf("expected version %q, got %q", v1, obj.VersionID)
+		}
+	})
+}
+
+func TestListObjectVersions(t *testing.T) {
+	const (
+		accessKeyID = testAccessKeyID
+		bucket      = "versioned"
+	)
+
+	store := initTestDB(t, zaptest.NewLogger(t))
+	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+		t.Fatal(err)
+	} else if err := store.PutBucketVersioning(accessKeyID, bucket, s3.VersioningStatusEnabled); err != nil {
+		t.Fatal(err)
+	}
+
+	put := func(key string) string {
+		t.Helper()
+		v, _, err := store.PutObject(accessKeyID, bucket, key, frand.Entropy128(), nil, 1, new(string))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+
+	// three versions of "key" (newest last) plus a single-version "other"
+	kv1 := put("key")
+	kv2 := put("key")
+	kv3 := put("key")
+	ov1 := put("other")
+
+	t.Run("Ordering", func(t *testing.T) {
+		result, err := store.ListObjectVersions(accessKeyID, bucket, s3.Prefix{}, s3.ListObjectVersionsPage{MaxKeys: 100})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// key ascending, then newest version first within a key
+		want := []struct {
+			key      string
+			version  string
+			isLatest bool
+		}{
+			{"key", kv3, true},
+			{"key", kv2, false},
+			{"key", kv1, false},
+			{"other", ov1, true},
+		}
+		if len(result.Versions) != len(want) {
+			t.Fatalf("expected %d versions, got %d", len(want), len(result.Versions))
+		}
+		for i, w := range want {
+			got := result.Versions[i]
+			if got.Key != w.key || got.VersionID != w.version {
+				t.Fatalf("version %d: expected %s/%s, got %s/%s", i, w.key, w.version, got.Key, got.VersionID)
+			} else if got.IsLatest != w.isLatest {
+				t.Fatalf("version %d (%s/%s): expected IsLatest=%v, got %v", i, w.key, w.version, w.isLatest, got.IsLatest)
+			}
+		}
+	})
+
+	t.Run("VersionIDMarkerResumesMidKey", func(t *testing.T) {
+		// resuming within "key" after its newest version yields the remaining two
+		// versions of "key" followed by "other"
+		result, err := store.ListObjectVersions(accessKeyID, bucket, s3.Prefix{}, s3.ListObjectVersionsPage{
+			KeyMarker:       aws.String("key"),
+			VersionIDMarker: aws.String(kv3),
+			MaxKeys:         100,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"key/" + kv2, "key/" + kv1, "other/" + ov1}
+		if len(result.Versions) != len(want) {
+			t.Fatalf("expected %d versions, got %d", len(want), len(result.Versions))
+		}
+		for i, w := range want {
+			if got := result.Versions[i].Key + "/" + result.Versions[i].VersionID; got != w {
+				t.Fatalf("version %d: expected %s, got %s", i, w, got)
+			}
+		}
+	})
+
+	t.Run("Pagination", func(t *testing.T) {
+		// a small max-keys forces truncation; the (key, version) cursor must
+		// round-trip without dropping or repeating a version
+		var got []string
+		seen := map[string]bool{}
+		page := s3.ListObjectVersionsPage{MaxKeys: 2}
+		for {
+			result, err := store.ListObjectVersions(accessKeyID, bucket, s3.Prefix{}, page)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, v := range result.Versions {
+				id := v.Key + "/" + v.VersionID
+				if seen[id] {
+					t.Fatalf("version returned twice: %s", id)
+				}
+				seen[id] = true
+				got = append(got, id)
+			}
+			if !result.IsTruncated {
+				break
+			}
+			// all versions here are non-null, so the wire-encoded markers equal
+			// the internal IDs and can be fed straight back
+			km, vm := result.NextKeyMarker, result.NextVersionIDMarker
+			page.KeyMarker, page.VersionIDMarker = &km, &vm
+		}
+		want := []string{"key/" + kv3, "key/" + kv2, "key/" + kv1, "other/" + ov1}
+		if len(got) != len(want) {
+			t.Fatalf("expected %d versions, got %d", len(want), len(got))
+		}
+		for i, w := range want {
+			if got[i] != w {
+				t.Fatalf("version %d: expected %s, got %s", i, w, got[i])
+			}
+		}
+	})
+
+	t.Run("MaxKeysZero", func(t *testing.T) {
+		result, err := store.ListObjectVersions(accessKeyID, bucket, s3.Prefix{}, s3.ListObjectVersionsPage{MaxKeys: 0})
+		if err != nil {
+			t.Fatal(err)
+		} else if len(result.Versions) != 0 {
+			t.Fatalf("expected no versions, got %d", len(result.Versions))
+		} else if result.IsTruncated {
+			t.Fatal("expected IsTruncated=false for max-keys=0")
+		}
+	})
+
+	t.Run("DeleteMarkerListed", func(t *testing.T) {
+		const bucket = "delete-marker"
+		if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+			t.Fatal(err)
+		} else if err := store.PutBucketVersioning(accessKeyID, bucket, s3.VersioningStatusEnabled); err != nil {
+			t.Fatal(err)
+		}
+		v, _, err := store.PutObject(accessKeyID, bucket, "k", frand.Entropy128(), nil, 1, new(string))
+		if err != nil {
+			t.Fatal(err)
+		}
+		marker, _, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "k"})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		result, err := store.ListObjectVersions(accessKeyID, bucket, s3.Prefix{}, s3.ListObjectVersionsPage{MaxKeys: 100})
+		if err != nil {
+			t.Fatal(err)
+		} else if len(result.Versions) != 2 {
+			t.Fatalf("expected 2 versions, got %d", len(result.Versions))
+		}
+		// newest first: the delete marker is the current version
+		dm, obj := result.Versions[0], result.Versions[1]
+		if !dm.IsDeleteMarker || dm.VersionID != marker || !dm.IsLatest {
+			t.Fatalf("expected current delete marker %q, got %+v", marker, dm)
+		} else if obj.IsDeleteMarker || obj.VersionID != v {
+			t.Fatalf("expected underlying object version %q, got %+v", v, obj)
+		}
+	})
+
+	t.Run("DelimiterRollsUpCommonPrefixes", func(t *testing.T) {
+		const bucket = "delimiter"
+		if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+			t.Fatal(err)
+		} else if err := store.PutBucketVersioning(accessKeyID, bucket, s3.VersioningStatusEnabled); err != nil {
+			t.Fatal(err)
+		}
+		for _, k := range []string{"dir/a", "dir/b", "top"} {
+			if _, _, err := store.PutObject(accessKeyID, bucket, k, frand.Entropy128(), nil, 1, new(string)); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		result, err := store.ListObjectVersions(accessKeyID, bucket, s3.Prefix{
+			Delimiter:    "/",
+			HasDelimiter: true,
+		}, s3.ListObjectVersionsPage{MaxKeys: 100})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(result.CommonPrefixes) != 1 || result.CommonPrefixes[0].Prefix != "dir/" {
+			t.Fatalf("expected common prefix dir/, got %+v", result.CommonPrefixes)
+		}
+		if len(result.Versions) != 1 || result.Versions[0].Key != "top" {
+			t.Fatalf("expected only top-level key 'top', got %+v", result.Versions)
+		}
+	})
+}
+
 func newTestObject() sdk.Object {
 	obj := sdk.NewEmptyObject()
 	ss := []slabs.SlabSlice{{EncryptionKey: frand.Entropy256(), Length: 1}}

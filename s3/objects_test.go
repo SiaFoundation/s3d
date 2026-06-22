@@ -612,12 +612,13 @@ func TestListObjects(t *testing.T) {
 	}
 
 	tests := []struct {
-		name       string
-		prefix     *string
-		delimiter  *string
-		marker     *string
-		nextMarker *string
-		maxKeys    int64
+		name          string
+		prefix        *string
+		delimiter     *string
+		marker        *string
+		versionMarker *string
+		nextMarker    *string
+		maxKeys       int64
 
 		truncated      bool
 		objects        []string
@@ -638,6 +639,15 @@ func TestListObjects(t *testing.T) {
 			name:    "Marker",
 			marker:  aws.String("foo/bar"),
 			objects: []string{"foo/baz"},
+		},
+		{
+			// for ListObjectVersions, a key marker paired with the null
+			// version-id marker resumes mid-key after "foo"'s only (null)
+			// version; ListObjects and ListObjectsV2 just treat it as a key marker.
+			name:          "VersionIDMarker",
+			marker:        aws.String("foo"),
+			versionMarker: aws.String("null"),
+			objects:       []string{"foo/bar", "foo/baz"},
 		},
 		{
 			name:    "Prefix",
@@ -715,10 +725,11 @@ func TestListObjects(t *testing.T) {
 					maxKeys = aws.Int32(int32(tc.maxKeys))
 				}
 				resp, err := s3Tester.ListObjectVersionsPage(t.Context(), bucket, &service.ListObjectVersionsInput{
-					Prefix:    tc.prefix,
-					Delimiter: tc.delimiter,
-					KeyMarker: tc.marker,
-					MaxKeys:   maxKeys,
+					Prefix:          tc.prefix,
+					Delimiter:       tc.delimiter,
+					KeyMarker:       tc.marker,
+					VersionIdMarker: tc.versionMarker,
+					MaxKeys:         maxKeys,
 				})
 				if err != nil {
 					t.Fatal(err)
