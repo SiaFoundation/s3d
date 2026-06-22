@@ -271,6 +271,11 @@ type Backend interface {
 	// rather than waiting for the background pipeline to batch them into
 	// efficiently packed slabs. It blocks until the uploads complete.
 	FlushObjects(ctx context.Context) error
+
+	// BackupSQLite3 creates a backup of the SQLite3 database at the given
+	// path on the local filesystem. The backup is a consistent snapshot
+	// even if the database is being written to concurrently.
+	BackupSQLite3(ctx context.Context, destPath string) error
 }
 
 type s3 struct {
@@ -364,8 +369,9 @@ func corsMiddleware(handler http.Handler) http.Handler {
 
 // NewAdmin creates an HTTP handler that serves the admin API using the provided
 // backend. It exposes /prometheus, which serves the background upload stats as
-// Prometheus metrics, /stats/uploads, which serves the same stats as JSON, and
-// /objects/flush, which uploads all pending objects regardless of padding.
+// Prometheus metrics, /stats/uploads, which serves the same stats as JSON,
+// /objects/flush, which uploads all pending objects regardless of padding, and
+// /system/sqlite3/backup, which creates a backup of the SQLite3 database.
 func NewAdmin(b Backend, opts ...Option) http.Handler {
 	s3 := &s3{
 		backend: b,
@@ -376,9 +382,10 @@ func NewAdmin(b Backend, opts ...Option) http.Handler {
 	}
 
 	return jape.Mux(map[string]jape.Handler{
-		"GET /prometheus":     s3.handlePrometheus,
-		"GET /stats/uploads":  s3.handleGetUploadStats,
-		"POST /objects/flush": s3.handleFlushObjects,
+		"GET /prometheus":             s3.handlePrometheus,
+		"GET /stats/uploads":          s3.handleGetUploadStats,
+		"POST /objects/flush":         s3.handleFlushObjects,
+		"POST /system/sqlite3/backup": s3.handleBackupSQLite3,
 	})
 }
 
