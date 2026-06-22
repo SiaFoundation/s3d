@@ -219,7 +219,7 @@ func (s *Sia) FlushObjects(ctx context.Context) error {
 		// don't wait for the pinning loop
 		return fmt.Errorf("failed to pin objects after flush: %w", err)
 	}
-	return ctx.Err()
+	return nil
 }
 
 func (s *Sia) uploadObjects(ctx context.Context, flush bool) error { //nolint:revive
