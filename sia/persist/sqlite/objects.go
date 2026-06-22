@@ -634,16 +634,18 @@ func (s *Store) CopyObject(accessKeyID, srcBucket, srcName string, srcVersion s3
 			maps.Copy(obj.Meta, meta)
 		}
 
-		dstBid := srcBid
+		// a same-bucket copy shares the source's id and versioning status, so
+		// only resolve the destination separately when the buckets differ.
+		dstBid, dstStatus := srcBid, srcStatus
 		if dstBucket != srcBucket {
 			dstBid, err = bucketID(tx, accessKeyID, dstBucket)
 			if err != nil {
 				return err
 			}
-		}
-		dstStatus, err := bucketVersioning(tx, dstBid)
-		if err != nil {
-			return err
+			dstStatus, err = bucketVersioning(tx, dstBid)
+			if err != nil {
+				return err
+			}
 		}
 
 		// a self-copy onto the same null version rewrites the row in place to

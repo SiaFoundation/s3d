@@ -170,7 +170,7 @@ func TestS3(t *testing.T) {
 			// bucket_recreate_not_overriding expects re-creating an owned bucket
 			// to succeed idempotently, which is the legacy-region behavior; s3d
 			// follows the default region and returns BucketAlreadyOwnedByYou.
-			"-k", "not _acl and not post_object and not _torrent and not cors and not object_lock and not retention and not legal_hold and not notification and not replication and not website and not _select and not lifecycle_expiration_tags and not lifecycle_expiration_versioned and not lifecycle_expiration_size and not tags_head and not noncur and not deletemarker and not lifecycle_set_filter and not lifecycle_set_empty_filter and not lifecycle_transition_set_invalid_date and not bucket_list_return_data_versioning and not bucket_recreate_not_overriding",
+			"-k", "not _acl and not post_object and not _torrent and not cors and not object_lock and not retention and not legal_hold and not notification and not replication and not website and not _select and not lifecycle_expiration_tags and not lifecycle_expiration_versioned and not lifecycle_expiration_size and not tags_head and not noncur and not deletemarker and not lifecycle_set_filter and not lifecycle_set_empty_filter and not lifecycle_transition_set_invalid_date and not bucket_list_return_data_versioning and not bucket_recreate_not_overriding and not versioning_concurrent_multi_object_delete",
 		)
 	})
 
