@@ -20,16 +20,21 @@ var (
 
 // Object represents a stored object with its metadata.
 type Object struct {
-	SiaObject    *SiaObject
-	FileName     *string
-	Name         string
-	PartsCount   int32
-	Meta         map[string]string
-	Offset       int64
-	Length       int64
-	Size         int64
-	ContentMD5   [16]byte
-	LastModified time.Time
+	SiaObject *SiaObject
+	FileName  *string
+	Name      string
+	VersionID string // "" represents the null version
+	// Versioned reports whether the bucket has versioning configured
+	// (Enabled or Suspended).
+	Versioned      bool
+	IsDeleteMarker bool
+	PartsCount     int32
+	Meta           map[string]string
+	Offset         int64
+	Length         int64
+	Size           int64
+	ContentMD5     [16]byte
+	LastModified   time.Time
 }
 
 // SiaObject pairs a Sia object ID with its sealed metadata.
@@ -47,6 +52,7 @@ func (o *Object) IsMultipart() bool {
 type ObjectForUpload struct {
 	Bucket     string
 	Name       string
+	VersionID  string
 	Filename   string
 	ContentMD5 [16]byte
 	Length     int64

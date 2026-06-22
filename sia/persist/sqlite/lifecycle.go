@@ -7,8 +7,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia"
+	"github.com/SiaFoundation/s3d/sia/objects"
 )
 
 // PutBucketLifecycleConfiguration stores the serialized lifecycle configuration
@@ -146,25 +148,37 @@ func (s *Store) AbortMultipartUploads(bucketID int64, prefix string, before time
 	return
 }
 
-// ExpireObjects deletes up to limit objects in the bucket identified by
-// bucketID that match prefix and were last modified at or before the cutoff.
-// Deleted objects backed by Sia data are inserted into orphaned_objects; objects still
-// pending on disk have their newly-unreferenced filenames returned for cleanup.
-// It returns the number of objects deleted and performs no ownership checks.
-func (s *Store) ExpireObjects(bucketID int64, prefix string, before time.Time, limit int) (deleted int, orphans []sia.OrphanedFile, err error) {
+// ExpireObjects expires up to limit objects whose current version matches
+// prefix and was last modified at or before the cutoff, applying a
+// versioning-aware delete (see [deleteCurrentObject]) to each.
+// NoncurrentVersionExpiration is not supported. Returns the number of objects
+// expired; performs no ownership checks.
+func (s *Store) ExpireObjects(bucketID int64, prefix string, before time.Time, limit int) (deleted int, orphans []objects.OrphanedFile, err error) {
 	err = s.transaction(func(tx *txn) error {
 		deleted = 0
 		orphans = nil
 
-		where := []string{"bucket_id = ?", "updated_at <= ?"}
+		status, err := bucketVersioning(tx, bucketID)
+		if err != nil {
+			return err
+		}
+
+		// only the current version of each key, and only objects (not existing
+		// delete markers), so the cutoff applies to what a reader would see.
+		where := []string{
+			"o.bucket_id = ?",
+			"o.is_latest = TRUE",
+			"o.is_delete_marker = FALSE",
+			"o.updated_at <= ?",
+		}
 		args := []any{bucketID, sqlTime(before)}
 		if prefix != "" {
-			where = append(where, "name >= ? AND name < ?")
+			where = append(where, "o.name >= ? AND o.name < ?")
 			args = append(args, prefix, prefix+"\xFF")
 		}
 		args = append(args, limit)
 
-		query := fmt.Sprintf(`SELECT name FROM objects WHERE %s LIMIT ?`, strings.Join(where, " AND "))
+		query := fmt.Sprintf(`SELECT o.name FROM objects o WHERE %s LIMIT ?`, strings.Join(where, " AND "))
 		rows, err := tx.Query(query, args...)
 		if err != nil {
 			return err
@@ -184,21 +198,14 @@ func (s *Store) ExpireObjects(bucketID int64, prefix string, before time.Time, l
 		}
 
 		for _, name := range names {
-			oldID, filename, size, err := deleteObject(tx, bucketID, name)
-			if err != nil {
+			res, err := deleteCurrentObject(tx, bucketID, name, status, s3.ObjectID{Key: name})
+			if errors.Is(err, sql.ErrNoRows) {
+				continue // current version vanished concurrently; nothing to do
+			} else if err != nil {
 				return err
 			}
-			if oldID != nil {
-				if err := insertOrphan(tx, *oldID); err != nil {
-					return err
-				}
-			}
-			orphanFile, orphanSize, err := newOrphanedFile(tx, filename, size)
-			if err != nil {
-				return err
-			}
-			if orphanFile != "" {
-				orphans = append(orphans, sia.OrphanedFile{Filename: orphanFile, Size: orphanSize})
+			if res.orphanFile.Filename != "" {
+				orphans = append(orphans, res.orphanFile)
 			}
 		}
 		deleted = len(names)

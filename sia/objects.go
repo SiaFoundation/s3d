@@ -268,8 +268,9 @@ func (s *Sia) DeleteObjects(ctx context.Context, accessKeyID, bucket string, obj
 			})
 		} else {
 			result.Deleted = append(result.Deleted, s3.ObjectID{
-				Key:       obj.Key,
-				VersionID: "",
+				Key: obj.Key,
+				// VersionID is now *string; the follow-up branch (versioning-3)
+				// rewrites this method.
 			})
 		}
 	}

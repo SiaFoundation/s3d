@@ -266,8 +266,10 @@ type (
 		Size             *int64    `xml:"Size,omitempty"`
 		LastModifiedTime *HttpTime `xml:"LastModifiedTime,omitempty"`
 
+		// VersionID addresses a specific version ("" is the null version), or nil
+		// when no version was specified.
 		// nolint:tagliatelle
-		VersionID string `xml:"VersionId,omitempty"`
+		VersionID *string `xml:"VersionId,omitempty"`
 	}
 
 	// DeleteRequest represents a multi delete request.

@@ -39,8 +39,13 @@ type Object struct {
 type CopyObjectResult struct {
 	ContentMD5   [16]byte
 	LastModified time.Time
-	VersionID    string
-	PartsCount   int32
+	// VersionID is the wire-encoded version of the new copy ("" on a suspended
+	// or unversioned bucket, neither of which reports a version).
+	VersionID string
+	// SourceVersionID is the wire-encoded version copied, reported when the
+	// source bucket is versioned (Enabled or Suspended), else "".
+	SourceVersionID string
+	PartsCount      int32
 }
 
 // DeleteObjectResult contains information about the result of a DeleteObject
@@ -286,10 +291,11 @@ func (s *s3) deleteObjects(w http.ResponseWriter, r *http.Request, accessKeyID s
 	}
 
 	for i := range req.Objects {
-		if req.Objects[i].VersionID == Null {
-			req.Objects[i].VersionID = ""
-		} else if req.Objects[i].VersionID != "" {
-			return s3errs.ErrNotImplemented // versioning not supported
+		// the wire value "null" maps to the null version (empty internally); a
+		// nil VersionID means no version was specified.
+		if v := req.Objects[i].VersionID; v != nil && *v == Null {
+			empty := ""
+			req.Objects[i].VersionID = &empty
 		}
 	}
 

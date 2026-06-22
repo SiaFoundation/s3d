@@ -105,6 +105,41 @@ func (s *Store) ListBuckets(accessKeyID string) ([]s3.BucketInfo, error) {
 	return buckets, err
 }
 
+// GetBucketVersioning returns the versioning status of the bucket. The status
+// is one of "" (never configured), "Enabled" or "Suspended".
+func (s *Store) GetBucketVersioning(accessKeyID, bucket string) (status string, err error) {
+	err = s.transaction(func(tx *txn) error {
+		bid, err := bucketID(tx, accessKeyID, bucket)
+		if err != nil {
+			return err
+		}
+		status, err = bucketVersioning(tx, bid)
+		return err
+	})
+	return
+}
+
+// PutBucketVersioning sets the versioning status of the bucket to status, which
+// must be "Enabled" or "Suspended".
+func (s *Store) PutBucketVersioning(accessKeyID, bucket, status string) error {
+	return s.transaction(func(tx *txn) error {
+		bid, err := bucketID(tx, accessKeyID, bucket)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(`UPDATE buckets SET versioning_status = $1 WHERE id = $2`, status, bid)
+		return err
+	})
+}
+
+// bucketVersioning returns the versioning status stored for the bucket (one of
+// "", s3.VersioningStatusEnabled or s3.VersioningStatusSuspended), which drives the write
+// and delete state machine in versioning.go.
+func bucketVersioning(tx *txn, bid int64) (status string, err error) {
+	err = tx.QueryRow(`SELECT versioning_status FROM buckets WHERE id = $1`, bid).Scan(&status)
+	return
+}
+
 // bucketID returns the ID of the bucket with the given name if the user
 // associated with the given access key owns it. Returns ErrNoSuchBucket if
 // the bucket does not exist, or ErrAccessDenied if it exists but is owned by
