@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -82,6 +84,31 @@ func TestUploadStats(t *testing.T) {
 		t.Fatal(err)
 	} else if (stats != s3.UploadStats{}) {
 		t.Fatal("expected zero-value stats on an empty backend", stats)
+	}
+}
+
+func TestBackupSQLite3(t *testing.T) {
+	baseURL, httpClient := newAdminServer(t)
+
+	dest := filepath.Join(t.TempDir(), "backup.sqlite")
+	body, err := json.Marshal(s3.BackupSQLite3Request{Path: dest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, baseURL+"/system/sqlite3/backup", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	} else if _, err := os.Stat(dest); err != nil {
+		t.Fatalf("expected backup file at %q: %v", dest, err)
 	}
 }
 

@@ -17,6 +17,8 @@ security:
 tags:
   - name: metrics
     description: Background upload pipeline statistics for monitoring.
+  - name: system
+    description: System administration endpoints.
 
 paths:
   /prometheus:
@@ -56,6 +58,32 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/UploadStats"
+  /system/sqlite3/backup:
+    post:
+      tags:
+        - system
+      summary: Back up the SQLite3 metadata database
+      description: >
+        Creates a backup of the SQLite metadata database using the SQLite
+        online backup API. Unlike copying the database file directly, the
+        backup is a consistent snapshot even while objects are being written.
+        The backup only contains the metadata database, not the buffered
+        objects that have not yet been uploaded to the Sia network.
+      operationId: backupSQLite3
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BackupSQLite3Request"
+      responses:
+        "200":
+          description: The backup was created successfully.
+        "400":
+          description: >
+            The request was invalid, e.g. the path was empty or not absolute.
+        "500":
+          description: The backup could not be created.
 
 components:
   securitySchemes:
@@ -95,3 +123,15 @@ components:
           type: integer
           format: int64
           description: In-progress multipart uploads.
+    BackupSQLite3Request:
+      type: object
+      description: Request body for creating a SQLite3 database backup.
+      required:
+        - path
+      properties:
+        path:
+          type: string
+          description: >
+            Absolute filesystem path, resolved on the machine running s3d,
+            where the backup file will be written. It must not already exist.
+          example: /backups/s3d.sqlite3
