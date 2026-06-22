@@ -873,9 +873,10 @@ func BenchmarkListObjects(b *testing.B) {
 	for _, slab := range sealed.Slabs {
 		size += uint64(slab.Length)
 	}
+	size = max(size, 1)
 
 	populateBucket := func(bucket, delimiter string) {
-		if err := store.CreateBucket("", bucket); err != nil {
+		if err := store.CreateBucket(accessKeyID, bucket); err != nil {
 			b.Fatal(err)
 		}
 		err := store.transaction(func(tx *txn) error {
@@ -900,8 +901,8 @@ func BenchmarkListObjects(b *testing.B) {
 							key := layer3 + delimiter + name
 
 							_, err = tx.Exec(`
-			INSERT INTO objects (bucket_id, name, sia_object_id, content_md5, metadata, size, updated_at, sia_object)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, bid, key, sqlHash256(objID), sqlMD5(contentMD5), []byte{}, size, sqlTime(now), sqlSiaObject(sealed))
+			INSERT INTO objects (bucket_id, name, seq, sia_object_id, content_md5, metadata, size, updated_at, sia_object)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, bid, key, 1, sqlHash256(objID), sqlMD5(contentMD5), []byte{}, size, sqlTime(now), sqlSiaObject(sealed))
 						}
 					}
 				}
