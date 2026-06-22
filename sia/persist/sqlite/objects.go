@@ -24,6 +24,14 @@ func nextSeq(tx *txn, bid int64, name string) (seq int64, err error) {
 	return
 }
 
+// clearLatest unmarks the current version of (bid, name). A newly written
+// version always carries the highest seq and becomes current, but the unique
+// index on is_latest requires the previous current version be cleared first.
+func clearLatest(tx *txn, bid int64, name string) error {
+	_, err := tx.Exec(`UPDATE objects SET is_latest = FALSE WHERE bucket_id = $1 AND name = $2 AND is_latest = TRUE`, bid, name)
+	return err
+}
+
 // DiskUsage returns the total bytes currently held on disk in the uploads
 // directory, across objects with a staged filename (pending upload or uploaded
 // but not yet pinned) and in-progress multipart parts. Objects sharing a
@@ -110,9 +118,7 @@ func checkObjectPreconditions(tx *txn, bid int64, name string, objectID s3.Objec
 	err := tx.QueryRow(`
 		SELECT content_md5, size, updated_at, is_delete_marker
 		FROM objects
-		WHERE bucket_id = $1 AND name = $2
-		ORDER BY seq DESC
-		LIMIT 1
+		WHERE bucket_id = $1 AND name = $2 AND is_latest = TRUE
 	`, bid, name).Scan((*sqlMD5)(&contentMD5), &size, (*sqlTime)(&updatedAt), &isDeleteMarker)
 	if errors.Is(err, sql.ErrNoRows) || isDeleteMarker {
 		return s3errs.ErrPreconditionFailed // no current object to match against
@@ -178,9 +184,7 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, version s3.
 		err := tx.QueryRow(`
 			SELECT version_id, parts_count, is_delete_marker
 			FROM objects
-			WHERE bucket_id = $1 AND name = $2
-			ORDER BY seq DESC
-			LIMIT 1
+			WHERE bucket_id = $1 AND name = $2 AND is_latest = TRUE
 		`, bid, name).Scan(&versionID, &obj.PartsCount, &obj.IsDeleteMarker)
 		if err != nil {
 			return err
@@ -659,8 +663,13 @@ func (s *Store) CopyObject(accessKeyID, srcBucket, srcName string, srcVersion s3
 			if err != nil {
 				return err
 			}
+			// the refreshed seq makes this row current; clear the previous
+			// current version first to satisfy the unique index.
+			if err := clearLatest(tx, dstBid, dstName); err != nil {
+				return err
+			}
 			_, err = tx.Exec(`
-				UPDATE objects SET seq = $1, metadata = $2, updated_at = $3
+				UPDATE objects SET seq = $1, metadata = $2, updated_at = $3, is_latest = TRUE
 				WHERE bucket_id = $4 AND name = $5 AND version_id = $6
 			`, seq, sqlMetaJSON(obj.Meta), sqlTime(time.Now()), dstBid, dstName, srcInternalVersion)
 			obj.VersionID = srcInternalVersion
@@ -890,14 +899,26 @@ type deletedRow struct {
 // returned row to orphanDeleted for that.
 func deleteObject(tx *txn, bid int64, name string, version string) (row deletedRow, found bool, _ error) {
 	var id sql.Null[sqlHash256]
+	var wasLatest bool
 	err := tx.QueryRow(`
 		DELETE FROM objects WHERE bucket_id = $1 AND name = $2 AND version_id = $3
-		RETURNING sia_object_id, filename, size, content_md5, updated_at, is_delete_marker
-	`, bid, name, version).Scan(&id, &row.filename, &row.size, (*sqlMD5)(&row.contentMD5), (*sqlTime)(&row.updatedAt), &row.isDeleteMarker)
+		RETURNING sia_object_id, filename, size, content_md5, updated_at, is_delete_marker, is_latest
+	`, bid, name, version).Scan(&id, &row.filename, &row.size, (*sqlMD5)(&row.contentMD5), (*sqlTime)(&row.updatedAt), &row.isDeleteMarker, &wasLatest)
 	if errors.Is(err, sql.ErrNoRows) {
 		return deletedRow{}, false, nil
 	} else if err != nil {
 		return deletedRow{}, false, err
+	}
+	// removing the current version promotes the next-highest seq to current
+	// (a no-op when no versions remain).
+	if wasLatest {
+		if _, err := tx.Exec(`
+			UPDATE objects SET is_latest = TRUE
+			WHERE bucket_id = $1 AND name = $2
+			  AND seq = (SELECT MAX(seq) FROM objects WHERE bucket_id = $3 AND name = $4)`,
+			bid, name, bid, name); err != nil {
+			return deletedRow{}, false, err
+		}
 	}
 	// an object is pending (filename, no sia_object_id), uploaded
 	// (sia_object_id, possibly still keeping its filename as a backup until
@@ -983,8 +1004,8 @@ func listObjectsPage(tx *txn, bid int64, prefix s3.Prefix, marker string, limit 
 	query := `SELECT o.name, o.content_md5, o.size, o.parts_count, o.updated_at
 FROM objects o
 WHERE o.bucket_id = ?
-  AND o.is_delete_marker = FALSE
-  AND o.seq = (SELECT MAX(seq) FROM objects o2 WHERE o2.bucket_id = o.bucket_id AND o2.name = o.name)`
+  AND o.is_latest = TRUE
+  AND o.is_delete_marker = FALSE`
 	args := []any{bid}
 
 	if marker != "" {
@@ -1144,8 +1165,7 @@ func resolveVersionCursor(tx *txn, bid int64, prefix s3.Prefix, page s3.ListObje
 // the cursor m, ordered by key ascending then seq descending (newest first),
 // each tagged with whether it is the current (latest) version of its key.
 func queryObjectVersions(tx *txn, bid int64, prefix s3.Prefix, m versionMarker, limit int) (*rows, error) {
-	query := `SELECT o.name, o.version_id, o.seq, o.is_delete_marker, o.parts_count, o.size, o.content_md5, o.updated_at,
-o.seq = (SELECT MAX(seq) FROM objects o2 WHERE o2.bucket_id = o.bucket_id AND o2.name = o.name) AS is_latest
+	query := `SELECT o.name, o.version_id, o.seq, o.is_delete_marker, o.parts_count, o.size, o.content_md5, o.updated_at, o.is_latest
 FROM objects o
 WHERE o.bucket_id = ?`
 	args := []any{bid}

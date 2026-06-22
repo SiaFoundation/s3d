@@ -90,9 +90,15 @@ func putObject(tx *txn, bid int64, name string, status string, contentMD5 [16]by
 		sealed = (*sqlSiaObject)(&siaObject.Sealed)
 	}
 
+	// the new row carries the highest seq and becomes the current version;
+	// clear the previous current version first to satisfy the unique index.
+	if err := clearLatest(tx, bid, name); err != nil {
+		return objectMutationResult{}, fmt.Errorf("failed to clear current version: %w", err)
+	}
+
 	if _, err := tx.Exec(`
-		INSERT INTO objects (bucket_id, name, version_id, seq, is_delete_marker, sia_object_id, content_md5, metadata, size, parts_count, updated_at, filename, sia_object)
-		VALUES ($1, $2, $3, $4, FALSE, $5, $6, $7, $8, $9, $10, $11, $12)
+		INSERT INTO objects (bucket_id, name, version_id, seq, is_delete_marker, is_latest, sia_object_id, content_md5, metadata, size, parts_count, updated_at, filename, sia_object)
+		VALUES ($1, $2, $3, $4, FALSE, TRUE, $5, $6, $7, $8, $9, $10, $11, $12)
 	`, bid, name, version, seq, id, sqlMD5(contentMD5),
 		sqlMetaJSON(meta), length, partsCount, sqlTime(time.Now()),
 		fileName, sealed); err != nil {
@@ -216,10 +222,15 @@ func insertDeleteMarker(tx *txn, bid int64, name string, version string) error {
 	if err != nil {
 		return fmt.Errorf("failed to get next sequence: %w", err)
 	}
+	// the marker carries the highest seq and becomes the current version;
+	// clear the previous current version first to satisfy the unique index.
+	if err := clearLatest(tx, bid, name); err != nil {
+		return fmt.Errorf("failed to clear current version: %w", err)
+	}
 	var zero [16]byte
 	if _, err := tx.Exec(`
-		INSERT INTO objects (bucket_id, name, version_id, seq, is_delete_marker, content_md5, metadata, size, parts_count, updated_at)
-		VALUES ($1, $2, $3, $4, TRUE, $5, '{}', 0, 0, $6)
+		INSERT INTO objects (bucket_id, name, version_id, seq, is_delete_marker, is_latest, content_md5, metadata, size, parts_count, updated_at)
+		VALUES ($1, $2, $3, $4, TRUE, TRUE, $5, '{}', 0, 0, $6)
 	`, bid, name, version, seq, sqlMD5(zero), sqlTime(time.Now())); err != nil {
 		return fmt.Errorf("failed to insert delete marker: %w", err)
 	}

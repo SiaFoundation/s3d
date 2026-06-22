@@ -32,6 +32,7 @@ CREATE TABLE objects (
     version_id TEXT NOT NULL DEFAULT '',
     seq INTEGER NOT NULL,
     is_delete_marker INTEGER NOT NULL DEFAULT FALSE,
+    is_latest INTEGER NOT NULL DEFAULT TRUE, -- the current version of (bucket_id, name): the row with the highest seq
     content_md5 BLOB NOT NULL,
     metadata TEXT NOT NULL,
     size INTEGER NOT NULL,
@@ -45,12 +46,14 @@ CREATE TABLE objects (
     -- non-empty objects must have a filename, a sia_object_id, or both (between uploading and pinning)
     CHECK ((size = 0 AND filename IS NULL AND sia_object_id IS NULL) OR (size > 0 AND (filename IS NOT NULL OR sia_object_id IS NOT NULL))),
     CHECK (is_delete_marker IN (FALSE, TRUE)),
+    CHECK (is_latest IN (FALSE, TRUE)),
     PRIMARY KEY (bucket_id, name, version_id)
 ) WITHOUT ROWID;
 CREATE INDEX objects_sia_object_id_idx ON objects(sia_object_id);
 CREATE INDEX objects_filename_idx ON objects(filename) WHERE filename IS NOT NULL;
 CREATE INDEX objects_bucket_id_updated_at_idx ON objects(bucket_id, updated_at);
 CREATE INDEX objects_bucket_name_seq_idx ON objects(bucket_id, name, seq DESC);
+CREATE UNIQUE INDEX objects_is_latest_idx ON objects(bucket_id, name) WHERE is_latest = TRUE;
 
 CREATE TABLE unpinned_objects (
     sia_object_id BLOB PRIMARY KEY,

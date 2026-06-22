@@ -167,8 +167,8 @@ func (s *Store) ExpireObjects(bucketID int64, prefix string, before time.Time, l
 		// delete markers), so the cutoff applies to what a reader would see.
 		where := []string{
 			"o.bucket_id = ?",
+			"o.is_latest = TRUE",
 			"o.is_delete_marker = FALSE",
-			"o.seq = (SELECT MAX(seq) FROM objects o2 WHERE o2.bucket_id = o.bucket_id AND o2.name = o.name)",
 			"o.updated_at <= ?",
 		}
 		args := []any{bucketID, sqlTime(before)}
