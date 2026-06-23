@@ -12,11 +12,8 @@ import (
 )
 
 // BucketLifecycleConfiguration pairs a bucket with its serialized lifecycle
-// configuration. The bucket ID is used to apply rules so a bucket deleted and
-// recreated under the same name mid-run cannot have stale rules applied to it;
-// the name is informational.
+// configuration.
 type BucketLifecycleConfiguration struct {
-	BucketID      int64
 	Bucket        string
 	Configuration string
 }
@@ -126,7 +123,7 @@ func (s *Sia) abortIncompleteUploads(ctx context.Context, bc BucketLifecycleConf
 	const batchSize = 100
 	var aborted int
 	for ctx.Err() == nil {
-		uploads, err := s.store.AbortMultipartUploads(bc.BucketID, prefix, before, batchSize)
+		uploads, err := s.store.AbortMultipartUploads(bc.Bucket, prefix, before, batchSize)
 		if err != nil {
 			s.logger.Error("failed to abort multipart uploads", zap.String("bucket", bc.Bucket), zap.Error(err))
 			return
@@ -152,7 +149,7 @@ func (s *Sia) expireObjects(ctx context.Context, bc BucketLifecycleConfiguration
 	const batchSize = 100
 	var expired int
 	for ctx.Err() == nil {
-		deleted, orphans, err := s.store.ExpireObjects(bc.BucketID, prefix, before, batchSize)
+		deleted, orphans, err := s.store.ExpireObjects(bc.Bucket, prefix, before, batchSize)
 		if err != nil {
 			s.logger.Error("failed to expire objects", zap.String("bucket", bc.Bucket), zap.Error(err))
 			return

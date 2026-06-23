@@ -211,8 +211,8 @@ type Store interface {
 	GetBucketLifecycleConfiguration(accessKeyID, bucket string) (string, error)
 	DeleteBucketLifecycleConfiguration(accessKeyID, bucket string) error
 	AllBucketLifecycleConfigurations() ([]BucketLifecycleConfiguration, error)
-	AbortMultipartUploads(bucketID int64, prefix string, before time.Time, limit int) ([]AbortedUpload, error)
-	ExpireObjects(bucketID int64, prefix string, before time.Time, limit int) (int, []OrphanedFile, error)
+	AbortMultipartUploads(bucket string, prefix string, before time.Time, limit int) ([]AbortedUpload, error)
+	ExpireObjects(bucket string, prefix string, before time.Time, limit int) (int, []OrphanedFile, error)
 
 	Backup(ctx context.Context, destPath string) error
 }

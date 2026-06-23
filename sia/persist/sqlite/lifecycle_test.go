@@ -11,15 +11,6 @@ import (
 	"lukechampine.com/frand"
 )
 
-// testBucketID looks up a bucket's ID directly in the database.
-func testBucketID(t *testing.T, store *testStore, bucket string) (id int64) {
-	t.Helper()
-	if err := store.db.QueryRow(`SELECT id FROM buckets WHERE name = ?`, bucket).Scan(&id); err != nil {
-		t.Fatal(err)
-	}
-	return
-}
-
 func TestBucketLifecycleConfiguration(t *testing.T) {
 	const (
 		accessKeyID = testAccessKeyID
@@ -65,7 +56,7 @@ func TestBucketLifecycleConfiguration(t *testing.T) {
 	all, err := store.AllBucketLifecycleConfigurations()
 	if err != nil {
 		t.Fatal(err)
-	} else if len(all) != 1 || all[0].BucketID != testBucketID(t, store, bucket) || all[0].Bucket != bucket || all[0].Configuration != updated {
+	} else if len(all) != 1 || all[0].Bucket != bucket || all[0].Configuration != updated {
 		t.Fatalf("unexpected configurations: %+v", all)
 	}
 
@@ -120,7 +111,7 @@ func TestAbortMultipartUploads(t *testing.T) {
 	}
 
 	// only the old "logs/" upload should be aborted
-	aborted, err := store.AbortMultipartUploads(testBucketID(t, store, bucket), "logs/", cutoff, 100)
+	aborted, err := store.AbortMultipartUploads(bucket, "logs/", cutoff, 100)
 	if err != nil {
 		t.Fatal(err)
 	} else if len(aborted) != 1 {
@@ -168,7 +159,7 @@ func TestExpireObjects(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deleted, orphans, err := store.ExpireObjects(testBucketID(t, store, bucket), "logs/", cutoff, 100)
+	deleted, orphans, err := store.ExpireObjects(bucket, "logs/", cutoff, 100)
 	if err != nil {
 		t.Fatal(err)
 	} else if deleted != 1 {
@@ -208,7 +199,7 @@ func TestExpireObjectsVersions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deleted, orphans, err := store.ExpireObjects(testBucketID(t, store, bucket), "logs/", cutoff, 100)
+	deleted, orphans, err := store.ExpireObjects(bucket, "logs/", cutoff, 100)
 	if err != nil {
 		t.Fatal(err)
 	} else if deleted != 0 {
