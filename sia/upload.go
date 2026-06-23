@@ -216,7 +216,6 @@ func (s *Sia) FlushObjects(ctx context.Context) error {
 	} else if err := ctx.Err(); err != nil {
 		return err
 	} else if err := s.performObjectPinning(ctx); err != nil {
-		// don't wait for the pinning loop
 		return fmt.Errorf("failed to pin objects after flush: %w", err)
 	}
 	return nil
@@ -314,6 +313,7 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 	defer upload.Close()
 
 	var objIdx []int
+	var errs []error
 	for i, obj := range group.objects {
 		rc, err := s.openUpload(obj.Bucket, obj.Name, &obj.Filename, obj.Multipart, nil)
 		if err != nil {
@@ -323,6 +323,7 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 				zap.String("name", obj.Name),
 				zap.String("filename", obj.Filename),
 				zap.Error(err))
+			errs = append(errs, fmt.Errorf("failed to open upload for %s/%s: %w", obj.Bucket, obj.Name, err))
 			continue
 		}
 		n, err := upload.Add(ctx, rc)
@@ -334,6 +335,7 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 				zap.String("filename", obj.Filename),
 				zap.Error(err))
 			rc.Close()
+			errs = append(errs, fmt.Errorf("failed to add %s/%s to upload: %w", obj.Bucket, obj.Name, err))
 			continue
 		} else if n != obj.Length {
 			s.failedUploads.Add(1)
@@ -393,6 +395,7 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 					zap.String("bucket", uploadObj.Bucket),
 					zap.String("name", uploadObj.Name),
 					zap.Error(err))
+				errs = append(errs, fmt.Errorf("failed to finalize %s/%s in store: %w", uploadObj.Bucket, uploadObj.Name, err))
 			}
 			continue
 		}
@@ -402,5 +405,5 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 			zap.String("name", uploadObj.Name))
 		queued++
 	}
-	return nil
+	return errors.Join(errs...)
 }

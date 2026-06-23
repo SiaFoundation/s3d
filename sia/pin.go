@@ -101,6 +101,9 @@ func (s *Sia) pinLoop(ctx context.Context) {
 // a backoff before retrying; transient pin failures bump the row's
 // next_attempt_at so the rest of the queue keeps moving.
 func (s *Sia) performObjectPinning(ctx context.Context) error {
+	s.pinMu.Lock()
+	defer s.pinMu.Unlock()
+
 	for ctx.Err() == nil {
 		now := time.Now()
 		toPin, err := s.store.ObjectsForPinning(now, pinBatchSize)

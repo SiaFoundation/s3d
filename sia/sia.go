@@ -130,6 +130,7 @@ type Sia struct {
 	lifecycleLoopInterval time.Duration
 	lifecycleDayDuration  time.Duration
 
+	pinMu   sync.Mutex
 	pinWake chan struct{}
 
 	lockedUploadsMu sync.Mutex
