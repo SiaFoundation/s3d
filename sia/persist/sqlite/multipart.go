@@ -43,11 +43,7 @@ func (s *Store) CreateMultipartUpload(accessKeyID, bucket, name string, uploadID
 func (s *Store) CompleteMultipartUpload(accessKeyID, bucket, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64) (versionID string, orphan objects.OrphanedFile, _ error) {
 	err := s.transaction(func(tx *txn) error {
 		versionID, orphan = "", objects.OrphanedFile{} // reset per attempt
-		bid, err := bucketID(tx, accessKeyID, bucket)
-		if err != nil {
-			return err
-		}
-		status, err := bucketVersioning(tx, bid)
+		bid, status, err := bucketIDAndVersioning(tx, accessKeyID, bucket)
 		if err != nil {
 			return err
 		}

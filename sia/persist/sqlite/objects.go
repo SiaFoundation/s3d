@@ -15,21 +15,16 @@ import (
 	sdk "go.sia.tech/siastorage"
 )
 
-// nextSeq returns the next version sequence for (bid, name): one greater than
-// the key's current maximum, so a row written with it becomes the current
-// version. Sequences are scoped per key (they need not be globally unique) and
-// the lookup is an index-edge read on objects_bucket_name_seq_idx.
-func nextSeq(tx *txn, bid int64, name string) (seq int64, err error) {
+// claimCurrentSeq returns the next sequence for (bid, name) and clears the
+// existing current version. The caller must use the returned sequence for the
+// row it marks current.
+func claimCurrentSeq(tx *txn, bid int64, name string) (seq int64, err error) {
 	err = tx.QueryRow(`SELECT COALESCE(MAX(seq), 0) + 1 FROM objects WHERE bucket_id = $1 AND name = $2`, bid, name).Scan(&seq)
-	return
-}
-
-// clearLatest unmarks the current version of (bid, name). A newly written
-// version always carries the highest seq and becomes current, but the unique
-// index on is_latest requires the previous current version be cleared first.
-func clearLatest(tx *txn, bid int64, name string) error {
-	_, err := tx.Exec(`UPDATE objects SET is_latest = FALSE WHERE bucket_id = $1 AND name = $2 AND is_latest = TRUE`, bid, name)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	_, err = tx.Exec(`UPDATE objects SET is_latest = FALSE WHERE bucket_id = $1 AND name = $2 AND is_latest = TRUE`, bid, name)
+	return seq, err
 }
 
 // DiskUsage returns the total bytes currently held on disk in the uploads
@@ -66,7 +61,7 @@ func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (
 	err := s.transaction(func(tx *txn) error {
 		versionID, isDeleteMarker, orphan = "", false, objects.OrphanedFile{} // reset per attempt
 
-		bid, err := bucketID(tx, accessKeyID, bucket)
+		bid, status, err := bucketIDAndVersioning(tx, accessKeyID, bucket)
 		if err != nil {
 			return err
 		}
@@ -87,10 +82,6 @@ func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (
 		}
 
 		// otherwise apply a versioning-aware delete to the current object.
-		status, err := bucketVersioning(tx, bid)
-		if err != nil {
-			return err
-		}
 		res, err := deleteCurrentObject(tx, bid, objectID.Key, status, objectID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil // unversioned bucket with nothing to delete
@@ -148,15 +139,11 @@ func matchPreconditions(objectID s3.ObjectID, contentMD5 [16]byte, size int64, u
 func (s *Store) GetObject(accessKeyID, bucket, name string, version s3.VersionRequest, partNumber *int32) (*objects.Object, error) {
 	var obj objects.Object
 	if err := s.transaction(func(tx *txn) error {
-		bid, err := bucketID(tx, accessKeyID, bucket)
+		bid, status, err := bucketIDAndVersioning(tx, accessKeyID, bucket)
 		if err != nil {
 			return err
 		}
 		if err := getObject(tx, &obj, bid, name, version, partNumber); err != nil {
-			return err
-		}
-		status, err := bucketVersioning(tx, bid)
-		if err != nil {
 			return err
 		}
 		obj.Versioned = status != ""
@@ -255,11 +242,7 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, version s3.
 func (s *Store) PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string) (versionID string, orphan objects.OrphanedFile, _ error) {
 	err := s.transaction(func(tx *txn) error {
 		versionID, orphan = "", objects.OrphanedFile{} // reset per attempt
-		bid, err := bucketID(tx, accessKeyID, bucket)
-		if err != nil {
-			return err
-		}
-		status, err := bucketVersioning(tx, bid)
+		bid, status, err := bucketIDAndVersioning(tx, accessKeyID, bucket)
 		if err != nil {
 			return err
 		}
@@ -607,11 +590,7 @@ func (s *Store) CopyObject(accessKeyID, srcBucket, srcName string, srcVersion s3
 		obj = objects.Object{} // reset per transaction attempt
 		versionID, srcVersionWire, orphan = "", "", objects.OrphanedFile{}
 
-		srcBid, err := bucketID(tx, accessKeyID, srcBucket)
-		if err != nil {
-			return err
-		}
-		srcStatus, err := bucketVersioning(tx, srcBid)
+		srcBid, srcStatus, err := bucketIDAndVersioning(tx, accessKeyID, srcBucket)
 		if err != nil {
 			return err
 		}
@@ -643,11 +622,7 @@ func (s *Store) CopyObject(accessKeyID, srcBucket, srcName string, srcVersion s3
 		// only resolve the destination separately when the buckets differ.
 		dstBid, dstStatus := srcBid, srcStatus
 		if dstBucket != srcBucket {
-			dstBid, err = bucketID(tx, accessKeyID, dstBucket)
-			if err != nil {
-				return err
-			}
-			dstStatus, err = bucketVersioning(tx, dstBid)
+			dstBid, dstStatus, err = bucketIDAndVersioning(tx, accessKeyID, dstBucket)
 			if err != nil {
 				return err
 			}
@@ -660,13 +635,8 @@ func (s *Store) CopyObject(accessKeyID, srcBucket, srcName string, srcVersion s3
 			if obj.Meta == nil {
 				obj.Meta = make(map[string]string)
 			}
-			seq, err := nextSeq(tx, dstBid, dstName)
+			seq, err := claimCurrentSeq(tx, dstBid, dstName)
 			if err != nil {
-				return err
-			}
-			// the refreshed seq makes this row current; clear the previous
-			// current version first to satisfy the unique index.
-			if err := clearLatest(tx, dstBid, dstName); err != nil {
 				return err
 			}
 			_, err = tx.Exec(`
@@ -1148,8 +1118,12 @@ func resolveVersionCursor(tx *txn, bid int64, prefix s3.Prefix, page s3.ListObje
 		m.key = *page.KeyMarker
 	}
 	if m.key != "" && page.VersionIDMarker != nil {
+		versionID := *page.VersionIDMarker
+		if versionID == s3.Null {
+			versionID = nullVersion
+		}
 		err := tx.QueryRow(`SELECT seq FROM objects WHERE bucket_id = $1 AND name = $2 AND version_id = $3`,
-			bid, m.key, *page.VersionIDMarker).Scan(&m.seq)
+			bid, m.key, versionID).Scan(&m.seq)
 		if err == nil {
 			m.hasSeq = true
 		} else if !errors.Is(err, sql.ErrNoRows) {

@@ -109,12 +109,11 @@ func (s *Store) ListBuckets(accessKeyID string) ([]s3.BucketInfo, error) {
 // is one of "" (never configured), "Enabled" or "Suspended".
 func (s *Store) GetBucketVersioning(accessKeyID, bucket string) (status string, err error) {
 	err = s.transaction(func(tx *txn) error {
-		bid, err := bucketID(tx, accessKeyID, bucket)
+		_, status, err = bucketIDAndVersioning(tx, accessKeyID, bucket)
 		if err != nil {
 			return err
 		}
-		status, err = bucketVersioning(tx, bid)
-		return err
+		return nil
 	})
 	return
 }
@@ -138,6 +137,17 @@ func (s *Store) PutBucketVersioning(accessKeyID, bucket, status string) error {
 func bucketVersioning(tx *txn, bid int64) (status string, err error) {
 	err = tx.QueryRow(`SELECT versioning_status FROM buckets WHERE id = $1`, bid).Scan(&status)
 	return
+}
+
+// bucketIDAndVersioning returns the bucket ID and versioning status after
+// verifying ownership with the given access key.
+func bucketIDAndVersioning(tx *txn, accessKeyID, bucket string) (bid int64, status string, err error) {
+	bid, err = bucketID(tx, accessKeyID, bucket)
+	if err != nil {
+		return 0, "", err
+	}
+	status, err = bucketVersioning(tx, bid)
+	return bid, status, err
 }
 
 // bucketID returns the ID of the bucket with the given name if the user

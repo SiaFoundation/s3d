@@ -2263,7 +2263,7 @@ func TestListObjectVersions(t *testing.T) {
 		// versions of "key" followed by "other"
 		result, err := store.ListObjectVersions(accessKeyID, bucket, s3.Prefix{}, s3.ListObjectVersionsPage{
 			KeyMarker:       aws.String("key"),
-			VersionIDMarker: aws.String(kv3),
+			VersionIDMarker: aws.String(s3.FormatVersion(kv3)),
 			MaxKeys:         100,
 		})
 		if err != nil {
@@ -2277,6 +2277,54 @@ func TestListObjectVersions(t *testing.T) {
 			if got := result.Versions[i].Key + "/" + result.Versions[i].VersionID; got != w {
 				t.Fatalf("version %d: expected %s, got %s", i, w, got)
 			}
+		}
+	})
+
+	t.Run("NullVersionIDMarkerResumesMidKey", func(t *testing.T) {
+		const (
+			bucket = "null-marker"
+			key    = "key"
+		)
+		if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+			t.Fatal(err)
+		} else if err := store.PutBucketVersioning(accessKeyID, bucket, s3.VersioningStatusEnabled); err != nil {
+			t.Fatal(err)
+		}
+		v1, _, err := store.PutObject(accessKeyID, bucket, key, frand.Entropy128(), nil, 1, new(string))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.PutBucketVersioning(accessKeyID, bucket, s3.VersioningStatusSuspended); err != nil {
+			t.Fatal(err)
+		}
+		if v, _, err := store.PutObject(accessKeyID, bucket, key, frand.Entropy128(), nil, 1, new(string)); err != nil {
+			t.Fatal(err)
+		} else if v != "" {
+			t.Fatalf("expected null version write to report no version, got %q", v)
+		}
+
+		first, err := store.ListObjectVersions(accessKeyID, bucket, s3.Prefix{}, s3.ListObjectVersionsPage{MaxKeys: 1})
+		if err != nil {
+			t.Fatal(err)
+		} else if !first.IsTruncated {
+			t.Fatal("expected first page to be truncated")
+		} else if len(first.Versions) != 1 || first.Versions[0].VersionID != "" {
+			t.Fatalf("expected first page to end on null version, got %+v", first.Versions)
+		} else if first.NextVersionIDMarker != s3.Null {
+			t.Fatalf("expected null next version marker, got %q", first.NextVersionIDMarker)
+		}
+
+		result, err := store.ListObjectVersions(accessKeyID, bucket, s3.Prefix{}, s3.ListObjectVersionsPage{
+			KeyMarker:       aws.String(first.NextKeyMarker),
+			VersionIDMarker: aws.String(first.NextVersionIDMarker),
+			MaxKeys:         100,
+		})
+		if err != nil {
+			t.Fatal(err)
+		} else if len(result.Versions) != 1 {
+			t.Fatalf("expected one remaining version, got %+v", result.Versions)
+		} else if result.Versions[0].Key != key || result.Versions[0].VersionID != v1 {
+			t.Fatalf("expected remaining version %s/%s, got %+v", key, v1, result.Versions[0])
 		}
 	})
 

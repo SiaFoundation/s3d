@@ -76,8 +76,9 @@ type ListObjectVersionsPage struct {
 	// beginning.
 	KeyMarker *string
 
-	// VersionIDMarker is the version to resume within KeyMarker, or nil for all
-	// of KeyMarker's versions. The wire value "null" is mapped to "".
+	// VersionIDMarker is the wire-encoded version to resume within KeyMarker, or
+	// nil for all of KeyMarker's versions. The wire value "null" represents the
+	// null version.
 	VersionIDMarker *string
 
 	// MaxKeys sets the maximum number of versions returned in the response.

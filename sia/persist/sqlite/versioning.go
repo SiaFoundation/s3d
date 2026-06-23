@@ -78,9 +78,9 @@ func putObject(tx *txn, bid int64, name string, status string, contentMD5 [16]by
 		return objectMutationResult{}, fmt.Errorf("failed to delete null version: %w", err)
 	}
 
-	seq, err := nextSeq(tx, bid, name)
+	seq, err := claimCurrentSeq(tx, bid, name)
 	if err != nil {
-		return objectMutationResult{}, fmt.Errorf("failed to get next sequence: %w", err)
+		return objectMutationResult{}, fmt.Errorf("failed to claim current sequence: %w", err)
 	}
 
 	var id *sqlHash256
@@ -88,12 +88,6 @@ func putObject(tx *txn, bid int64, name string, status string, contentMD5 [16]by
 	if siaObject != nil {
 		id = (*sqlHash256)(&siaObject.ID)
 		sealed = (*sqlSiaObject)(&siaObject.Sealed)
-	}
-
-	// the new row carries the highest seq and becomes the current version;
-	// clear the previous current version first to satisfy the unique index.
-	if err := clearLatest(tx, bid, name); err != nil {
-		return objectMutationResult{}, fmt.Errorf("failed to clear current version: %w", err)
 	}
 
 	if _, err := tx.Exec(`
@@ -218,14 +212,9 @@ func deleteSpecificVersion(tx *txn, bid int64, name string, version string, obje
 // insertDeleteMarker inserts a delete marker row for (bid, name) with a fresh
 // sequence so it becomes the current version. Delete markers carry no data.
 func insertDeleteMarker(tx *txn, bid int64, name string, version string) error {
-	seq, err := nextSeq(tx, bid, name)
+	seq, err := claimCurrentSeq(tx, bid, name)
 	if err != nil {
-		return fmt.Errorf("failed to get next sequence: %w", err)
-	}
-	// the marker carries the highest seq and becomes the current version;
-	// clear the previous current version first to satisfy the unique index.
-	if err := clearLatest(tx, bid, name); err != nil {
-		return fmt.Errorf("failed to clear current version: %w", err)
+		return fmt.Errorf("failed to claim current sequence: %w", err)
 	}
 	var zero [16]byte
 	if _, err := tx.Exec(`
