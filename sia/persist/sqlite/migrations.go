@@ -352,4 +352,19 @@ INSERT INTO object_parts (bucket_id, name, version_id, part_number, filename, co
 DROP TABLE object_parts_backup;`)
 		return err
 	},
+	func(tx *txn, _ *zap.Logger) error {
+		_, err := tx.Exec(`
+			CREATE TABLE snapshots (
+				id INTEGER PRIMARY KEY,
+				created_at INTEGER NOT NULL,
+				path TEXT NOT NULL
+			);
+			CREATE TABLE snapshot_objects (
+				snapshot_id INTEGER NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE,
+				sia_object_id BLOB NOT NULL,
+				PRIMARY KEY (snapshot_id, sia_object_id)
+			);
+			CREATE INDEX snapshot_objects_sia_object_id_idx ON snapshot_objects(sia_object_id);`)
+		return err
+	},
 }
