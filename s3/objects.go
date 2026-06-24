@@ -343,14 +343,10 @@ func (s *s3) getObject(w http.ResponseWriter, r *http.Request, accessKeyID *stri
 	}
 
 	// write body
-	if _, err := io.Copy(w, obj.Body); err != nil {
-		// log debug level if client disconnected to avoid spamming the logs
-		// when e.g. a video player aborta a range request on seek.
-		if r.Context().Err() != nil {
-			log.Debug("client disconnected while writing object body", zap.Error(err))
-		} else {
-			log.Error("failed to write object body", zap.Error(err))
-		}
+	if readErr, writeErr := streamBody(w, obj.Body); readErr != nil {
+		log.Error("failed to read object body", zap.Error(readErr))
+	} else if writeErr != nil {
+		log.Debug("failed to write object body", zap.Error(writeErr))
 	}
 	return nil
 }
@@ -1070,4 +1066,30 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 	}
 
 	return nil
+}
+
+// streamBody is the same as io.Copy but returns separate errors depending on
+// whether reading from src failed to writing to dst. If writing to dst fails,
+// it's usually the client disconnecting, so we don't want to log that as an
+// error. If reading from src fails, it's a backend error, so we do want
+// to log that.
+func streamBody(dst io.Writer, src io.Reader) (readErr, writeErr error) {
+	buf := make([]byte, 32*1024)
+	for {
+		nr, rerr := src.Read(buf)
+		if nr > 0 {
+			nw, werr := dst.Write(buf[:nr])
+			if werr != nil {
+				return nil, werr
+			}
+			if nw < nr {
+				return nil, io.ErrShortWrite
+			}
+		}
+		if rerr == io.EOF {
+			return nil, nil
+		} else if rerr != nil {
+			return rerr, nil
+		}
+	}
 }
