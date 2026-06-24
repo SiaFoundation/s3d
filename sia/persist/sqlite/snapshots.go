@@ -24,8 +24,16 @@ func (s *Store) CreateSnapshot(ctx context.Context, destPath string) error {
 		return fmt.Errorf("failed to stat destination file: %w", err)
 	}
 
+	// hold the single connection across the snapshot insert and the backup so
+	// no writer can commit objects that would land in the backup but not in
+	// snapshot_objects
+	conn, err := sqlConn(ctx, s.db)
+	if err != nil {
+		return fmt.Errorf("failed to create connection: %w", err)
+	}
+
 	var snapshotID int64
-	err := s.transaction(func(tx *txn) error {
+	err = doTransaction(ctx, conn, s.log.Named("snapshot"), func(tx *txn) error {
 		if err := tx.QueryRow("INSERT INTO snapshots (created_at, path) VALUES ($1, $2) RETURNING id", sqlTime(time.Now()), destPath).Scan(&snapshotID); err != nil {
 			return err
 		}
@@ -35,14 +43,18 @@ func (s *Store) CreateSnapshot(ctx context.Context, destPath string) error {
 		return err
 	})
 	if err != nil {
+		conn.Close()
 		return err
 	}
 
-	if err := s.Backup(ctx, destPath); err != nil {
+	backupErr := execBackup(ctx, conn, destPath)
+	// release the held connection before DeleteSnapshot, which needs it back
+	conn.Close()
+	if backupErr != nil {
 		if dErr := s.DeleteSnapshot(snapshotID); dErr != nil {
 			s.log.Error("failed to roll back snapshot after backup error", zap.Int64("snapshotID", snapshotID), zap.Error(dErr))
 		}
-		return fmt.Errorf("failed to create backup: %w", err)
+		return fmt.Errorf("failed to create backup: %w", backupErr)
 	}
 	return nil
 }
