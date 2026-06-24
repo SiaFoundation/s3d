@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -77,6 +78,68 @@ func (r *MultipartReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// WriteTo streams the remaining parts to w. It does not verify part checksums.
+func (r *MultipartReader) WriteTo(w io.Writer) (int64, error) {
+	return r.writeTo(w, math.MaxInt64)
+}
+
+// writeTo copies up to limit bytes of the remaining parts to w.
+func (r *MultipartReader) writeTo(w io.Writer, limit int64) (int64, error) {
+	var written int64
+	for written < limit {
+		if r.curr == nil {
+			if err := r.openNext(); err != nil {
+				if errors.Is(err, io.EOF) {
+					return written, nil // no more parts
+				}
+				return written, err
+			}
+		}
+
+		n, err := io.CopyN(w, r.curr, limit-written)
+		written += n
+		if errors.Is(err, io.EOF) {
+			// part ended before the limit; advance to the next one
+			if err := r.closePart(); err != nil {
+				return written, err
+			}
+			continue
+		} else if err != nil {
+			return written, err
+		}
+		break // reached the limit mid-part; leave it open for Close
+	}
+	return written, nil
+}
+
+// LimitReader bounds r to the next n bytes. The caller still owns and closes r.
+func LimitReader(r *MultipartReader, n int64) io.Reader {
+	return &limitedReader{r: r, n: n}
+}
+
+type limitedReader struct {
+	r *MultipartReader
+	n int64
+}
+
+func (l *limitedReader) Read(p []byte) (int, error) {
+	if l.n <= 0 {
+		return 0, io.EOF
+	}
+	if int64(len(p)) > l.n {
+		p = p[:l.n]
+	}
+	n, err := l.r.Read(p)
+	l.n -= int64(n)
+	return n, err
+}
+
+func (l *limitedReader) WriteTo(w io.Writer) (int64, error) {
+	n, err := l.r.writeTo(w, l.n)
+	l.n -= n
+	return n, err
+}
+
 // Close closes the reader and any open part file.
 func (r *MultipartReader) Close() error {
 	if r.curr == nil {
@@ -116,19 +179,25 @@ func (r *MultipartReader) openNext() error {
 }
 
 func (r *MultipartReader) finishPart() error {
+	h, part := r.currHash, r.currPart
+	if err := r.closePart(); err != nil {
+		return err
+	}
+	if sum := h.Sum(nil); !bytes.Equal(sum, part.ContentMD5[:]) {
+		return fmt.Errorf("part %d MD5 mismatch (expected %x, got %x): %w",
+			part.PartNumber,
+			part.ContentMD5,
+			sum,
+			s3errs.ErrBadDigest)
+	}
+	return nil
+}
+
+func (r *MultipartReader) closePart() error {
 	if err := r.curr.Close(); err != nil {
 		return fmt.Errorf("failed to close part file: %w", err)
 	}
 	r.curr = nil
-
-	if sum := r.currHash.Sum(nil); !bytes.Equal(sum, r.currPart.ContentMD5[:]) {
-		return fmt.Errorf("part %d MD5 mismatch (expected %x, got %x): %w",
-			r.currPart.PartNumber,
-			r.currPart.ContentMD5,
-			sum,
-			s3errs.ErrBadDigest)
-	}
-
 	r.currHash = nil
 	r.currPart = Part{}
 	return nil

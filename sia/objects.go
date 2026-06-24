@@ -100,6 +100,10 @@ func (lr *lockedUploadReader) Close() error {
 	return err
 }
 
+func (lr *lockedUploadReader) WriteTo(w io.Writer) (int64, error) {
+	return io.Copy(w, lr.Reader)
+}
+
 func (s *Sia) uploadDir() string {
 	return filepath.Join(s.directory, UploadsDirectory)
 }
@@ -181,7 +185,11 @@ func (s *Sia) openUpload(bucket, name string, filename *string, multipart bool, 
 	}
 
 	if r != nil {
-		reader = io.LimitReader(reader, r.Length)
+		if mr, ok := reader.(*objects.MultipartReader); ok {
+			reader = objects.LimitReader(mr, r.Length)
+		} else {
+			reader = io.LimitReader(reader, r.Length)
+		}
 	}
 	return &lockedUploadReader{Reader: reader, c: closer, unlock: unlock}, nil
 }
