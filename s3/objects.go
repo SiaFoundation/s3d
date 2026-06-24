@@ -344,9 +344,13 @@ func (s *s3) getObject(w http.ResponseWriter, r *http.Request, accessKeyID *stri
 
 	// write body
 	if _, err := io.Copy(w, obj.Body); err != nil {
-		// at this point we can't inform the client of the error anymore so
-		// we just log it
-		s.logger.Error("failed to write object body", zap.Error(err))
+		// log debug level if client disconnected to avoid spamming the logs
+		// when e.g. a video player aborta a range request on seek.
+		if r.Context().Err() != nil {
+			log.Debug("client disconnected while writing object body", zap.Error(err))
+		} else {
+			log.Error("failed to write object body", zap.Error(err))
+		}
 	}
 	return nil
 }
