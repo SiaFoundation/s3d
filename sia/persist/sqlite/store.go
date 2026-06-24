@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"context"
 	"database/sql"
 	"encoding/hex"
 	"errors"
@@ -41,7 +42,7 @@ func (s *Store) transaction(fn func(*txn) error) error {
 	for ; attempt < maxRetryAttempts; attempt++ {
 		attemptStart := time.Now()
 		log := log.With(zap.Int("attempt", attempt))
-		err = doTransaction(s.db, log, fn)
+		err = doTransaction(context.Background(), s.db, log, fn)
 		if err == nil {
 			// no error, break out of the loop
 			return nil
@@ -73,11 +74,17 @@ func sqliteFilepath(fp string) string {
 	return "file:" + fp + "?" + strings.Join(params, "&")
 }
 
+// txBeginner begins a transaction. Both *sql.DB and *sql.Conn satisfy it,
+// letting doTransaction run against the pool or a single held connection.
+type txBeginner interface {
+	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
+}
+
 // doTransaction is a helper function to execute a function within a transaction. If fn returns
 // an error, the transaction is rolled back. Otherwise, the transaction is
 // committed.
-func doTransaction(db *sql.DB, log *zap.Logger, fn func(tx *txn) error) error {
-	dbtx, err := db.Begin()
+func doTransaction(ctx context.Context, b txBeginner, log *zap.Logger, fn func(tx *txn) error) error {
+	dbtx, err := b.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
