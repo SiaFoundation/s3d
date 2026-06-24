@@ -100,6 +100,11 @@ func main() {
 	keysDeleteCmd := flagg.New("delete", keysDeleteUsage)
 	keysListCmd := flagg.New("list", keysListUsage)
 
+	backupCmd := flagg.New("backup", backupUsage)
+	backupCreateCmd := flagg.New("create", backupCreateUsage)
+	backupListCmd := flagg.New("list", backupListUsage)
+	backupDeleteCmd := flagg.New("delete", backupDeleteUsage)
+
 	var keysCreateAccessKey, keysCreateSecretKey string
 	keysCreateCmd.StringVar(&keysCreateAccessKey, "access-key", "", "access key ID (auto-generated if empty)")
 	keysCreateCmd.StringVar(&keysCreateSecretKey, "secret-key", "", "secret key (auto-generated if empty)")
@@ -136,6 +141,14 @@ func main() {
 					{Cmd: keysCreateCmd},
 					{Cmd: keysDeleteCmd},
 					{Cmd: keysListCmd},
+				},
+			},
+			{
+				Cmd: backupCmd,
+				Sub: []flagg.Tree{
+					{Cmd: backupCreateCmd},
+					{Cmd: backupListCmd},
+					{Cmd: backupDeleteCmd},
 				},
 			},
 		},
@@ -200,6 +213,21 @@ func main() {
 		return
 	case keysListCmd:
 		runKeysList(keysListCmd)
+		return
+	case backupCmd:
+		cmd.Usage()
+		if len(cmd.Args()) != 0 {
+			os.Exit(1)
+		}
+		return
+	case backupCreateCmd:
+		runBackupCreate(ctx, backupCreateCmd)
+		return
+	case backupListCmd:
+		runBackupList(ctx, backupListCmd)
+		return
+	case backupDeleteCmd:
+		runBackupDelete(ctx, backupDeleteCmd)
 		return
 	case rootCmd:
 		if len(cmd.Args()) != 0 {

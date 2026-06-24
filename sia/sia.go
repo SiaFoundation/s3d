@@ -217,6 +217,8 @@ type Store interface {
 	ExpireObjects(bucketID int64, prefix string, before time.Time, limit int) (int, []OrphanedFile, error)
 
 	CreateSnapshot(ctx context.Context, destPath string) error
+	ListSnapshots() ([]objects.Snapshot, error)
+	DeleteSnapshot(snapshotID int64) error
 }
 
 // New creates a new Sia backend instance.
@@ -309,7 +311,32 @@ func (s *Sia) BackupSQLite3(ctx context.Context, destPath string) error {
 	} else if !filepath.IsAbs(destPath) {
 		return fmt.Errorf("destination path must be absolute: %q", destPath)
 	}
+	// TODO: flush pending objects before the backup so the snapshot does not
+	// reference data still only on local disk (needs FlushObjects, #209)
 	return s.store.CreateSnapshot(ctx, destPath)
+}
+
+// ListSnapshots returns the recorded database backups.
+func (s *Sia) ListSnapshots(context.Context) ([]s3.Snapshot, error) {
+	snapshots, err := s.store.ListSnapshots()
+	if err != nil {
+		return nil, err
+	}
+	result := make([]s3.Snapshot, len(snapshots))
+	for i, snap := range snapshots {
+		result[i] = s3.Snapshot{
+			ID:          snap.ID,
+			CreatedAt:   snap.CreatedAt,
+			Path:        snap.Path,
+			ObjectCount: snap.ObjectCount,
+		}
+	}
+	return result, nil
+}
+
+// DeleteSnapshot removes the snapshot with the given id.
+func (s *Sia) DeleteSnapshot(_ context.Context, snapshotID int64) error {
+	return s.store.DeleteSnapshot(snapshotID)
 }
 
 // processOrphansLoop periodically processes orphaned objects.
