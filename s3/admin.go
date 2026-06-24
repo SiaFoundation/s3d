@@ -106,3 +106,21 @@ func (s *s3) handleCreateSnapshot(jc jape.Context) {
 	}
 	jc.Encode(snapshot)
 }
+
+// handleListSnapshots lists the recorded database backups.
+func (s *s3) handleListSnapshots(jc jape.Context) {
+	snapshots, err := s.backend.ListSnapshots(jc.Request.Context())
+	if jc.Check("failed to list snapshots", err) != nil {
+		return
+	}
+	jc.Encode(snapshots)
+}
+
+// handleDeleteSnapshot deletes the snapshot with the id given in the path.
+func (s *s3) handleDeleteSnapshot(jc jape.Context) {
+	var id int64
+	if jc.DecodeParam("id", &id) != nil {
+		return
+	}
+	jc.Check("failed to delete snapshot", s.backend.DeleteSnapshot(jc.Request.Context(), id))
+}

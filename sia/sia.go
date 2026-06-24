@@ -247,6 +247,7 @@ type Store interface {
 	CreateSnapshot() (s3.Snapshot, int64, error)
 	AdoptSnapshot(objectID types.Hash256, createdAt time.Time, gen, objectCount int64) (s3.Snapshot, error)
 	MarkSnapshotPinned(id int64, objectID types.Hash256) error
+	ListSnapshots() ([]s3.Snapshot, error)
 	DeleteSnapshot(id int64) error
 	DeleteIncompleteSnapshots() (int64, error)
 	DeleteSnapshotsBySiaObject(objectID types.Hash256) (int64, error)
@@ -356,6 +357,8 @@ func (s *Sia) Close() error {
 // once the upload completes. On failure the snapshot and any pinned object are
 // rolled back.
 func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
+	// TODO: flush pending objects before the backup so the snapshot does not
+	// reference data still only on local disk
 	snap, gen, err := s.store.CreateSnapshot()
 	if err != nil {
 		return s3.Snapshot{}, fmt.Errorf("failed to create snapshot: %w", err)
@@ -458,6 +461,40 @@ func (s *Sia) wakeOrphanLoop() {
 	case s.orphanWake <- struct{}{}:
 	default:
 	}
+}
+
+// ListSnapshots returns the recorded database backups.
+func (s *Sia) ListSnapshots(_ context.Context) ([]s3.Snapshot, error) {
+	return s.store.ListSnapshots()
+}
+
+// DeleteSnapshot removes the snapshot with the given id and unpins its backup
+// object from the Sia network, releasing the objects the snapshot pinned so
+// they can be unpinned once nothing else references them.
+func (s *Sia) DeleteSnapshot(ctx context.Context, id int64) error {
+	snapshots, err := s.store.ListSnapshots()
+	if err != nil {
+		return fmt.Errorf("failed to list snapshots: %w", err)
+	}
+	var objectID types.Hash256
+	for _, snap := range snapshots {
+		if snap.ID == id {
+			objectID = snap.SiaObjectID
+			break
+		}
+	}
+	if objectID == (types.Hash256{}) {
+		return objects.ErrSnapshotNotFound
+	}
+
+	// unpin the backup object before deleting the record, the sync loop drops
+	// snapshots whose object was deleted, so a failure after the unpin heals
+	if err := s.sdk.DeleteObject(ctx, objectID); err != nil && !isObjectNotFound(err) {
+		return fmt.Errorf("failed to unpin snapshot object: %w", err)
+	} else if err := s.store.DeleteSnapshot(id); err != nil && !errors.Is(err, objects.ErrSnapshotNotFound) {
+		return fmt.Errorf("failed to delete snapshot: %w", err)
+	}
+	return nil
 }
 
 // processOrphansLoop periodically processes orphaned objects.

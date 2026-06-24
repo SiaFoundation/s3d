@@ -95,6 +95,49 @@ paths:
                 $ref: "#/components/schemas/Snapshot"
         "500":
           description: The snapshot could not be created.
+    get:
+      tags:
+        - system
+      summary: List database backups
+      description: >
+        Lists the database backups recorded as snapshots. A snapshot prevents
+        the objects it references from being unpinned from the Sia network
+        until the snapshot is deleted.
+      operationId: listSnapshots
+      responses:
+        "200":
+          description: The recorded backups.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Snapshot"
+        "500":
+          description: The backups could not be listed.
+  /snapshots/{id}:
+    delete:
+      tags:
+        - system
+      summary: Delete a database backup
+      description: >
+        Deletes the snapshot with the given id, unpinning its backup object
+        from the Sia network and releasing the objects it pinned so they can
+        be unpinned once nothing else references them.
+      operationId: deleteSnapshot
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+          description: The id of the snapshot to delete.
+      responses:
+        "200":
+          description: The backup was deleted.
+        "500":
+          description: The backup could not be deleted.
 
 components:
   securitySchemes:
