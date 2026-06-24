@@ -527,7 +527,7 @@ func (s *s3) routeBase(w http.ResponseWriter, r *http.Request, accessKeyID *stri
 	}
 	if err != nil {
 		// only consider 5xx errors as "real" errors when logging. Other errors
-		// like bad requests or not found errors are no our fault
+		// like bad requests or not found errors are not our fault
 		var s3Err s3errs.Error
 		if errors.As(err, &s3Err) && s3Err.HTTPStatus < http.StatusInternalServerError {
 			log.Debug("failed to handle request", zap.Error(err))
