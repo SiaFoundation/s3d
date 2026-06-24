@@ -74,3 +74,11 @@ type OrphanedFile struct {
 	Filename string
 	Size     int64
 }
+
+// Snapshot describes a database backup recorded in the store.
+type Snapshot struct {
+	ID          int64
+	CreatedAt   time.Time
+	Path        string
+	ObjectCount int
+}

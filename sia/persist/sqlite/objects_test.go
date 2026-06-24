@@ -1101,6 +1101,32 @@ func TestOrphanedObjects(t *testing.T) {
 		t.Fatalf("expected orphan %v, got %v", objID, orphans)
 	}
 
+	// a snapshot referencing the orphan withholds it from unpinning
+	if _, err := store.db.Exec("INSERT INTO snapshots (id, created_at, path) VALUES (1, 0, 'backup.sqlite')"); err != nil {
+		t.Fatal(err)
+	} else if _, err := store.db.Exec("INSERT INTO snapshot_objects (snapshot_id, sia_object_id) VALUES (1, $1)", sqlHash256(objID)); err != nil {
+		t.Fatal(err)
+	}
+
+	orphans, err = store.OrphanedObjects(100)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(orphans) != 0 {
+		t.Fatalf("expected snapshotted orphan to be withheld, got %d", len(orphans))
+	}
+
+	// removing the snapshot reference releases the orphan
+	if _, err := store.db.Exec("DELETE FROM snapshot_objects WHERE sia_object_id = $1", sqlHash256(objID)); err != nil {
+		t.Fatal(err)
+	}
+
+	orphans, err = store.OrphanedObjects(100)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(orphans) != 1 || orphans[0] != objID {
+		t.Fatalf("expected orphan %v after snapshot reference removed, got %v", objID, orphans)
+	}
+
 	// remove orphan
 	if err := store.RemoveOrphanedObject(objID); err != nil {
 		t.Fatal(err)

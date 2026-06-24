@@ -669,11 +669,15 @@ func (s *Store) AllFilenames() (filenames []string, err error) {
 	return
 }
 
-// OrphanedObjects returns up to limit object IDs from the orphaned_objects table.
+// OrphanedObjects returns up to limit object IDs eligible for unpinning. An id
+// referenced by a snapshot is withheld until that snapshot is deleted.
 func (s *Store) OrphanedObjects(limit int) (ids []types.Hash256, err error) {
 	err = s.transaction(func(tx *txn) error {
 		ids = ids[:0] // reuse same slice if transaction retries
-		rows, err := tx.Query("SELECT sia_object_id FROM orphaned_objects LIMIT $1", limit)
+		rows, err := tx.Query(`
+			SELECT sia_object_id FROM orphaned_objects o
+			WHERE NOT EXISTS (SELECT 1 FROM snapshot_objects s WHERE s.sia_object_id = o.sia_object_id)
+			LIMIT $1`, limit)
 		if err != nil {
 			return err
 		}
