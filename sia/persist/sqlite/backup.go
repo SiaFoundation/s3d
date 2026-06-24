@@ -39,7 +39,21 @@ func withSQLiteConn(conn *sql.Conn, fn func(*sqlite3.SQLiteConn) error) error {
 // backup API. The backup runs over the store's own connection, so writes to
 // the database are blocked for the duration of the backup but the snapshot is
 // always consistent.
-func (s *Store) Backup(ctx context.Context, destPath string) (err error) {
+func (s *Store) Backup(ctx context.Context, destPath string) error {
+	// initialize the source conn
+	srcConn, err := sqlConn(ctx, s.db)
+	if err != nil {
+		return fmt.Errorf("failed to create source connection: %w", err)
+	}
+	defer srcConn.Close()
+	return execBackup(ctx, srcConn, destPath)
+}
+
+// execBackup writes a backup of the database read through srcConn to destPath
+// using the SQLite backup API. The caller retains ownership of srcConn, which
+// lets a caller hold a single connection across an enclosing write and the
+// backup so no other writer can interleave.
+func execBackup(ctx context.Context, srcConn *sql.Conn, destPath string) (err error) {
 	// prevent overwriting the destination file
 	if destPath == "" {
 		return errors.New("empty destination path")
@@ -64,13 +78,6 @@ func (s *Store) Backup(ctx context.Context, destPath string) (err error) {
 			_ = os.Remove(destPath + "-shm")
 		}
 	}()
-
-	// initialize the source conn
-	srcConn, err := sqlConn(ctx, s.db)
-	if err != nil {
-		return fmt.Errorf("failed to create source connection: %w", err)
-	}
-	defer srcConn.Close()
 
 	// initialize the destination conn
 	destConn, err := sqlConn(ctx, dest)
