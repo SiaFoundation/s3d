@@ -259,9 +259,7 @@ func (s *Sia) uploadObjects(ctx context.Context, flush bool) error { //nolint:re
 					zap.Int("n", len(g.objects)),
 				)
 
-				err := s.uploadObjectGroup(ctx, g)
-				if err != nil {
-					s.logger.Error("failed to upload object group", zap.Error(err))
+				if err := s.uploadObjectGroup(ctx, g); err != nil {
 					errs[i] = errors.Join(errs[i], err)
 				}
 			}
@@ -308,6 +306,7 @@ func (s *Sia) UploadStats(_ context.Context) (s3.UploadStats, error) {
 func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 	upload, err := s.sdk.UploadPacked()
 	if err != nil {
+		s.logger.Error("failed to create packed upload", zap.Error(err))
 		return fmt.Errorf("failed to create packed upload: %w", err)
 	}
 	defer upload.Close()
