@@ -321,6 +321,8 @@ func main() {
 	adminServer := &http.Server{
 		Handler:     adminHandler,
 		ReadTimeout: 30 * time.Second,
+		// no WriteTimeout: /objects/flush blocks until all pending objects are
+		// uploaded, which can take longer than any fixed deadline.
 	}
 	defer adminServer.Close()
 

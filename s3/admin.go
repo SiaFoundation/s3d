@@ -94,6 +94,11 @@ func (s *s3) handleGetUploadStats(jc jape.Context) {
 	jc.Encode(stats)
 }
 
+// handleFlushObjects flushes all pending objects to Sia via Backend.FlushObjects.
+func (s *s3) handleFlushObjects(jc jape.Context) {
+	jc.Check("failed to flush objects", s.backend.FlushObjects(jc.Request.Context()))
+}
+
 // handleBackupSQLite3 creates a backup of the SQLite3 database at the path
 // provided in the request body. The backup is a consistent snapshot even if
 // the database is being written to concurrently.

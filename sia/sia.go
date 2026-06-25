@@ -122,6 +122,7 @@ type Sia struct {
 	diskUsageWake chan struct{}
 	diskUsage     uint64
 
+	uploadMu          sync.Mutex
 	uploadDisabled    bool
 	uploadOptimalSize int64
 	uploadWastePct    float64
@@ -129,6 +130,7 @@ type Sia struct {
 	lifecycleLoopInterval time.Duration
 	lifecycleDayDuration  time.Duration
 
+	pinMu   sync.Mutex
 	pinWake chan struct{}
 
 	lockedUploadsMu sync.Mutex
