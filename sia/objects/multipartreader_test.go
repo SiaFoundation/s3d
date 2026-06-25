@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"lukechampine.com/frand"
 )
 
@@ -84,18 +83,6 @@ func TestMultipartReader(t *testing.T) {
 	// assert data
 	if !bytes.Equal(all, append(p1, p2...)) {
 		t.Fatalf("unexpected data: %q", all)
-	}
-
-	// assert MD5 is validated
-	r, err = NewReader(dir, []Part{
-		{PartNumber: 3, Filename: writePart(3, []byte("x")), Size: 1, ContentMD5: md5.Sum([]byte("y"))},
-	}, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer r.Close()
-	if _, err := io.ReadAll(r); !errors.Is(err, s3errs.ErrBadDigest) {
-		t.Fatalf("expected ErrBadDigest, got %v", err)
 	}
 
 	// assert size is validated

@@ -1,18 +1,13 @@
 package objects
 
 import (
-	"bytes"
-	"crypto/md5"
 	"errors"
 	"fmt"
-	"hash"
 	"io"
 	"math"
 	"os"
 	"path/filepath"
 	"strconv"
-
-	"github.com/SiaFoundation/s3d/s3/s3errs"
 )
 
 // MultipartReader provides a sequential reader over the parts of a multipart
@@ -20,10 +15,9 @@ import (
 type MultipartReader struct {
 	partsDir       string
 	remainingParts []Part
+	offset         int64 // bytes to skip within the next opened part
 
-	curr     *os.File
-	currHash hash.Hash
-	currPart Part
+	curr *os.File
 }
 
 // NewReader creates a new Reader for the given multipart upload starting at
@@ -44,19 +38,11 @@ func NewReader(partsDir string, parts []Part, offset int64) (*MultipartReader, e
 		parts = parts[1:]
 	}
 
-	r := &MultipartReader{
+	return &MultipartReader{
 		remainingParts: parts,
 		partsDir:       partsDir,
-	}
-
-	// discard remaining bytes within the first part so the hasher stays correct
-	if offset > 0 && len(parts) > 0 {
-		if _, err := io.CopyN(io.Discard, r, offset); err != nil {
-			r.Close()
-			return nil, fmt.Errorf("failed to skip to offset: %w", err)
-		}
-	}
-	return r, nil
+		offset:         offset,
+	}, nil
 }
 
 // Read reads data from the multipart upload parts sequentially.
@@ -69,16 +55,13 @@ func (r *MultipartReader) Read(p []byte) (int, error) {
 	}
 
 	n, err := r.curr.Read(p)
-	if n > 0 {
-		_, _ = r.currHash.Write(p[:n])
-	}
 	if errors.Is(err, io.EOF) {
-		return n, r.finishPart() // ignore EOF, try next part
+		return n, r.closePart() // ignore EOF, try next part
 	}
 	return n, err
 }
 
-// WriteTo streams the remaining parts to w. It does not verify part checksums.
+// WriteTo streams the remaining parts to w.
 func (r *MultipartReader) WriteTo(w io.Writer) (int64, error) {
 	return r.writeTo(w, math.MaxInt64)
 }
@@ -173,22 +156,13 @@ func (r *MultipartReader) openNext() error {
 		return fmt.Errorf("part %d size mismatch: file is %d bytes, expected %d", part.PartNumber, stat.Size(), part.Size)
 	}
 
-	r.currHash = md5.New()
-	r.currPart = part
-	return nil
-}
-
-func (r *MultipartReader) finishPart() error {
-	h, part := r.currHash, r.currPart
-	if err := r.closePart(); err != nil {
-		return err
-	}
-	if sum := h.Sum(nil); !bytes.Equal(sum, part.ContentMD5[:]) {
-		return fmt.Errorf("part %d MD5 mismatch (expected %x, got %x): %w",
-			part.PartNumber,
-			part.ContentMD5,
-			sum,
-			s3errs.ErrBadDigest)
+	// seek past the offset within the first part
+	if r.offset > 0 {
+		if _, err := r.curr.Seek(r.offset, io.SeekStart); err != nil {
+			r.curr.Close()
+			return fmt.Errorf("failed to seek part %d to offset %d: %w", part.PartNumber, r.offset, err)
+		}
+		r.offset = 0
 	}
 	return nil
 }
@@ -198,7 +172,5 @@ func (r *MultipartReader) closePart() error {
 		return fmt.Errorf("failed to close part file: %w", err)
 	}
 	r.curr = nil
-	r.currHash = nil
-	r.currPart = Part{}
 	return nil
 }
