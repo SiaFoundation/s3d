@@ -63,6 +63,7 @@ func runBackupCreate(ctx context.Context, cmd *flag.FlagSet) {
 	// imposed beyond the parent context
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+cfg.AdminAddress+"/system/sqlite3/backup", bytes.NewReader(body))
 	checkFatalError("failed to build request", err)
+	req.Header.Set("Content-Type", "application/json")
 	req.SetBasicAuth("", cfg.AdminPassword)
 
 	resp, err := http.DefaultClient.Do(req)
@@ -116,6 +117,9 @@ func runBackupDelete(ctx context.Context, cmd *flag.FlagSet) {
 
 	id, err := strconv.ParseInt(cmd.Arg(0), 10, 64)
 	checkFatalError("invalid snapshot id", err)
+	if id <= 0 {
+		checkFatalError("invalid snapshot id", fmt.Errorf("id must be positive: %d", id))
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()

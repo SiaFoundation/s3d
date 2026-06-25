@@ -317,7 +317,7 @@ func (s *Sia) BackupSQLite3(ctx context.Context, destPath string) error {
 }
 
 // ListSnapshots returns the recorded database backups.
-func (s *Sia) ListSnapshots(context.Context) ([]s3.Snapshot, error) {
+func (s *Sia) ListSnapshots(_ context.Context) ([]s3.Snapshot, error) {
 	snapshots, err := s.store.ListSnapshots()
 	if err != nil {
 		return nil, err

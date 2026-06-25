@@ -40,6 +40,7 @@ Commands:
 	status		Print a basic overview of the running s3d instance
 	users		Manage users
 	keys		Manage S3 access keys
+	backup		Manage SQLite database backups
 `
 
 	versionUsage = `Usage: s3d version

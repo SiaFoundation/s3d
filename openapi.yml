@@ -142,6 +142,8 @@ paths:
       responses:
         "200":
           description: The backup was deleted.
+        "400":
+          description: The id must be a positive integer.
         "500":
           description: The backup could not be deleted.
 

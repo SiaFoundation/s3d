@@ -145,6 +145,9 @@ func (s *s3) handleDeleteSnapshot(jc jape.Context) {
 	var id int64
 	if jc.DecodeParam("id", &id) != nil {
 		return
+	} else if id <= 0 {
+		jc.Error(fmt.Errorf("id must be positive: %d", id), http.StatusBadRequest)
+		return
 	}
 	jc.Check("failed to delete snapshot", s.backend.DeleteSnapshot(jc.Request.Context(), id))
 }
