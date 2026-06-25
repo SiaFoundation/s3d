@@ -2280,6 +2280,57 @@ func TestListObjectVersions(t *testing.T) {
 		}
 	})
 
+	t.Run("DeletedVersionIDMarkerResumesFromKey", func(t *testing.T) {
+		// a version-id marker whose row was deleted between pages must not skip
+		// the whole key: its older, not-yet-listed versions must still appear
+		const (
+			bucket = "deleted-marker"
+			key    = "key"
+		)
+		if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+			t.Fatal(err)
+		} else if err := store.PutBucketVersioning(accessKeyID, bucket, s3.VersioningStatusEnabled); err != nil {
+			t.Fatal(err)
+		}
+		put := func(key string) string {
+			t.Helper()
+			v, _, err := store.PutObject(accessKeyID, bucket, key, frand.Entropy128(), nil, 1, new(string))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return v
+		}
+		kv1 := put(key)
+		kv2 := put(key)
+		kv3 := put(key)
+		ov1 := put("other")
+
+		// simulate a first page ending at kv2, then kv2 deleted before resume
+		if _, _, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: key, VersionID: &kv2}); err != nil {
+			t.Fatal(err)
+		}
+
+		result, err := store.ListObjectVersions(accessKeyID, bucket, s3.Prefix{}, s3.ListObjectVersionsPage{
+			KeyMarker:       aws.String(key),
+			VersionIDMarker: aws.String(s3.FormatVersion(kv2)),
+			MaxKeys:         100,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// resumes from the key's newest version (re-listing kv3) rather than
+		// skipping the key, so kv1 is not lost and "other" still follows
+		want := []string{"key/" + kv3, "key/" + kv1, "other/" + ov1}
+		if len(result.Versions) != len(want) {
+			t.Fatalf("expected %d versions, got %+v", len(want), result.Versions)
+		}
+		for i, w := range want {
+			if got := result.Versions[i].Key + "/" + result.Versions[i].VersionID; got != w {
+				t.Fatalf("version %d: expected %s, got %s", i, w, got)
+			}
+		}
+	})
+
 	t.Run("NullVersionIDMarkerResumesMidKey", func(t *testing.T) {
 		const (
 			bucket = "null-marker"

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
@@ -1100,12 +1101,13 @@ func (s *Store) ListObjects(accessKeyID, bucket string, prefix s3.Prefix, page s
 }
 
 // versionMarker is the pagination cursor for one page query in
-// ListObjectVersions. hasSeq distinguishes "resume within key at seq" from
-// "resume at the next key".
+// ListObjectVersions. seq is the exclusive lower bound on the marker key's own
+// versions: rows of key with a smaller seq are listed. 0 (the zero value) skips
+// the key entirely since seqs start at 1, a real seq resumes mid-key, and
+// math.MaxInt64 lists the whole key from its newest version.
 type versionMarker struct {
-	key    string
-	seq    int64
-	hasSeq bool
+	key string
+	seq int64
 }
 
 // resolveVersionCursor translates the request's (key-marker, version-id-marker)
@@ -1124,14 +1126,16 @@ func resolveVersionCursor(tx *txn, bid int64, prefix s3.Prefix, page s3.ListObje
 		}
 		err := tx.QueryRow(`SELECT seq FROM objects WHERE bucket_id = $1 AND name = $2 AND version_id = $3`,
 			bid, m.key, versionID).Scan(&m.seq)
-		if err == nil {
-			m.hasSeq = true
-		} else if !errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
+			// marker version deleted between pages; list the whole key from its
+			// newest version so its older, not-yet-listed versions aren't dropped
+			m.seq = math.MaxInt64
+		} else if err != nil {
 			return versionMarker{}, err
 		}
 	}
 	if adjusted, reset := adjustMarkerForCommonPrefix(prefix, m.key); reset {
-		m.key, m.hasSeq = adjusted, false
+		m.key, m.seq = adjusted, 0
 	}
 	return m, nil
 }
@@ -1145,13 +1149,8 @@ FROM objects o
 WHERE o.bucket_id = ?`
 	args := []any{bid}
 	if m.key != "" {
-		if m.hasSeq {
-			query += ` AND (o.name > ? OR (o.name = ? AND o.seq < ?))`
-			args = append(args, m.key, m.key, m.seq)
-		} else {
-			query += ` AND o.name > ?`
-			args = append(args, m.key)
-		}
+		query += ` AND (o.name > ? OR (o.name = ? AND o.seq < ?))`
+		args = append(args, m.key, m.key, m.seq)
 	}
 	if prefix.HasPrefix {
 		query += ` AND o.name >= ? AND o.name < ?`
@@ -1215,7 +1214,7 @@ func listVersionPage(tx *txn, bid int64, prefix s3.Prefix, m versionMarker, limi
 		return versionMarker{key: skipPrefix + "\xFF"}, true, nil
 	case sawObject && n == limit:
 		// a full page of object rows; resume mid-key after the last one
-		return versionMarker{key: lastKey, seq: lastSeq, hasSeq: true}, true, nil
+		return versionMarker{key: lastKey, seq: lastSeq}, true, nil
 	default:
 		// the query returned fewer than a full page; nothing more to list
 		return versionMarker{}, false, nil
