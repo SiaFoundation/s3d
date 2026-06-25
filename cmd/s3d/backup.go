@@ -106,6 +106,9 @@ func runBackupDelete(ctx context.Context, cmd *flag.FlagSet) {
 
 	id, err := strconv.ParseInt(cmd.Arg(0), 10, 64)
 	checkFatalError("invalid snapshot id", err)
+	if id <= 0 {
+		checkFatalError("invalid snapshot id", fmt.Errorf("id must be positive: %d", id))
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()

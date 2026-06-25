@@ -42,6 +42,7 @@ Commands:
 	flush		Upload all pending objects to Sia immediately
 	users		Manage users
 	keys		Manage S3 access keys
+	backup		Manage SQLite database backups
 `
 
 	versionUsage = `Usage: s3d version
