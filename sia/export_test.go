@@ -20,7 +20,7 @@ func (s *Sia) SyncMetadata(ctx context.Context) { //nolint:revive
 
 // UploadObjects runs a single upload cycle for testing.
 func (s *Sia) UploadObjects(ctx context.Context) { //nolint:revive
-	s.uploadObjects(ctx)
+	s.uploadObjects(ctx, false)
 }
 
 // PinObjects runs a single pin cycle for testing.

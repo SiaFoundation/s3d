@@ -343,10 +343,13 @@ func (s *s3) getObject(w http.ResponseWriter, r *http.Request, accessKeyID *stri
 	}
 
 	// write body
-	if _, err := io.Copy(w, obj.Body); err != nil {
-		// at this point we can't inform the client of the error anymore so
-		// we just log it
-		s.logger.Error("failed to write object body", zap.Error(err))
+	body := newErrTrackingReader(obj.Body)
+	if _, err := io.Copy(w, body); err != nil {
+		if readErr := body.Err(); readErr != nil {
+			log.Error("failed to read object body", zap.Error(readErr))
+		} else {
+			log.Debug("failed to write object body", zap.Error(err))
+		}
 	}
 	return nil
 }
@@ -1067,3 +1070,53 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 
 	return nil
 }
+
+// errTrackingReader is the interface returned by [newErrTrackingReader]: an
+// io.Reader that also reports, via Err, the last non-EOF error its underlying
+// reader returned.
+type errTrackingReader interface {
+	io.Reader
+	Err() error
+}
+
+// newErrTrackingReader wraps r so that, after copying it with io.Copy, the
+// caller can tell a read failure from a write failure: io.Copy returns the
+// error from whichever side failed, and a nil Err means the failure happened
+// while writing to the destination rather than reading from r.
+//
+// If r implements io.WriterTo the wrapper does too, preserving io.Copy's
+// WriterTo fast path. WriteTo bypasses Read, so read errors are not tracked on
+// that path, but the standard library's WriterTo readers only fail on the write
+// side, so such a failure is correctly attributed to the writer (Err stays
+// nil).
+func newErrTrackingReader(r io.Reader) errTrackingReader {
+	tr := &trackingReader{r: r}
+	if wt, ok := r.(io.WriterTo); ok {
+		return &trackingWriterTo{trackingReader: tr, wt: wt}
+	}
+	return tr
+}
+
+type trackingReader struct {
+	r   io.Reader
+	err error
+}
+
+func (t *trackingReader) Read(p []byte) (int, error) {
+	n, err := t.r.Read(p)
+	if err != nil && err != io.EOF {
+		t.err = err
+	}
+	return n, err
+}
+
+func (t *trackingReader) Err() error { return t.err }
+
+// trackingWriterTo is a trackingReader whose underlying reader also implements
+// io.WriterTo, so io.Copy keeps using the WriterTo fast path.
+type trackingWriterTo struct {
+	*trackingReader
+	wt io.WriterTo
+}
+
+func (t *trackingWriterTo) WriteTo(w io.Writer) (int64, error) { return t.wt.WriteTo(w) }
