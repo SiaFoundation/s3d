@@ -51,6 +51,13 @@ type (
 		DiskUsageLimit uint64 `yaml:"diskUsageLimit"`
 	}
 
+	// Backups contains the configuration for database backups.
+	Backups struct {
+		// Directory is where backups are written and listed. Defaults to a
+		// "backups" directory inside the data directory.
+		Directory string `yaml:"directory"`
+	}
+
 	// Config contains the configuration for S3d.
 	Config struct {
 		ApiAddress string `yaml:"apiAddress"`
@@ -59,11 +66,12 @@ type (
 		AdminAddress string `yaml:"adminAddress"`
 		// AdminPassword is the password required to access the admin API via
 		// HTTP Basic authentication. It must not be empty.
-		AdminPassword string `yaml:"adminPassword"`
-		Directory     string `yaml:"directory"`
-		Log           Log    `yaml:"log"`
-		Sia           Sia    `yaml:"sia"`
-		S3            S3     `yaml:"s3"`
+		AdminPassword string  `yaml:"adminPassword"`
+		Directory     string  `yaml:"directory"`
+		Log           Log     `yaml:"log"`
+		Sia           Sia     `yaml:"sia"`
+		S3            S3      `yaml:"s3"`
+		Backups       Backups `yaml:"backups"`
 	}
 )
 

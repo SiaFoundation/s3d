@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/mattn/go-sqlite3"
 )
@@ -49,6 +50,12 @@ func (s *Store) Backup(ctx context.Context, destPath string) (err error) {
 		return fmt.Errorf("failed to stat destination file: %w", err)
 	}
 
+	// the daemon may run as a different user than the caller, so create the
+	// destination directory itself
+	if err := os.MkdirAll(filepath.Dir(destPath), 0700); err != nil {
+		return fmt.Errorf("failed to create destination directory: %w", err)
+	}
+
 	// create the destination database
 	dest, err := sql.Open("sqlite3", sqliteFilepath(destPath))
 	if err != nil {
@@ -62,6 +69,7 @@ func (s *Store) Backup(ctx context.Context, destPath string) (err error) {
 			_ = os.Remove(destPath)
 			_ = os.Remove(destPath + "-wal")
 			_ = os.Remove(destPath + "-shm")
+			_ = os.Remove(destPath + "-journal")
 		}
 	}()
 
