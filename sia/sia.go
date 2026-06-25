@@ -301,18 +301,22 @@ func (s *Sia) Close() error {
 	return nil
 }
 
-// BackupSQLite3 creates a backup of the SQLite3 database at destPath and
-// records it as a snapshot so the orphan loop does not unpin data the backup
-// references. The backup is created using the SQLite backup API, which is safe
-// to use with a live database.
+// BackupSQLite3 flushes pending objects to Sia, then creates a backup of the
+// SQLite3 database at destPath and records it as a snapshot so the orphan loop
+// does not unpin data the backup references. The backup is created using the
+// SQLite backup API, which is safe to use with a live database.
 func (s *Sia) BackupSQLite3(ctx context.Context, destPath string) error {
 	if destPath == "" {
 		return errors.New("empty destination path")
 	} else if !filepath.IsAbs(destPath) {
 		return fmt.Errorf("destination path must be absolute: %q", destPath)
 	}
-	// TODO: flush pending objects before the backup so the snapshot does not
-	// reference data still only on local disk (needs FlushObjects, #209)
+	// flush pending objects to Sia first so every object captured by the
+	// snapshot has been uploaded and pinned, rather than living only on local
+	// disk where the SQLite backup cannot reference it
+	if err := s.FlushObjects(ctx); err != nil {
+		return fmt.Errorf("failed to flush objects before backup: %w", err)
+	}
 	return s.store.CreateSnapshot(ctx, destPath)
 }
 
