@@ -351,14 +351,19 @@ func (s *Sia) Close() error {
 	return nil
 }
 
-// CreateSnapshot records a snapshot, backs up the database to a temporary
-// file, uploads it gzip compressed to Sia as a tagged snapshot object, pins
-// it, and records the object ID on the snapshot. The temporary file is removed
-// once the upload completes. On failure the snapshot and any pinned object are
-// rolled back.
+// CreateSnapshot flushes pending objects to Sia, then records a snapshot,
+// backs up the database to a temporary file, uploads it gzip compressed to Sia
+// as a tagged snapshot object, pins it, and records the object ID on the
+// snapshot. The temporary file is removed once the upload completes. On
+// failure the snapshot and any pinned object are rolled back.
 func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
-	// TODO: flush pending objects before the backup so the snapshot does not
-	// reference data still only on local disk
+	// flush pending objects to Sia first so every object captured by the
+	// snapshot has been uploaded and pinned, rather than living only on local
+	// disk where the backup cannot reference it
+	if err := s.FlushObjects(ctx); err != nil {
+		return s3.Snapshot{}, fmt.Errorf("failed to flush objects before backup: %w", err)
+	}
+
 	snap, gen, err := s.store.CreateSnapshot()
 	if err != nil {
 		return s3.Snapshot{}, fmt.Errorf("failed to create snapshot: %w", err)
