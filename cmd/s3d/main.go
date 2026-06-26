@@ -38,6 +38,7 @@ Commands:
 	config		Interactively configure s3d
 	login		Register this s3d instance with the indexer
 	status		Print a basic overview of the running s3d instance
+	flush		Upload all pending objects to Sia immediately
 	users		Manage users
 	keys		Manage S3 access keys
 `
@@ -89,6 +90,7 @@ func main() {
 	configCmd := flagg.New("config", configUsage)
 	loginCmd := flagg.New("login", loginUsage)
 	statusCmd := flagg.New("status", statusUsage)
+	flushCmd := flagg.New("flush", flushUsage)
 
 	usersCmd := flagg.New("users", usersUsage)
 	usersCreateCmd := flagg.New("create", usersCreateUsage)
@@ -122,6 +124,7 @@ func main() {
 			{Cmd: configCmd},
 			{Cmd: loginCmd},
 			{Cmd: statusCmd},
+			{Cmd: flushCmd},
 			{
 				Cmd: usersCmd,
 				Sub: []flagg.Tree{
@@ -170,6 +173,9 @@ func main() {
 		return
 	case statusCmd:
 		runStatus(ctx, statusCmd)
+		return
+	case flushCmd:
+		runFlush(ctx, flushCmd)
 		return
 	case usersCmd:
 		cmd.Usage()
