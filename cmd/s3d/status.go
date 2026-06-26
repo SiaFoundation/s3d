@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"net/http"
@@ -26,11 +25,7 @@ func runStatus(ctx context.Context, cmd *flag.FlagSet) {
 		os.Exit(1)
 	}
 
-	if cfg.AdminAddress == "" {
-		checkFatalError("missing admin configuration", errors.New("adminAddress is not set in the config file"))
-	} else if cfg.AdminPassword == "" {
-		checkFatalError("missing admin configuration", errors.New("adminPassword is not set in the config file"))
-	}
+	requireAdminConfig()
 
 	stats, err := fetchUploadStats(ctx, cfg.AdminAddress, cfg.AdminPassword)
 	checkFatalError("failed to fetch status", err)
