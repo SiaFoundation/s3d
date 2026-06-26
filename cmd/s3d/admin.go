@@ -33,6 +33,11 @@ func postAdmin(ctx context.Context, addr, password, route string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		buf := make([]byte, 8<<10)
+		n, _ := resp.Body.Read(buf)
+		if n > 0 {
+			return fmt.Errorf("unexpected status %s: %s", resp.Status, buf[:n])
+		}
 		return fmt.Errorf("unexpected status %s", resp.Status)
 	}
 	return nil
