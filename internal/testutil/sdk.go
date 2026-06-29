@@ -176,6 +176,14 @@ func (s *MemorySDK) ObjectCount() int {
 	return len(s.objects)
 }
 
+// Pinned reports whether the object with the given id is still stored in the SDK.
+func (s *MemorySDK) Pinned(id types.Hash256) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.objects[id]
+	return ok
+}
+
 // Upload stores an object in memory. It is not part of the SDK interface but
 // used by tests to simulate the background upload to Sia.
 func (s *MemorySDK) Upload(_ context.Context, r io.Reader) (sdk.Object, error) {
