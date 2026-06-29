@@ -113,14 +113,13 @@ CREATE INDEX unpinned_objects_next_attempt_at_idx ON unpinned_objects(next_attem
 			CREATE TABLE snapshots (
 				id INTEGER PRIMARY KEY,
 				created_at INTEGER NOT NULL,
-				path TEXT NOT NULL
+				path TEXT NOT NULL,
+				gen INTEGER NOT NULL DEFAULT 0,
+				object_count INTEGER NOT NULL DEFAULT 0
 			);
-			CREATE TABLE snapshot_objects (
-				snapshot_id INTEGER NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE,
-				sia_object_id BLOB NOT NULL,
-				PRIMARY KEY (snapshot_id, sia_object_id)
-			);
-			CREATE INDEX snapshot_objects_sia_object_id_idx ON snapshot_objects(sia_object_id);`)
+			ALTER TABLE global_settings ADD COLUMN snapshot_generation INTEGER NOT NULL DEFAULT 0;
+			ALTER TABLE orphaned_objects ADD COLUMN orphaned_at_gen INTEGER NOT NULL DEFAULT 0;
+			CREATE INDEX orphaned_objects_gen_idx ON orphaned_objects(orphaned_at_gen);`)
 		return err
 	},
 }

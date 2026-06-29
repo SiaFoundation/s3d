@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
@@ -670,14 +671,15 @@ func (s *Store) AllFilenames() (filenames []string, err error) {
 }
 
 // OrphanedObjects returns up to limit object IDs eligible for unpinning. An id
-// referenced by a snapshot is withheld until that snapshot is deleted.
+// whose orphan generation is at or above the lowest surviving snapshot's
+// generation is withheld until that snapshot is deleted.
 func (s *Store) OrphanedObjects(limit int) (ids []types.Hash256, err error) {
 	err = s.transaction(func(tx *txn) error {
 		ids = ids[:0] // reuse same slice if transaction retries
 		rows, err := tx.Query(`
-			SELECT sia_object_id FROM orphaned_objects o
-			WHERE NOT EXISTS (SELECT 1 FROM snapshot_objects s WHERE s.sia_object_id = o.sia_object_id)
-			LIMIT $1`, limit)
+			SELECT sia_object_id FROM orphaned_objects
+			WHERE orphaned_at_gen < COALESCE((SELECT MIN(gen) FROM snapshots), $1)
+			LIMIT $2`, int64(math.MaxInt64), limit)
 		if err != nil {
 			return err
 		}
@@ -878,7 +880,11 @@ func insertOrphan(tx *txn, objectID types.Hash256) error {
 			return err
 		}
 	}
-	res, err = tx.Exec("INSERT OR IGNORE INTO orphaned_objects (sia_object_id) VALUES ($1)", sqlHash256(objectID))
+	// stamp the orphan with the current snapshot generation so any snapshot
+	// taken while the object was still live withholds it until that snapshot is
+	// deleted. an id is orphaned at most once, so OR IGNORE never conflicts.
+	res, err = tx.Exec(`INSERT OR IGNORE INTO orphaned_objects (sia_object_id, orphaned_at_gen)
+		VALUES ($1, (SELECT snapshot_generation FROM global_settings LIMIT 1))`, sqlHash256(objectID))
 	if err != nil {
 		return err
 	}

@@ -1089,22 +1089,17 @@ func TestOrphanedObjects(t *testing.T) {
 		t.Fatalf("expected no orphans with remaining reference, got %d", len(orphans))
 	}
 
-	// delete second object - last reference gone, should be orphaned
+	// snapshot the object while "b" still references it, so the generation it
+	// pins withholds the object once its last reference is gone
+	if _, err := store.db.Exec("UPDATE global_settings SET snapshot_generation = 1"); err != nil {
+		t.Fatal(err)
+	} else if _, err := store.db.Exec("INSERT INTO snapshots (id, created_at, path, gen, object_count) VALUES (1, 0, 'backup.sqlite', 1, 1)"); err != nil {
+		t.Fatal(err)
+	}
+
+	// delete the last reference, orphaning the object at the snapshot's
+	// generation so the snapshot withholds it from unpinning
 	if _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "b"}); err != nil {
-		t.Fatal(err)
-	}
-
-	orphans, err = store.OrphanedObjects(100)
-	if err != nil {
-		t.Fatal(err)
-	} else if len(orphans) != 1 || orphans[0] != objID {
-		t.Fatalf("expected orphan %v, got %v", objID, orphans)
-	}
-
-	// a snapshot referencing the orphan withholds it from unpinning
-	if _, err := store.db.Exec("INSERT INTO snapshots (id, created_at, path) VALUES (1, 0, 'backup.sqlite')"); err != nil {
-		t.Fatal(err)
-	} else if _, err := store.db.Exec("INSERT INTO snapshot_objects (snapshot_id, sia_object_id) VALUES (1, $1)", sqlHash256(objID)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1115,8 +1110,8 @@ func TestOrphanedObjects(t *testing.T) {
 		t.Fatalf("expected snapshotted orphan to be withheld, got %d", len(orphans))
 	}
 
-	// removing the snapshot reference releases the orphan
-	if _, err := store.db.Exec("DELETE FROM snapshot_objects WHERE sia_object_id = $1", sqlHash256(objID)); err != nil {
+	// removing the snapshot raises the floor and releases the orphan
+	if _, err := store.db.Exec("DELETE FROM snapshots WHERE id = 1"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1124,7 +1119,7 @@ func TestOrphanedObjects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	} else if len(orphans) != 1 || orphans[0] != objID {
-		t.Fatalf("expected orphan %v after snapshot reference removed, got %v", objID, orphans)
+		t.Fatalf("expected orphan %v after snapshot deleted, got %v", objID, orphans)
 	}
 
 	// remove orphan
