@@ -1,12 +1,14 @@
 package sqlite
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
+	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.sia.tech/core/types"
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap/zaptest"
@@ -52,9 +54,8 @@ func TestSnapshots(t *testing.T) {
 		t.Fatal("backup file not created", err)
 	}
 
-	// only the uploaded object is registered, the pending one has no sia_object_id
+	// only the uploaded object is counted, the pending one has no sia_object_id
 	store.assertCount(1, "snapshots")
-	store.assertCount(1, "snapshot_objects")
 
 	// the snapshot is listed with its metadata
 	snapshots, err := store.ListSnapshots()
@@ -63,18 +64,23 @@ func TestSnapshots(t *testing.T) {
 	} else if len(snapshots) != 1 {
 		t.Fatalf("expected 1 snapshot, got %d", len(snapshots))
 	}
-	s := snapshots[0]
-	if s.ID == 0 {
+	s1 := snapshots[0]
+	if s1.ID == 0 {
 		t.Fatal("expected non-zero snapshot id")
-	} else if s.Path != path {
-		t.Fatalf("expected path %q, got %q", path, s.Path)
-	} else if s.ObjectCount != 1 {
-		t.Fatalf("expected object count 1, got %d", s.ObjectCount)
-	} else if s.CreatedAt.IsZero() {
+	} else if s1.Path != path {
+		t.Fatalf("expected path %q, got %q", path, s1.Path)
+	} else if s1.ObjectCount != 1 {
+		t.Fatalf("expected object count 1, got %d", s1.ObjectCount)
+	} else if s1.CreatedAt.IsZero() {
 		t.Fatal("expected non-zero created at")
 	}
 
-	// delete the object, still held by the snapshot
+	// deleting a non-existent snapshot reports not found
+	if err := store.DeleteSnapshot(s1.ID + 100); !errors.Is(err, objects.ErrSnapshotNotFound) {
+		t.Fatal("unexpected", err)
+	}
+
+	// delete the object while the first snapshot still references it
 	if _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "a"}); err != nil {
 		t.Fatal(err)
 	}
@@ -84,12 +90,37 @@ func TestSnapshots(t *testing.T) {
 		t.Fatalf("expected no orphans while snapshotted, got %d", len(orphans))
 	}
 
-	// delete the snapshot, releasing the object
-	if err := store.DeleteSnapshot(s.ID); err != nil {
+	// a later snapshot taken after the object was deleted does not capture it
+	path2 := filepath.Join(t.TempDir(), "snap2.sqlite")
+	if err := store.CreateSnapshot(t.Context(), path2); err != nil {
+		t.Fatal(err)
+	}
+	snapshots, err = store.ListSnapshots()
+	if err != nil {
+		t.Fatal(err)
+	} else if len(snapshots) != 2 {
+		t.Fatalf("expected 2 snapshots, got %d", len(snapshots))
+	} else if snapshots[1].ObjectCount != 0 {
+		t.Fatalf("expected second snapshot to capture no objects, got %d", snapshots[1].ObjectCount)
+	}
+	s2 := snapshots[1]
+
+	// deleting the later snapshot leaves the object withheld by the earlier
+	// snapshot that captured it
+	if err := store.DeleteSnapshot(s2.ID); err != nil {
+		t.Fatal(err)
+	}
+	if orphans, err := store.OrphanedObjects(100); err != nil {
+		t.Fatal(err)
+	} else if len(orphans) != 0 {
+		t.Fatalf("expected object still withheld by earlier snapshot, got %d", len(orphans))
+	}
+
+	// deleting the snapshot that captured it releases the object
+	if err := store.DeleteSnapshot(s1.ID); err != nil {
 		t.Fatal(err)
 	}
 	store.assertCount(0, "snapshots")
-	store.assertCount(0, "snapshot_objects")
 	if orphans, err := store.OrphanedObjects(100); err != nil {
 		t.Fatal(err)
 	} else if len(orphans) != 1 || orphans[0] != objID {

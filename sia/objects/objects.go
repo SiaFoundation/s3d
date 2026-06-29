@@ -16,6 +16,10 @@ var (
 	// ErrObjectNotFound is returned by MarkObjectUploaded when the pending
 	// object does not exist.
 	ErrObjectNotFound = errors.New("object not found")
+
+	// ErrSnapshotNotFound is returned by DeleteSnapshot when no snapshot with
+	// the given id exists.
+	ErrSnapshotNotFound = errors.New("snapshot not found")
 )
 
 // Object represents a stored object with its metadata.
