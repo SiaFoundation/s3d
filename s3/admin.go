@@ -20,6 +20,9 @@ type BackupSQLite3Request struct {
 	Path string `json:"path"`
 }
 
+// ErrSnapshotNotFound is returned when deleting a snapshot that does not exist.
+var ErrSnapshotNotFound = errors.New("snapshot not found")
+
 // Snapshot describes a recorded database backup.
 type Snapshot struct {
 	ID          int64     `json:"id"`
@@ -149,5 +152,11 @@ func (s *s3) handleDeleteSnapshot(jc jape.Context) {
 		jc.Error(fmt.Errorf("id must be positive: %d", id), http.StatusBadRequest)
 		return
 	}
-	jc.Check("failed to delete snapshot", s.backend.DeleteSnapshot(jc.Request.Context(), id))
+
+	err := s.backend.DeleteSnapshot(jc.Request.Context(), id)
+	if errors.Is(err, ErrSnapshotNotFound) {
+		jc.Error(ErrSnapshotNotFound, http.StatusNotFound)
+		return
+	}
+	jc.Check("failed to delete snapshot", err)
 }

@@ -379,8 +379,10 @@ func corsMiddleware(handler http.Handler) http.Handler {
 // NewAdmin creates an HTTP handler that serves the admin API using the provided
 // backend. It exposes /prometheus, which serves the background upload stats as
 // Prometheus metrics, /stats/uploads, which serves the same stats as JSON,
-// /objects/flush, which uploads all pending objects regardless of padding, and
-// /system/sqlite3/backup, which creates a backup of the SQLite3 database.
+// /objects/flush, which uploads all pending objects regardless of padding,
+// /system/sqlite3/backup, which creates a backup of the SQLite3 database,
+// /system/sqlite3/backups, which lists the recorded backups, and
+// /system/sqlite3/backups/:id, which deletes a recorded backup.
 func NewAdmin(b Backend, opts ...Option) http.Handler {
 	s3 := &s3{
 		backend: b,

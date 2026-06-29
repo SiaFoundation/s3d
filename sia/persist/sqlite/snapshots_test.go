@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -94,5 +95,12 @@ func TestSnapshots(t *testing.T) {
 		t.Fatal(err)
 	} else if len(orphans) != 1 || orphans[0] != objID {
 		t.Fatalf("expected orphan %v after snapshot delete, got %v", objID, orphans)
+	}
+
+	// deleting a snapshot that no longer exists reports not found
+	if err := store.DeleteSnapshot(s.ID); !errors.Is(err, s3.ErrSnapshotNotFound) {
+		t.Fatal("expected ErrSnapshotNotFound, got", err)
+	} else if err := store.DeleteSnapshot(99999); !errors.Is(err, s3.ErrSnapshotNotFound) {
+		t.Fatal("expected ErrSnapshotNotFound, got", err)
 	}
 }

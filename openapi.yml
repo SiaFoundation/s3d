@@ -80,11 +80,14 @@ paths:
         - system
       summary: Back up the SQLite3 metadata database
       description: >
-        Creates a backup of the SQLite metadata database using the SQLite
-        online backup API. Unlike copying the database file directly, the
-        backup is a consistent snapshot even while objects are being written.
-        The backup only contains the metadata database, not the buffered
-        objects that have not yet been uploaded to the Sia network.
+        Flushes any pending objects to the Sia network, then creates a backup
+        of the SQLite metadata database using the SQLite online backup API.
+        The request may block while pending objects upload, and the resulting
+        backup references every object flushed before the snapshot was taken.
+        Unlike copying the database file directly, the backup is a consistent
+        snapshot even while objects are being written. It contains only the
+        metadata database, not the object data, which resides on the Sia
+        network.
       operationId: backupSQLite3
       requestBody:
         required: true

@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.uber.org/zap"
 )
@@ -88,10 +89,20 @@ func (s *Store) ListSnapshots() (snapshots []objects.Snapshot, err error) {
 
 // DeleteSnapshot removes a snapshot and its object references from the store.
 // Objects no longer referenced by any snapshot or live object become eligible
-// for unpinning on the next orphan loop.
+// for unpinning on the next orphan loop. It returns [s3.ErrSnapshotNotFound] if
+// no snapshot with the given id exists.
 func (s *Store) DeleteSnapshot(snapshotID int64) error {
 	return s.transaction(func(tx *txn) error {
-		_, err := tx.Exec("DELETE FROM snapshots WHERE id = $1", snapshotID)
-		return err
+		res, err := tx.Exec("DELETE FROM snapshots WHERE id = $1", snapshotID)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		} else if n == 0 {
+			return s3.ErrSnapshotNotFound
+		}
+		return nil
 	})
 }
