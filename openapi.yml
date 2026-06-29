@@ -80,11 +80,14 @@ paths:
         - system
       summary: Upload a database snapshot to Sia
       description: >
-        Backs up the SQLite metadata database and uploads it to the Sia network
-        as a tagged, pinned object so it can be recovered later. Objects that a
-        snapshot references are not unpinned until the snapshot is deleted.
-        Database writes are blocked for the duration of the backup, so this can
-        be long-running on large databases.
+        Flushes any pending objects to the Sia network, then backs up the
+        SQLite metadata database and uploads it to the Sia network as a
+        tagged, pinned object so it can be recovered later. The request may
+        block while pending objects upload, and the resulting backup
+        references every object flushed before the snapshot was taken.
+        Objects that a snapshot references are not unpinned until the
+        snapshot is deleted. Database writes are blocked for the duration of
+        the backup, so this can be long-running on large databases.
       operationId: createSnapshot
       responses:
         "200":
@@ -138,6 +141,8 @@ paths:
           description: The backup was deleted.
         "400":
           description: The id must be a positive integer.
+        "404":
+          description: No snapshot with the given id exists.
         "500":
           description: The backup could not be deleted.
 

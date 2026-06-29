@@ -96,7 +96,7 @@ func TestSnapshots(t *testing.T) {
 	}
 
 	// deleting a non-existent snapshot reports not found
-	if err := store.DeleteSnapshot(s1.ID + 100); !errors.Is(err, objects.ErrSnapshotNotFound) {
+	if err := store.DeleteSnapshot(s1.ID + 100); !errors.Is(err, s3.ErrSnapshotNotFound) {
 		t.Fatal("unexpected", err)
 	}
 
@@ -176,6 +176,13 @@ func TestSnapshots(t *testing.T) {
 		t.Fatal(err)
 	} else if len(orphans) != 1 || orphans[0] != objID {
 		t.Fatal("unexpected", orphans)
+	}
+
+	// deleting a snapshot that no longer exists reports not found
+	if err := store.DeleteSnapshot(s1.ID); !errors.Is(err, s3.ErrSnapshotNotFound) {
+		t.Fatal("expected ErrSnapshotNotFound, got", err)
+	} else if err := store.DeleteSnapshot(99999); !errors.Is(err, s3.ErrSnapshotNotFound) {
+		t.Fatal("expected ErrSnapshotNotFound, got", err)
 	}
 
 	// adopting a snapshot recreates its record and raises the orphan's

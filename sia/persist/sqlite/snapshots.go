@@ -130,7 +130,8 @@ func (s *Store) ListSnapshots() (snapshots []s3.Snapshot, err error) {
 // DeleteSnapshot removes a snapshot from the store, releasing orphans only it
 // was withholding. It does not unpin the snapshot's backup object from the
 // Sia network, callers exposing snapshot deletion must unpin it themselves or
-// it leaks.
+// it leaks. It returns [s3.ErrSnapshotNotFound] if no snapshot with the given
+// id exists.
 func (s *Store) DeleteSnapshot(snapshotID int64) error {
 	return s.transaction(func(tx *txn) error {
 		res, err := tx.Exec("DELETE FROM snapshots WHERE id = $1", snapshotID)
@@ -140,7 +141,7 @@ func (s *Store) DeleteSnapshot(snapshotID int64) error {
 		if n, err := res.RowsAffected(); err != nil {
 			return err
 		} else if n == 0 {
-			return objects.ErrSnapshotNotFound
+			return s3.ErrSnapshotNotFound
 		}
 		return nil
 	})

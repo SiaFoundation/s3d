@@ -1,6 +1,7 @@
 package s3
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -9,6 +10,9 @@ import (
 	"go.sia.tech/core/types"
 	"go.sia.tech/jape"
 )
+
+// ErrSnapshotNotFound is returned when deleting a snapshot that does not exist.
+var ErrSnapshotNotFound = errors.New("snapshot not found")
 
 // Snapshot describes a database backup uploaded to Sia. It is returned by the
 // [POST] /snapshots endpoint.
@@ -127,5 +131,11 @@ func (s *s3) handleDeleteSnapshot(jc jape.Context) {
 		jc.Error(fmt.Errorf("id must be positive: %d", id), http.StatusBadRequest)
 		return
 	}
-	jc.Check("failed to delete snapshot", s.backend.DeleteSnapshot(jc.Request.Context(), id))
+
+	err := s.backend.DeleteSnapshot(jc.Request.Context(), id)
+	if errors.Is(err, ErrSnapshotNotFound) {
+		jc.Error(ErrSnapshotNotFound, http.StatusNotFound)
+		return
+	}
+	jc.Check("failed to delete snapshot", err)
 }

@@ -489,14 +489,14 @@ func (s *Sia) DeleteSnapshot(ctx context.Context, id int64) error {
 		}
 	}
 	if objectID == (types.Hash256{}) {
-		return objects.ErrSnapshotNotFound
+		return s3.ErrSnapshotNotFound
 	}
 
 	// unpin the backup object before deleting the record, the sync loop drops
 	// snapshots whose object was deleted, so a failure after the unpin heals
 	if err := s.sdk.DeleteObject(ctx, objectID); err != nil && !isObjectNotFound(err) {
 		return fmt.Errorf("failed to unpin snapshot object: %w", err)
-	} else if err := s.store.DeleteSnapshot(id); err != nil && !errors.Is(err, objects.ErrSnapshotNotFound) {
+	} else if err := s.store.DeleteSnapshot(id); err != nil && !errors.Is(err, s3.ErrSnapshotNotFound) {
 		return fmt.Errorf("failed to delete snapshot: %w", err)
 	}
 	return nil
