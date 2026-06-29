@@ -18,7 +18,6 @@ import (
 	"github.com/SiaFoundation/s3d/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
-	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -26,16 +25,16 @@ import (
 	"go.uber.org/zap/zaptest"
 )
 
-func newAdminServer(t *testing.T) (string, *http.Client, *sqlite.Store) {
+func newAdminServer(t *testing.T) (string, *http.Client) {
 	t.Helper()
-	backend, store := testutil.NewBackend(t)
+	backend, _ := testutil.NewBackend(t)
 	server := httptest.NewServer(s3.NewAdmin(backend))
 	t.Cleanup(server.Close)
-	return server.URL, server.Client(), store
+	return server.URL, server.Client()
 }
 
 func TestPrometheus(t *testing.T) {
-	baseURL, httpClient, _ := newAdminServer(t)
+	baseURL, httpClient := newAdminServer(t)
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, baseURL+"/prometheus", nil)
 	if err != nil {
@@ -62,7 +61,7 @@ func TestPrometheus(t *testing.T) {
 }
 
 func TestUploadStats(t *testing.T) {
-	baseURL, httpClient, _ := newAdminServer(t)
+	baseURL, httpClient := newAdminServer(t)
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, baseURL+"/stats/uploads", nil)
 	if err != nil {
@@ -89,7 +88,7 @@ func TestUploadStats(t *testing.T) {
 }
 
 func TestBackupSQLite3(t *testing.T) {
-	baseURL, httpClient, store := newAdminServer(t)
+	baseURL, httpClient := newAdminServer(t)
 
 	dest := filepath.Join(t.TempDir(), "backup.sqlite")
 	body, err := json.Marshal(s3.BackupSQLite3Request{Path: dest})
@@ -104,7 +103,7 @@ func TestBackupSQLite3(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
@@ -112,14 +111,52 @@ func TestBackupSQLite3(t *testing.T) {
 		t.Fatalf("expected backup file at %q: %v", dest, err)
 	}
 
-	// the backup is recorded as a snapshot
-	snapshots, err := store.ListSnapshots()
-	if err != nil {
-		t.Fatal(err)
-	} else if len(snapshots) != 1 {
+	listBackups := func() []s3.Snapshot {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, baseURL+"/system/sqlite3/backups", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		}
+		var snapshots []s3.Snapshot
+		if err := json.NewDecoder(resp.Body).Decode(&snapshots); err != nil {
+			t.Fatal(err)
+		}
+		return snapshots
+	}
+
+	// the backup is listed as a snapshot
+	snapshots := listBackups()
+	if len(snapshots) != 1 {
 		t.Fatalf("expected 1 snapshot, got %d", len(snapshots))
 	} else if snapshots[0].Path != dest {
 		t.Fatalf("expected snapshot path %q, got %q", dest, snapshots[0].Path)
+	}
+
+	// deleting the snapshot removes it from the list
+	delURL := baseURL + "/system/sqlite3/backups/" + strconv.FormatInt(snapshots[0].ID, 10)
+	delReq, err := http.NewRequestWithContext(t.Context(), http.MethodDelete, delURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delResp, err := httpClient.Do(delReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delResp.Body.Close()
+	if delResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", delResp.StatusCode)
+	}
+
+	if snapshots := listBackups(); len(snapshots) != 0 {
+		t.Fatalf("expected 0 snapshots after delete, got %d", len(snapshots))
 	}
 }
 

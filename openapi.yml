@@ -80,11 +80,14 @@ paths:
         - system
       summary: Back up the SQLite3 metadata database
       description: >
-        Creates a backup of the SQLite metadata database using the SQLite
-        online backup API. Unlike copying the database file directly, the
-        backup is a consistent snapshot even while objects are being written.
-        The backup only contains the metadata database, not the buffered
-        objects that have not yet been uploaded to the Sia network.
+        Flushes any pending objects to the Sia network, then creates a backup
+        of the SQLite metadata database using the SQLite online backup API.
+        The request may block while pending objects upload, and the resulting
+        backup references every object flushed before the snapshot was taken.
+        Unlike copying the database file directly, the backup is a consistent
+        snapshot even while objects are being written. It contains only the
+        metadata database, not the object data, which resides on the Sia
+        network.
       operationId: backupSQLite3
       requestBody:
         required: true
@@ -100,6 +103,52 @@ paths:
             The request was invalid, e.g. the path was empty or not absolute.
         "500":
           description: The backup could not be created.
+  /system/sqlite3/backups:
+    get:
+      tags:
+        - system
+      summary: List database backups
+      description: >
+        Lists the database backups recorded as snapshots. A snapshot prevents
+        the objects it references from being unpinned from the Sia network
+        until the snapshot is deleted.
+      operationId: listSnapshots
+      responses:
+        "200":
+          description: The recorded backups.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Snapshot"
+        "500":
+          description: The backups could not be listed.
+  /system/sqlite3/backups/{id}:
+    delete:
+      tags:
+        - system
+      summary: Delete a database backup
+      description: >
+        Deletes the snapshot with the given id, releasing the objects it
+        pinned so they can be unpinned once nothing else references them. The
+        backup file on disk is not removed.
+      operationId: deleteSnapshot
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+          description: The id of the snapshot to delete.
+      responses:
+        "200":
+          description: The backup was deleted.
+        "400":
+          description: The id must be a positive integer.
+        "500":
+          description: The backup could not be deleted.
 
 components:
   securitySchemes:
@@ -151,3 +200,22 @@ components:
             Absolute filesystem path, resolved on the machine running s3d,
             where the backup file will be written. It must not already exist.
           example: /backups/s3d.sqlite3
+    Snapshot:
+      type: object
+      description: A recorded database backup.
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: Unique identifier of the snapshot.
+        createdAt:
+          type: string
+          format: date-time
+          description: When the backup was created.
+        path:
+          type: string
+          description: Filesystem path of the backup file.
+          example: /backups/s3d.sqlite3
+        objectCount:
+          type: integer
+          description: Number of Sia objects the snapshot references.

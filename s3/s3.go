@@ -277,6 +277,14 @@ type Backend interface {
 	// path on the local filesystem. The backup is a consistent snapshot
 	// even if the database is being written to concurrently.
 	BackupSQLite3(ctx context.Context, destPath string) error
+
+	// ListSnapshots returns the recorded database backups.
+	ListSnapshots(ctx context.Context) ([]Snapshot, error)
+
+	// DeleteSnapshot removes the snapshot with the given id, releasing the
+	// objects it pinned so they can be unpinned once nothing else references
+	// them.
+	DeleteSnapshot(ctx context.Context, id int64) error
 }
 
 type s3 struct {
@@ -371,8 +379,10 @@ func corsMiddleware(handler http.Handler) http.Handler {
 // NewAdmin creates an HTTP handler that serves the admin API using the provided
 // backend. It exposes /prometheus, which serves the background upload stats as
 // Prometheus metrics, /stats/uploads, which serves the same stats as JSON,
-// /objects/flush, which uploads all pending objects regardless of padding, and
-// /system/sqlite3/backup, which creates a backup of the SQLite3 database.
+// /objects/flush, which uploads all pending objects regardless of padding,
+// /system/sqlite3/backup, which creates a backup of the SQLite3 database,
+// /system/sqlite3/backups, which lists the recorded backups, and
+// /system/sqlite3/backups/:id, which deletes a recorded backup.
 func NewAdmin(b Backend, opts ...Option) http.Handler {
 	s3 := &s3{
 		backend: b,
@@ -383,10 +393,12 @@ func NewAdmin(b Backend, opts ...Option) http.Handler {
 	}
 
 	return jape.Mux(map[string]jape.Handler{
-		"GET /prometheus":             s3.handlePrometheus,
-		"GET /stats/uploads":          s3.handleGetUploadStats,
-		"POST /objects/flush":         s3.handleFlushObjects,
-		"POST /system/sqlite3/backup": s3.handleBackupSQLite3,
+		"GET /prometheus":                    s3.handlePrometheus,
+		"GET /stats/uploads":                 s3.handleGetUploadStats,
+		"POST /objects/flush":                s3.handleFlushObjects,
+		"POST /system/sqlite3/backup":        s3.handleBackupSQLite3,
+		"GET /system/sqlite3/backups":        s3.handleListSnapshots,
+		"DELETE /system/sqlite3/backups/:id": s3.handleDeleteSnapshot,
 	})
 }
 

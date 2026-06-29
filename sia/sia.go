@@ -217,6 +217,8 @@ type Store interface {
 	ExpireObjects(bucketID int64, prefix string, before time.Time, limit int) (int, []OrphanedFile, error)
 
 	CreateSnapshot(ctx context.Context, destPath string) error
+	ListSnapshots() ([]objects.Snapshot, error)
+	DeleteSnapshot(snapshotID int64) error
 }
 
 // New creates a new Sia backend instance.
@@ -299,17 +301,46 @@ func (s *Sia) Close() error {
 	return nil
 }
 
-// BackupSQLite3 creates a backup of the SQLite3 database at destPath and
-// records it as a snapshot so the orphan loop does not unpin data the backup
-// references. The backup is created using the SQLite backup API, which is safe
-// to use with a live database.
+// BackupSQLite3 flushes pending objects to Sia, then creates a backup of the
+// SQLite3 database at destPath and records it as a snapshot so the orphan loop
+// does not unpin data the backup references. The backup is created using the
+// SQLite backup API, which is safe to use with a live database.
 func (s *Sia) BackupSQLite3(ctx context.Context, destPath string) error {
 	if destPath == "" {
 		return errors.New("empty destination path")
 	} else if !filepath.IsAbs(destPath) {
 		return fmt.Errorf("destination path must be absolute: %q", destPath)
 	}
+	// flush pending objects to Sia first so every object captured by the
+	// snapshot has been uploaded and pinned, rather than living only on local
+	// disk where the SQLite backup cannot reference it
+	if err := s.FlushObjects(ctx); err != nil {
+		return fmt.Errorf("failed to flush objects before backup: %w", err)
+	}
 	return s.store.CreateSnapshot(ctx, destPath)
+}
+
+// ListSnapshots returns the recorded database backups.
+func (s *Sia) ListSnapshots(_ context.Context) ([]s3.Snapshot, error) {
+	snapshots, err := s.store.ListSnapshots()
+	if err != nil {
+		return nil, err
+	}
+	result := make([]s3.Snapshot, len(snapshots))
+	for i, snap := range snapshots {
+		result[i] = s3.Snapshot{
+			ID:          snap.ID,
+			CreatedAt:   snap.CreatedAt,
+			Path:        snap.Path,
+			ObjectCount: snap.ObjectCount,
+		}
+	}
+	return result, nil
+}
+
+// DeleteSnapshot removes the snapshot with the given id.
+func (s *Sia) DeleteSnapshot(_ context.Context, snapshotID int64) error {
+	return s.store.DeleteSnapshot(snapshotID)
 }
 
 // processOrphansLoop periodically processes orphaned objects.

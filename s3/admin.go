@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/SiaFoundation/s3d/internal/prometheus"
 	"go.sia.tech/jape"
@@ -17,6 +18,17 @@ type BackupSQLite3Request struct {
 	// Path is the absolute filesystem path where the backup file will be
 	// written. It must not already exist.
 	Path string `json:"path"`
+}
+
+// ErrSnapshotNotFound is returned when deleting a snapshot that does not exist.
+var ErrSnapshotNotFound = errors.New("snapshot not found")
+
+// Snapshot describes a recorded database backup.
+type Snapshot struct {
+	ID          int64     `json:"id"`
+	CreatedAt   time.Time `json:"createdAt"`
+	Path        string    `json:"path"`
+	ObjectCount int       `json:"objectCount"`
 }
 
 // UploadStats contains statistics about the background upload pipeline.
@@ -120,4 +132,31 @@ func (s *s3) handleBackupSQLite3(jc jape.Context) {
 		return
 	}
 	jc.Check("failed to backup database", s.backend.BackupSQLite3(jc.Request.Context(), req.Path))
+}
+
+// handleListSnapshots lists the recorded database backups.
+func (s *s3) handleListSnapshots(jc jape.Context) {
+	snapshots, err := s.backend.ListSnapshots(jc.Request.Context())
+	if jc.Check("failed to list snapshots", err) != nil {
+		return
+	}
+	jc.Encode(snapshots)
+}
+
+// handleDeleteSnapshot deletes the snapshot with the id given in the path.
+func (s *s3) handleDeleteSnapshot(jc jape.Context) {
+	var id int64
+	if jc.DecodeParam("id", &id) != nil {
+		return
+	} else if id <= 0 {
+		jc.Error(fmt.Errorf("id must be positive: %d", id), http.StatusBadRequest)
+		return
+	}
+
+	err := s.backend.DeleteSnapshot(jc.Request.Context(), id)
+	if errors.Is(err, ErrSnapshotNotFound) {
+		jc.Error(ErrSnapshotNotFound, http.StatusNotFound)
+		return
+	}
+	jc.Check("failed to delete snapshot", err)
 }

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
-	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.sia.tech/core/types"
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap/zaptest"
@@ -76,7 +75,7 @@ func TestSnapshots(t *testing.T) {
 	}
 
 	// deleting a non-existent snapshot reports not found
-	if err := store.DeleteSnapshot(s1.ID + 100); !errors.Is(err, objects.ErrSnapshotNotFound) {
+	if err := store.DeleteSnapshot(s1.ID + 100); !errors.Is(err, s3.ErrSnapshotNotFound) {
 		t.Fatal("unexpected", err)
 	}
 
@@ -125,5 +124,12 @@ func TestSnapshots(t *testing.T) {
 		t.Fatal(err)
 	} else if len(orphans) != 1 || orphans[0] != objID {
 		t.Fatalf("expected orphan %v after snapshot delete, got %v", objID, orphans)
+	}
+
+	// deleting a snapshot that no longer exists reports not found
+	if err := store.DeleteSnapshot(s1.ID); !errors.Is(err, s3.ErrSnapshotNotFound) {
+		t.Fatal("expected ErrSnapshotNotFound, got", err)
+	} else if err := store.DeleteSnapshot(99999); !errors.Is(err, s3.ErrSnapshotNotFound) {
+		t.Fatal("expected ErrSnapshotNotFound, got", err)
 	}
 }

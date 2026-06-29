@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.uber.org/zap"
 )
@@ -100,7 +101,7 @@ func (s *Store) DeleteSnapshot(snapshotID int64) error {
 		if n, err := res.RowsAffected(); err != nil {
 			return err
 		} else if n == 0 {
-			return objects.ErrSnapshotNotFound
+			return s3.ErrSnapshotNotFound
 		}
 		return nil
 	})
