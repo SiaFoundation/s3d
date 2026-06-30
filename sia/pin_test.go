@@ -104,7 +104,7 @@ func TestPinLoopDemotesExpiredUploads(t *testing.T) {
 		bucket = "bucket"
 		name   = "obj"
 	)
-	priorID := stageUpload(t, memSDK, store, bucket, name, time.Now().Add(-time.Minute))
+	stageUpload(t, memSDK, store, bucket, name, time.Now().Add(-time.Minute))
 
 	backend.PinObjects(t.Context())
 
@@ -144,23 +144,9 @@ func TestPinLoopDemotesExpiredUploads(t *testing.T) {
 		t.Fatal("expected demoted object to be picked up by ObjectsForUpload")
 	}
 
-	// the previous upload is orphaned: a pin attempt may have succeeded in
-	// the indexer without MarkObjectPinned committing, so the old id is
-	// conservatively routed through the orphan path (unpinning never-pinned
-	// data is a no-op)
-	orphans, err := store.OrphanedObjects(10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var orphaned bool
-	for _, id := range orphans {
-		if id == priorID {
-			orphaned = true
-		}
-	}
-	if !orphaned {
-		t.Fatalf("expected demoted prior sia object ID %v to be orphaned, got %v", priorID, orphans)
-	}
+	// the prior id's orphaning is asserted deterministically in
+	// TestScheduleObjectForReupload. asserting it here would race the
+	// background orphan loop that drains orphaned_objects.
 }
 
 // TestPinLoopPinsCopyAfterSourceDeleted verifies that a copy of an

@@ -2,6 +2,7 @@ package s3
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -312,6 +313,11 @@ type Backend interface {
 	// UploadStats returns statistics about the background upload pipeline.
 	UploadStats(ctx context.Context) (UploadStats, error)
 
+	// FlushObjects uploads all pending objects to Sia regardless of padding,
+	// rather than waiting for the background pipeline to batch them into
+	// efficiently packed slabs. It blocks until the uploads complete.
+	FlushObjects(ctx context.Context) error
+
 	// BackupSQLite3 creates a backup of the SQLite3 database at the given
 	// path on the local filesystem. The backup is a consistent snapshot
 	// even if the database is being written to concurrently.
@@ -409,7 +415,8 @@ func corsMiddleware(handler http.Handler) http.Handler {
 
 // NewAdmin creates an HTTP handler that serves the admin API using the provided
 // backend. It exposes /prometheus, which serves the background upload stats as
-// Prometheus metrics, /stats/uploads, which serves the same stats as JSON, and
+// Prometheus metrics, /stats/uploads, which serves the same stats as JSON,
+// /objects/flush, which uploads all pending objects regardless of padding, and
 // /system/sqlite3/backup, which creates a backup of the SQLite3 database.
 func NewAdmin(b Backend, opts ...Option) http.Handler {
 	s3 := &s3{
@@ -423,6 +430,7 @@ func NewAdmin(b Backend, opts ...Option) http.Handler {
 	return jape.Mux(map[string]jape.Handler{
 		"GET /prometheus":             s3.handlePrometheus,
 		"GET /stats/uploads":          s3.handleGetUploadStats,
+		"POST /objects/flush":         s3.handleFlushObjects,
 		"POST /system/sqlite3/backup": s3.handleBackupSQLite3,
 	})
 }
@@ -570,7 +578,14 @@ func (s *s3) routeBase(w http.ResponseWriter, r *http.Request, accessKeyID *stri
 		return
 	}
 	if err != nil {
-		log.Error("failed to handle request", zap.Error(err))
+		// only consider 5xx errors as "real" errors when logging. Other errors
+		// like bad requests or not found errors are not our fault
+		var s3Err s3errs.Error
+		if errors.As(err, &s3Err) && s3Err.HTTPStatus < http.StatusInternalServerError {
+			log.Debug("failed to handle request", zap.Error(err))
+		} else {
+			log.Error("failed to handle request", zap.Error(err))
+		}
 		writeErrorResponse(w, err)
 	}
 }

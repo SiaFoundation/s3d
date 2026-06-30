@@ -122,7 +122,7 @@ func TestPrepareUploads(t *testing.T) {
 		logger:            zaptest.NewLogger(t),
 	}
 
-	ready := s.prepareUploads()
+	ready := s.prepareUploads(false)
 
 	if len(ready) != 1 {
 		t.Fatalf("expected 1 ready group, got %d", len(ready))
@@ -132,6 +132,21 @@ func TestPrepareUploads(t *testing.T) {
 	}
 	if len(ready[0].objects) != 2 {
 		t.Fatalf("expected 2 objects, got %d", len(ready[0].objects))
+	}
+
+	// flushing uploads every pending object regardless of padding, so the
+	// "c"(42) object that was held back is now included
+	flushed := s.prepareUploads(true)
+	var flushedObjects, flushedSize int64
+	for _, g := range flushed {
+		flushedObjects += int64(len(g.objects))
+		flushedSize += g.totalSize
+	}
+	if flushedObjects != 3 {
+		t.Fatalf("expected 3 flushed objects, got %d", flushedObjects)
+	}
+	if flushedSize != 242 {
+		t.Fatalf("expected flushed size 242, got %d", flushedSize)
 	}
 }
 

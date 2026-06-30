@@ -17,6 +17,8 @@ security:
 tags:
   - name: metrics
     description: Background upload pipeline statistics for monitoring.
+  - name: uploads
+    description: Background upload pipeline control.
   - name: system
     description: System administration endpoints.
 
@@ -58,6 +60,20 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/UploadStats"
+  /objects/flush:
+    post:
+      tags:
+        - uploads
+      summary: Flush pending objects to Sia
+      description: >
+        Uploads all pending objects to Sia immediately, regardless of padding,
+        and pins them so their local pending files are removed. Blocks until done.
+      operationId: flushObjects
+      responses:
+        "200":
+          description: All pending objects were flushed to Sia.
+        "500":
+          description: Internal error while pinning, or the request was cancelled.
   /system/sqlite3/backup:
     post:
       tags:

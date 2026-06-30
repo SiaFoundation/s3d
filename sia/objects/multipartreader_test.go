@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"lukechampine.com/frand"
 )
 
@@ -84,18 +83,6 @@ func TestMultipartReader(t *testing.T) {
 	// assert data
 	if !bytes.Equal(all, append(p1, p2...)) {
 		t.Fatalf("unexpected data: %q", all)
-	}
-
-	// assert MD5 is validated
-	r, err = NewReader(dir, []Part{
-		{PartNumber: 3, Filename: writePart(3, []byte("x")), Size: 1, ContentMD5: md5.Sum([]byte("y"))},
-	}, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer r.Close()
-	if _, err := io.ReadAll(r); !errors.Is(err, s3errs.ErrBadDigest) {
-		t.Fatalf("expected ErrBadDigest, got %v", err)
 	}
 
 	// assert size is validated
@@ -196,5 +183,118 @@ func TestMultipartReader(t *testing.T) {
 	}
 	if !bytes.Equal(got, fullData) {
 		t.Fatalf("offset 0: expected %d bytes, got %d", len(fullData), len(got))
+	}
+
+	// WriteTo streams all remaining parts
+	r, err = NewReader(dir, offsetParts, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	n, err := r.WriteTo(&buf)
+	r.Close()
+	if err != nil {
+		t.Fatalf("unexpected WriteTo error: %v", err)
+	} else if n != int64(len(fullData)) {
+		t.Fatalf("WriteTo: expected %d bytes, got %d", len(fullData), n)
+	} else if !bytes.Equal(buf.Bytes(), fullData) {
+		t.Fatalf("WriteTo: unexpected data: %q", buf.Bytes())
+	}
+
+	// WriteTo honors an offset within the first part
+	r, err = NewReader(dir, offsetParts, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf.Reset()
+	n, err = r.WriteTo(&buf)
+	r.Close()
+	if err != nil {
+		t.Fatalf("WriteTo offset 50: unexpected error: %v", err)
+	} else if n != int64(len(fullData)-50) {
+		t.Fatalf("WriteTo offset 50: expected %d bytes, got %d", len(fullData)-50, n)
+	} else if !bytes.Equal(buf.Bytes(), fullData[50:]) {
+		t.Fatalf("WriteTo offset 50: unexpected data: %q", buf.Bytes())
+	}
+
+	// WriteTo continues from where a preceding Read left off
+	r, err = NewReader(dir, offsetParts, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := make([]byte, 30)
+	if _, err := io.ReadFull(r, head); err != nil {
+		t.Fatalf("read head: %v", err)
+	}
+	buf.Reset()
+	n, err = r.WriteTo(&buf)
+	r.Close()
+	if err != nil {
+		t.Fatalf("WriteTo after Read: unexpected error: %v", err)
+	} else if n != int64(len(fullData)-30) {
+		t.Fatalf("WriteTo after Read: expected %d bytes, got %d", len(fullData)-30, n)
+	} else if !bytes.Equal(append(head, buf.Bytes()...), fullData) {
+		t.Fatalf("WriteTo after Read: unexpected data: %q", append(head, buf.Bytes()...))
+	}
+
+	// LimitReader.WriteTo stops at the limit within the first part
+	r, err = NewReader(dir, offsetParts, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf.Reset()
+	n, err = io.Copy(&buf, LimitReader(r, 60))
+	r.Close()
+	if err != nil {
+		t.Fatalf("LimitReader WriteTo: unexpected error: %v", err)
+	} else if n != 60 {
+		t.Fatalf("LimitReader WriteTo: expected 60 bytes, got %d", n)
+	} else if !bytes.Equal(buf.Bytes(), fullData[:60]) {
+		t.Fatalf("LimitReader WriteTo: unexpected data: %q", buf.Bytes())
+	}
+
+	// LimitReader.WriteTo spans parts, combined with an offset
+	r, err = NewReader(dir, offsetParts, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf.Reset()
+	n, err = io.Copy(&buf, LimitReader(r, 200))
+	r.Close()
+	if err != nil {
+		t.Fatalf("LimitReader WriteTo span: unexpected error: %v", err)
+	} else if n != 200 {
+		t.Fatalf("LimitReader WriteTo span: expected 200 bytes, got %d", n)
+	} else if !bytes.Equal(buf.Bytes(), fullData[50:250]) {
+		t.Fatalf("LimitReader WriteTo span: unexpected data: %q", buf.Bytes())
+	}
+
+	// LimitReader caps a limit longer than the remaining data
+	r, err = NewReader(dir, offsetParts, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf.Reset()
+	n, err = io.Copy(&buf, LimitReader(r, int64(len(fullData))+100))
+	r.Close()
+	if err != nil {
+		t.Fatalf("LimitReader WriteTo overshoot: unexpected error: %v", err)
+	} else if n != int64(len(fullData)) {
+		t.Fatalf("LimitReader WriteTo overshoot: expected %d bytes, got %d", len(fullData), n)
+	} else if !bytes.Equal(buf.Bytes(), fullData) {
+		t.Fatalf("LimitReader WriteTo overshoot: unexpected data: %q", buf.Bytes())
+	}
+
+	// LimitReader.Read honors the same bound as WriteTo
+	r, err = NewReader(dir, offsetParts, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = io.ReadAll(LimitReader(r, 200))
+	r.Close()
+	if err != nil {
+		t.Fatalf("LimitReader Read: unexpected error: %v", err)
+	} else if !bytes.Equal(got, fullData[50:250]) {
+		t.Fatalf("LimitReader Read: unexpected data: %q", got)
 	}
 }

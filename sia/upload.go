@@ -127,7 +127,11 @@ func (s *Sia) newUploadGroup(initial objects.ObjectForUpload) uploadGroup {
 	}
 }
 
-func (s *Sia) prepareUploads() []uploadGroup {
+// prepareUploads groups pending objects into upload groups. Unless flush is
+// set, groups whose wasted space exceeds the configured threshold are held
+// back so they can be batched with future objects. When flush is set every
+// pending object is uploaded regardless of padding.
+func (s *Sia) prepareUploads(flush bool) []uploadGroup {
 	candidates, err := s.store.ObjectsForUpload()
 	if err != nil {
 		s.logger.Error("failed to fetch objects for upload", zap.Error(err))
@@ -159,11 +163,15 @@ func (s *Sia) prepareUploads() []uploadGroup {
 		}
 	}
 
-	// filter groups that meet the waste threshold
-	filtered := groups[:0]
-	for _, g := range groups {
-		if g.wastePct() < s.uploadWastePct {
-			filtered = append(filtered, g)
+	// filter groups that meet the waste threshold, unless flushing in which
+	// case every pending object is uploaded regardless of padding
+	filtered := groups
+	if !flush {
+		filtered = groups[:0]
+		for _, g := range groups {
+			if g.wastePct() < s.uploadWastePct {
+				filtered = append(filtered, g)
+			}
 		}
 	}
 
@@ -191,17 +199,39 @@ func (s *Sia) uploadLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			s.uploadObjects(ctx)
+			// errors are logged per group inside uploadObjects; the
+			// background loop retries on the next tick
+			_ = s.uploadObjects(ctx, false)
 		}
 	}
 }
 
-func (s *Sia) uploadObjects(ctx context.Context) { //nolint:revive
+// FlushObjects uploads every pending object to Sia regardless of padding,
+// rather than waiting for the background loop to batch them into efficiently
+// packed slabs, and pins the uploaded objects so their local backup files are
+// removed. It blocks until the uploads and pins complete.
+func (s *Sia) FlushObjects(ctx context.Context) error {
+	if err := s.uploadObjects(ctx, true); err != nil {
+		return fmt.Errorf("failed to upload objects: %w", err)
+	} else if err := ctx.Err(); err != nil {
+		return err
+	} else if err := s.performObjectPinning(ctx); err != nil {
+		return fmt.Errorf("failed to pin objects after flush: %w", err)
+	}
+	return nil
+}
+
+func (s *Sia) uploadObjects(ctx context.Context, flush bool) error { //nolint:revive
+	// serialize upload cycles so a manual flush and the background loop don't
+	// pick up the same objects and waste work uploading them twice
+	s.uploadMu.Lock()
+	defer s.uploadMu.Unlock()
+
 	// fetch and prepare objects for upload
-	groups := s.prepareUploads()
+	groups := s.prepareUploads(flush)
 	if len(groups) == 0 {
 		s.logger.Debug("not enough objects for upload")
-		return
+		return nil
 	}
 	s.logger.Debug("found enough objects for upload",
 		zap.Int("groups", len(groups)))
@@ -218,7 +248,8 @@ func (s *Sia) uploadObjects(ctx context.Context) { //nolint:revive
 	uploadsCh := make(chan uploadGroup, numUploadThreads)
 
 	// start upload workers
-	for range numUploadThreads {
+	errs := make([]error, numUploadThreads)
+	for i := range numUploadThreads {
 		wg.Go(func() {
 			for g := range uploadsCh {
 				s.logger.Info("uploading object group",
@@ -228,9 +259,8 @@ func (s *Sia) uploadObjects(ctx context.Context) { //nolint:revive
 					zap.Int("n", len(g.objects)),
 				)
 
-				err := s.uploadObjectGroup(ctx, g)
-				if err != nil {
-					s.logger.Error("failed to upload object group", zap.Error(err))
+				if err := s.uploadObjectGroup(ctx, g); err != nil {
+					errs[i] = errors.Join(errs[i], err)
 				}
 			}
 		})
@@ -259,6 +289,8 @@ func (s *Sia) uploadObjects(ctx context.Context) { //nolint:revive
 	}
 
 	wg.Wait()
+
+	return errors.Join(errs...)
 }
 
 // UploadStats returns statistics about the background upload pipeline.
@@ -274,11 +306,13 @@ func (s *Sia) UploadStats(_ context.Context) (s3.UploadStats, error) {
 func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 	upload, err := s.sdk.UploadPacked()
 	if err != nil {
+		s.logger.Error("failed to create packed upload", zap.Error(err))
 		return fmt.Errorf("failed to create packed upload: %w", err)
 	}
 	defer upload.Close()
 
 	var objIdx []int
+	var errs []error
 	for i, obj := range group.objects {
 		rc, err := s.openUpload(obj.Bucket, obj.Name, obj.VersionID, &obj.Filename, obj.Multipart, nil)
 		if err != nil {
@@ -288,6 +322,7 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 				zap.String("name", obj.Name),
 				zap.String("filename", obj.Filename),
 				zap.Error(err))
+			errs = append(errs, fmt.Errorf("failed to open upload for %s/%s: %w", obj.Bucket, obj.Name, err))
 			continue
 		}
 		n, err := upload.Add(ctx, rc)
@@ -299,6 +334,7 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 				zap.String("filename", obj.Filename),
 				zap.Error(err))
 			rc.Close()
+			errs = append(errs, fmt.Errorf("failed to add %s/%s to upload: %w", obj.Bucket, obj.Name, err))
 			continue
 		} else if n != obj.Length {
 			s.failedUploads.Add(1)
@@ -358,6 +394,7 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 					zap.String("bucket", uploadObj.Bucket),
 					zap.String("name", uploadObj.Name),
 					zap.Error(err))
+				errs = append(errs, fmt.Errorf("failed to finalize %s/%s in store: %w", uploadObj.Bucket, uploadObj.Name, err))
 			}
 			continue
 		}
@@ -367,5 +404,5 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 			zap.String("name", uploadObj.Name))
 		queued++
 	}
-	return nil
+	return errors.Join(errs...)
 }

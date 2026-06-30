@@ -26,11 +26,12 @@ type (
 	// MemorySDK is an in-memory implementation of the sia.SDK interface for
 	// testing the Sia backend without requiring a full indexer.
 	MemorySDK struct {
-		mu       sync.Mutex
-		appKey   types.PrivateKey
-		objects  map[types.Hash256]uploadedObject
-		events   []sdk.ObjectEvent
-		slabSize int64
+		mu          sync.Mutex
+		appKey      types.PrivateKey
+		objects     map[types.Hash256]uploadedObject
+		events      []sdk.ObjectEvent
+		slabSize    int64
+		failUploads bool
 
 		accountErr       error
 		pruneSlabsCalls  int
@@ -206,8 +207,20 @@ func (s *MemorySDK) OptimalDataSize() (int64, error) {
 	return s.slabSize, nil
 }
 
+// SetFailUploads controls whether UploadPacked returns an error.
+func (s *MemorySDK) SetFailUploads(fail bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failUploads = fail
+}
+
 // UploadPacked creates a new packed upload.
 func (s *MemorySDK) UploadPacked() (sia.PackedUpload, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.failUploads {
+		return nil, errors.New("upload failed")
+	}
 	return &memoryPackedUpload{sdk: s}, nil
 }
 
