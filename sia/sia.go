@@ -301,8 +301,9 @@ func (s *Sia) Close() error {
 
 // BackupSQLite3 creates a backup of the SQLite3 database at destPath and
 // records it as a snapshot so the orphan loop does not unpin data the backup
-// references. The backup is created using the SQLite backup API, which is safe
-// to use with a live database.
+// references. The backup is created with VACUUM INTO over a dedicated
+// connection, so it is safe to run against a live database without blocking
+// writers.
 func (s *Sia) BackupSQLite3(ctx context.Context, destPath string) error {
 	if destPath == "" {
 		return errors.New("empty destination path")
