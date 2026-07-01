@@ -216,7 +216,7 @@ type Store interface {
 	AbortMultipartUploads(bucketID int64, prefix string, before time.Time, limit int) ([]AbortedUpload, error)
 	ExpireObjects(bucketID int64, prefix string, before time.Time, limit int) (int, []OrphanedFile, error)
 
-	Backup(ctx context.Context, destPath string) error
+	CreateSnapshot(ctx context.Context, destPath string) error
 }
 
 // New creates a new Sia backend instance.
@@ -299,16 +299,18 @@ func (s *Sia) Close() error {
 	return nil
 }
 
-// BackupSQLite3 creates a backup of the SQLite3 database at destPath. The
-// backup is created using the SQLite backup API, which is safe to use with a
-// live database.
+// BackupSQLite3 creates a backup of the SQLite3 database at destPath and
+// records it as a snapshot so the orphan loop does not unpin data the backup
+// references. The backup uses the SQLite backup API over the store's own
+// connection, so writes are blocked for the duration of the backup but the
+// resulting snapshot is always consistent.
 func (s *Sia) BackupSQLite3(ctx context.Context, destPath string) error {
 	if destPath == "" {
 		return errors.New("empty destination path")
 	} else if !filepath.IsAbs(destPath) {
 		return fmt.Errorf("destination path must be absolute: %q", destPath)
 	}
-	return s.store.Backup(ctx, destPath)
+	return s.store.CreateSnapshot(ctx, destPath)
 }
 
 // processOrphansLoop periodically processes orphaned objects.

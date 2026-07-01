@@ -16,6 +16,10 @@ var (
 	// ErrObjectNotFound is returned by MarkObjectUploaded when the pending
 	// object does not exist.
 	ErrObjectNotFound = errors.New("object not found")
+
+	// ErrSnapshotNotFound is returned by DeleteSnapshot when no snapshot with
+	// the given id exists.
+	ErrSnapshotNotFound = errors.New("snapshot not found")
 )
 
 // Object represents a stored object with its metadata.
@@ -73,4 +77,12 @@ type UnpinnedObject struct {
 type OrphanedFile struct {
 	Filename string
 	Size     int64
+}
+
+// Snapshot describes a database backup recorded in the store.
+type Snapshot struct {
+	ID          int64
+	CreatedAt   time.Time
+	Path        string
+	ObjectCount int
 }

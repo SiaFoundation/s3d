@@ -89,7 +89,17 @@ CREATE TABLE object_parts (
 );
 
 CREATE TABLE orphaned_objects (
-    sia_object_id BLOB PRIMARY KEY
+    sia_object_id BLOB PRIMARY KEY,
+    orphaned_at_gen INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX orphaned_objects_gen_idx ON orphaned_objects(orphaned_at_gen);
+
+CREATE TABLE snapshots (
+    id INTEGER PRIMARY KEY,
+    created_at INTEGER NOT NULL,
+    path TEXT NOT NULL,
+    gen INTEGER NOT NULL DEFAULT 0,
+    object_count INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE bucket_lifecycle_configurations (
@@ -120,6 +130,7 @@ CREATE TABLE global_settings (
 	indexer_url TEXT,
 	last_sync_at INTEGER NOT NULL DEFAULT 0,
 	last_sync_key BLOB NOT NULL DEFAULT X'0000000000000000000000000000000000000000000000000000000000000000',
+	snapshot_generation INTEGER NOT NULL DEFAULT 0,
 	-- app_key and indexer_url are always set or nulled together
 	CHECK ((app_key IS NULL AND indexer_url IS NULL) OR (app_key IS NOT NULL AND indexer_url IS NOT NULL))
 );

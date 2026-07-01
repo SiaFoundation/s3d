@@ -18,6 +18,7 @@ import (
 	"github.com/SiaFoundation/s3d/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -25,16 +26,16 @@ import (
 	"go.uber.org/zap/zaptest"
 )
 
-func newAdminServer(t *testing.T) (string, *http.Client) {
+func newAdminServer(t *testing.T) (string, *http.Client, *sqlite.Store) {
 	t.Helper()
-	backend, _ := testutil.NewBackend(t)
+	backend, store := testutil.NewBackend(t)
 	server := httptest.NewServer(s3.NewAdmin(backend))
 	t.Cleanup(server.Close)
-	return server.URL, server.Client()
+	return server.URL, server.Client(), store
 }
 
 func TestPrometheus(t *testing.T) {
-	baseURL, httpClient := newAdminServer(t)
+	baseURL, httpClient, _ := newAdminServer(t)
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, baseURL+"/prometheus", nil)
 	if err != nil {
@@ -61,7 +62,7 @@ func TestPrometheus(t *testing.T) {
 }
 
 func TestUploadStats(t *testing.T) {
-	baseURL, httpClient := newAdminServer(t)
+	baseURL, httpClient, _ := newAdminServer(t)
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, baseURL+"/stats/uploads", nil)
 	if err != nil {
@@ -88,7 +89,7 @@ func TestUploadStats(t *testing.T) {
 }
 
 func TestBackupSQLite3(t *testing.T) {
-	baseURL, httpClient := newAdminServer(t)
+	baseURL, httpClient, store := newAdminServer(t)
 
 	dest := filepath.Join(t.TempDir(), "backup.sqlite")
 	body, err := json.Marshal(s3.BackupSQLite3Request{Path: dest})
@@ -109,6 +110,16 @@ func TestBackupSQLite3(t *testing.T) {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	} else if _, err := os.Stat(dest); err != nil {
 		t.Fatalf("expected backup file at %q: %v", dest, err)
+	}
+
+	// the backup is recorded as a snapshot
+	snapshots, err := store.ListSnapshots()
+	if err != nil {
+		t.Fatal(err)
+	} else if len(snapshots) != 1 {
+		t.Fatalf("expected 1 snapshot, got %d", len(snapshots))
+	} else if snapshots[0].Path != dest {
+		t.Fatalf("expected snapshot path %q, got %q", dest, snapshots[0].Path)
 	}
 }
 
