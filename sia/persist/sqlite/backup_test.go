@@ -2,11 +2,14 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"reflect"
+	"sync/atomic"
 	"testing"
 
 	"go.uber.org/zap/zaptest"
+	"lukechampine.com/frand"
 )
 
 func TestBackup(t *testing.T) {
@@ -88,4 +91,80 @@ func TestBackup(t *testing.T) {
 			t.Fatal("expected error for existing destination path")
 		}
 	})
+}
+
+// TestBackupConcurrentWrites asserts that writes proceed while a backup runs.
+// The backup copies the database over a dedicated connection, so it must not
+// hold the store's single pool connection for its duration.
+func TestBackupConcurrentWrites(t *testing.T) {
+	store := initTestDB(t, zaptest.NewLogger(t))
+
+	// seed enough data that the backup runs long enough to observe writes
+	// landing against it
+	if _, err := store.db.Exec(`CREATE TABLE blobs (id INTEGER PRIMARY KEY, data BLOB)`); err != nil {
+		t.Fatal(err)
+	} else if _, err := store.db.Exec(`CREATE TABLE writes (id INTEGER PRIMARY KEY, val INTEGER)`); err != nil {
+		t.Fatal(err)
+	}
+
+	const blobs = 512 // ~128MB at 256KB each
+	blob := frand.Bytes(256 * 1024)
+	tx, err := store.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < blobs; i++ {
+		if _, err := tx.Exec(`INSERT INTO blobs (data) VALUES (?)`, blob); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	// hammer writes through the pool connection while the backup runs
+	var writes atomic.Int64
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if _, err := store.db.Exec(`INSERT INTO writes (val) VALUES (?)`, frand.Uint64n(1<<62)); err == nil {
+				writes.Add(1)
+			}
+		}
+	}()
+
+	destPath := filepath.Join(t.TempDir(), "backup.sqlite")
+	if err := store.Backup(context.Background(), destPath); err != nil {
+		close(stop)
+		<-done
+		t.Fatal(err)
+	}
+	close(stop)
+	<-done
+
+	// a backup that held the pool connection would block the writer for its
+	// whole duration, leaving the count near zero
+	if n := writes.Load(); n < 25 {
+		t.Fatal("expected writes to proceed during backup, got", n)
+	}
+
+	// the copy must be consistent
+	dest, err := sql.Open("sqlite3", sqliteFilepath(destPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dest.Close()
+	var got int
+	if err := dest.QueryRow(`SELECT COUNT(*) FROM blobs`).Scan(&got); err != nil {
+		t.Fatal(err)
+	} else if got != blobs {
+		t.Fatal("inconsistent backup, blobs:", got)
+	}
 }

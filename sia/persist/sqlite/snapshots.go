@@ -25,40 +25,28 @@ func (s *Store) CreateSnapshot(ctx context.Context, destPath string) error {
 		return fmt.Errorf("failed to stat destination file: %w", err)
 	}
 
-	// hold the single connection across the generation bump and the backup so
-	// no writer can orphan an object the backup references before it is stamped
-	// with this snapshot's generation
-	conn, err := sqlConn(ctx, s.db)
-	if err != nil {
-		return fmt.Errorf("failed to create connection: %w", err)
-	}
-
+	// create snapshot
 	var snapshotID int64
-	err = doTransaction(ctx, conn, s.log.Named("snapshot"), func(tx *txn) error {
-		// bump the generation before the backup runs so every object orphaned
-		// from now on is stamped at or above this snapshot's generation
+	if err := s.transaction(func(tx *txn) error {
 		var gen int64
-		if err := tx.QueryRow("UPDATE global_settings SET snapshot_generation = snapshot_generation + 1 RETURNING snapshot_generation").Scan(&gen); err != nil {
+		err := tx.QueryRow("UPDATE global_settings SET snapshot_generation = snapshot_generation + 1 RETURNING snapshot_generation").Scan(&gen)
+		if err != nil {
 			return err
 		}
 		return tx.QueryRow(`
 			INSERT INTO snapshots (created_at, path, gen, object_count)
 			VALUES ($1, $2, $3, (SELECT stat_value FROM stats WHERE stat = $4))
 			RETURNING id`, sqlTime(time.Now()), destPath, gen, statUploadedObjects).Scan(&snapshotID)
-	})
-	if err != nil {
-		conn.Close()
-		return err
+	}); err != nil {
+		return fmt.Errorf("failed to create snapshot: %w", err)
 	}
 
-	backupErr := execBackup(ctx, conn, destPath)
-	// release the held connection before DeleteSnapshot, which needs it back
-	conn.Close()
-	if backupErr != nil {
+	// proceed to backup the database, rolling back the snapshot if it fails
+	if err := s.Backup(ctx, destPath); err != nil {
 		if dErr := s.DeleteSnapshot(snapshotID); dErr != nil {
 			s.log.Error("failed to roll back snapshot after backup error", zap.Int64("snapshotID", snapshotID), zap.Error(dErr))
 		}
-		return fmt.Errorf("failed to create backup: %w", backupErr)
+		return fmt.Errorf("failed to create backup: %w", err)
 	}
 	return nil
 }
