@@ -1,7 +1,6 @@
 package sqlite
 
 import (
-	"context"
 	"database/sql"
 	"encoding/hex"
 	"errors"
@@ -19,9 +18,8 @@ import (
 type (
 	// A Store is a persistent store that uses a SQL database as its backend.
 	Store struct {
-		db   *sql.DB
-		path string
-		log  *zap.Logger
+		db  *sql.DB
+		log *zap.Logger
 	}
 )
 
@@ -43,7 +41,7 @@ func (s *Store) transaction(fn func(*txn) error) error {
 	for ; attempt < maxRetryAttempts; attempt++ {
 		attemptStart := time.Now()
 		log := log.With(zap.Int("attempt", attempt))
-		err = doTransaction(context.Background(), s.db, log, fn)
+		err = doTransaction(s.db, log, fn)
 		if err == nil {
 			// no error, break out of the loop
 			return nil
@@ -75,17 +73,11 @@ func sqliteFilepath(fp string) string {
 	return "file:" + fp + "?" + strings.Join(params, "&")
 }
 
-// txBeginner begins a transaction. Both *sql.DB and *sql.Conn satisfy it,
-// letting doTransaction run against the pool or a single held connection.
-type txBeginner interface {
-	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
-}
-
 // doTransaction is a helper function to execute a function within a transaction. If fn returns
 // an error, the transaction is rolled back. Otherwise, the transaction is
 // committed.
-func doTransaction(ctx context.Context, b txBeginner, log *zap.Logger, fn func(tx *txn) error) error {
-	dbtx, err := b.BeginTx(ctx, nil)
+func doTransaction(db *sql.DB, log *zap.Logger, fn func(tx *txn) error) error {
+	dbtx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
@@ -127,9 +119,8 @@ func OpenDatabase(fp string, log *zap.Logger) (*Store, error) {
 	db.SetMaxOpenConns(1)
 
 	store := &Store{
-		db:   db,
-		path: fp,
-		log:  log,
+		db:  db,
+		log: log,
 	}
 	if err := store.init(int64(len(migrations) + 1)); err != nil {
 		return nil, err
