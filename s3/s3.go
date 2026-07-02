@@ -41,12 +41,18 @@ type Backend interface {
 	//
 	// - If the source and destination are the same, the object is kept but its metadata
 	//   is merged with the provided metadata.
-	CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, replace bool, meta map[string]string) (*CopyObjectResult, error)
+	//
+	// - srcVersion selects the source version: an unspecified request copies the
+	//   current version ([ErrNoSuchKey] if it is a delete marker), a specified
+	//   request the exact version ("" is the null version, [ErrNoSuchVersion] if
+	//   absent).
+	CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject string, srcVersion VersionRequest, dstBucket, dstObject string, replace bool, meta map[string]string) (*CopyObjectResult, error)
 
 	// CreateBucket creates a new bucket with the given name for the user
-	// identified by the given access key. If the bucket already exists,
-	// [ErrBucketAlreadyExists] or [ErrBucketAlreadyOwnedByYou] must be
-	// returned depending on the ownership of the bucket.
+	// identified by the given access key. Re-creating a bucket the user
+	// already owns is idempotent and preserves its contents (matching the AWS
+	// default region). If the bucket exists and is owned by another user,
+	// [ErrBucketAlreadyExists] must be returned.
 	CreateBucket(ctx context.Context, accessKeyID, name string) error
 
 	// DeleteBucket deletes the bucket with the given name for the user
@@ -99,7 +105,12 @@ type Backend interface {
 	//
 	// - If the requested range is not satisfiable, [ErrInvalidRange] must be
 	//   returned. You can use the 'Range' method on 'rnge' for that.
-	GetObject(ctx context.Context, accessKeyID *string, bucket, object string, rnge *ObjectRangeRequest, partNumber *int32) (*Object, error)
+	//
+	// - version unspecified returns the current version ([ErrNoSuchKey] if it is
+	//   a delete marker); a specified request returns that exact version ("" is
+	//   the null version, [ErrNoSuchVersion] if absent). The result may be a
+	//   delete marker (Object.IsDeleteMarker).
+	GetObject(ctx context.Context, accessKeyID *string, bucket, object string, version VersionRequest, rnge *ObjectRangeRequest, partNumber *int32) (*Object, error)
 
 	// HeadBucket checks if the bucket with the given name exists and is
 	// accessible for the user identified by the given access key.
@@ -112,7 +123,7 @@ type Backend interface {
 
 	// HeadObject is like GetObject but only retrieves the metadata of the
 	// object and returns an empty body.
-	HeadObject(ctx context.Context, accessKeyID *string, bucket, object string, rnge *ObjectRangeRequest, partNumber *int32) (*Object, error)
+	HeadObject(ctx context.Context, accessKeyID *string, bucket, object string, version VersionRequest, rnge *ObjectRangeRequest, partNumber *int32) (*Object, error)
 
 	// ListBuckets lists all available buckets for the user identified by the
 	// given access key.
@@ -136,8 +147,9 @@ type Backend interface {
 	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
 	//
-	// - If the object already exists, it must be overwritten.
-	//   NOTE: Versioning is not supported yet.
+	// - On a versioning-enabled bucket a new version is created and prior
+	//   versions are retained; otherwise (unversioned or suspended) the null
+	//   version is overwritten in place.
 	//
 	// - If the bytes read from 'r' do not match 'contentLength',
 	//   [ErrIncompleteBody] must be returned.
@@ -205,9 +217,14 @@ type Backend interface {
 	//
 	// - If the source object does not exist, [ErrNoSuchKey] must be returned.
 	//
+	// - srcVersion selects the source version: an unspecified request copies the
+	//   current version ([ErrNoSuchKey] if it is a delete marker), a specified
+	//   request the exact version ("" is the null version, [ErrNoSuchVersion] if
+	//   absent).
+	//
 	// - If the multipart upload ID is not known or no longer active,
 	//   [ErrNoSuchUpload] must be returned.
-	UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObject, dstBucket, dstObject string, uploadID UploadID, opts UploadPartCopyOptions) (*UploadPartCopyResult, error)
+	UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObject string, srcVersion VersionRequest, dstBucket, dstObject string, uploadID UploadID, opts UploadPartCopyOptions) (*UploadPartCopyResult, error)
 
 	// ListParts lists uploaded parts for the specified multipart upload.
 	//
@@ -264,6 +281,34 @@ type Backend interface {
 	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
 	DeleteBucketLifecycleConfiguration(ctx context.Context, accessKeyID, bucket string) error
+
+	// PutBucketVersioning sets the versioning state of the specified bucket.
+	// status is either "Enabled" or "Suspended".
+	//
+	// - If the access key does not have permission to configure the bucket,
+	//   [ErrAccessDenied] must be returned.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	PutBucketVersioning(ctx context.Context, accessKeyID, bucket, status string) error
+
+	// GetBucketVersioning returns the versioning state of the specified
+	// bucket. The status is "" if the bucket has never been configured,
+	// otherwise "Enabled" or "Suspended".
+	//
+	// - If the access key does not have permission to read the bucket
+	//   configuration, [ErrAccessDenied] must be returned.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	GetBucketVersioning(ctx context.Context, accessKeyID, bucket string) (status string, err error)
+
+	// ListObjectVersions lists all versions (including delete markers) of the
+	// objects in the specified bucket.
+	//
+	// - If the access key does not have permission to list the bucket,
+	//   [ErrAccessDenied] must be returned.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	ListObjectVersions(ctx context.Context, accessKeyID *string, bucket string, prefix Prefix, page ListObjectVersionsPage) (*ObjectVersionsListResult, error)
 
 	// UploadStats returns statistics about the background upload pipeline.
 	UploadStats(ctx context.Context) (UploadStats, error)
@@ -517,11 +562,11 @@ func (s *s3) routeBase(w http.ResponseWriter, r *http.Request, accessKeyID *stri
 	} else if _, ok := query["uploads"]; ok {
 		err = s.routeMultipartUploadBase(w, r, accessKeyID, bucket, object)
 	} else if _, ok := query["versioning"]; ok {
-		err = s.routeVersioning(w, r)
+		err = s.routeVersioning(w, r, accessKeyID, bucket)
 	} else if _, ok := query["versions"]; ok {
 		err = s.routeVersions(w, r, accessKeyID, bucket)
-	} else if versionID := versionFromQuery(query["versionId"]); versionID != "" {
-		err = s.routeVersion(w, r)
+	} else if version := VersionFromQuery(query["versionId"]); version.Specified {
+		err = s.routeVersion(w, r, accessKeyID, bucket, object, version)
 	} else if bucket != "" && object != "" {
 		err = s.routeObject(w, r, accessKeyID, bucket, object)
 	} else if bucket != "" {
@@ -545,11 +590,21 @@ func (s *s3) routeBase(w http.ResponseWriter, r *http.Request, accessKeyID *stri
 	}
 }
 
-// routeVersioningBase operates on routes that contain '?versioning' in the
-// query string. These routes may or may not have a value for bucket; this is
-// validated and handled in the target handler functions.
-func (s *s3) routeVersioning(w http.ResponseWriter, r *http.Request) error {
-	return s3errs.ErrNotImplemented
+// routeVersioning operates on routes that contain '?versioning' in the query
+// string.
+func (s *s3) routeVersioning(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket string) error {
+	validatedKey, err := assertAuth(accessKeyID)
+	if err != nil {
+		return err
+	}
+	switch r.Method {
+	case http.MethodGet:
+		return s.getBucketVersioning(w, r, validatedKey, bucket)
+	case http.MethodPut:
+		return s.putBucketVersioning(w, r, validatedKey, bucket)
+	default:
+		return s3errs.ErrMethodNotAllowed
+	}
 }
 
 // routeVersions operates on routes that contain '?versions' in the query string.
@@ -563,9 +618,29 @@ func (s *s3) routeVersions(w http.ResponseWriter, r *http.Request, accessKeyID *
 }
 
 // routeVersion operates on routes that contain '?versionId=<id>' in the
-// query string.
-func (s *s3) routeVersion(w http.ResponseWriter, r *http.Request) error {
-	return s3errs.ErrNotImplemented
+// query string, addressing a specific version of an object.
+func (s *s3) routeVersion(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket, object string, version VersionRequest) error {
+	// routes with optional authentication
+	switch r.Method {
+	case http.MethodGet:
+		return s.getObject(w, r, accessKeyID, bucket, object, version)
+	case http.MethodHead:
+		return s.headObject(w, r, accessKeyID, bucket, object, version)
+	default:
+	}
+
+	validatedKey, err := assertAuth(accessKeyID)
+	if err != nil {
+		return err
+	}
+
+	// routes with mandatory authentication
+	switch r.Method {
+	case http.MethodDelete:
+		return s.deleteObject(w, r, validatedKey, bucket, object, version)
+	default:
+		return s3errs.ErrMethodNotAllowed
+	}
 }
 
 // assertAuth checks if the accessKeyID is not nil, returning an error if it is.
@@ -577,16 +652,4 @@ func assertAuth(accessKeyID *string) (string, error) {
 		return "", s3errs.ErrAccessDenied
 	}
 	return *accessKeyID, nil
-}
-
-func versionFromQuery(qv []string) string {
-	// The versionId subresource may be the string 'null'; this has been
-	// observed coming in via Boto. The S3 documentation for the "DELETE
-	// object" endpoint describes a 'null' version explicitly, but we don't
-	// want backend implementers to have to special-case this string, so
-	// let's hide it in here:
-	if len(qv) > 0 && qv[0] != "" && qv[0] != Null {
-		return qv[0]
-	}
-	return ""
 }

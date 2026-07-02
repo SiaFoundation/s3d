@@ -176,22 +176,25 @@ type Store interface {
 	UserNameForAccessKey(accessKeyID string) (string, error)
 
 	AllFilenames() ([]string, error)
-	CopyObject(accessKeyID, srcBucket, srcName, dstBucket, dstName string, meta map[string]string, replace bool) (*objects.Object, string, int64, error)
+	CopyObject(accessKeyID, srcBucket, srcName string, srcVersion s3.VersionRequest, dstBucket, dstName string, meta map[string]string, replace bool) (*s3.CopyObjectResult, objects.OrphanedFile, error)
 	CreateBucket(accessKeyID, bucket string) error
 	DeleteBucket(accessKeyID, bucket string) error
-	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (string, int64, error)
-	GetObject(accessKeyID, bucket, object string, partNumber *int32) (*objects.Object, error)
+	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (string, bool, objects.OrphanedFile, error)
+	GetObject(accessKeyID, bucket, object string, version s3.VersionRequest, partNumber *int32) (*objects.Object, error)
 	DiskUsage() (uint64, error)
 	HeadBucket(accessKeyID, bucket string) error
+	GetBucketVersioning(accessKeyID, bucket string) (string, error)
+	PutBucketVersioning(accessKeyID, bucket, status string) error
 	ObjectsCursor() (slabs.Cursor, error)
 	SetObjectsCursor(cursor slabs.Cursor) error
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
 	ListObjects(accessKeyID, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error)
-	ObjectPartsByName(bucket, name string) ([]objects.Part, error)
+	ListObjectVersions(accessKeyID, bucket string, prefix s3.Prefix, page s3.ListObjectVersionsPage) (*s3.ObjectVersionsListResult, error)
+	ObjectPartsByName(bucket, name, versionID string) ([]objects.Part, error)
 	ObjectsForUpload() ([]objects.ObjectForUpload, error)
 	OrphanedObjects(limit int) ([]types.Hash256, error)
-	PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string) (string, int64, error)
-	MarkObjectUploaded(bucket, name string, contentMD5 [16]byte, sealed sdk.SealedObject, pinBefore time.Time) error
+	PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string) (string, objects.OrphanedFile, error)
+	MarkObjectUploaded(bucket, name, versionID string, contentMD5 [16]byte, sealed sdk.SealedObject, pinBefore time.Time) error
 	MarkObjectPinned(siaObjectID types.Hash256) ([]objects.OrphanedFile, error)
 	ScheduleObjectForReupload(siaObjectID types.Hash256) error
 	ObjectsForPinning(now time.Time, limit int) ([]objects.UnpinnedObject, error)
@@ -202,7 +205,7 @@ type Store interface {
 	AbortMultipartUpload(accessKeyID, bucket, name string, uploadID s3.UploadID) (int64, error)
 	AddMultipartPart(accessKeyID, bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (string, int64, error)
 	CreateMultipartUpload(accessKeyID, bucket, name string, uploadID s3.UploadID, meta map[string]string) error
-	CompleteMultipartUpload(accessKeyID, bucket, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64) (string, int64, error)
+	CompleteMultipartUpload(accessKeyID, bucket, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64) (string, objects.OrphanedFile, error)
 	HasMultipartUpload(accessKeyID, bucket, name string, uploadID s3.UploadID) (hasParts bool, err error)
 	ListMultipartUploads(accessKeyID, bucket string, prefix s3.Prefix, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error)
 	ListParts(accessKeyID, bucket, name string, uploadID s3.UploadID, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error)
@@ -213,8 +216,8 @@ type Store interface {
 	GetBucketLifecycleConfiguration(accessKeyID, bucket string) (string, error)
 	DeleteBucketLifecycleConfiguration(accessKeyID, bucket string) error
 	AllBucketLifecycleConfigurations() ([]BucketLifecycleConfiguration, error)
-	AbortMultipartUploads(bucketID int64, prefix string, before time.Time, limit int) ([]AbortedUpload, error)
-	ExpireObjects(bucketID int64, prefix string, before time.Time, limit int) (int, []OrphanedFile, error)
+	AbortMultipartUploads(bucket string, prefix string, before time.Time, limit int) ([]AbortedUpload, error)
+	ExpireObjects(bucket string, prefix string, before time.Time, limit int) (int, []objects.OrphanedFile, error)
 
 	Backup(ctx context.Context, destPath string) error
 }

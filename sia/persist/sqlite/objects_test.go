@@ -77,7 +77,7 @@ func TestDiskUsage(t *testing.T) {
 	}
 
 	// copy "a" - shared filename should not double-count
-	if _, _, _, err := store.CopyObject(accessKeyID, bucket, "a", bucket, "a-copy", nil, false); err != nil {
+	if _, _, err := store.CopyObject(accessKeyID, bucket, "a", s3.NoVersion(), bucket, "a-copy", nil, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -95,7 +95,7 @@ func TestDiskUsage(t *testing.T) {
 	}
 	sealObj := sdk.Object{}
 	sealed := sealObj.Seal(types.GeneratePrivateKey())
-	if err := store.MarkObjectUploaded(bucket, "uploaded", contentMD5, sealed, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, "uploaded", "", contentMD5, sealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -178,7 +178,7 @@ func TestAllFilenames(t *testing.T) {
 	if _, _, err := store.PutObject(accessKeyID, bucket, "obj1", md5, nil, 100, &fn); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.MarkObjectUploaded(bucket, "obj1", md5, sealed, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, "obj1", "", md5, sealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -229,7 +229,7 @@ func TestAllFilenames(t *testing.T) {
 	// filename is released
 	mpObj := sdk.Object{}
 	mpSealed := mpObj.Seal(types.GeneratePrivateKey())
-	if err := store.MarkObjectUploaded(bucket, "mp1", mpMD5, mpSealed, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, "mp1", "", mpMD5, mpSealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	} else if _, err := store.MarkObjectPinned(mpSealed.ID()); err != nil {
 		t.Fatal(err)
@@ -305,7 +305,7 @@ func TestGetObject(t *testing.T) {
 	}
 
 	// get object without part number
-	obj, err := store.GetObject(testAccessKeyID, bucket, object, nil)
+	obj, err := store.GetObject(testAccessKeyID, bucket, object, s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.SiaObject != nil {
@@ -319,12 +319,12 @@ func TestGetObject(t *testing.T) {
 	}
 
 	// mark the object as uploaded
-	if err := store.MarkObjectUploaded(bucket, object, obj.ContentMD5, objSealed, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, object, "", obj.ContentMD5, objSealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
 	// re-fetch and verify the sia_object_id is now set
-	obj, err = store.GetObject(testAccessKeyID, bucket, object, nil)
+	obj, err = store.GetObject(testAccessKeyID, bucket, object, s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.SiaObject == nil || obj.SiaObject.ID != objSealed.ID() {
@@ -332,7 +332,7 @@ func TestGetObject(t *testing.T) {
 	}
 
 	// get object with part number 1
-	objPart1, err := store.GetObject(testAccessKeyID, bucket, object, aws.Int32(1))
+	objPart1, err := store.GetObject(testAccessKeyID, bucket, object, s3.NoVersion(), aws.Int32(1))
 	if err != nil {
 		t.Fatal(err)
 	} else if objPart1.SiaObject == nil || objPart1.SiaObject.ID != objSealed.ID() {
@@ -354,13 +354,13 @@ func TestGetObject(t *testing.T) {
 	}
 
 	// mark multipart object as uploaded
-	if err := store.MarkObjectUploaded(bucket, multipart, multipartMD5, multipartSealed, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, multipart, "", multipartMD5, multipartSealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
 	// get multipart object with part number 2
 	mpID := multipartSealed.ID()
-	multipartPart2, err := store.GetObject(testAccessKeyID, bucket, multipart, aws.Int32(2))
+	multipartPart2, err := store.GetObject(testAccessKeyID, bucket, multipart, s3.NoVersion(), aws.Int32(2))
 	if err != nil {
 		t.Fatal(err)
 	} else if multipartPart2.SiaObject == nil || multipartPart2.SiaObject.ID != mpID {
@@ -380,7 +380,7 @@ func TestGetObject(t *testing.T) {
 	}
 
 	// get object with invalid part number
-	_, err = store.GetObject(testAccessKeyID, bucket, object, aws.Int32(3))
+	_, err = store.GetObject(testAccessKeyID, bucket, object, s3.NoVersion(), aws.Int32(3))
 	if !errors.Is(err, s3errs.ErrInvalidPart) {
 		t.Fatal("unexpected error", err)
 	}
@@ -415,7 +415,7 @@ func TestGetObjectPartFields(t *testing.T) {
 	}
 
 	// pending multipart: fetching part 1 should populate FileName
-	obj, err := store.GetObject(accessKeyID, bucket, name, aws.Int32(1))
+	obj, err := store.GetObject(accessKeyID, bucket, name, s3.NoVersion(), aws.Int32(1))
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.FileName == nil {
@@ -428,12 +428,12 @@ func TestGetObjectPartFields(t *testing.T) {
 	sealKey := types.GeneratePrivateKey()
 	sdkObj := sdk.NewEmptyObject()
 	sealed := sdkObj.Seal(sealKey)
-	if err := store.MarkObjectUploaded(bucket, name, contentMD5, sealed, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, name, "", contentMD5, sealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
 	// after upload: SiaObject is populated and FileName remains until pinning
-	obj, err = store.GetObject(accessKeyID, bucket, name, aws.Int32(2))
+	obj, err = store.GetObject(accessKeyID, bucket, name, s3.NoVersion(), aws.Int32(2))
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.FileName == nil {
@@ -448,7 +448,7 @@ func TestGetObjectPartFields(t *testing.T) {
 	if _, err := store.MarkObjectPinned(sealed.ID()); err != nil {
 		t.Fatal(err)
 	}
-	obj, err = store.GetObject(accessKeyID, bucket, name, aws.Int32(2))
+	obj, err = store.GetObject(accessKeyID, bucket, name, s3.NoVersion(), aws.Int32(2))
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.FileName != nil {
@@ -873,9 +873,10 @@ func BenchmarkListObjects(b *testing.B) {
 	for _, slab := range sealed.Slabs {
 		size += uint64(slab.Length)
 	}
+	size = max(size, 1)
 
 	populateBucket := func(bucket, delimiter string) {
-		if err := store.CreateBucket("", bucket); err != nil {
+		if err := store.CreateBucket(accessKeyID, bucket); err != nil {
 			b.Fatal(err)
 		}
 		err := store.transaction(func(tx *txn) error {
@@ -900,8 +901,8 @@ func BenchmarkListObjects(b *testing.B) {
 							key := layer3 + delimiter + name
 
 							_, err = tx.Exec(`
-			INSERT INTO objects (bucket_id, name, sia_object_id, content_md5, metadata, size, updated_at, sia_object)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, bid, key, sqlHash256(objID), sqlMD5(contentMD5), []byte{}, size, sqlTime(now), sqlSiaObject(sealed))
+			INSERT INTO objects (bucket_id, name, seq, sia_object_id, content_md5, metadata, size, updated_at, sia_object)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, bid, key, 1, sqlHash256(objID), sqlMD5(contentMD5), []byte{}, size, sqlTime(now), sqlSiaObject(sealed))
 						}
 					}
 				}
@@ -1066,19 +1067,19 @@ func TestOrphanedObjects(t *testing.T) {
 	if _, _, err := store.PutObject(testAccessKeyID, bucket, "a", md5a, nil, 1, new(string)); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.MarkObjectUploaded(bucket, "a", md5a, sealed, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, "a", "", md5a, sealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	} else if _, err := store.MarkObjectPinned(sealed.ID()); err != nil {
 		t.Fatal(err)
 	}
 
 	// copy object to a second key
-	if _, _, _, err := store.CopyObject(testAccessKeyID, bucket, "a", bucket, "b", nil, false); err != nil {
+	if _, _, err := store.CopyObject(testAccessKeyID, bucket, "a", s3.NoVersion(), bucket, "b", nil, false); err != nil {
 		t.Fatal(err)
 	}
 
 	// delete first object - references still exist, nothing orphaned
-	if _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "a"}); err != nil {
+	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "a"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1090,7 +1091,7 @@ func TestOrphanedObjects(t *testing.T) {
 	}
 
 	// delete second object - last reference gone, should be orphaned
-	if _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "b"}); err != nil {
+	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "b"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1136,7 +1137,7 @@ func TestPutObjectOrphan(t *testing.T) {
 	if _, _, err := store.PutObject(testAccessKeyID, bucket, "obj", md5old, nil, 1, new(string)); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.MarkObjectUploaded(bucket, "obj", md5old, oldSealed, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, "obj", "", md5old, oldSealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	} else if _, err := store.MarkObjectPinned(oldSealed.ID()); err != nil {
 		t.Fatal(err)
@@ -1169,7 +1170,7 @@ func TestPutObjectOrphan(t *testing.T) {
 
 	// mark + pin a new upload, then overwrite: pinned data orphans
 	// correctly when its last reference disappears.
-	if err := store.MarkObjectUploaded(bucket, "obj", md5new, newSealed, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, "obj", "", md5new, newSealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	} else if _, err := store.MarkObjectPinned(newSealed.ID()); err != nil {
 		t.Fatal(err)
@@ -1272,7 +1273,7 @@ func TestUpdateSiaObjects(t *testing.T) {
 		contentMD5 := frand.Entropy128()
 		if _, _, err := store.PutObject(testAccessKeyID, bucket, key, contentMD5, nil, 1, new(string)); err != nil {
 			t.Fatal(err)
-		} else if err := store.MarkObjectUploaded(bucket, key, contentMD5, sealed, time.Now().Add(time.Hour)); err != nil {
+		} else if err := store.MarkObjectUploaded(bucket, key, "", contentMD5, sealed, time.Now().Add(time.Hour)); err != nil {
 			t.Fatal(err)
 		}
 		return sealed
@@ -1296,7 +1297,7 @@ func TestUpdateSiaObjects(t *testing.T) {
 	}
 
 	// delete the first object
-	if _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "obj1"}); err != nil {
+	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "obj1"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1315,7 +1316,7 @@ func TestUpdateSiaObjects(t *testing.T) {
 	}
 
 	// verify the second object was updated
-	obj, err := store.GetObject(testAccessKeyID, bucket, "obj2", nil)
+	obj, err := store.GetObject(testAccessKeyID, bucket, "obj2", s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.SiaObject == nil {
@@ -1350,19 +1351,19 @@ func TestMarkObjectUploaded(t *testing.T) {
 
 	// marking with a different content MD5 should return ErrObjectModified
 	wrongMD5 := frand.Entropy128()
-	err := store.MarkObjectUploaded(bucket, object, wrongMD5, sealed, time.Now().Add(time.Hour))
+	err := store.MarkObjectUploaded(bucket, object, "", wrongMD5, sealed, time.Now().Add(time.Hour))
 	if !errors.Is(err, objects.ErrObjectModified) {
 		t.Fatalf("expected ErrObjectModified, got %v", err)
 	}
 
 	// marking with the correct content MD5 should succeed
-	if err := store.MarkObjectUploaded(bucket, object, contentMD5, sealed, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, object, "", contentMD5, sealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
 	// verify the object is now on Sia but its filename is preserved on
 	// disk pending the pin
-	obj, err := store.GetObject(testAccessKeyID, bucket, object, nil)
+	obj, err := store.GetObject(testAccessKeyID, bucket, object, s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.FileName == nil || *obj.FileName != fileName {
@@ -1375,7 +1376,7 @@ func TestMarkObjectUploaded(t *testing.T) {
 	// already uploaded
 	sdkObj2 := sdk.Object{}
 	sealed2 := sdkObj2.Seal(types.GeneratePrivateKey())
-	err = store.MarkObjectUploaded(bucket, object, contentMD5, sealed2, time.Now().Add(time.Hour))
+	err = store.MarkObjectUploaded(bucket, object, "", contentMD5, sealed2, time.Now().Add(time.Hour))
 	if !errors.Is(err, objects.ErrObjectNotFound) {
 		t.Fatalf("expected ErrObjectNotFound, got %v", err)
 	}
@@ -1392,7 +1393,7 @@ func TestMarkObjectUploaded(t *testing.T) {
 		t.Fatalf("expected orphan size 100, got %d", orphans[0].Size)
 	}
 
-	obj, err = store.GetObject(testAccessKeyID, bucket, object, nil)
+	obj, err = store.GetObject(testAccessKeyID, bucket, object, s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.FileName != nil {
@@ -1438,7 +1439,7 @@ func TestObjectsForUpload(t *testing.T) {
 	}
 	sealObj := sdk.Object{}
 	sealed := sealObj.Seal(types.GeneratePrivateKey())
-	if err := store.MarkObjectUploaded(bucket, "uploaded", uploadedMD5, sealed, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, "uploaded", "", uploadedMD5, sealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1542,7 +1543,7 @@ func TestUploadStats(t *testing.T) {
 	}
 	sealObj := sdk.Object{}
 	sealed := sealObj.Seal(types.GeneratePrivateKey())
-	if err := store.MarkObjectUploaded(bucket, "obj3", contentMD5, sealed, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, "obj3", "", contentMD5, sealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1582,7 +1583,7 @@ func TestUploadStats(t *testing.T) {
 	})
 
 	// delete uploaded object to create an orphan
-	if _, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "obj3"}); err != nil {
+	if _, _, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "obj3"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1618,7 +1619,7 @@ func TestUploadStats(t *testing.T) {
 	})
 
 	// copy a pending object, adding another pending object
-	if _, _, _, err := store.CopyObject(accessKeyID, bucket, "obj1", bucket, "copy1", nil, true); err != nil {
+	if _, _, err := store.CopyObject(accessKeyID, bucket, "obj1", s3.NoVersion(), bucket, "copy1", nil, true); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1638,7 +1639,7 @@ func TestUploadStats(t *testing.T) {
 	})
 
 	// delete a pending object
-	if _, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "obj1"}); err != nil {
+	if _, _, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "obj1"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1698,7 +1699,7 @@ func TestMarkObjectPinned(t *testing.T) {
 	}
 	sdkObj := sdk.Object{}
 	sealed := sdkObj.Seal(types.GeneratePrivateKey())
-	if err := store.MarkObjectUploaded(bucket, name, md5, sealed, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, name, "", md5, sealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1738,7 +1739,7 @@ func TestMarkObjectPinned(t *testing.T) {
 	}
 	sdkObjA := sdk.Object{}
 	sealedA := sdkObjA.Seal(types.GeneratePrivateKey())
-	if err := store.MarkObjectUploaded(bucket, "a", otherMD5, sealedA, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, "a", "", otherMD5, sealedA, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	orphans, err = store.MarkObjectPinned(sealedA.ID())
@@ -1759,10 +1760,10 @@ func TestMarkObjectPinned(t *testing.T) {
 	}
 	sdkObjC := newTestObject()
 	sealedC := sdkObjC.Seal(types.GeneratePrivateKey())
-	if err := store.MarkObjectUploaded(bucket, "c", md5C, sealedC, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, "c", "", md5C, sealedC, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "c"}); err != nil {
+	if _, _, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "c"}); err != nil {
 		t.Fatal(err)
 	}
 	if orphans, err := store.MarkObjectPinned(sealedC.ID()); err != nil {
@@ -1813,7 +1814,7 @@ func TestObjectsForPinning(t *testing.T) {
 		}
 		o := newTestObject()
 		sealed := o.Seal(types.GeneratePrivateKey())
-		if err := store.MarkObjectUploaded(bucket, name, md5, sealed, time.Now().Add(time.Hour)); err != nil {
+		if err := store.MarkObjectUploaded(bucket, name, "", md5, sealed, time.Now().Add(time.Hour)); err != nil {
 			t.Fatal(err)
 		}
 		return sealed
@@ -1924,7 +1925,7 @@ func TestScheduleObjectForReupload(t *testing.T) {
 	}
 	sdkObj := sdk.Object{}
 	sealed := sdkObj.Seal(types.GeneratePrivateKey())
-	if err := store.MarkObjectUploaded(bucket, name, md5, sealed, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, name, "", md5, sealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1941,7 +1942,7 @@ func TestScheduleObjectForReupload(t *testing.T) {
 	}
 
 	// the object reappears in the upload queue with sia_object_id cleared
-	obj, err := store.GetObject(accessKeyID, bucket, name, nil)
+	obj, err := store.GetObject(accessKeyID, bucket, name, s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.FileName == nil || *obj.FileName != fileName {
@@ -1991,10 +1992,10 @@ func TestScheduleObjectForReupload(t *testing.T) {
 	}
 	sdkObj2 := newTestObject()
 	sealed2 := sdkObj2.Seal(types.GeneratePrivateKey())
-	if err := store.MarkObjectUploaded(bucket, "obj2", md52, sealed2, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, "obj2", "", md52, sealed2, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "obj2"}); err != nil {
+	if _, _, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "obj2"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.ScheduleObjectForReupload(sealed2.ID()); !errors.Is(err, objects.ErrObjectNotFound) {
@@ -2007,6 +2008,484 @@ func TestScheduleObjectForReupload(t *testing.T) {
 	if len(orphans) != 1 || orphans[0] != sealed2.ID() {
 		t.Fatalf("expected deleted sealed ID %v to be orphaned, got %v", sealed2.ID(), orphans)
 	}
+}
+
+func TestVersioning(t *testing.T) {
+	const accessKeyID = testAccessKeyID
+
+	store := initTestDB(t, zaptest.NewLogger(t))
+
+	t.Run("BucketConfiguration", func(t *testing.T) {
+		const bucket = "config"
+		if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+			t.Fatal(err)
+		}
+
+		// an unconfigured bucket reports no status
+		if status, err := store.GetBucketVersioning(accessKeyID, bucket); err != nil {
+			t.Fatal(err)
+		} else if status != "" {
+			t.Fatalf("expected empty status, got %q", status)
+		}
+
+		// status round-trips through put/get
+		for _, want := range []string{s3.VersioningStatusEnabled, s3.VersioningStatusSuspended} {
+			if err := store.PutBucketVersioning(accessKeyID, bucket, want); err != nil {
+				t.Fatal(err)
+			}
+			if got, err := store.GetBucketVersioning(accessKeyID, bucket); err != nil {
+				t.Fatal(err)
+			} else if got != want {
+				t.Fatalf("expected status %q, got %q", want, got)
+			}
+		}
+	})
+
+	t.Run("EnabledLifecycle", func(t *testing.T) {
+		const (
+			bucket = "enabled"
+			key    = "key"
+		)
+		if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+			t.Fatal(err)
+		} else if err := store.PutBucketVersioning(accessKeyID, bucket, s3.VersioningStatusEnabled); err != nil {
+			t.Fatal(err)
+		}
+
+		put := func() string {
+			t.Helper()
+			v, _, err := store.PutObject(accessKeyID, bucket, key, frand.Entropy128(), nil, 1, new(string))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return v
+		}
+
+		// two writes produce two distinct, non-empty version IDs
+		v1 := put()
+		v2 := put()
+		if v1 == "" || v2 == "" {
+			t.Fatalf("expected non-empty version IDs, got %q and %q", v1, v2)
+		} else if v1 == v2 {
+			t.Fatalf("expected distinct version IDs, both were %q", v1)
+		}
+
+		// the current version is the latest write, and the object reports as versioned
+		if obj, err := store.GetObject(accessKeyID, bucket, key, s3.NoVersion(), nil); err != nil {
+			t.Fatal(err)
+		} else if obj.VersionID != v2 {
+			t.Fatalf("expected current version %q, got %q", v2, obj.VersionID)
+		} else if !obj.Versioned {
+			t.Fatal("expected object to be reported as versioned")
+		}
+
+		// each version is independently retrievable
+		if obj, err := store.GetObject(accessKeyID, bucket, key, s3.SpecificVersion(v1), nil); err != nil {
+			t.Fatal(err)
+		} else if obj.VersionID != v1 {
+			t.Fatalf("expected version %q, got %q", v1, obj.VersionID)
+		}
+
+		// an unknown version is reported as missing
+		if _, err := store.GetObject(accessKeyID, bucket, key, s3.SpecificVersion("does-not-exist"), nil); !errors.Is(err, s3errs.ErrNoSuchVersion) {
+			t.Fatalf("expected ErrNoSuchVersion, got %v", err)
+		}
+
+		// a simple delete inserts a delete marker that becomes the current version
+		marker, isDeleteMarker, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: key})
+		if err != nil {
+			t.Fatal(err)
+		} else if !isDeleteMarker {
+			t.Fatal("expected a delete marker on simple delete")
+		} else if marker == "" {
+			t.Fatal("expected a delete marker version ID")
+		}
+		if obj, err := store.GetObject(accessKeyID, bucket, key, s3.NoVersion(), nil); err != nil {
+			t.Fatal(err)
+		} else if !obj.IsDeleteMarker {
+			t.Fatal("expected current version to be a delete marker")
+		}
+
+		// deleting the delete marker by version restores the previous version
+		if _, _, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: key, VersionID: &marker}); err != nil {
+			t.Fatal(err)
+		}
+		if obj, err := store.GetObject(accessKeyID, bucket, key, s3.NoVersion(), nil); err != nil {
+			t.Fatal(err)
+		} else if obj.IsDeleteMarker {
+			t.Fatal("expected the object to be restored")
+		} else if obj.VersionID != v2 {
+			t.Fatalf("expected restored current version %q, got %q", v2, obj.VersionID)
+		}
+
+		// permanently deleting a specific version removes only that version
+		if _, _, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: key, VersionID: &v1}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.GetObject(accessKeyID, bucket, key, s3.SpecificVersion(v1), nil); !errors.Is(err, s3errs.ErrNoSuchVersion) {
+			t.Fatalf("expected ErrNoSuchVersion for deleted version, got %v", err)
+		}
+		if obj, err := store.GetObject(accessKeyID, bucket, key, s3.NoVersion(), nil); err != nil {
+			t.Fatal(err)
+		} else if obj.VersionID != v2 {
+			t.Fatalf("expected remaining version %q to stay current, got %q", v2, obj.VersionID)
+		}
+	})
+
+	t.Run("SuspendedNullVersion", func(t *testing.T) {
+		const (
+			bucket = "suspended"
+			key    = "key"
+		)
+		if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+			t.Fatal(err)
+		}
+
+		// create a non-null version while enabled
+		if err := store.PutBucketVersioning(accessKeyID, bucket, s3.VersioningStatusEnabled); err != nil {
+			t.Fatal(err)
+		}
+		v1, _, err := store.PutObject(accessKeyID, bucket, key, frand.Entropy128(), nil, 1, new(string))
+		if err != nil {
+			t.Fatal(err)
+		} else if v1 == "" {
+			t.Fatal("expected a version ID while enabled")
+		}
+
+		// suspended writes report no version and reuse the null version in place
+		if err := store.PutBucketVersioning(accessKeyID, bucket, s3.VersioningStatusSuspended); err != nil {
+			t.Fatal(err)
+		}
+		if v, _, err := store.PutObject(accessKeyID, bucket, key, frand.Entropy128(), nil, 1, new(string)); err != nil {
+			t.Fatal(err)
+		} else if v != "" {
+			t.Fatalf("expected no version ID while suspended, got %q", v)
+		}
+		if _, _, err := store.PutObject(accessKeyID, bucket, key, frand.Entropy128(), nil, 1, new(string)); err != nil {
+			t.Fatal(err)
+		}
+
+		// only the null version and the original non-null version remain
+		result, err := store.ListObjectVersions(accessKeyID, bucket, s3.Prefix{}, s3.ListObjectVersionsPage{MaxKeys: 100})
+		if err != nil {
+			t.Fatal(err)
+		} else if len(result.Versions) != 2 {
+			t.Fatalf("expected 2 versions (null + original), got %d", len(result.Versions))
+		}
+		var nullCount int
+		for _, v := range result.Versions {
+			if v.VersionID == "" {
+				nullCount++
+			}
+		}
+		if nullCount != 1 {
+			t.Fatalf("expected exactly one null version, got %d", nullCount)
+		}
+
+		// the null version is current and addressable as the empty version ID
+		if obj, err := store.GetObject(accessKeyID, bucket, key, s3.NoVersion(), nil); err != nil {
+			t.Fatal(err)
+		} else if obj.VersionID != "" {
+			t.Fatalf("expected the null version to be current, got %q", obj.VersionID)
+		}
+		if _, err := store.GetObject(accessKeyID, bucket, key, s3.SpecificVersion(""), nil); err != nil {
+			t.Fatalf("expected the null version to be addressable, got %v", err)
+		}
+		// the original non-null version is still retrievable
+		if obj, err := store.GetObject(accessKeyID, bucket, key, s3.SpecificVersion(v1), nil); err != nil {
+			t.Fatal(err)
+		} else if obj.VersionID != v1 {
+			t.Fatalf("expected version %q, got %q", v1, obj.VersionID)
+		}
+	})
+}
+
+func TestListObjectVersions(t *testing.T) {
+	const (
+		accessKeyID = testAccessKeyID
+		bucket      = "versioned"
+	)
+
+	store := initTestDB(t, zaptest.NewLogger(t))
+	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+		t.Fatal(err)
+	} else if err := store.PutBucketVersioning(accessKeyID, bucket, s3.VersioningStatusEnabled); err != nil {
+		t.Fatal(err)
+	}
+
+	put := func(key string) string {
+		t.Helper()
+		v, _, err := store.PutObject(accessKeyID, bucket, key, frand.Entropy128(), nil, 1, new(string))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+
+	// three versions of "key" (newest last) plus a single-version "other"
+	kv1 := put("key")
+	kv2 := put("key")
+	kv3 := put("key")
+	ov1 := put("other")
+
+	t.Run("Ordering", func(t *testing.T) {
+		result, err := store.ListObjectVersions(accessKeyID, bucket, s3.Prefix{}, s3.ListObjectVersionsPage{MaxKeys: 100})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// key ascending, then newest version first within a key
+		want := []struct {
+			key      string
+			version  string
+			isLatest bool
+		}{
+			{"key", kv3, true},
+			{"key", kv2, false},
+			{"key", kv1, false},
+			{"other", ov1, true},
+		}
+		if len(result.Versions) != len(want) {
+			t.Fatalf("expected %d versions, got %d", len(want), len(result.Versions))
+		}
+		for i, w := range want {
+			got := result.Versions[i]
+			if got.Key != w.key || got.VersionID != w.version {
+				t.Fatalf("version %d: expected %s/%s, got %s/%s", i, w.key, w.version, got.Key, got.VersionID)
+			} else if got.IsLatest != w.isLatest {
+				t.Fatalf("version %d (%s/%s): expected IsLatest=%v, got %v", i, w.key, w.version, w.isLatest, got.IsLatest)
+			}
+		}
+	})
+
+	t.Run("VersionIDMarkerResumesMidKey", func(t *testing.T) {
+		// resuming within "key" after its newest version yields the remaining two
+		// versions of "key" followed by "other"
+		result, err := store.ListObjectVersions(accessKeyID, bucket, s3.Prefix{}, s3.ListObjectVersionsPage{
+			KeyMarker:       aws.String("key"),
+			VersionIDMarker: aws.String(s3.FormatVersion(kv3)),
+			MaxKeys:         100,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"key/" + kv2, "key/" + kv1, "other/" + ov1}
+		if len(result.Versions) != len(want) {
+			t.Fatalf("expected %d versions, got %d", len(want), len(result.Versions))
+		}
+		for i, w := range want {
+			if got := result.Versions[i].Key + "/" + result.Versions[i].VersionID; got != w {
+				t.Fatalf("version %d: expected %s, got %s", i, w, got)
+			}
+		}
+	})
+
+	t.Run("DeletedVersionIDMarkerResumesFromKey", func(t *testing.T) {
+		// a version-id marker whose row was deleted between pages must not skip
+		// the whole key: its older, not-yet-listed versions must still appear
+		const (
+			bucket = "deleted-marker"
+			key    = "key"
+		)
+		if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+			t.Fatal(err)
+		} else if err := store.PutBucketVersioning(accessKeyID, bucket, s3.VersioningStatusEnabled); err != nil {
+			t.Fatal(err)
+		}
+		put := func(key string) string {
+			t.Helper()
+			v, _, err := store.PutObject(accessKeyID, bucket, key, frand.Entropy128(), nil, 1, new(string))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return v
+		}
+		kv1 := put(key)
+		kv2 := put(key)
+		kv3 := put(key)
+		ov1 := put("other")
+
+		// simulate a first page ending at kv2, then kv2 deleted before resume
+		if _, _, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: key, VersionID: &kv2}); err != nil {
+			t.Fatal(err)
+		}
+
+		result, err := store.ListObjectVersions(accessKeyID, bucket, s3.Prefix{}, s3.ListObjectVersionsPage{
+			KeyMarker:       aws.String(key),
+			VersionIDMarker: aws.String(s3.FormatVersion(kv2)),
+			MaxKeys:         100,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// resumes from the key's newest version (re-listing kv3) rather than
+		// skipping the key, so kv1 is not lost and "other" still follows
+		want := []string{"key/" + kv3, "key/" + kv1, "other/" + ov1}
+		if len(result.Versions) != len(want) {
+			t.Fatalf("expected %d versions, got %+v", len(want), result.Versions)
+		}
+		for i, w := range want {
+			if got := result.Versions[i].Key + "/" + result.Versions[i].VersionID; got != w {
+				t.Fatalf("version %d: expected %s, got %s", i, w, got)
+			}
+		}
+	})
+
+	t.Run("NullVersionIDMarkerResumesMidKey", func(t *testing.T) {
+		const (
+			bucket = "null-marker"
+			key    = "key"
+		)
+		if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+			t.Fatal(err)
+		} else if err := store.PutBucketVersioning(accessKeyID, bucket, s3.VersioningStatusEnabled); err != nil {
+			t.Fatal(err)
+		}
+		v1, _, err := store.PutObject(accessKeyID, bucket, key, frand.Entropy128(), nil, 1, new(string))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.PutBucketVersioning(accessKeyID, bucket, s3.VersioningStatusSuspended); err != nil {
+			t.Fatal(err)
+		}
+		if v, _, err := store.PutObject(accessKeyID, bucket, key, frand.Entropy128(), nil, 1, new(string)); err != nil {
+			t.Fatal(err)
+		} else if v != "" {
+			t.Fatalf("expected null version write to report no version, got %q", v)
+		}
+
+		first, err := store.ListObjectVersions(accessKeyID, bucket, s3.Prefix{}, s3.ListObjectVersionsPage{MaxKeys: 1})
+		if err != nil {
+			t.Fatal(err)
+		} else if !first.IsTruncated {
+			t.Fatal("expected first page to be truncated")
+		} else if len(first.Versions) != 1 || first.Versions[0].VersionID != "" {
+			t.Fatalf("expected first page to end on null version, got %+v", first.Versions)
+		} else if first.NextVersionIDMarker != s3.Null {
+			t.Fatalf("expected null next version marker, got %q", first.NextVersionIDMarker)
+		}
+
+		result, err := store.ListObjectVersions(accessKeyID, bucket, s3.Prefix{}, s3.ListObjectVersionsPage{
+			KeyMarker:       aws.String(first.NextKeyMarker),
+			VersionIDMarker: aws.String(first.NextVersionIDMarker),
+			MaxKeys:         100,
+		})
+		if err != nil {
+			t.Fatal(err)
+		} else if len(result.Versions) != 1 {
+			t.Fatalf("expected one remaining version, got %+v", result.Versions)
+		} else if result.Versions[0].Key != key || result.Versions[0].VersionID != v1 {
+			t.Fatalf("expected remaining version %s/%s, got %+v", key, v1, result.Versions[0])
+		}
+	})
+
+	t.Run("Pagination", func(t *testing.T) {
+		// a small max-keys forces truncation; the (key, version) cursor must
+		// round-trip without dropping or repeating a version
+		var got []string
+		seen := map[string]bool{}
+		page := s3.ListObjectVersionsPage{MaxKeys: 2}
+		for {
+			result, err := store.ListObjectVersions(accessKeyID, bucket, s3.Prefix{}, page)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, v := range result.Versions {
+				id := v.Key + "/" + v.VersionID
+				if seen[id] {
+					t.Fatalf("version returned twice: %s", id)
+				}
+				seen[id] = true
+				got = append(got, id)
+			}
+			if !result.IsTruncated {
+				break
+			}
+			// all versions here are non-null, so the wire-encoded markers equal
+			// the internal IDs and can be fed straight back
+			km, vm := result.NextKeyMarker, result.NextVersionIDMarker
+			page.KeyMarker, page.VersionIDMarker = &km, &vm
+		}
+		want := []string{"key/" + kv3, "key/" + kv2, "key/" + kv1, "other/" + ov1}
+		if len(got) != len(want) {
+			t.Fatalf("expected %d versions, got %d", len(want), len(got))
+		}
+		for i, w := range want {
+			if got[i] != w {
+				t.Fatalf("version %d: expected %s, got %s", i, w, got[i])
+			}
+		}
+	})
+
+	t.Run("MaxKeysZero", func(t *testing.T) {
+		result, err := store.ListObjectVersions(accessKeyID, bucket, s3.Prefix{}, s3.ListObjectVersionsPage{MaxKeys: 0})
+		if err != nil {
+			t.Fatal(err)
+		} else if len(result.Versions) != 0 {
+			t.Fatalf("expected no versions, got %d", len(result.Versions))
+		} else if result.IsTruncated {
+			t.Fatal("expected IsTruncated=false for max-keys=0")
+		}
+	})
+
+	t.Run("DeleteMarkerListed", func(t *testing.T) {
+		const bucket = "delete-marker"
+		if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+			t.Fatal(err)
+		} else if err := store.PutBucketVersioning(accessKeyID, bucket, s3.VersioningStatusEnabled); err != nil {
+			t.Fatal(err)
+		}
+		v, _, err := store.PutObject(accessKeyID, bucket, "k", frand.Entropy128(), nil, 1, new(string))
+		if err != nil {
+			t.Fatal(err)
+		}
+		marker, _, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: "k"})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		result, err := store.ListObjectVersions(accessKeyID, bucket, s3.Prefix{}, s3.ListObjectVersionsPage{MaxKeys: 100})
+		if err != nil {
+			t.Fatal(err)
+		} else if len(result.Versions) != 2 {
+			t.Fatalf("expected 2 versions, got %d", len(result.Versions))
+		}
+		// newest first: the delete marker is the current version
+		dm, obj := result.Versions[0], result.Versions[1]
+		if !dm.IsDeleteMarker || dm.VersionID != marker || !dm.IsLatest {
+			t.Fatalf("expected current delete marker %q, got %+v", marker, dm)
+		} else if obj.IsDeleteMarker || obj.VersionID != v {
+			t.Fatalf("expected underlying object version %q, got %+v", v, obj)
+		}
+	})
+
+	t.Run("DelimiterRollsUpCommonPrefixes", func(t *testing.T) {
+		const bucket = "delimiter"
+		if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+			t.Fatal(err)
+		} else if err := store.PutBucketVersioning(accessKeyID, bucket, s3.VersioningStatusEnabled); err != nil {
+			t.Fatal(err)
+		}
+		for _, k := range []string{"dir/a", "dir/b", "top"} {
+			if _, _, err := store.PutObject(accessKeyID, bucket, k, frand.Entropy128(), nil, 1, new(string)); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		result, err := store.ListObjectVersions(accessKeyID, bucket, s3.Prefix{
+			Delimiter:    "/",
+			HasDelimiter: true,
+		}, s3.ListObjectVersionsPage{MaxKeys: 100})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(result.CommonPrefixes) != 1 || result.CommonPrefixes[0].Prefix != "dir/" {
+			t.Fatalf("expected common prefix dir/, got %+v", result.CommonPrefixes)
+		}
+		if len(result.Versions) != 1 || result.Versions[0].Key != "top" {
+			t.Fatalf("expected only top-level key 'top', got %+v", result.Versions)
+		}
+	})
 }
 
 func newTestObject() sdk.Object {

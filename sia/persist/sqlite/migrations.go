@@ -108,4 +108,65 @@ CREATE INDEX unpinned_objects_next_attempt_at_idx ON unpinned_objects(next_attem
 			CREATE INDEX IF NOT EXISTS multipart_uploads_bucket_id_created_at_idx ON multipart_uploads(bucket_id, created_at);`)
 		return err
 	},
+	// add object versioning. objects keys on (bucket_id, name, version_id)
+	// with a monotonic seq (current version = MAX(seq) per key), an
+	// is_delete_marker flag, and an is_latest flag marking the current version
+	// (maintained on write so current-version listing is a plain index scan);
+	// object_parts is rebuilt to carry version_id. Pre-existing rows become the
+	// null version (''), each the sole and current version of its key.
+	func(tx *txn, _ *zap.Logger) error {
+		_, err := tx.Exec(`
+CREATE TABLE object_parts_backup AS SELECT bucket_id, name, part_number, filename, content_md5, content_length, offset FROM object_parts;
+DROP TABLE object_parts;
+
+CREATE TABLE objects_new (
+    bucket_id INTEGER REFERENCES buckets(id) NOT NULL,
+    name TEXT NOT NULL,
+    version_id TEXT NOT NULL DEFAULT '',
+    seq INTEGER NOT NULL,
+    is_delete_marker INTEGER NOT NULL DEFAULT FALSE,
+    is_latest INTEGER NOT NULL DEFAULT TRUE,
+    content_md5 BLOB NOT NULL,
+    metadata TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    parts_count INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL,
+    filename TEXT,
+    sia_object_id BLOB,
+    sia_object BLOB,
+    CHECK ((sia_object_id IS NULL AND sia_object IS NULL) OR (sia_object_id IS NOT NULL AND sia_object IS NOT NULL)),
+    CHECK ((size = 0 AND filename IS NULL AND sia_object_id IS NULL) OR (size > 0 AND (filename IS NOT NULL OR sia_object_id IS NOT NULL))),
+    CHECK (is_delete_marker IN (FALSE, TRUE)),
+    CHECK (is_latest IN (FALSE, TRUE)),
+    PRIMARY KEY (bucket_id, name, version_id)
+) WITHOUT ROWID;
+INSERT INTO objects_new (bucket_id, name, version_id, seq, is_delete_marker, content_md5, metadata, size, parts_count, updated_at, filename, sia_object_id, sia_object)
+    SELECT bucket_id, name, '', ROW_NUMBER() OVER (ORDER BY bucket_id, name), FALSE, content_md5, metadata, size, parts_count, updated_at, filename, sia_object_id, sia_object FROM objects;
+DROP TABLE objects;
+ALTER TABLE objects_new RENAME TO objects;
+CREATE INDEX objects_sia_object_id_idx ON objects(sia_object_id);
+CREATE INDEX objects_filename_idx ON objects(filename) WHERE filename IS NOT NULL;
+CREATE INDEX objects_bucket_id_updated_at_idx ON objects(bucket_id, updated_at);
+CREATE INDEX objects_bucket_name_seq_idx ON objects(bucket_id, name, seq DESC);
+CREATE UNIQUE INDEX objects_is_latest_idx ON objects(bucket_id, name) WHERE is_latest = TRUE;
+
+CREATE TABLE object_parts (
+    bucket_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    version_id TEXT NOT NULL DEFAULT '',
+    part_number INTEGER NOT NULL,
+    filename TEXT NOT NULL,
+    content_md5 BLOB NOT NULL,
+    content_length INTEGER NOT NULL,
+    offset INTEGER NOT NULL,
+    FOREIGN KEY (bucket_id, name, version_id) REFERENCES objects(bucket_id, name, version_id) ON DELETE CASCADE,
+    PRIMARY KEY (bucket_id, name, version_id, part_number)
+);
+INSERT INTO object_parts (bucket_id, name, version_id, part_number, filename, content_md5, content_length, offset)
+    SELECT bucket_id, name, '', part_number, filename, content_md5, content_length, offset FROM object_parts_backup;
+DROP TABLE object_parts_backup;
+
+ALTER TABLE buckets ADD COLUMN versioning_status TEXT NOT NULL DEFAULT '' CHECK (versioning_status IN ('', 'Enabled', 'Suspended'));`)
+		return err
+	},
 }

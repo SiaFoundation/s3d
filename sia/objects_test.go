@@ -280,7 +280,7 @@ func TestPutObject(t *testing.T) {
 		}
 
 		// verify the object is on disk
-		obj, err := store.GetObject(testutil.AccessKeyID, bucket, "pending", nil)
+		obj, err := store.GetObject(testutil.AccessKeyID, bucket, "pending", s3.NoVersion(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -311,7 +311,7 @@ func TestPutObject(t *testing.T) {
 		backend.PinObjects(t.Context())
 
 		// verify the object is now on Sia
-		obj, err = store.GetObject(testutil.AccessKeyID, bucket, "pending", nil)
+		obj, err = store.GetObject(testutil.AccessKeyID, bucket, "pending", s3.NoVersion(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -348,7 +348,7 @@ func TestPutObject(t *testing.T) {
 		if _, err := s3Tester.PutObject(t.Context(), bucket, "blocked", bytes.NewReader(blocked), nil); err != nil {
 			t.Fatal(err)
 		}
-		blockedObj, err := store.GetObject(testutil.AccessKeyID, bucket, "blocked", nil)
+		blockedObj, err := store.GetObject(testutil.AccessKeyID, bucket, "blocked", s3.NoVersion(), nil)
 		if err != nil {
 			t.Fatal(err)
 		} else if blockedObj.FileName == nil {
@@ -360,7 +360,7 @@ func TestPutObject(t *testing.T) {
 		backend.UploadObjects(t.Context())
 
 		// assert blocked object was not uploaded
-		blockedObj, err = store.GetObject(testutil.AccessKeyID, bucket, "blocked", nil)
+		blockedObj, err = store.GetObject(testutil.AccessKeyID, bucket, "blocked", s3.NoVersion(), nil)
 		if err != nil {
 			t.Fatal(err)
 		} else if blockedObj.FileName == nil {
@@ -377,7 +377,7 @@ func TestPutObject(t *testing.T) {
 		backend.PinObjects(t.Context())
 
 		// assert object was uploaded
-		blockedObj, err = store.GetObject(testutil.AccessKeyID, bucket, "blocked", nil)
+		blockedObj, err = store.GetObject(testutil.AccessKeyID, bucket, "blocked", s3.NoVersion(), nil)
 		if err != nil {
 			t.Fatal(err)
 		} else if blockedObj.FileName != nil {
@@ -394,7 +394,7 @@ func TestPutObject(t *testing.T) {
 		backend.PinObjects(t.Context())
 		memSDK.SetAccountErr(nil)
 
-		blockedObj, err = store.GetObject(testutil.AccessKeyID, bucket, "blocked", nil)
+		blockedObj, err = store.GetObject(testutil.AccessKeyID, bucket, "blocked", s3.NoVersion(), nil)
 		if err != nil {
 			t.Fatal(err)
 		} else if blockedObj.FileName != nil {
@@ -478,7 +478,7 @@ func TestFlushObjects(t *testing.T) {
 	}
 
 	// the object should now be served from Sia
-	obj, err := store.GetObject(testutil.AccessKeyID, bucket, "small", nil)
+	obj, err := store.GetObject(testutil.AccessKeyID, bucket, "small", s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.FileName != nil {
@@ -719,7 +719,7 @@ func TestListObjects(t *testing.T) {
 	}
 
 	// test pagination with continuation token
-	t.Run("pagination", func(t *testing.T) {
+	t.Run("Pagination", func(t *testing.T) {
 		// first request
 		resp, err := s3Tester.ListObjectsV2(t.Context(), bucket, nil, nil, s3.ListObjectsPage{
 			MaxKeys: 2,
@@ -949,19 +949,19 @@ func TestSyncMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	obj, err := store.GetObject(testutil.AccessKeyID, bucket, "obj", nil)
+	obj, err := store.GetObject(testutil.AccessKeyID, bucket, "obj", s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.FileName == nil {
 		t.Fatal("expected pending upload to have a filename")
 	}
 	sealed := memSDK.SealObject(siaObj)
-	if err := store.MarkObjectUploaded(bucket, "obj", obj.ContentMD5, sealed, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bucket, "obj", "", obj.ContentMD5, sealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
 	// record the original sealed object
-	origObj, err := store.GetObject(testutil.AccessKeyID, bucket, "obj", nil)
+	origObj, err := store.GetObject(testutil.AccessKeyID, bucket, "obj", s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -997,7 +997,7 @@ func TestSyncMetadata(t *testing.T) {
 	}
 
 	// the object's sia_object should have been re-sealed by the sync
-	objAfter, err := store.GetObject(testutil.AccessKeyID, bucket, "obj", nil)
+	objAfter, err := store.GetObject(testutil.AccessKeyID, bucket, "obj", s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1114,7 +1114,7 @@ func TestOverwritePendingObjectCleansUpFile(t *testing.T) {
 	uploadsDir := filepath.Join(dir, sia.UploadsDirectory)
 	pendingFilename := func(t *testing.T, object string) string {
 		t.Helper()
-		obj, err := store.GetObject(testutil.AccessKeyID, bucket, object, nil)
+		obj, err := store.GetObject(testutil.AccessKeyID, bucket, object, s3.NoVersion(), nil)
 		if err != nil {
 			t.Fatal(err)
 		} else if obj.FileName == nil {
@@ -1197,7 +1197,7 @@ func TestOverwritePendingObjectCleansUpFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertRemoved(t, mpDir)
-	parts, err := store.ObjectPartsByName(bucket, "mp")
+	parts, err := store.ObjectPartsByName(bucket, "mp", "")
 	if err != nil {
 		t.Fatal(err)
 	}

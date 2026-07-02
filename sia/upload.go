@@ -314,7 +314,7 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 	var objIdx []int
 	var errs []error
 	for i, obj := range group.objects {
-		rc, err := s.openUpload(obj.Bucket, obj.Name, &obj.Filename, obj.Multipart, nil)
+		rc, err := s.openUpload(obj.Bucket, obj.Name, obj.VersionID, &obj.Filename, obj.Multipart, nil)
 		if err != nil {
 			s.failedUploads.Add(1)
 			s.logger.Error("failed to open upload",
@@ -379,7 +379,7 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 
 	for i, obj := range results {
 		uploadObj := group.objects[objIdx[i]]
-		if err := s.store.MarkObjectUploaded(uploadObj.Bucket, uploadObj.Name, uploadObj.ContentMD5, s.sdk.SealObject(obj), pinBefore); err != nil {
+		if err := s.store.MarkObjectUploaded(uploadObj.Bucket, uploadObj.Name, uploadObj.VersionID, uploadObj.ContentMD5, s.sdk.SealObject(obj), pinBefore); err != nil {
 			if errors.Is(err, objects.ErrObjectNotFound) {
 				s.logger.Warn("object was deleted during upload, skipping",
 					zap.String("bucket", uploadObj.Bucket),

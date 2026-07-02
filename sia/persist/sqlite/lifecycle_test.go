@@ -11,15 +11,6 @@ import (
 	"lukechampine.com/frand"
 )
 
-// testBucketID looks up a bucket's ID directly in the database.
-func testBucketID(t *testing.T, store *testStore, bucket string) (id int64) {
-	t.Helper()
-	if err := store.db.QueryRow(`SELECT id FROM buckets WHERE name = ?`, bucket).Scan(&id); err != nil {
-		t.Fatal(err)
-	}
-	return
-}
-
 func TestBucketLifecycleConfiguration(t *testing.T) {
 	const (
 		accessKeyID = testAccessKeyID
@@ -65,7 +56,7 @@ func TestBucketLifecycleConfiguration(t *testing.T) {
 	all, err := store.AllBucketLifecycleConfigurations()
 	if err != nil {
 		t.Fatal(err)
-	} else if len(all) != 1 || all[0].BucketID != testBucketID(t, store, bucket) || all[0].Bucket != bucket || all[0].Configuration != updated {
+	} else if len(all) != 1 || all[0].Bucket != bucket || all[0].Configuration != updated {
 		t.Fatalf("unexpected configurations: %+v", all)
 	}
 
@@ -120,7 +111,7 @@ func TestAbortMultipartUploads(t *testing.T) {
 	}
 
 	// only the old "logs/" upload should be aborted
-	aborted, err := store.AbortMultipartUploads(testBucketID(t, store, bucket), "logs/", cutoff, 100)
+	aborted, err := store.AbortMultipartUploads(bucket, "logs/", cutoff, 100)
 	if err != nil {
 		t.Fatal(err)
 	} else if len(aborted) != 1 {
@@ -168,7 +159,7 @@ func TestExpireObjects(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deleted, orphans, err := store.ExpireObjects(testBucketID(t, store, bucket), "logs/", cutoff, 100)
+	deleted, orphans, err := store.ExpireObjects(bucket, "logs/", cutoff, 100)
 	if err != nil {
 		t.Fatal(err)
 	} else if deleted != 1 {
@@ -177,4 +168,50 @@ func TestExpireObjects(t *testing.T) {
 		t.Fatalf("unexpected orphans: %+v", orphans)
 	}
 	store.assertCount(2, "objects")
+}
+
+func TestExpireObjectsVersions(t *testing.T) {
+	const (
+		accessKeyID = testAccessKeyID
+		bucket      = "versioned-bucket"
+		key         = "logs/versioned"
+	)
+
+	store := initTestDB(t, zap.NewNop())
+	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+		t.Fatal(err)
+	} else if err := store.PutBucketVersioning(accessKeyID, bucket, s3.VersioningStatusEnabled); err != nil {
+		t.Fatal(err)
+	}
+
+	oldVersion, _, err := store.PutObject(accessKeyID, bucket, key, frand.Entropy128(), nil, 100, new(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentVersion, _, err := store.PutObject(accessKeyID, bucket, key, frand.Entropy128(), nil, 200, new(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cutoff := time.Now().Add(-24 * time.Hour)
+	if _, err := store.db.Exec("UPDATE objects SET updated_at = ? WHERE name = ? AND version_id = ?",
+		sqlTime(time.Now().Add(-48*time.Hour)), key, oldVersion); err != nil {
+		t.Fatal(err)
+	}
+
+	deleted, orphans, err := store.ExpireObjects(bucket, "logs/", cutoff, 100)
+	if err != nil {
+		t.Fatal(err)
+	} else if deleted != 0 {
+		t.Fatalf("expected no deleted objects, got %d", deleted)
+	} else if len(orphans) != 0 {
+		t.Fatalf("expected no orphans, got %+v", orphans)
+	}
+	if obj, err := store.GetObject(accessKeyID, bucket, key, s3.NoVersion(), nil); err != nil {
+		t.Fatal(err)
+	} else if obj.VersionID != currentVersion {
+		t.Fatalf("expected current version %q, got %q", currentVersion, obj.VersionID)
+	} else if _, err := store.GetObject(accessKeyID, bucket, key, s3.SpecificVersion(oldVersion), nil); err != nil {
+		t.Fatalf("expected old noncurrent version to remain, got %v", err)
+	}
 }
