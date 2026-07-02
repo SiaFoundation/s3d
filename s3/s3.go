@@ -446,7 +446,6 @@ func (s s3) authMiddleware(handler auth.AuthenticatedHandler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		s.logger.Debug("authenticating request",
 			zap.String("method", req.Method),
-			zap.String(auth.HeaderAuthorization, auth.RedactAuthorization(req.Header.Get(auth.HeaderAuthorization))),
 			zap.String(auth.HeaderXAMZContentSHA256, req.Header.Get(auth.HeaderXAMZContentSHA256)),
 			zap.String(auth.HeaderXAMZDate, req.Header.Get(auth.HeaderXAMZDate)))
 
