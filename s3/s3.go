@@ -446,7 +446,7 @@ func (s s3) authMiddleware(handler auth.AuthenticatedHandler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		s.logger.Debug("authenticating request",
 			zap.String("method", req.Method),
-			zap.String(auth.HeaderAuthorization, req.Header.Get(auth.HeaderAuthorization)),
+			zap.String(auth.HeaderAuthorization, auth.RedactAuthorization(req.Header.Get(auth.HeaderAuthorization))),
 			zap.String(auth.HeaderXAMZContentSHA256, req.Header.Get(auth.HeaderXAMZContentSHA256)),
 			zap.String(auth.HeaderXAMZDate, req.Header.Get(auth.HeaderXAMZDate)))
 
@@ -543,7 +543,7 @@ func (s *s3) routeBase(w http.ResponseWriter, r *http.Request, accessKeyID *stri
 		object = parts[1]
 	}
 
-	log := s.logger.With(zap.Stringer("url", r.URL),
+	log := s.logger.With(zap.String("url", auth.RedactURL(r.URL)),
 		zap.String("host", r.Host),
 		zap.Strings("parts", parts),
 		zap.String("bucket", bucket),
