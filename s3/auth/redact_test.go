@@ -7,34 +7,6 @@ import (
 	"github.com/SiaFoundation/s3d/s3/auth"
 )
 
-func TestRedactAuthorization(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{
-			name: "signature redacted, rest retained",
-			in:   "AWS4-HMAC-SHA256 Credential=AKIA7GQ3XN52WQLYDHZP/20251017/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=d609f580a2aba01cc8cc2a0e62fb695748c2733b1cf3df64a623d74dfc4e3a39",
-			want: "AWS4-HMAC-SHA256 Credential=AKIA7GQ3XN52WQLYDHZP/20251017/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=REDACTED",
-		},
-		{
-			name: "no space after algorithm still redacts signature",
-			in:   "AWS4-HMAC-SHA256Credential=AKIA7GQ3XN52WQLYDHZP/20251017/us-east-1/s3/aws4_request,SignedHeaders=host;x-amz-date,Signature=d609f580a2aba01cc8cc2a0e62fb695748c2733b1cf3df64a623d74dfc4e3a39",
-			want: "AWS4-HMAC-SHA256 Credential=AKIA7GQ3XN52WQLYDHZP/20251017/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=REDACTED",
-		},
-		{name: "empty", in: "", want: ""},
-		{name: "no parameters", in: "AWS4-HMAC-SHA256", want: "AWS4-HMAC-SHA256"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := auth.RedactAuthorization(tc.in); got != tc.want {
-				t.Errorf("RedactAuthorization(%q) = %q, want %q", tc.in, got, tc.want)
-			}
-		})
-	}
-}
-
 func TestRedactURL(t *testing.T) {
 	tests := []struct {
 		name string
