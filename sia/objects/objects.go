@@ -85,10 +85,24 @@ type OrphanedFile struct {
 	Size     int64
 }
 
-// Snapshot describes a database backup recorded in the store.
+// SnapshotType is the discriminator written to a snapshot object's metadata so
+// recovery can identify snapshots among all account objects.
+const SnapshotType = "s3d-snapshot"
+
+// Snapshot describes a database backup uploaded to Sia.
 type Snapshot struct {
 	ID          int64
 	CreatedAt   time.Time
-	Path        string
+	SiaObjectID types.Hash256
 	ObjectCount int
+}
+
+// SnapshotMetadata is attached to a snapshot's Sia object. It lets recovery
+// find snapshots and refuse ones it cannot restore.
+type SnapshotMetadata struct {
+	Type        string    `json:"type"`
+	CreatedAt   time.Time `json:"createdAt"`
+	DBVersion   int64     `json:"dbVersion"`
+	ObjectCount int64     `json:"objectCount"`
+	S3DVersion  string    `json:"s3dVersion"`
 }

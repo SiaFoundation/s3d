@@ -24,6 +24,7 @@ import (
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	service "github.com/aws/aws-sdk-go-v2/service/s3"
+	"go.sia.tech/core/types"
 	"go.uber.org/zap/zaptest"
 )
 
@@ -113,14 +114,39 @@ func TestBackupSQLite3(t *testing.T) {
 		t.Fatalf("expected backup file at %q: %v", dest, err)
 	}
 
-	// the backup is recorded as a snapshot
+	// a plain backup does not record a snapshot
+	if snapshots, err := store.ListSnapshots(); err != nil {
+		t.Fatal(err)
+	} else if len(snapshots) != 0 {
+		t.Fatalf("expected no snapshots, got %d", len(snapshots))
+	}
+}
+
+func TestCreateSnapshot(t *testing.T) {
+	baseURL, httpClient, store := newAdminServer(t)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, baseURL+"/snapshots", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	// the snapshot is recorded with a sia object id
 	snapshots, err := store.ListSnapshots()
 	if err != nil {
 		t.Fatal(err)
 	} else if len(snapshots) != 1 {
 		t.Fatalf("expected 1 snapshot, got %d", len(snapshots))
-	} else if snapshots[0].Path != dest {
-		t.Fatalf("expected snapshot path %q, got %q", dest, snapshots[0].Path)
+	} else if snapshots[0].SiaObjectID == (types.Hash256{}) {
+		t.Fatal("expected snapshot to have a sia object id")
 	}
 }
 

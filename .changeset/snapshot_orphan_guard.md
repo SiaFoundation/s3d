@@ -2,4 +2,4 @@
 default: minor
 ---
 
-# Backups now record a snapshot so deleting an object no longer unpins data a previous backup still references
+# Added a POST /snapshots admin endpoint that uploads a database backup to Sia and prevents unpinning objects a snapshot still references

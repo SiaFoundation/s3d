@@ -1097,7 +1097,7 @@ func TestOrphanedObjects(t *testing.T) {
 	// pins withholds the object once its last reference is gone
 	if _, err := store.db.Exec("UPDATE global_settings SET snapshot_generation = 1"); err != nil {
 		t.Fatal(err)
-	} else if _, err := store.db.Exec("INSERT INTO snapshots (id, created_at, path, gen, object_count) VALUES (1, 0, 'backup.sqlite', 1, 1)"); err != nil {
+	} else if _, err := store.db.Exec("INSERT INTO snapshots (id, created_at, gen, object_count) VALUES (1, 0, 1, 1)"); err != nil {
 		t.Fatal(err)
 	}
 

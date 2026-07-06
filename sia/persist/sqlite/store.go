@@ -28,6 +28,11 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+// DBVersion returns the current database schema version.
+func (s *Store) DBVersion() int64 {
+	return getDBVersion(s.db)
+}
+
 // transaction executes a function within a database transaction. If the
 // function returns an error, the transaction is rolled back. Otherwise, the
 // transaction is committed. If the transaction fails due to a busy error, it is
