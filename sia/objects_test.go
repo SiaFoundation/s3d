@@ -945,7 +945,7 @@ func TestSyncMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	siaObj, err := memSDK.Upload(t.Context(), bytes.NewReader(data))
+	siaObj, err := memSDK.AddObject(t.Context(), bytes.NewReader(data))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1599,7 +1599,7 @@ func TestOrphanLifecycle(t *testing.T) {
 	upload := func(name string) stypes.Hash256 {
 		t.Helper()
 		data := frand.Bytes(16)
-		siaObj, err := memSDK.Upload(t.Context(), bytes.NewReader(data))
+		siaObj, err := memSDK.AddObject(t.Context(), bytes.NewReader(data))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1625,25 +1625,25 @@ func TestOrphanLifecycle(t *testing.T) {
 	}
 
 	// snapshot S1 captures both objects, then delete A
-	s1Path := filepath.Join(t.TempDir(), "s1.sqlite")
-	if err := backend.BackupSQLite3(t.Context(), s1Path); err != nil {
+	if err := backend.CreateSnapshot(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := store.DeleteObject(testutil.AccessKeyID, bucket, s3.ObjectID{Key: "a"}); err != nil {
 		t.Fatal(err)
 	}
 
-	// the orphan loop must not unpin A while S1 references it
+	// the orphan loop must not unpin A while S1 references it.
+	// memSDK now holds A, B and the S1 snapshot object, so 3 total
 	backend.ProcessOrphans(t.Context())
-	if got := memSDK.ObjectCount(); got != 2 {
+	if got := memSDK.ObjectCount(); got != 3 {
 		t.Fatal("expected A still pinned while snapshotted, got", got)
 	} else if !memSDK.Pinned(idA) {
 		t.Fatal("expected A still pinned")
 	}
 
-	// snapshot S2 is taken after A was deleted, then delete B
-	s2Path := filepath.Join(t.TempDir(), "s2.sqlite")
-	if err := backend.BackupSQLite3(t.Context(), s2Path); err != nil {
+	// snapshot S2 is taken after A was deleted, then delete B.
+	// memSDK now holds A, B, snap1 and snap2, so 4 total
+	if err := backend.CreateSnapshot(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := store.DeleteObject(testutil.AccessKeyID, bucket, s3.ObjectID{Key: "b"}); err != nil {
@@ -1652,7 +1652,7 @@ func TestOrphanLifecycle(t *testing.T) {
 
 	// both orphans are withheld while their snapshots survive
 	backend.ProcessOrphans(t.Context())
-	if got := memSDK.ObjectCount(); got != 2 {
+	if got := memSDK.ObjectCount(); got != 4 {
 		t.Fatal("expected both objects still pinned while snapshotted, got", got)
 	}
 
@@ -1664,12 +1664,13 @@ func TestOrphanLifecycle(t *testing.T) {
 	}
 
 	// deleting S1 lowers the floor past A's generation, so the orphan loop
-	// unpins A while B remains withheld by the newer S2
+	// unpins A while B remains withheld by the newer S2.
+	// memSDK retains B, snap1 and snap2, so 3 total with A unpinned
 	if err := store.DeleteSnapshot(snapshots[0].ID); err != nil {
 		t.Fatal(err)
 	}
 	backend.ProcessOrphans(t.Context())
-	if got := memSDK.ObjectCount(); got != 1 {
+	if got := memSDK.ObjectCount(); got != 3 {
 		t.Fatal("expected only B pinned after S1 deleted, got", got)
 	} else if memSDK.Pinned(idA) {
 		t.Fatal("expected A unpinned after its snapshot was deleted")
@@ -1677,13 +1678,14 @@ func TestOrphanLifecycle(t *testing.T) {
 		t.Fatal("expected B still pinned while S2 survives")
 	}
 
-	// deleting S2 releases B as well
+	// deleting S2 releases B as well.
+	// memSDK retains snap1 and snap2, so 2 total with B unpinned
 	if err := store.DeleteSnapshot(snapshots[1].ID); err != nil {
 		t.Fatal(err)
 	}
 	backend.ProcessOrphans(t.Context())
-	if got := memSDK.ObjectCount(); got != 0 {
-		t.Fatal("expected no pinned objects after all snapshots deleted, got", got)
+	if got := memSDK.ObjectCount(); got != 2 {
+		t.Fatal("expected no s3 objects pinned after all snapshots deleted, got", got)
 	} else if memSDK.Pinned(idB) {
 		t.Fatal("expected B unpinned after its snapshot was deleted")
 	}

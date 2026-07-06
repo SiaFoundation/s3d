@@ -45,34 +45,39 @@ func TestSnapshots(t *testing.T) {
 
 	// create a snapshot
 	path := filepath.Join(t.TempDir(), "snap.sqlite")
-	if err := store.CreateSnapshot(t.Context(), path); err != nil {
-		t.Fatal(err)
-	}
-
-	// the backup file is written
-	if _, err := os.Stat(path); err != nil {
-		t.Fatal("backup file not created", err)
-	}
-
-	// only the uploaded object is counted, the pending one has no sia_object_id
-	store.assertCount(1, "snapshots")
-
-	// the snapshot is listed with its metadata
-	snapshots, err := store.ListSnapshots()
+	s1, err := store.CreateSnapshot(t.Context(), path)
 	if err != nil {
 		t.Fatal(err)
-	} else if len(snapshots) != 1 {
-		t.Fatalf("expected 1 snapshot, got %d", len(snapshots))
-	}
-	s1 := snapshots[0]
-	if s1.ID == 0 {
+	} else if _, err := os.Stat(path); err != nil {
+		t.Fatal("backup file not created", err)
+	} else if s1.ID == 0 {
 		t.Fatal("expected non-zero snapshot id")
-	} else if s1.Path != path {
-		t.Fatalf("expected path %q, got %q", path, s1.Path)
 	} else if s1.ObjectCount != 1 {
-		t.Fatalf("expected object count 1, got %d", s1.ObjectCount)
+		t.Fatal("unexpected", s1.ObjectCount)
 	} else if s1.CreatedAt.IsZero() {
 		t.Fatal("expected non-zero created at")
+	}
+	store.assertCount(1, "snapshots")
+
+	// an uploaded snapshot is listed once its object id is recorded
+	var siaObjectID types.Hash256
+	frand.Read(siaObjectID[:])
+	if err := store.SetSnapshotSiaObject(s1.ID, siaObjectID); err != nil {
+		t.Fatal(err)
+	}
+	if snapshots, err := store.ListSnapshots(); err != nil {
+		t.Fatal(err)
+	} else if len(snapshots) != 1 {
+		t.Fatal("unexpected", len(snapshots))
+	} else if snapshots[0].SiaObjectID != siaObjectID {
+		t.Fatal("mismatch", snapshots[0].SiaObjectID)
+	} else if snapshots[0].ObjectCount != 1 {
+		t.Fatal("unexpected", snapshots[0].ObjectCount)
+	}
+
+	// setting the object id on a missing snapshot reports not found
+	if err := store.SetSnapshotSiaObject(s1.ID+100, siaObjectID); !errors.Is(err, objects.ErrSnapshotNotFound) {
+		t.Fatal("unexpected", err)
 	}
 
 	// deleting a non-existent snapshot reports not found
@@ -87,33 +92,33 @@ func TestSnapshots(t *testing.T) {
 	if orphans, err := store.OrphanedObjects(100); err != nil {
 		t.Fatal(err)
 	} else if len(orphans) != 0 {
-		t.Fatalf("expected no orphans while snapshotted, got %d", len(orphans))
+		t.Fatal("unexpected", len(orphans))
 	}
 
 	// a later snapshot taken after the object was deleted does not capture it
 	path2 := filepath.Join(t.TempDir(), "snap2.sqlite")
-	if err := store.CreateSnapshot(t.Context(), path2); err != nil {
-		t.Fatal(err)
-	}
-	snapshots, err = store.ListSnapshots()
+	s2, err := store.CreateSnapshot(t.Context(), path2)
 	if err != nil {
 		t.Fatal(err)
-	} else if len(snapshots) != 2 {
-		t.Fatalf("expected 2 snapshots, got %d", len(snapshots))
-	} else if snapshots[1].ObjectCount != 0 {
-		t.Fatalf("expected second snapshot to capture no objects, got %d", snapshots[1].ObjectCount)
+	} else if s2.ObjectCount != 0 {
+		t.Fatal("unexpected", s2.ObjectCount)
 	}
-	s2 := snapshots[1]
 
-	// deleting the later snapshot leaves the object withheld by the earlier
-	// snapshot that captured it
+	// the un-uploaded second snapshot is excluded from the list
+	if snapshots, err := store.ListSnapshots(); err != nil {
+		t.Fatal(err)
+	} else if len(snapshots) != 1 {
+		t.Fatal("unexpected", len(snapshots))
+	}
+
+	// deleting the later snapshot leaves the object withheld by the earlier one
 	if err := store.DeleteSnapshot(s2.ID); err != nil {
 		t.Fatal(err)
 	}
 	if orphans, err := store.OrphanedObjects(100); err != nil {
 		t.Fatal(err)
 	} else if len(orphans) != 0 {
-		t.Fatalf("expected object still withheld by earlier snapshot, got %d", len(orphans))
+		t.Fatal("unexpected", len(orphans))
 	}
 
 	// deleting the snapshot that captured it releases the object
@@ -124,6 +129,6 @@ func TestSnapshots(t *testing.T) {
 	if orphans, err := store.OrphanedObjects(100); err != nil {
 		t.Fatal(err)
 	} else if len(orphans) != 1 || orphans[0] != objID {
-		t.Fatalf("expected orphan %v after snapshot delete, got %v", objID, orphans)
+		t.Fatal("unexpected", orphans)
 	}
 }

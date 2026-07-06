@@ -25,7 +25,7 @@ func stageUpload(t *testing.T, memSDK *testutil.MemorySDK, store *sqlite.Store, 
 	}
 
 	data := frand.Bytes(16)
-	siaObj, err := memSDK.Upload(t.Context(), bytes.NewReader(data))
+	siaObj, err := memSDK.AddObject(t.Context(), bytes.NewReader(data))
 	if err != nil {
 		t.Fatal(err)
 	}

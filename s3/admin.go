@@ -121,3 +121,9 @@ func (s *s3) handleBackupSQLite3(jc jape.Context) {
 	}
 	jc.Check("failed to backup database", s.backend.BackupSQLite3(jc.Request.Context(), req.Path))
 }
+
+// handleCreateSnapshot backs up the database, uploads it to Sia as a tagged
+// snapshot object, and records the object ID.
+func (s *s3) handleCreateSnapshot(jc jape.Context) {
+	jc.Check("failed to create snapshot", s.backend.CreateSnapshot(jc.Request.Context()))
+}

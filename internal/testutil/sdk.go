@@ -3,6 +3,7 @@ package testutil
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -37,9 +38,10 @@ type (
 		pruneSlabsCalls  int
 		remainingStorage uint64
 
+		uploadErr error // when non-nil, Upload returns this error
+
 		pinErr      error // when non-nil, PinObject returns this error
 		pinAttempts int   // number of PinObject calls observed
-
 	}
 
 	uploadedObject struct {
@@ -184,21 +186,54 @@ func (s *MemorySDK) Pinned(id types.Hash256) bool {
 	return ok
 }
 
-// Upload stores an object in memory. It is not part of the SDK interface but
-// used by tests to simulate the background upload to Sia.
-func (s *MemorySDK) Upload(_ context.Context, r io.Reader) (sdk.Object, error) {
-	data, err := io.ReadAll(r)
-	if err != nil {
-		return sdk.Object{}, err
-	}
-	obj := newTestObject()
+// Upload stores the object's data in memory keyed by its ID and records its
+// metadata. It implements the sia.SDK interface.
+func (s *MemorySDK) Upload(_ context.Context, obj *sdk.Object, r io.Reader) error {
 	s.mu.Lock()
-	s.objects[obj.ID()] = uploadedObject{
-		data: data,
-		meta: obj,
+	if s.uploadErr != nil {
+		s.mu.Unlock()
+		return s.uploadErr
 	}
 	s.mu.Unlock()
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// give the object a slab so its ID is content-derived and unique
+	setSlabs(obj, []slabs.SlabSlice{{EncryptionKey: frand.Entropy256(), Length: uint32(len(data))}})
+	s.objects[obj.ID()] = uploadedObject{data: data, meta: *obj}
+	return nil
+}
+
+// AddObject uploads data as a fresh object and returns it. It is a test
+// convenience for seeding objects, not part of the SDK interface.
+func (s *MemorySDK) AddObject(ctx context.Context, r io.Reader) (sdk.Object, error) {
+	obj := sdk.NewEmptyObject()
+	if err := s.Upload(ctx, &obj, r); err != nil {
+		return sdk.Object{}, err
+	}
 	return obj, nil
+}
+
+// SetUploadError configures the error returned by future Upload calls. Pass
+// nil to restore the default behavior.
+func (s *MemorySDK) SetUploadError(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.uploadErr = err
+}
+
+// ObjectMetadata returns the metadata recorded for an uploaded object.
+func (s *MemorySDK) ObjectMetadata(id types.Hash256) (json.RawMessage, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	o, ok := s.objects[id]
+	if !ok {
+		return nil, false
+	}
+	return o.meta.Metadata(), true
 }
 
 // SetSlabSize overrides the slab size for testing.
@@ -310,9 +345,12 @@ func (u *memoryPackedUpload) Close() error { return nil }
 
 func newTestObject() sdk.Object {
 	obj := sdk.NewEmptyObject()
-	ss := []slabs.SlabSlice{{EncryptionKey: frand.Entropy256(), Length: 1}}
-	v := reflect.ValueOf(&obj).Elem()
+	setSlabs(&obj, []slabs.SlabSlice{{EncryptionKey: frand.Entropy256(), Length: 1}})
+	return obj
+}
+
+func setSlabs(obj *sdk.Object, ss []slabs.SlabSlice) {
+	v := reflect.ValueOf(obj).Elem()
 	f := v.FieldByName("slabs")
 	reflect.NewAt(f.Type(), unsafe.Pointer(f.UnsafeAddr())).Elem().Set(reflect.ValueOf(ss))
-	return obj
 }

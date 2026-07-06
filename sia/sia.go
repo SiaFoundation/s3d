@@ -2,6 +2,8 @@ package sia
 
 import (
 	"context"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/SiaFoundation/s3d/build"
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/auth"
 	"github.com/SiaFoundation/s3d/sia/objects"
@@ -22,6 +25,7 @@ import (
 	"go.sia.tech/indexd/slabs"
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
+	"lukechampine.com/frand"
 )
 
 const (
@@ -154,6 +158,7 @@ type SDK interface {
 	Download(obj sdk.Object, rnge *s3.ObjectRange) (io.ReadCloser, error)
 	ObjectEvents(ctx context.Context, cursor slabs.Cursor, limit int) ([]sdk.ObjectEvent, error)
 	OptimalDataSize() (int64, error)
+	Upload(ctx context.Context, obj *sdk.Object, r io.Reader) error
 	UploadPacked() (PackedUpload, error)
 	PinObject(ctx context.Context, obj sdk.Object) error
 	PruneSlabs(ctx context.Context, opts ...api.URLQueryParameterOption) error
@@ -224,7 +229,11 @@ type Store interface {
 	AbortMultipartUploads(bucket string, prefix string, before time.Time, limit int) ([]AbortedUpload, error)
 	ExpireObjects(bucket string, prefix string, before time.Time, limit int) (int, []objects.OrphanedFile, error)
 
-	CreateSnapshot(ctx context.Context, destPath string) error
+	Backup(ctx context.Context, destPath string) error
+	CreateSnapshot(ctx context.Context, destPath string) (objects.Snapshot, error)
+	SetSnapshotSiaObject(id int64, objectID types.Hash256) error
+	DeleteSnapshot(id int64) error
+	DBVersion() int64
 }
 
 // New creates a new Sia backend instance.
@@ -308,18 +317,87 @@ func (s *Sia) Close() error {
 	return nil
 }
 
-// BackupSQLite3 creates a backup of the SQLite3 database at destPath and
-// records it as a snapshot so the orphan loop does not unpin data the backup
-// references. The backup uses the SQLite backup API over the store's own
-// connection, so writes are blocked for the duration of the backup but the
-// resulting snapshot is always consistent.
+// BackupSQLite3 creates a consistent backup of the SQLite3 database at destPath
+// on the local filesystem. It does not record a snapshot or upload to Sia.
 func (s *Sia) BackupSQLite3(ctx context.Context, destPath string) error {
 	if destPath == "" {
 		return errors.New("empty destination path")
 	} else if !filepath.IsAbs(destPath) {
 		return fmt.Errorf("destination path must be absolute: %q", destPath)
 	}
-	return s.store.CreateSnapshot(ctx, destPath)
+	return s.store.Backup(ctx, destPath)
+}
+
+// CreateSnapshot backs up the database to a temporary file, uploads it to Sia
+// as a tagged snapshot object, pins it, and records the object ID on the
+// snapshot. The temporary file is removed once the upload completes. On failure
+// the snapshot and any pinned object are rolled back.
+func (s *Sia) CreateSnapshot(ctx context.Context) (err error) {
+	tmp := filepath.Join(s.directory, "snapshot-"+hex.EncodeToString(frand.Bytes(8))+".tmp")
+
+	snap, err := s.store.CreateSnapshot(ctx, tmp)
+	if err != nil {
+		return fmt.Errorf("failed to create snapshot: %w", err)
+	}
+	defer s.removeBackupFile(tmp)
+
+	var pinned types.Hash256
+	defer func() {
+		if err == nil {
+			return
+		}
+		if pinned != (types.Hash256{}) {
+			if dErr := s.sdk.DeleteObject(ctx, pinned); dErr != nil && !strings.Contains(dErr.Error(), slabs.ErrObjectNotFound.Error()) {
+				s.logger.Error("failed to unpin snapshot object during rollback", zap.Stringer("objectID", &pinned), zap.Error(dErr))
+			}
+		}
+		if dErr := s.store.DeleteSnapshot(snap.ID); dErr != nil {
+			s.logger.Error("failed to roll back snapshot", zap.Int64("snapshotID", snap.ID), zap.Error(dErr))
+		}
+	}()
+
+	meta, err := json.Marshal(objects.SnapshotMetadata{
+		Type:        objects.SnapshotType,
+		CreatedAt:   snap.CreatedAt,
+		DBVersion:   s.store.DBVersion(),
+		ObjectCount: int64(snap.ObjectCount),
+		S3DVersion:  build.Version(),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to marshal snapshot metadata: %w", err)
+	}
+
+	f, err := os.Open(tmp)
+	if err != nil {
+		return fmt.Errorf("failed to open snapshot backup: %w", err)
+	}
+	defer f.Close()
+
+	obj := sdk.NewEmptyObject()
+	obj.UpdateMetadata(meta)
+	if err := s.sdk.Upload(ctx, &obj, f); err != nil {
+		return fmt.Errorf("failed to upload snapshot: %w", err)
+	}
+	pinned = obj.ID()
+
+	if err := s.sdk.PinObject(ctx, obj); err != nil {
+		return fmt.Errorf("failed to pin snapshot: %w", err)
+	}
+
+	if err := s.store.SetSnapshotSiaObject(snap.ID, obj.ID()); err != nil {
+		return fmt.Errorf("failed to record snapshot object: %w", err)
+	}
+	return nil
+}
+
+// removeBackupFile deletes a snapshot backup and its sidecar files, ignoring
+// missing files.
+func (s *Sia) removeBackupFile(path string) {
+	for _, p := range []string{path, path + "-wal", path + "-shm"} {
+		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+			s.logger.Warn("failed to remove snapshot backup file", zap.String("path", p), zap.Error(err))
+		}
+	}
 }
 
 // processOrphansLoop periodically processes orphaned objects.

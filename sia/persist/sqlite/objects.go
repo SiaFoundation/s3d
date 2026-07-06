@@ -1015,9 +1015,6 @@ func insertOrphan(tx *txn, objectID types.Hash256) error {
 			return err
 		}
 	}
-	// stamp the orphan with the current snapshot generation so any snapshot
-	// taken while the object was still live withholds it until that snapshot is
-	// deleted. an id is orphaned at most once, so OR IGNORE never conflicts.
 	res, err = tx.Exec(`INSERT OR IGNORE INTO orphaned_objects (sia_object_id, orphaned_at_gen)
 		VALUES ($1, (SELECT snapshot_generation FROM global_settings LIMIT 1))`, sqlHash256(objectID))
 	if err != nil {
