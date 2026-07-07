@@ -138,7 +138,6 @@ CREATE TABLE orphaned_objects (
     sia_object_id BLOB PRIMARY KEY,
     orphaned_at_gen INTEGER NOT NULL DEFAULT 0
 );
-CREATE INDEX orphaned_objects_gen_idx ON orphaned_objects(orphaned_at_gen);
 
 CREATE TABLE snapshots (
     id INTEGER PRIMARY KEY,

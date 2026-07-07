@@ -38,8 +38,6 @@ type (
 		pruneSlabsCalls  int
 		remainingStorage uint64
 
-		uploadErr error // when non-nil, Upload returns this error
-
 		pinErr      error // when non-nil, PinObject returns this error
 		pinAttempts int   // number of PinObject calls observed
 	}
@@ -189,12 +187,6 @@ func (s *MemorySDK) Pinned(id types.Hash256) bool {
 // Upload stores the object's data in memory keyed by its ID and records its
 // metadata. It implements the sia.SDK interface.
 func (s *MemorySDK) Upload(_ context.Context, obj *sdk.Object, r io.Reader) error {
-	s.mu.Lock()
-	if s.uploadErr != nil {
-		s.mu.Unlock()
-		return s.uploadErr
-	}
-	s.mu.Unlock()
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return err
@@ -215,14 +207,6 @@ func (s *MemorySDK) AddObject(ctx context.Context, r io.Reader) (sdk.Object, err
 		return sdk.Object{}, err
 	}
 	return obj, nil
-}
-
-// SetUploadError configures the error returned by future Upload calls. Pass
-// nil to restore the default behavior.
-func (s *MemorySDK) SetUploadError(err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.uploadErr = err
 }
 
 // ObjectMetadata returns the metadata recorded for an uploaded object.

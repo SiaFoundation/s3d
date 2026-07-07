@@ -139,14 +139,21 @@ func TestCreateSnapshot(t *testing.T) {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
 
-	// the snapshot is recorded with a sia object id
-	snapshots, err := store.ListSnapshots()
-	if err != nil {
+	// the response carries the recorded snapshot
+	var snapshot s3.Snapshot
+	if err := json.NewDecoder(resp.Body).Decode(&snapshot); err != nil {
+		t.Fatal(err)
+	} else if snapshot.SiaObjectID == (types.Hash256{}) {
+		t.Fatal("expected snapshot to have a sia object id")
+	}
+
+	// the snapshot is recorded in the store
+	if snapshots, err := store.ListSnapshots(); err != nil {
 		t.Fatal(err)
 	} else if len(snapshots) != 1 {
 		t.Fatalf("expected 1 snapshot, got %d", len(snapshots))
-	} else if snapshots[0].SiaObjectID == (types.Hash256{}) {
-		t.Fatal("expected snapshot to have a sia object id")
+	} else if snapshots[0].SiaObjectID != snapshot.SiaObjectID {
+		t.Fatal("mismatch", snapshots[0].SiaObjectID)
 	}
 }
 

@@ -9,31 +9,16 @@ import (
 
 	"github.com/SiaFoundation/s3d/build"
 	"github.com/SiaFoundation/s3d/internal/testutil"
-	"github.com/SiaFoundation/s3d/sia"
 	"github.com/SiaFoundation/s3d/sia/objects"
-	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
-	"go.uber.org/zap/zaptest"
 )
 
 func TestCreateSnapshot(t *testing.T) {
-	log := zaptest.NewLogger(t)
-	dir := t.TempDir()
-
-	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { store.Close() })
-
 	memSDK := testutil.NewMemorySDK()
-	backend, err := sia.New(t.Context(), memSDK, store, dir, sia.WithUploadDisabled(), sia.WithLogger(log))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { backend.Close() })
+	backend, store := testutil.NewBackend(t, testutil.WithSDK(memSDK))
 
 	// create a snapshot
-	if err := backend.CreateSnapshot(t.Context()); err != nil {
+	snap, err := backend.CreateSnapshot(t.Context())
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -50,8 +35,10 @@ func TestCreateSnapshot(t *testing.T) {
 		t.Fatal(err)
 	} else if len(snapshots) != 1 {
 		t.Fatal("unexpected", len(snapshots))
+	} else if snapshots[0].SiaObjectID != snap.SiaObjectID {
+		t.Fatal("mismatch", snapshots[0].SiaObjectID)
 	}
-	raw, ok := memSDK.ObjectMetadata(snapshots[0].SiaObjectID)
+	raw, ok := memSDK.ObjectMetadata(snap.SiaObjectID)
 	if !ok {
 		t.Fatal("snapshot object not found")
 	}
@@ -62,7 +49,7 @@ func TestCreateSnapshot(t *testing.T) {
 		t.Fatal("unexpected", meta.Type)
 	} else if meta.DBVersion != store.DBVersion() {
 		t.Fatal("unexpected", meta.DBVersion)
-	} else if meta.ObjectCount != int64(snapshots[0].ObjectCount) {
+	} else if meta.ObjectCount != snap.ObjectCount {
 		t.Fatal("unexpected", meta.ObjectCount)
 	} else if meta.S3DVersion != build.Version() {
 		t.Fatal("unexpected", meta.S3DVersion)
@@ -71,7 +58,7 @@ func TestCreateSnapshot(t *testing.T) {
 	}
 
 	// no temporary backup files are left behind
-	entries, err := os.ReadDir(dir)
+	entries, err := os.ReadDir(backend.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +70,7 @@ func TestCreateSnapshot(t *testing.T) {
 
 	// a pin failure rolls the snapshot and object back
 	memSDK.SetPinError(errors.New("pin failed"))
-	if err := backend.CreateSnapshot(t.Context()); err == nil {
+	if _, err := backend.CreateSnapshot(t.Context()); err == nil {
 		t.Fatal("expected error")
 	}
 	if snapshots, err := store.ListSnapshots(); err != nil {

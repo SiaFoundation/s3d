@@ -2,8 +2,6 @@ package sqlite
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -44,12 +42,9 @@ func TestSnapshots(t *testing.T) {
 	}
 
 	// create a snapshot
-	path := filepath.Join(t.TempDir(), "snap.sqlite")
-	s1, err := store.CreateSnapshot(t.Context(), path)
+	s1, err := store.CreateSnapshot()
 	if err != nil {
 		t.Fatal(err)
-	} else if _, err := os.Stat(path); err != nil {
-		t.Fatal("backup file not created", err)
 	} else if s1.ID == 0 {
 		t.Fatal("expected non-zero snapshot id")
 	} else if s1.ObjectCount != 1 {
@@ -96,8 +91,7 @@ func TestSnapshots(t *testing.T) {
 	}
 
 	// a later snapshot taken after the object was deleted does not capture it
-	path2 := filepath.Join(t.TempDir(), "snap2.sqlite")
-	s2, err := store.CreateSnapshot(t.Context(), path2)
+	s2, err := store.CreateSnapshot()
 	if err != nil {
 		t.Fatal(err)
 	} else if s2.ObjectCount != 0 {

@@ -827,8 +827,8 @@ func (s *Store) OrphanedObjects(limit int) (ids []types.Hash256, err error) {
 		ids = ids[:0] // reuse same slice if transaction retries
 		rows, err := tx.Query(`
 			SELECT sia_object_id FROM orphaned_objects
-			WHERE orphaned_at_gen < COALESCE((SELECT MIN(gen) FROM snapshots), $1)
-			LIMIT $2`, int64(math.MaxInt64), limit)
+			WHERE NOT EXISTS (SELECT 1 FROM snapshots WHERE gen <= orphaned_at_gen)
+			LIMIT $1`, limit)
 		if err != nil {
 			return err
 		}

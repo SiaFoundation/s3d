@@ -1625,7 +1625,7 @@ func TestOrphanLifecycle(t *testing.T) {
 	}
 
 	// snapshot S1 captures both objects, then delete A
-	if err := backend.CreateSnapshot(t.Context()); err != nil {
+	if _, err := backend.CreateSnapshot(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := store.DeleteObject(testutil.AccessKeyID, bucket, s3.ObjectID{Key: "a"}); err != nil {
@@ -1643,7 +1643,7 @@ func TestOrphanLifecycle(t *testing.T) {
 
 	// snapshot S2 is taken after A was deleted, then delete B.
 	// memSDK now holds A, B, snap1 and snap2, so 4 total
-	if err := backend.CreateSnapshot(t.Context()); err != nil {
+	if _, err := backend.CreateSnapshot(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := store.DeleteObject(testutil.AccessKeyID, bucket, s3.ObjectID{Key: "b"}); err != nil {

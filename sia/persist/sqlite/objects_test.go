@@ -1095,9 +1095,8 @@ func TestOrphanedObjects(t *testing.T) {
 
 	// snapshot the object while "b" still references it, so the generation it
 	// pins withholds the object once its last reference is gone
-	if _, err := store.db.Exec("UPDATE global_settings SET snapshot_generation = 1"); err != nil {
-		t.Fatal(err)
-	} else if _, err := store.db.Exec("INSERT INTO snapshots (id, created_at, gen, object_count) VALUES (1, 0, 1, 1)"); err != nil {
+	snap, err := store.CreateSnapshot()
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -1115,7 +1114,7 @@ func TestOrphanedObjects(t *testing.T) {
 	}
 
 	// removing the snapshot raises the floor and releases the orphan
-	if _, err := store.db.Exec("DELETE FROM snapshots WHERE id = 1"); err != nil {
+	if err := store.DeleteSnapshot(snap.ID); err != nil {
 		t.Fatal(err)
 	}
 
