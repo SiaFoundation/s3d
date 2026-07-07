@@ -230,7 +230,7 @@ type Store interface {
 	ExpireObjects(bucket string, prefix string, before time.Time, limit int) (int, []objects.OrphanedFile, error)
 
 	Backup(ctx context.Context, destPath string) error
-	CreateSnapshot(ctx context.Context, destPath string) (objects.Snapshot, error)
+	CreateSnapshot() (objects.Snapshot, error)
 	SetSnapshotSiaObject(id int64, objectID types.Hash256) error
 	DeleteSnapshot(id int64) error
 	DBVersion() int64
@@ -328,18 +328,15 @@ func (s *Sia) BackupSQLite3(ctx context.Context, destPath string) error {
 	return s.store.Backup(ctx, destPath)
 }
 
-// CreateSnapshot backs up the database to a temporary file, uploads it to Sia
-// as a tagged snapshot object, pins it, and records the object ID on the
-// snapshot. The temporary file is removed once the upload completes. On failure
-// the snapshot and any pinned object are rolled back.
-func (s *Sia) CreateSnapshot(ctx context.Context) (err error) {
-	tmp := filepath.Join(s.directory, "snapshot-"+hex.EncodeToString(frand.Bytes(8))+".tmp")
-
-	snap, err := s.store.CreateSnapshot(ctx, tmp)
+// CreateSnapshot records a snapshot, backs up the database to a temporary
+// file, uploads it to Sia as a tagged snapshot object, pins it, and records
+// the object ID on the snapshot. The temporary file is removed once the upload
+// completes. On failure the snapshot and any pinned object are rolled back.
+func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
+	snap, err := s.store.CreateSnapshot()
 	if err != nil {
-		return fmt.Errorf("failed to create snapshot: %w", err)
+		return s3.Snapshot{}, fmt.Errorf("failed to create snapshot: %w", err)
 	}
-	defer s.removeBackupFile(tmp)
 
 	var pinned types.Hash256
 	defer func() {
@@ -347,7 +344,7 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (err error) {
 			return
 		}
 		if pinned != (types.Hash256{}) {
-			if dErr := s.sdk.DeleteObject(ctx, pinned); dErr != nil && !strings.Contains(dErr.Error(), slabs.ErrObjectNotFound.Error()) {
+			if dErr := s.sdk.DeleteObject(ctx, pinned); dErr != nil && !isObjectNotFound(dErr) {
 				s.logger.Error("failed to unpin snapshot object during rollback", zap.Stringer("objectID", &pinned), zap.Error(dErr))
 			}
 		}
@@ -356,48 +353,60 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (err error) {
 		}
 	}()
 
+	tmp := filepath.Join(s.directory, "snapshot-"+hex.EncodeToString(frand.Bytes(8))+".tmp")
+	if err := s.store.Backup(ctx, tmp); err != nil {
+		return s3.Snapshot{}, fmt.Errorf("failed to create backup: %w", err)
+	}
+	defer func() {
+		if rErr := os.Remove(tmp); rErr != nil && !errors.Is(rErr, os.ErrNotExist) {
+			s.logger.Warn("failed to remove snapshot backup file", zap.String("path", tmp), zap.Error(rErr))
+		}
+	}()
+
 	meta, err := json.Marshal(objects.SnapshotMetadata{
 		Type:        objects.SnapshotType,
 		CreatedAt:   snap.CreatedAt,
 		DBVersion:   s.store.DBVersion(),
-		ObjectCount: int64(snap.ObjectCount),
+		ObjectCount: snap.ObjectCount,
 		S3DVersion:  build.Version(),
 	})
 	if err != nil {
-		return fmt.Errorf("failed to marshal snapshot metadata: %w", err)
+		return s3.Snapshot{}, fmt.Errorf("failed to marshal snapshot metadata: %w", err)
 	}
 
 	f, err := os.Open(tmp)
 	if err != nil {
-		return fmt.Errorf("failed to open snapshot backup: %w", err)
+		return s3.Snapshot{}, fmt.Errorf("failed to open snapshot backup: %w", err)
 	}
 	defer f.Close()
 
 	obj := sdk.NewEmptyObject()
 	obj.UpdateMetadata(meta)
 	if err := s.sdk.Upload(ctx, &obj, f); err != nil {
-		return fmt.Errorf("failed to upload snapshot: %w", err)
+		return s3.Snapshot{}, fmt.Errorf("failed to upload snapshot: %w", err)
 	}
 	pinned = obj.ID()
 
 	if err := s.sdk.PinObject(ctx, obj); err != nil {
-		return fmt.Errorf("failed to pin snapshot: %w", err)
+		return s3.Snapshot{}, fmt.Errorf("failed to pin snapshot: %w", err)
 	}
 
-	if err := s.store.SetSnapshotSiaObject(snap.ID, obj.ID()); err != nil {
-		return fmt.Errorf("failed to record snapshot object: %w", err)
+	if err := s.store.SetSnapshotSiaObject(snap.ID, pinned); err != nil {
+		return s3.Snapshot{}, fmt.Errorf("failed to record snapshot object: %w", err)
 	}
-	return nil
+	return s3.Snapshot{
+		ID:          snap.ID,
+		CreatedAt:   snap.CreatedAt,
+		SiaObjectID: pinned,
+		ObjectCount: snap.ObjectCount,
+	}, nil
 }
 
-// removeBackupFile deletes a snapshot backup and its sidecar files, ignoring
-// missing files.
-func (s *Sia) removeBackupFile(path string) {
-	for _, p := range []string{path, path + "-wal", path + "-shm"} {
-		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
-			s.logger.Warn("failed to remove snapshot backup file", zap.String("path", p), zap.Error(err))
-		}
-	}
+// isObjectNotFound reports whether err indicates the object does not exist on
+// the indexer. The SDK transports errors over HTTP, so the sentinel is matched
+// by string.
+func isObjectNotFound(err error) bool {
+	return err != nil && strings.Contains(err.Error(), slabs.ErrObjectNotFound.Error())
 }
 
 // processOrphansLoop periodically processes orphaned objects.
@@ -456,7 +465,7 @@ func (s *Sia) ProcessOrphans(ctx context.Context) {
 			default:
 			}
 
-			if err := s.sdk.DeleteObject(ctx, id); err != nil && !strings.Contains(err.Error(), slabs.ErrObjectNotFound.Error()) {
+			if err := s.sdk.DeleteObject(ctx, id); err != nil && !isObjectNotFound(err) {
 				s.logger.Error("failed to unpin object from indexer", zap.Error(err), zap.Stringer("objectID", &id))
 				return
 			}

@@ -326,7 +326,7 @@ type Backend interface {
 	// CreateSnapshot backs up the database, uploads it to Sia as a tagged
 	// snapshot object, and records the object ID. The backup is written to a
 	// temporary file and removed after upload.
-	CreateSnapshot(ctx context.Context) error
+	CreateSnapshot(ctx context.Context) (Snapshot, error)
 }
 
 type s3 struct {

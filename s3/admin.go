@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/SiaFoundation/s3d/internal/prometheus"
+	"go.sia.tech/core/types"
 	"go.sia.tech/jape"
 )
 
@@ -17,6 +19,15 @@ type BackupSQLite3Request struct {
 	// Path is the absolute filesystem path where the backup file will be
 	// written. It must not already exist.
 	Path string `json:"path"`
+}
+
+// Snapshot describes a database backup uploaded to Sia. It is returned by the
+// [POST] /snapshots endpoint.
+type Snapshot struct {
+	ID          int64         `json:"id"`
+	CreatedAt   time.Time     `json:"createdAt"`
+	SiaObjectID types.Hash256 `json:"siaObjectID"`
+	ObjectCount int64         `json:"objectCount"`
 }
 
 // UploadStats contains statistics about the background upload pipeline.
@@ -125,5 +136,9 @@ func (s *s3) handleBackupSQLite3(jc jape.Context) {
 // handleCreateSnapshot backs up the database, uploads it to Sia as a tagged
 // snapshot object, and records the object ID.
 func (s *s3) handleCreateSnapshot(jc jape.Context) {
-	jc.Check("failed to create snapshot", s.backend.CreateSnapshot(jc.Request.Context()))
+	snapshot, err := s.backend.CreateSnapshot(jc.Request.Context())
+	if jc.Check("failed to create snapshot", err) != nil {
+		return
+	}
+	jc.Encode(snapshot)
 }
