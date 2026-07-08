@@ -84,7 +84,9 @@ paths:
         online backup API. Unlike copying the database file directly, the
         backup is a consistent snapshot even while objects are being written.
         The backup only contains the metadata database, not the buffered
-        objects that have not yet been uploaded to the Sia network.
+        objects that have not yet been uploaded to the Sia network. Database
+        writes are blocked for the duration of the backup, so this can be
+        long-running on large databases.
       operationId: backupSQLite3
       requestBody:
         required: true
@@ -109,6 +111,10 @@ paths:
         Backs up the SQLite metadata database and uploads it to the Sia network
         as a tagged, pinned object so it can be recovered later. Objects that a
         snapshot references are not unpinned until the snapshot is deleted.
+        Database writes are blocked for the duration of the backup, so this can
+        be long-running on large databases. The snapshot contains all S3
+        credentials. Its confidentiality relies on the client-side encryption
+        the SDK applies to every upload.
       operationId: createSnapshot
       responses:
         "200":

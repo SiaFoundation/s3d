@@ -286,6 +286,20 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		sia.logger.Info("removed orphaned uploads", zap.Int("removed", deleted))
 	}
 
+	// remove snapshot backups left behind by a crash
+	tmpFiles, err := filepath.Glob(filepath.Join(sia.directory, "snapshot-*.tmp*"))
+	if err != nil {
+		return nil, fmt.Errorf("failed to list leftover snapshot backups: %w", err)
+	}
+	for _, fp := range tmpFiles {
+		if err := os.Remove(fp); err != nil {
+			return nil, fmt.Errorf("failed to remove leftover snapshot backup %q: %w", fp, err)
+		}
+	}
+	if len(tmpFiles) > 0 {
+		sia.logger.Info("removed leftover snapshot backups", zap.Int("removed", len(tmpFiles)))
+	}
+
 	launchBgLoop := func(loopFn func(context.Context)) error {
 		ctx, cancel, err := sia.tg.AddContext(ctx)
 		if err != nil {
@@ -344,7 +358,9 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 			return
 		}
 		if pinned != (types.Hash256{}) {
-			if dErr := s.sdk.DeleteObject(ctx, pinned); dErr != nil && !isObjectNotFound(dErr) {
+			// the unpin must run even when the failure is a cancelled request
+			// context, otherwise the object stays pinned with no local record
+			if dErr := s.sdk.DeleteObject(context.WithoutCancel(ctx), pinned); dErr != nil && !isObjectNotFound(dErr) {
 				s.logger.Error("failed to unpin snapshot object during rollback", zap.Stringer("objectID", &pinned), zap.Error(dErr))
 			}
 		}

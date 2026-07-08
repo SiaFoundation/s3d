@@ -67,7 +67,9 @@ func (s *Store) ListSnapshots() (snapshots []objects.Snapshot, err error) {
 
 // DeleteSnapshot removes a snapshot from the store. Objects orphaned during its
 // lifetime that no longer fall under any surviving snapshot's generation become
-// eligible for unpinning on the next orphan loop.
+// eligible for unpinning on the next orphan loop. It does not unpin the
+// snapshot's backup object from the Sia network. Callers exposing snapshot
+// deletion must unpin that object themselves or it leaks.
 func (s *Store) DeleteSnapshot(snapshotID int64) error {
 	return s.transaction(func(tx *txn) error {
 		res, err := tx.Exec("DELETE FROM snapshots WHERE id = $1", snapshotID)

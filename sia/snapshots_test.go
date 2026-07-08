@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/SiaFoundation/s3d/build"
@@ -57,13 +57,13 @@ func TestCreateSnapshot(t *testing.T) {
 		t.Fatal("expected non-zero created at")
 	}
 
-	// no temporary backup files are left behind
+	// no temporary backup files or sidecars are left behind
 	entries, err := os.ReadDir(backend.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, e := range entries {
-		if filepath.Ext(e.Name()) == ".tmp" {
+		if strings.HasPrefix(e.Name(), "snapshot-") {
 			t.Fatal("leftover temp file", e.Name())
 		}
 	}
