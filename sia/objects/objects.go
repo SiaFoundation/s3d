@@ -89,6 +89,10 @@ type OrphanedFile struct {
 // recovery can identify snapshots among all account objects.
 const SnapshotType = "s3d-snapshot"
 
+// SnapshotEncodingGzip is the encoding recorded for snapshots whose backup is
+// gzip compressed before upload.
+const SnapshotEncodingGzip = "gzip"
+
 // Snapshot describes a database backup uploaded to Sia.
 type Snapshot struct {
 	ID          int64
@@ -103,6 +107,7 @@ type SnapshotMetadata struct {
 	Type        string    `json:"type"`
 	CreatedAt   time.Time `json:"createdAt"`
 	DBVersion   int64     `json:"dbVersion"`
+	Encoding    string    `json:"encoding"`
 	ObjectCount int64     `json:"objectCount"`
 	S3DVersion  string    `json:"s3dVersion"`
 }

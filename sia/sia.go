@@ -1,6 +1,7 @@
 package sia
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -231,8 +232,9 @@ type Store interface {
 
 	Backup(ctx context.Context, destPath string) error
 	CreateSnapshot() (objects.Snapshot, error)
-	SetSnapshotSiaObject(id int64, objectID types.Hash256) error
+	MarkSnapshotPinned(id int64, objectID types.Hash256) error
 	DeleteSnapshot(id int64) error
+	DeleteSnapshotsBySiaObject(objectIDs []types.Hash256) (int64, error)
 	DBVersion() int64
 }
 
@@ -331,21 +333,11 @@ func (s *Sia) Close() error {
 	return nil
 }
 
-// BackupSQLite3 creates a consistent backup of the SQLite3 database at destPath
-// on the local filesystem. It does not record a snapshot or upload to Sia.
-func (s *Sia) BackupSQLite3(ctx context.Context, destPath string) error {
-	if destPath == "" {
-		return errors.New("empty destination path")
-	} else if !filepath.IsAbs(destPath) {
-		return fmt.Errorf("destination path must be absolute: %q", destPath)
-	}
-	return s.store.Backup(ctx, destPath)
-}
-
 // CreateSnapshot records a snapshot, backs up the database to a temporary
-// file, uploads it to Sia as a tagged snapshot object, pins it, and records
-// the object ID on the snapshot. The temporary file is removed once the upload
-// completes. On failure the snapshot and any pinned object are rolled back.
+// file, compresses it, uploads it to Sia as a tagged snapshot object, pins it,
+// and records the object ID on the snapshot. The temporary files are removed
+// once the upload completes. On failure the snapshot and any pinned object are
+// rolled back.
 func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 	snap, err := s.store.CreateSnapshot()
 	if err != nil {
@@ -369,20 +361,31 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 		}
 	}()
 
+	removeFile := func(path string) {
+		if rErr := os.Remove(path); rErr != nil && !errors.Is(rErr, os.ErrNotExist) {
+			s.logger.Warn("failed to remove snapshot backup file", zap.String("path", path), zap.Error(rErr))
+		}
+	}
+
 	tmp := filepath.Join(s.directory, "snapshot-"+hex.EncodeToString(frand.Bytes(8))+".tmp")
 	if err := s.store.Backup(ctx, tmp); err != nil {
 		return s3.Snapshot{}, fmt.Errorf("failed to create backup: %w", err)
 	}
-	defer func() {
-		if rErr := os.Remove(tmp); rErr != nil && !errors.Is(rErr, os.ErrNotExist) {
-			s.logger.Warn("failed to remove snapshot backup file", zap.String("path", tmp), zap.Error(rErr))
-		}
-	}()
+	defer removeFile(tmp)
+
+	// compress the backup before upload since database files compress well
+	// and Sia storage is paid per byte
+	tmpGz := tmp + ".gz"
+	if err := gzipFile(tmp, tmpGz); err != nil {
+		return s3.Snapshot{}, fmt.Errorf("failed to compress backup: %w", err)
+	}
+	defer removeFile(tmpGz)
 
 	meta, err := json.Marshal(objects.SnapshotMetadata{
 		Type:        objects.SnapshotType,
 		CreatedAt:   snap.CreatedAt,
 		DBVersion:   s.store.DBVersion(),
+		Encoding:    objects.SnapshotEncodingGzip,
 		ObjectCount: snap.ObjectCount,
 		S3DVersion:  build.Version(),
 	})
@@ -390,7 +393,7 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 		return s3.Snapshot{}, fmt.Errorf("failed to marshal snapshot metadata: %w", err)
 	}
 
-	f, err := os.Open(tmp)
+	f, err := os.Open(tmpGz)
 	if err != nil {
 		return s3.Snapshot{}, fmt.Errorf("failed to open snapshot backup: %w", err)
 	}
@@ -407,7 +410,7 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 		return s3.Snapshot{}, fmt.Errorf("failed to pin snapshot: %w", err)
 	}
 
-	if err := s.store.SetSnapshotSiaObject(snap.ID, pinned); err != nil {
+	if err := s.store.MarkSnapshotPinned(snap.ID, pinned); err != nil {
 		return s3.Snapshot{}, fmt.Errorf("failed to record snapshot object: %w", err)
 	}
 	return s3.Snapshot{
@@ -416,6 +419,29 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 		SiaObjectID: pinned,
 		ObjectCount: snap.ObjectCount,
 	}, nil
+}
+
+// gzipFile compresses the file at src into a new file at dst.
+func gzipFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("failed to open source: %w", err)
+	}
+	defer in.Close()
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return fmt.Errorf("failed to create destination: %w", err)
+	}
+	defer out.Close()
+
+	gw := gzip.NewWriter(out)
+	if _, err := io.Copy(gw, in); err != nil {
+		return fmt.Errorf("failed to compress: %w", err)
+	} else if err := gw.Close(); err != nil {
+		return fmt.Errorf("failed to flush compressed data: %w", err)
+	}
+	return out.Close()
 }
 
 // isObjectNotFound reports whether err indicates the object does not exist on
@@ -601,9 +627,10 @@ func (s *Sia) syncMetadata(ctx context.Context) { //nolint:revive
 		}
 
 		var batch []objects.SiaObject
+		var deletedIDs []types.Hash256
 		for _, ev := range events {
 			if ev.Deleted {
-				s.logger.Debug("skipping deleted object event", zap.Stringer("objectID", &ev.Key))
+				deletedIDs = append(deletedIDs, ev.Key)
 				continue
 			} else if ev.Object == nil {
 				s.logger.Warn("skipping event with nil object", zap.Stringer("objectID", &ev.Key))
@@ -621,6 +648,18 @@ func (s *Sia) syncMetadata(ctx context.Context) { //nolint:revive
 				break
 			}
 			synced += int(n)
+		}
+
+		// drop snapshots whose backup object was deleted on the indexer so
+		// they stop withholding orphans
+		if len(deletedIDs) > 0 {
+			n, err := s.store.DeleteSnapshotsBySiaObject(deletedIDs)
+			if err != nil {
+				s.logger.Error("failed to delete snapshots for deleted objects", zap.Error(err))
+				break
+			} else if n > 0 {
+				s.logger.Info("deleted snapshots for deleted objects", zap.Int64("deleted", n))
+			}
 		}
 
 		// advance the cursor to the last event

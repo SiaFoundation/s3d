@@ -57,7 +57,7 @@ func TestSnapshots(t *testing.T) {
 	// an uploaded snapshot is listed once its object id is recorded
 	var siaObjectID types.Hash256
 	frand.Read(siaObjectID[:])
-	if err := store.SetSnapshotSiaObject(s1.ID, siaObjectID); err != nil {
+	if err := store.MarkSnapshotPinned(s1.ID, siaObjectID); err != nil {
 		t.Fatal(err)
 	}
 	if snapshots, err := store.ListSnapshots(); err != nil {
@@ -71,7 +71,7 @@ func TestSnapshots(t *testing.T) {
 	}
 
 	// setting the object id on a missing snapshot reports not found
-	if err := store.SetSnapshotSiaObject(s1.ID+100, siaObjectID); !errors.Is(err, objects.ErrSnapshotNotFound) {
+	if err := store.MarkSnapshotPinned(s1.ID+100, siaObjectID); !errors.Is(err, objects.ErrSnapshotNotFound) {
 		t.Fatal("unexpected", err)
 	}
 
@@ -115,9 +115,18 @@ func TestSnapshots(t *testing.T) {
 		t.Fatal("unexpected", len(orphans))
 	}
 
-	// deleting the snapshot that captured it releases the object
-	if err := store.DeleteSnapshot(s1.ID); err != nil {
+	// deleting snapshots by an unknown sia object id removes nothing
+	if n, err := store.DeleteSnapshotsBySiaObject([]types.Hash256{frand.Entropy256()}); err != nil {
 		t.Fatal(err)
+	} else if n != 0 {
+		t.Fatal("unexpected", n)
+	}
+
+	// deleting the snapshot that captured it by object id releases the object
+	if n, err := store.DeleteSnapshotsBySiaObject([]types.Hash256{siaObjectID}); err != nil {
+		t.Fatal(err)
+	} else if n != 1 {
+		t.Fatal("unexpected", n)
 	}
 	store.assertCount(0, "snapshots")
 	if orphans, err := store.OrphanedObjects(100); err != nil {

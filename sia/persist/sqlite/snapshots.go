@@ -9,11 +9,11 @@ import (
 
 // CreateSnapshot bumps the snapshot generation and records a snapshot of the
 // current uploaded object count. The Sia object ID is filled in later with
-// SetSnapshotSiaObject once the backup is uploaded.
+// MarkSnapshotPinned once the backup is uploaded.
 func (s *Store) CreateSnapshot() (snap objects.Snapshot, err error) {
 	err = s.transaction(func(tx *txn) error {
 		var gen int64
-		if err := tx.QueryRow("UPDATE global_settings SET snapshot_generation = snapshot_generation + 1 RETURNING snapshot_generation").Scan(&gen); err != nil {
+		if err := tx.QueryRow("UPDATE global_settings SET snapshot_gen = snapshot_gen + 1 RETURNING snapshot_gen").Scan(&gen); err != nil {
 			return err
 		}
 		return tx.QueryRow(`
@@ -24,8 +24,8 @@ func (s *Store) CreateSnapshot() (snap objects.Snapshot, err error) {
 	return
 }
 
-// SetSnapshotSiaObject records the Sia object ID for an uploaded snapshot.
-func (s *Store) SetSnapshotSiaObject(id int64, objectID types.Hash256) error {
+// MarkSnapshotPinned records the Sia object ID for an uploaded snapshot.
+func (s *Store) MarkSnapshotPinned(id int64, objectID types.Hash256) error {
 	return s.transaction(func(tx *txn) error {
 		res, err := tx.Exec("UPDATE snapshots SET sia_object_id = $1 WHERE id = $2", sqlHash256(objectID), id)
 		if err != nil {
@@ -83,4 +83,32 @@ func (s *Store) DeleteSnapshot(snapshotID int64) error {
 		}
 		return nil
 	})
+}
+
+// DeleteSnapshotsBySiaObject removes snapshots whose backup object matches one
+// of the given Sia object IDs and returns the number of snapshots removed.
+func (s *Store) DeleteSnapshotsBySiaObject(objectIDs []types.Hash256) (deleted int64, err error) {
+	err = s.transaction(func(tx *txn) error {
+		deleted = 0 // reset per transaction attempt
+
+		stmt, err := tx.Prepare("DELETE FROM snapshots WHERE sia_object_id = $1")
+		if err != nil {
+			return err
+		}
+		defer stmt.Close()
+
+		for _, id := range objectIDs {
+			res, err := stmt.Exec(sqlHash256(id))
+			if err != nil {
+				return err
+			}
+			n, err := res.RowsAffected()
+			if err != nil {
+				return err
+			}
+			deleted += n
+		}
+		return nil
+	})
+	return
 }

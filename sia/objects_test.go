@@ -970,6 +970,15 @@ func TestSyncMetadata(t *testing.T) {
 	// inject a deleted event followed by a matching update event
 	eventTime := time.Now().Truncate(time.Second)
 	deletedKey := stypes.Hash256{1, 2, 3}
+
+	// record a snapshot whose backup object matches the deleted event
+	snap, err := store.CreateSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	} else if err := store.MarkSnapshotPinned(snap.ID, deletedKey); err != nil {
+		t.Fatal(err)
+	}
+
 	memSDK.SetEvents([]sdk.ObjectEvent{
 		{
 			Key:       deletedKey,
@@ -994,6 +1003,13 @@ func TestSyncMetadata(t *testing.T) {
 	}
 	if cursor.Key != sealed.ID() {
 		t.Fatalf("expected cursor key %v, got %v", sealed.ID(), cursor.Key)
+	}
+
+	// the deleted event removed the snapshot referencing the deleted object
+	if snapshots, err := store.ListSnapshots(); err != nil {
+		t.Fatal(err)
+	} else if len(snapshots) != 0 {
+		t.Fatal("unexpected", len(snapshots))
 	}
 
 	// the object's sia_object should have been re-sealed by the sync
