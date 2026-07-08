@@ -176,7 +176,7 @@ CREATE TABLE global_settings (
 	indexer_url TEXT,
 	last_sync_at INTEGER NOT NULL DEFAULT 0,
 	last_sync_key BLOB NOT NULL DEFAULT X'0000000000000000000000000000000000000000000000000000000000000000',
-	snapshot_generation INTEGER NOT NULL DEFAULT 0,
+	snapshot_gen INTEGER NOT NULL DEFAULT 0,
 	-- app_key and indexer_url are always set or nulled together
 	CHECK ((app_key IS NULL AND indexer_url IS NULL) OR (app_key IS NOT NULL AND indexer_url IS NOT NULL))
 );

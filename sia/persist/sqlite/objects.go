@@ -1016,7 +1016,7 @@ func insertOrphan(tx *txn, objectID types.Hash256) error {
 		}
 	}
 	res, err = tx.Exec(`INSERT OR IGNORE INTO orphaned_objects (sia_object_id, orphaned_at_gen)
-		VALUES ($1, (SELECT snapshot_generation FROM global_settings LIMIT 1))`, sqlHash256(objectID))
+		VALUES ($1, (SELECT snapshot_gen FROM global_settings LIMIT 1))`, sqlHash256(objectID))
 	if err != nil {
 		return err
 	}

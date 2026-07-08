@@ -361,7 +361,7 @@ DROP TABLE object_parts_backup;`)
 				gen INTEGER NOT NULL DEFAULT 0,
 				object_count INTEGER NOT NULL DEFAULT 0
 			);
-			ALTER TABLE global_settings ADD COLUMN snapshot_generation INTEGER NOT NULL DEFAULT 0;
+			ALTER TABLE global_settings ADD COLUMN snapshot_gen INTEGER NOT NULL DEFAULT 0;
 			ALTER TABLE orphaned_objects ADD COLUMN orphaned_at_gen INTEGER NOT NULL DEFAULT 0;
 			CREATE INDEX orphaned_objects_gen_idx ON orphaned_objects(orphaned_at_gen);`)
 		return err

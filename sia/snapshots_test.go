@@ -1,8 +1,11 @@
 package sia_test
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -49,12 +52,30 @@ func TestCreateSnapshot(t *testing.T) {
 		t.Fatal("unexpected", meta.Type)
 	} else if meta.DBVersion != store.DBVersion() {
 		t.Fatal("unexpected", meta.DBVersion)
+	} else if meta.Encoding != objects.SnapshotEncodingGzip {
+		t.Fatal("unexpected", meta.Encoding)
 	} else if meta.ObjectCount != snap.ObjectCount {
 		t.Fatal("unexpected", meta.ObjectCount)
 	} else if meta.S3DVersion != build.Version() {
 		t.Fatal("unexpected", meta.S3DVersion)
 	} else if meta.CreatedAt.IsZero() {
 		t.Fatal("expected non-zero created at")
+	}
+
+	// the uploaded backup decompresses to a SQLite database
+	data, ok := memSDK.ObjectData(snap.SiaObjectID)
+	if !ok {
+		t.Fatal("snapshot object not found")
+	}
+	gz, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := io.ReadAll(gz)
+	if err != nil {
+		t.Fatal(err)
+	} else if !bytes.HasPrefix(db, []byte("SQLite format 3\x00")) {
+		t.Fatal("unexpected backup header")
 	}
 
 	// no temporary backup files or sidecars are left behind

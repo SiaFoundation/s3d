@@ -209,6 +209,17 @@ func (s *MemorySDK) AddObject(ctx context.Context, r io.Reader) (sdk.Object, err
 	return obj, nil
 }
 
+// ObjectData returns the uploaded data for an object.
+func (s *MemorySDK) ObjectData(id types.Hash256) ([]byte, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	o, ok := s.objects[id]
+	if !ok {
+		return nil, false
+	}
+	return o.data, true
+}
+
 // ObjectMetadata returns the metadata recorded for an uploaded object.
 func (s *MemorySDK) ObjectMetadata(id types.Hash256) (json.RawMessage, bool) {
 	s.mu.Lock()
