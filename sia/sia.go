@@ -630,7 +630,7 @@ func (s *Sia) syncMetadata(ctx context.Context) { //nolint:revive
 				processed++
 				continue
 			} else if isSnapshotObject(ev.Object) {
-				if !s.reconcileSnapshotObject(ctx, ev.Key) {
+				if !s.confirmSnapshotObject(ctx, ev.Key) {
 					break
 				}
 				processed++
@@ -694,12 +694,12 @@ func isSnapshotObject(obj *sdk.Object) bool {
 	return meta.Type == objects.SnapshotType
 }
 
-// reconcileSnapshotObject unpins a snapshot backup object that has no local
+// confirmSnapshotObject unpins a snapshot backup object that has no local
 // record, which happens when a snapshot crashes after pinning its backup but
 // before recording the object ID. It reports whether the event was handled.
 // While a snapshot upload is in flight its object may not be recorded yet, so
 // reconciliation is deferred until no upload is running.
-func (s *Sia) reconcileSnapshotObject(ctx context.Context, objectID types.Hash256) bool {
+func (s *Sia) confirmSnapshotObject(ctx context.Context, objectID types.Hash256) bool {
 	known, inFlight, err := s.store.CheckSnapshotObject(objectID)
 	if err != nil {
 		s.logger.Error("failed to check snapshot object", zap.Stringer("objectID", &objectID), zap.Error(err))
