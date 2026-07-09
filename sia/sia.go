@@ -426,6 +426,10 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 		return s3.Snapshot{}, fmt.Errorf("failed to pin snapshot: %w", err)
 	}
 
+	// NOTE: a failure between pinning the object and marking it pinned is being cleaned
+	// up by the sync loop, if we encounter a pinned snapshot without a corresponding
+	// record in the database, the object is unpinned.
+
 	if err := s.store.MarkSnapshotPinned(snap.ID, pinned); err != nil {
 		return s3.Snapshot{}, fmt.Errorf("failed to record snapshot object: %w", err)
 	}
