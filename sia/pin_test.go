@@ -20,10 +20,6 @@ import (
 func stageUpload(t *testing.T, memSDK *testutil.MemorySDK, store *sqlite.Store, bucket, name string, pinBefore time.Time) (siaID [32]byte) {
 	t.Helper()
 
-	if err := store.CreateBucket(testutil.AccessKeyID, bucket); err != nil {
-		t.Fatal(err)
-	}
-
 	data := frand.Bytes(16)
 	siaObj, err := memSDK.AddObject(t.Context(), bytes.NewReader(data))
 	if err != nil {
@@ -53,6 +49,9 @@ func TestPinLoopRetriesOnFailure(t *testing.T) {
 		bucket = "bucket"
 		name   = "obj"
 	)
+	if err := store.CreateBucket(testutil.AccessKeyID, bucket); err != nil {
+		t.Fatal(err)
+	}
 	stageUpload(t, memSDK, store, bucket, name, time.Now().Add(time.Hour))
 
 	memSDK.SetPinError(errors.New("indexer unavailable"))
@@ -105,6 +104,9 @@ func TestPinLoopDemotesExpiredUploads(t *testing.T) {
 		bucket = "bucket"
 		name   = "obj"
 	)
+	if err := store.CreateBucket(testutil.AccessKeyID, bucket); err != nil {
+		t.Fatal(err)
+	}
 	stageUpload(t, memSDK, store, bucket, name, time.Now().Add(-time.Minute))
 
 	backend.PinObjects(t.Context())
@@ -164,6 +166,9 @@ func TestPinLoopPinsCopyAfterSourceDeleted(t *testing.T) {
 		srcName = "src"
 		dstName = "dst"
 	)
+	if err := store.CreateBucket(testutil.AccessKeyID, bucket); err != nil {
+		t.Fatal(err)
+	}
 	stageUpload(t, memSDK, store, bucket, srcName, time.Now().Add(time.Hour))
 
 	// copy src -> dst while src is uploaded but not yet pinned

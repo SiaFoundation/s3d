@@ -176,11 +176,17 @@ func (s *MemorySDK) ObjectCount() int {
 	return len(s.objects)
 }
 
-// Pinned reports whether the object with the given id is still stored in the SDK.
-func (s *MemorySDK) Pinned(id types.Hash256) bool {
+// lookup returns the stored object for an id under the SDK's lock.
+func (s *MemorySDK) lookup(id types.Hash256) (uploadedObject, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, ok := s.objects[id]
+	o, ok := s.objects[id]
+	return o, ok
+}
+
+// Pinned reports whether the object with the given id is still stored in the SDK.
+func (s *MemorySDK) Pinned(id types.Hash256) bool {
+	_, ok := s.lookup(id)
 	return ok
 }
 
@@ -211,9 +217,7 @@ func (s *MemorySDK) AddObject(ctx context.Context, r io.Reader) (sdk.Object, err
 
 // ObjectData returns the uploaded data for an object.
 func (s *MemorySDK) ObjectData(id types.Hash256) ([]byte, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	o, ok := s.objects[id]
+	o, ok := s.lookup(id)
 	if !ok {
 		return nil, false
 	}
@@ -222,9 +226,7 @@ func (s *MemorySDK) ObjectData(id types.Hash256) ([]byte, bool) {
 
 // ObjectMetadata returns the metadata recorded for an uploaded object.
 func (s *MemorySDK) ObjectMetadata(id types.Hash256) (json.RawMessage, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	o, ok := s.objects[id]
+	o, ok := s.lookup(id)
 	if !ok {
 		return nil, false
 	}

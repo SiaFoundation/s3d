@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"io/fs"
@@ -18,6 +19,7 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia"
+	"github.com/SiaFoundation/s3d/sia/objects"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -1033,6 +1035,85 @@ func TestSyncMetadata(t *testing.T) {
 	if cursor2 != cursor {
 		t.Fatal("cursor should not change on no-op sync")
 	}
+
+	// uploads an object tagged as a snapshot backup to the SDK without
+	// recording it locally
+	snapMeta, err := json.Marshal(objects.SnapshotMetadata{Type: objects.SnapshotType})
+	if err != nil {
+		t.Fatal(err)
+	}
+	uploadSnapshotObject := func() sdk.Object {
+		t.Helper()
+		obj := sdk.NewEmptyObject()
+		obj.UpdateMetadata(snapMeta)
+		if err := memSDK.Upload(t.Context(), &obj, bytes.NewReader(frand.Bytes(8))); err != nil {
+			t.Fatal(err)
+		}
+		return obj
+	}
+
+	// record one snapshot object locally, leak another with no local record
+	recorded := uploadSnapshotObject()
+	recordedSnap, err := store.CreateSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	} else if err := store.MarkSnapshotPinned(recordedSnap.ID, recorded.ID()); err != nil {
+		t.Fatal(err)
+	}
+	leaked := uploadSnapshotObject()
+
+	// the sync unpins the leaked object and leaves the recorded one alone
+	memSDK.SetEvents([]sdk.ObjectEvent{
+		{Key: recorded.ID(), UpdatedAt: eventTime.Add(2 * time.Second), Object: &recorded},
+		{Key: leaked.ID(), UpdatedAt: eventTime.Add(3 * time.Second), Object: &leaked},
+	})
+	siaBackend.SyncMetadata(t.Context())
+	if memSDK.Pinned(leaked.ID()) {
+		t.Fatal("expected leaked snapshot object to be unpinned")
+	} else if !memSDK.Pinned(recorded.ID()) {
+		t.Fatal("expected recorded snapshot object to stay pinned")
+	}
+	if snapshots, err := store.ListSnapshots(); err != nil {
+		t.Fatal(err)
+	} else if len(snapshots) != 1 {
+		t.Fatal("unexpected", len(snapshots))
+	}
+
+	// an unknown snapshot object is left alone while an upload is in flight,
+	// and the cursor stops before its deferred event
+	blocked := uploadSnapshotObject()
+	inflight, err := store.CreateSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	memSDK.SetEvents([]sdk.ObjectEvent{
+		{Key: recorded.ID(), UpdatedAt: eventTime.Add(4 * time.Second), Object: &recorded},
+		{Key: blocked.ID(), UpdatedAt: eventTime.Add(5 * time.Second), Object: &blocked},
+	})
+	siaBackend.SyncMetadata(t.Context())
+	if !memSDK.Pinned(blocked.ID()) {
+		t.Fatal("expected unknown snapshot object to stay pinned during upload")
+	}
+	if cursor, err := store.ObjectsCursor(); err != nil {
+		t.Fatal(err)
+	} else if !cursor.After.Equal(eventTime.Add(4 * time.Second)) {
+		t.Fatalf("expected cursor at %v, got %v", eventTime.Add(4*time.Second), cursor.After)
+	}
+
+	// once no upload is in flight the deferred event is consumed and the
+	// leaked object unpinned
+	if err := store.DeleteSnapshot(inflight.ID); err != nil {
+		t.Fatal(err)
+	}
+	siaBackend.SyncMetadata(t.Context())
+	if memSDK.Pinned(blocked.ID()) {
+		t.Fatal("expected leaked snapshot object to be unpinned")
+	}
+	if cursor, err := store.ObjectsCursor(); err != nil {
+		t.Fatal(err)
+	} else if !cursor.After.Equal(eventTime.Add(5 * time.Second)) {
+		t.Fatalf("expected cursor at %v, got %v", eventTime.Add(5*time.Second), cursor.After)
+	}
 }
 
 func TestCopyAndDeleteObject(t *testing.T) {
@@ -1611,28 +1692,9 @@ func TestOrphanLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// upload an object to the SDK and record it as uploaded in the store
-	upload := func(name string) stypes.Hash256 {
-		t.Helper()
-		data := frand.Bytes(16)
-		siaObj, err := memSDK.AddObject(t.Context(), bytes.NewReader(data))
-		if err != nil {
-			t.Fatal(err)
-		}
-		sealed := memSDK.SealObject(siaObj)
-		fn := name + ".upload"
-		md5 := frand.Entropy128()
-		if _, _, err := store.PutObject(testutil.AccessKeyID, bucket, name, md5, nil, int64(len(data)), &fn); err != nil {
-			t.Fatal(err)
-		} else if err := store.MarkObjectUploaded(bucket, name, md5, sealed, time.Now().Add(time.Hour)); err != nil {
-			t.Fatal(err)
-		}
-		return sealed.ID()
-	}
-
 	// pin two objects so both are live on the network
-	idA := upload("a")
-	idB := upload("b")
+	idA := stageUpload(t, memSDK, store, bucket, "a", time.Now().Add(time.Hour))
+	idB := stageUpload(t, memSDK, store, bucket, "b", time.Now().Add(time.Hour))
 	if err := backend.PinObjects(t.Context()); err != nil {
 		t.Fatal(err)
 	}

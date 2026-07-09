@@ -54,11 +54,29 @@ func TestSnapshots(t *testing.T) {
 	}
 	store.assertCount(1, "snapshots")
 
+	// the pending snapshot counts as an upload in flight
+	if known, inFlight, err := store.CheckSnapshotObject(frand.Entropy256()); err != nil {
+		t.Fatal(err)
+	} else if known {
+		t.Fatal("unexpected known object")
+	} else if !inFlight {
+		t.Fatal("expected snapshot in flight")
+	}
+
 	// an uploaded snapshot is listed once its object id is recorded
 	var siaObjectID types.Hash256
 	frand.Read(siaObjectID[:])
 	if err := store.MarkSnapshotPinned(s1.ID, siaObjectID); err != nil {
 		t.Fatal(err)
+	}
+
+	// the recorded object is known and no upload is in flight anymore
+	if known, inFlight, err := store.CheckSnapshotObject(siaObjectID); err != nil {
+		t.Fatal(err)
+	} else if !known {
+		t.Fatal("expected known object")
+	} else if inFlight {
+		t.Fatal("unexpected snapshot in flight")
 	}
 	if snapshots, err := store.ListSnapshots(); err != nil {
 		t.Fatal(err)
@@ -96,6 +114,15 @@ func TestSnapshots(t *testing.T) {
 		t.Fatal(err)
 	} else if s2.ObjectCount != 0 {
 		t.Fatal("unexpected", s2.ObjectCount)
+	}
+
+	// the second pending snapshot counts as an upload in flight again
+	if known, inFlight, err := store.CheckSnapshotObject(siaObjectID); err != nil {
+		t.Fatal(err)
+	} else if !known {
+		t.Fatal("expected known object")
+	} else if !inFlight {
+		t.Fatal("expected snapshot in flight")
 	}
 
 	// the un-uploaded second snapshot is excluded from the list
