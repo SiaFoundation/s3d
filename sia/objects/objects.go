@@ -93,14 +93,6 @@ const SnapshotType = "s3d-snapshot"
 // gzip compressed before upload.
 const SnapshotEncodingGzip = "gzip"
 
-// Snapshot describes a database backup uploaded to Sia.
-type Snapshot struct {
-	ID          int64
-	CreatedAt   time.Time
-	SiaObjectID types.Hash256
-	ObjectCount int64
-}
-
 // SnapshotMetadata is attached to a snapshot's Sia object. It lets recovery
 // find snapshots and refuse ones it cannot restore.
 type SnapshotMetadata struct {

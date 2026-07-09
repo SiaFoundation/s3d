@@ -3,7 +3,6 @@ package sia
 import (
 	"compress/gzip"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -231,9 +230,11 @@ type Store interface {
 	ExpireObjects(bucket string, prefix string, before time.Time, limit int) (int, []objects.OrphanedFile, error)
 
 	Backup(ctx context.Context, destPath string) error
-	CreateSnapshot() (objects.Snapshot, error)
+	CheckSnapshotObject(objectID types.Hash256) (known, inFlight bool, err error)
+	CreateSnapshot() (s3.Snapshot, error)
 	MarkSnapshotPinned(id int64, objectID types.Hash256) error
 	DeleteSnapshot(id int64) error
+	DeleteIncompleteSnapshots() (int64, error)
 	DeleteSnapshotsBySiaObject(objectIDs []types.Hash256) (int64, error)
 	DBVersion() int64
 }
@@ -289,7 +290,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 	}
 
 	// remove snapshot backups left behind by a crash
-	tmpFiles, err := filepath.Glob(filepath.Join(sia.directory, "snapshot-*.tmp*"))
+	tmpFiles, err := filepath.Glob(filepath.Join(sia.directory, "snapshot-*.tmp"))
 	if err != nil {
 		return nil, fmt.Errorf("failed to list leftover snapshot backups: %w", err)
 	}
@@ -300,6 +301,15 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 	}
 	if len(tmpFiles) > 0 {
 		sia.logger.Info("removed leftover snapshot backups", zap.Int("removed", len(tmpFiles)))
+	}
+
+	// remove snapshots that never finished uploading. their rollback only runs
+	// in-process, so a row left over from a crash would withhold orphaned
+	// objects forever
+	if n, err := sia.store.DeleteIncompleteSnapshots(); err != nil {
+		return nil, fmt.Errorf("failed to remove incomplete snapshots: %w", err)
+	} else if n > 0 {
+		sia.logger.Info("removed incomplete snapshots", zap.Int64("removed", n))
 	}
 
 	launchBgLoop := func(loopFn func(context.Context)) error {
@@ -334,8 +344,8 @@ func (s *Sia) Close() error {
 }
 
 // CreateSnapshot records a snapshot, backs up the database to a temporary
-// file, compresses it, uploads it to Sia as a tagged snapshot object, pins it,
-// and records the object ID on the snapshot. The temporary files are removed
+// file, uploads it gzip compressed to Sia as a tagged snapshot object, pins
+// it, and records the object ID on the snapshot. The temporary file is removed
 // once the upload completes. On failure the snapshot and any pinned object are
 // rolled back.
 func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
@@ -367,19 +377,11 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 		}
 	}
 
-	tmp := filepath.Join(s.directory, "snapshot-"+hex.EncodeToString(frand.Bytes(8))+".tmp")
+	tmp := filepath.Join(s.directory, fmt.Sprintf("snapshot-%x.tmp", frand.Bytes(8)))
 	if err := s.store.Backup(ctx, tmp); err != nil {
 		return s3.Snapshot{}, fmt.Errorf("failed to create backup: %w", err)
 	}
 	defer removeFile(tmp)
-
-	// compress the backup before upload since database files compress well
-	// and Sia storage is paid per byte
-	tmpGz := tmp + ".gz"
-	if err := gzipFile(tmp, tmpGz); err != nil {
-		return s3.Snapshot{}, fmt.Errorf("failed to compress backup: %w", err)
-	}
-	defer removeFile(tmpGz)
 
 	meta, err := json.Marshal(objects.SnapshotMetadata{
 		Type:        objects.SnapshotType,
@@ -393,15 +395,29 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 		return s3.Snapshot{}, fmt.Errorf("failed to marshal snapshot metadata: %w", err)
 	}
 
-	f, err := os.Open(tmpGz)
+	f, err := os.Open(tmp)
 	if err != nil {
 		return s3.Snapshot{}, fmt.Errorf("failed to open snapshot backup: %w", err)
 	}
 	defer f.Close()
 
+	// compress the backup during upload since database files compress well
+	// and Sia storage is paid per byte
+	pr, pw := io.Pipe()
+	go func() {
+		gw := gzip.NewWriter(pw)
+		if _, err := io.Copy(gw, f); err != nil {
+			pw.CloseWithError(fmt.Errorf("failed to compress backup: %w", err))
+			return
+		}
+		pw.CloseWithError(gw.Close())
+	}()
+	// closing the read side unblocks the compressor if the upload aborts early
+	defer pr.Close()
+
 	obj := sdk.NewEmptyObject()
 	obj.UpdateMetadata(meta)
-	if err := s.sdk.Upload(ctx, &obj, f); err != nil {
+	if err := s.sdk.Upload(ctx, &obj, pr); err != nil {
 		return s3.Snapshot{}, fmt.Errorf("failed to upload snapshot: %w", err)
 	}
 	pinned = obj.ID()
@@ -413,35 +429,8 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 	if err := s.store.MarkSnapshotPinned(snap.ID, pinned); err != nil {
 		return s3.Snapshot{}, fmt.Errorf("failed to record snapshot object: %w", err)
 	}
-	return s3.Snapshot{
-		ID:          snap.ID,
-		CreatedAt:   snap.CreatedAt,
-		SiaObjectID: pinned,
-		ObjectCount: snap.ObjectCount,
-	}, nil
-}
-
-// gzipFile compresses the file at src into a new file at dst.
-func gzipFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return fmt.Errorf("failed to open source: %w", err)
-	}
-	defer in.Close()
-
-	out, err := os.Create(dst)
-	if err != nil {
-		return fmt.Errorf("failed to create destination: %w", err)
-	}
-	defer out.Close()
-
-	gw := gzip.NewWriter(out)
-	if _, err := io.Copy(gw, in); err != nil {
-		return fmt.Errorf("failed to compress: %w", err)
-	} else if err := gw.Close(); err != nil {
-		return fmt.Errorf("failed to flush compressed data: %w", err)
-	}
-	return out.Close()
+	snap.SiaObjectID = pinned
+	return snap, nil
 }
 
 // isObjectNotFound reports whether err indicates the object does not exist on
@@ -626,19 +615,31 @@ func (s *Sia) syncMetadata(ctx context.Context) { //nolint:revive
 			break
 		}
 
+		// consume events in order, stopping at the first snapshot object that
+		// can't be reconciled yet so it is retried on the next sync
 		var batch []objects.SiaObject
 		var deletedIDs []types.Hash256
+		processed := 0
 		for _, ev := range events {
 			if ev.Deleted {
 				deletedIDs = append(deletedIDs, ev.Key)
+				processed++
 				continue
 			} else if ev.Object == nil {
 				s.logger.Warn("skipping event with nil object", zap.Stringer("objectID", &ev.Key))
+				processed++
+				continue
+			} else if isSnapshotObject(ev.Object) {
+				if !s.reconcileSnapshotObject(ctx, ev.Key) {
+					break
+				}
+				processed++
 				continue
 			}
 
 			sealed := s.sdk.SealObject(*ev.Object)
 			batch = append(batch, objects.SiaObject{ID: sealed.ID(), Sealed: sealed})
+			processed++
 		}
 
 		if len(batch) > 0 {
@@ -662,11 +663,18 @@ func (s *Sia) syncMetadata(ctx context.Context) { //nolint:revive
 			}
 		}
 
-		// advance the cursor to the last event
-		last := events[len(events)-1]
+		// advance the cursor past the consumed events only, a deferred
+		// snapshot event and everything after it is retried on the next sync
+		if processed == 0 {
+			break
+		}
+		last := events[processed-1]
 		cursor = slabs.Cursor{After: last.UpdatedAt, Key: last.Key}
 		if err := s.store.SetObjectsCursor(cursor); err != nil {
 			s.logger.Error("failed to update objects cursor", zap.Error(err))
+			break
+		}
+		if processed < len(events) {
 			break
 		}
 	}
@@ -674,4 +682,37 @@ func (s *Sia) syncMetadata(ctx context.Context) { //nolint:revive
 	if synced > 0 {
 		s.logger.Info("synced object metadata", zap.Int("synced", synced))
 	}
+}
+
+// isSnapshotObject reports whether the object's metadata tags it as a
+// snapshot backup.
+func isSnapshotObject(obj *sdk.Object) bool {
+	var meta objects.SnapshotMetadata
+	if raw := obj.Metadata(); len(raw) == 0 || json.Unmarshal(raw, &meta) != nil {
+		return false
+	}
+	return meta.Type == objects.SnapshotType
+}
+
+// reconcileSnapshotObject unpins a snapshot backup object that has no local
+// record, which happens when a snapshot crashes after pinning its backup but
+// before recording the object ID. It reports whether the event was handled.
+// While a snapshot upload is in flight its object may not be recorded yet, so
+// reconciliation is deferred until no upload is running.
+func (s *Sia) reconcileSnapshotObject(ctx context.Context, objectID types.Hash256) bool {
+	known, inFlight, err := s.store.CheckSnapshotObject(objectID)
+	if err != nil {
+		s.logger.Error("failed to check snapshot object", zap.Stringer("objectID", &objectID), zap.Error(err))
+		return false
+	} else if known {
+		return true
+	} else if inFlight {
+		return false
+	}
+	if err := s.sdk.DeleteObject(ctx, objectID); err != nil && !isObjectNotFound(err) {
+		s.logger.Error("failed to unpin leaked snapshot object", zap.Stringer("objectID", &objectID), zap.Error(err))
+		return false
+	}
+	s.logger.Info("unpinned leaked snapshot object", zap.Stringer("objectID", &objectID))
+	return true
 }

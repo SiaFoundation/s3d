@@ -130,17 +130,6 @@ func OpenDatabase(fp string, log *zap.Logger) (*Store, error) {
 	if err := store.init(int64(len(migrations) + 1)); err != nil {
 		return nil, err
 	}
-
-	// a snapshot without an object id never finished uploading. its rollback
-	// only runs in-process, so a row left over from a crash would withhold
-	// orphaned objects forever
-	if res, err := db.Exec("DELETE FROM snapshots WHERE sia_object_id IS NULL"); err != nil {
-		return nil, fmt.Errorf("failed to remove incomplete snapshots: %w", err)
-	} else if n, err := res.RowsAffected(); err != nil {
-		return nil, fmt.Errorf("failed to count removed snapshots: %w", err)
-	} else if n > 0 {
-		log.Info("removed incomplete snapshots", zap.Int64("count", n))
-	}
 	sqliteVersion, _, _ := sqlite3.Version()
 	log.Debug("database initialized", zap.String("sqliteVersion", sqliteVersion), zap.Int("schemaVersion", len(migrations)+1), zap.String("path", fp))
 	return store, nil
