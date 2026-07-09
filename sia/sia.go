@@ -235,7 +235,7 @@ type Store interface {
 	MarkSnapshotPinned(id int64, objectID types.Hash256) error
 	DeleteSnapshot(id int64) error
 	DeleteIncompleteSnapshots() (int64, error)
-	DeleteSnapshotsBySiaObject(objectIDs []types.Hash256) (int64, error)
+	DeleteSnapshotsBySiaObject(objectID types.Hash256) (int64, error)
 	DBVersion() int64
 }
 
@@ -622,11 +622,17 @@ func (s *Sia) syncMetadata(ctx context.Context) { //nolint:revive
 		// consume events in order, stopping at the first snapshot object that
 		// can't be reconciled yet so it is retried on the next sync
 		var batch []objects.SiaObject
-		var deletedIDs []types.Hash256
 		processed := 0
 		for _, ev := range events {
 			if ev.Deleted {
-				deletedIDs = append(deletedIDs, ev.Key)
+				// drop snapshots whose backup object was deleted on the
+				// indexer so they stop withholding orphans
+				if n, err := s.store.DeleteSnapshotsBySiaObject(ev.Key); err != nil {
+					s.logger.Error("failed to delete snapshot for deleted object", zap.Stringer("objectID", &ev.Key), zap.Error(err))
+					break
+				} else if n > 0 {
+					s.logger.Info("deleted snapshot for deleted object", zap.Stringer("objectID", &ev.Key))
+				}
 				processed++
 				continue
 			} else if ev.Object == nil {
@@ -653,18 +659,6 @@ func (s *Sia) syncMetadata(ctx context.Context) { //nolint:revive
 				break
 			}
 			synced += int(n)
-		}
-
-		// drop snapshots whose backup object was deleted on the indexer so
-		// they stop withholding orphans
-		if len(deletedIDs) > 0 {
-			n, err := s.store.DeleteSnapshotsBySiaObject(deletedIDs)
-			if err != nil {
-				s.logger.Error("failed to delete snapshots for deleted objects", zap.Error(err))
-				break
-			} else if n > 0 {
-				s.logger.Info("deleted snapshots for deleted objects", zap.Int64("deleted", n))
-			}
 		}
 
 		// advance the cursor past the consumed events only, a deferred

@@ -143,14 +143,14 @@ func TestSnapshots(t *testing.T) {
 	}
 
 	// deleting snapshots by an unknown sia object id removes nothing
-	if n, err := store.DeleteSnapshotsBySiaObject([]types.Hash256{frand.Entropy256()}); err != nil {
+	if n, err := store.DeleteSnapshotsBySiaObject(frand.Entropy256()); err != nil {
 		t.Fatal(err)
 	} else if n != 0 {
 		t.Fatal("unexpected", n)
 	}
 
 	// deleting the snapshot that captured it by object id releases the object
-	if n, err := store.DeleteSnapshotsBySiaObject([]types.Hash256{siaObjectID}); err != nil {
+	if n, err := store.DeleteSnapshotsBySiaObject(siaObjectID); err != nil {
 		t.Fatal(err)
 	} else if n != 1 {
 		t.Fatal("unexpected", n)

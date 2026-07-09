@@ -100,18 +100,11 @@ func (s *Store) DeleteSnapshot(snapshotID int64) error {
 	})
 }
 
-// DeleteSnapshotsBySiaObject removes snapshots whose backup object matches one
-// of the given Sia object IDs and returns the number of snapshots removed.
-func (s *Store) DeleteSnapshotsBySiaObject(objectIDs []types.Hash256) (deleted int64, err error) {
-	if len(objectIDs) == 0 {
-		return 0, nil
-	}
-	ids := make([]sqlHash256, 0, len(objectIDs))
-	for _, id := range objectIDs {
-		ids = append(ids, sqlHash256(id))
-	}
+// DeleteSnapshotsBySiaObject removes snapshots whose backup object matches the
+// given Sia object ID and returns the number of snapshots removed.
+func (s *Store) DeleteSnapshotsBySiaObject(objectID types.Hash256) (deleted int64, err error) {
 	err = s.transaction(func(tx *txn) error {
-		res, err := tx.Exec("DELETE FROM snapshots WHERE sia_object_id IN ("+queryPlaceHolders(len(ids))+")", queryArgs(ids)...)
+		res, err := tx.Exec("DELETE FROM snapshots WHERE sia_object_id = $1", sqlHash256(objectID))
 		if err != nil {
 			return err
 		}
