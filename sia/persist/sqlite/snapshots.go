@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
-	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.sia.tech/core/types"
 )
 
@@ -96,7 +95,7 @@ func (s *Store) MarkSnapshotPinned(id int64, objectID types.Hash256) error {
 		if n, err := res.RowsAffected(); err != nil {
 			return err
 		} else if n == 0 {
-			return objects.ErrSnapshotNotFound
+			return s3.ErrSnapshotNotFound
 		}
 		return nil
 	})

@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
-	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.sia.tech/core/types"
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap/zaptest"
@@ -91,7 +90,7 @@ func TestSnapshots(t *testing.T) {
 	}
 
 	// setting the object id on a missing snapshot reports not found
-	if err := store.MarkSnapshotPinned(s1.ID+100, siaObjectID); !errors.Is(err, objects.ErrSnapshotNotFound) {
+	if err := store.MarkSnapshotPinned(s1.ID+100, siaObjectID); !errors.Is(err, s3.ErrSnapshotNotFound) {
 		t.Fatal("unexpected", err)
 	}
 
