@@ -42,11 +42,13 @@ func TestSnapshots(t *testing.T) {
 	}
 
 	// create a snapshot
-	s1, err := store.CreateSnapshot()
+	s1, s1Gen, err := store.CreateSnapshot()
 	if err != nil {
 		t.Fatal(err)
 	} else if s1.ID == 0 {
 		t.Fatal("expected non-zero snapshot id")
+	} else if s1Gen == 0 {
+		t.Fatal("expected non-zero generation")
 	} else if s1.ObjectCount != 1 {
 		t.Fatal("unexpected", s1.ObjectCount)
 	} else if s1.CreatedAt.IsZero() {
@@ -109,7 +111,7 @@ func TestSnapshots(t *testing.T) {
 	}
 
 	// a later snapshot taken after the object was deleted does not capture it
-	s2, err := store.CreateSnapshot()
+	s2, _, err := store.CreateSnapshot()
 	if err != nil {
 		t.Fatal(err)
 	} else if s2.ObjectCount != 0 {
@@ -160,5 +162,23 @@ func TestSnapshots(t *testing.T) {
 		t.Fatal(err)
 	} else if len(orphans) != 1 || orphans[0] != objID {
 		t.Fatal("unexpected", orphans)
+	}
+
+	// adopting a snapshot recreates its record
+	adopted, err := store.AdoptSnapshot(siaObjectID, s1.CreatedAt, s1Gen+10, s1.ObjectCount)
+	if err != nil {
+		t.Fatal(err)
+	} else if adopted.SiaObjectID != siaObjectID {
+		t.Fatal("mismatch", adopted.SiaObjectID)
+	} else if adopted.ObjectCount != s1.ObjectCount {
+		t.Fatal("unexpected", adopted.ObjectCount)
+	}
+	store.assertCount(1, "snapshots")
+
+	// the generation counter is bumped past the adopted generation
+	if _, gen, err := store.CreateSnapshot(); err != nil {
+		t.Fatal(err)
+	} else if gen != s1Gen+11 {
+		t.Fatal("unexpected", gen)
 	}
 }

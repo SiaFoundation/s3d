@@ -25,9 +25,8 @@ func (s *Store) CheckSnapshotObject(objectID types.Hash256) (known, inFlight boo
 // CreateSnapshot bumps the snapshot generation and records a snapshot of the
 // current uploaded object count. The Sia object ID is filled in later with
 // MarkSnapshotPinned once the backup is uploaded.
-func (s *Store) CreateSnapshot() (snap s3.Snapshot, err error) {
+func (s *Store) CreateSnapshot() (snap s3.Snapshot, gen int64, err error) {
 	err = s.transaction(func(tx *txn) error {
-		var gen int64
 		if err := tx.QueryRow("UPDATE global_settings SET snapshot_gen = snapshot_gen + 1 RETURNING snapshot_gen").Scan(&gen); err != nil {
 			return err
 		}
@@ -35,6 +34,23 @@ func (s *Store) CreateSnapshot() (snap s3.Snapshot, err error) {
 			INSERT INTO snapshots (created_at, gen, object_count)
 			VALUES ($1, $2, (SELECT stat_value FROM stats WHERE stat = $3))
 			RETURNING id, created_at, object_count`, sqlTime(time.Now()), gen, statUploadedObjects).Scan(&snap.ID, (*sqlTime)(&snap.CreatedAt), &snap.ObjectCount)
+	})
+	return
+}
+
+// AdoptSnapshot records a snapshot for a backup object discovered on the
+// network, e.g. after restoring from a backup made by a previous database. The
+// snapshot generation is bumped to at least the adopted generation so objects
+// orphaned during the adopted snapshot's lifetime stay withheld.
+func (s *Store) AdoptSnapshot(objectID types.Hash256, createdAt time.Time, gen, objectCount int64) (snap s3.Snapshot, err error) {
+	err = s.transaction(func(tx *txn) error {
+		if _, err := tx.Exec("UPDATE global_settings SET snapshot_gen = MAX(snapshot_gen, $1)", gen); err != nil {
+			return err
+		}
+		return tx.QueryRow(`
+			INSERT INTO snapshots (created_at, gen, object_count, sia_object_id)
+			VALUES ($1, $2, $3, $4)
+			RETURNING id, created_at, object_count, sia_object_id`, sqlTime(createdAt), gen, objectCount, sqlHash256(objectID)).Scan(&snap.ID, (*sqlTime)(&snap.CreatedAt), &snap.ObjectCount, (*sqlHash256)(&snap.SiaObjectID))
 	})
 	return
 }

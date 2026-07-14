@@ -1095,7 +1095,7 @@ func TestOrphanedObjects(t *testing.T) {
 
 	// snapshot the object while "b" still references it, so the generation it
 	// pins withholds the object once its last reference is gone
-	snap, err := store.CreateSnapshot()
+	snap, _, err := store.CreateSnapshot()
 	if err != nil {
 		t.Fatal(err)
 	}

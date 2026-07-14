@@ -47,6 +47,10 @@ const (
 
 	// UploadsDirectory is the directory name used for storing pending uploads.
 	UploadsDirectory = "uploads"
+
+	// TmpDirectory is the directory name used for temporary files, e.g.
+	// snapshot backups awaiting upload. It is cleared on startup.
+	TmpDirectory = "tmp"
 )
 
 var (
@@ -231,7 +235,8 @@ type Store interface {
 
 	Backup(ctx context.Context, destPath string) error
 	CheckSnapshotObject(objectID types.Hash256) (known, inFlight bool, err error)
-	CreateSnapshot() (s3.Snapshot, error)
+	CreateSnapshot() (s3.Snapshot, int64, error)
+	AdoptSnapshot(objectID types.Hash256, createdAt time.Time, gen, objectCount int64) (s3.Snapshot, error)
 	MarkSnapshotPinned(id int64, objectID types.Hash256) error
 	DeleteSnapshot(id int64) error
 	DeleteIncompleteSnapshots() (int64, error)
@@ -289,18 +294,12 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		sia.logger.Info("removed orphaned uploads", zap.Int("removed", deleted))
 	}
 
-	// remove snapshot backups left behind by a crash
-	tmpFiles, err := filepath.Glob(filepath.Join(sia.directory, "snapshot-*.tmp"))
-	if err != nil {
-		return nil, fmt.Errorf("failed to list leftover snapshot backups: %w", err)
-	}
-	for _, fp := range tmpFiles {
-		if err := os.Remove(fp); err != nil {
-			return nil, fmt.Errorf("failed to remove leftover snapshot backup %q: %w", fp, err)
-		}
-	}
-	if len(tmpFiles) > 0 {
-		sia.logger.Info("removed leftover snapshot backups", zap.Int("removed", len(tmpFiles)))
+	// recreate the tmp dir to remove files left behind by a crash
+	tmpDir := filepath.Join(sia.directory, TmpDirectory)
+	if err := os.RemoveAll(tmpDir); err != nil {
+		return nil, fmt.Errorf("failed to remove tmp directory: %w", err)
+	} else if err := os.MkdirAll(tmpDir, 0700); err != nil {
+		return nil, fmt.Errorf("failed to create tmp directory: %w", err)
 	}
 
 	// remove snapshots that never finished uploading. their rollback only runs
@@ -349,7 +348,7 @@ func (s *Sia) Close() error {
 // once the upload completes. On failure the snapshot and any pinned object are
 // rolled back.
 func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
-	snap, err := s.store.CreateSnapshot()
+	snap, gen, err := s.store.CreateSnapshot()
 	if err != nil {
 		return s3.Snapshot{}, fmt.Errorf("failed to create snapshot: %w", err)
 	}
@@ -377,7 +376,7 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 		}
 	}
 
-	tmp := filepath.Join(s.directory, fmt.Sprintf("snapshot-%x.tmp", frand.Bytes(8)))
+	tmp := filepath.Join(s.directory, TmpDirectory, fmt.Sprintf("snapshot-%x.tmp", frand.Bytes(8)))
 	if err := s.store.Backup(ctx, tmp); err != nil {
 		return s3.Snapshot{}, fmt.Errorf("failed to create backup: %w", err)
 	}
@@ -388,6 +387,7 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 		CreatedAt:   snap.CreatedAt,
 		DBVersion:   s.store.DBVersion(),
 		Encoding:    objects.SnapshotEncodingGzip,
+		Generation:  gen,
 		ObjectCount: snap.ObjectCount,
 		S3DVersion:  build.Version(),
 	})
@@ -426,9 +426,9 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 		return s3.Snapshot{}, fmt.Errorf("failed to pin snapshot: %w", err)
 	}
 
-	// NOTE: a failure between pinning the object and marking it pinned is being cleaned
-	// up by the sync loop, if we encounter a pinned snapshot without a corresponding
-	// record in the database, the object is unpinned.
+	// NOTE: a crash between pinning the object and marking it pinned leaves a
+	// pinned object without a record. The sync loop adopts snapshot objects
+	// without a local record, so the snapshot reappears after the next sync.
 
 	if err := s.store.MarkSnapshotPinned(snap.ID, pinned); err != nil {
 		return s3.Snapshot{}, fmt.Errorf("failed to record snapshot object: %w", err)
@@ -639,8 +639,8 @@ func (s *Sia) syncMetadata(ctx context.Context) { //nolint:revive
 				s.logger.Warn("skipping event with nil object", zap.Stringer("objectID", &ev.Key))
 				processed++
 				continue
-			} else if isSnapshotObject(ev.Object) {
-				if !s.confirmSnapshotObject(ctx, ev.Key) {
+			} else if meta, ok := snapshotMetadata(ev.Object); ok {
+				if !s.handleSnapshotObject(ev.Key, meta) {
 					break
 				}
 				processed++
@@ -682,22 +682,23 @@ func (s *Sia) syncMetadata(ctx context.Context) { //nolint:revive
 	}
 }
 
-// isSnapshotObject reports whether the object's metadata tags it as a
-// snapshot backup.
-func isSnapshotObject(obj *sdk.Object) bool {
+// snapshotMetadata parses the object's metadata and reports whether it tags
+// the object as a snapshot backup.
+func snapshotMetadata(obj *sdk.Object) (objects.SnapshotMetadata, bool) {
 	var meta objects.SnapshotMetadata
 	if raw := obj.Metadata(); len(raw) == 0 || json.Unmarshal(raw, &meta) != nil {
-		return false
+		return objects.SnapshotMetadata{}, false
 	}
-	return meta.Type == objects.SnapshotType
+	return meta, meta.Type == objects.SnapshotType
 }
 
-// confirmSnapshotObject unpins a snapshot backup object that has no local
-// record, which happens when a snapshot crashes after pinning its backup but
-// before recording the object ID. It reports whether the event was handled.
-// While a snapshot upload is in flight its object may not be recorded yet, so
-// reconciliation is deferred until no upload is running.
-func (s *Sia) confirmSnapshotObject(ctx context.Context, objectID types.Hash256) bool {
+// handleSnapshotObject checks a snapshot backup object against the local
+// records and adopts it when no record exists, e.g. after restoring from a
+// backup made by a previous database. Unpinning such an object instead would
+// destroy backups the database does not know about. It reports whether the
+// event was handled. While a snapshot upload is in flight its object may not
+// be recorded yet, so handling is deferred until no upload is running.
+func (s *Sia) handleSnapshotObject(objectID types.Hash256, meta objects.SnapshotMetadata) bool {
 	known, inFlight, err := s.store.CheckSnapshotObject(objectID)
 	if err != nil {
 		s.logger.Error("failed to check snapshot object", zap.Stringer("objectID", &objectID), zap.Error(err))
@@ -707,10 +708,11 @@ func (s *Sia) confirmSnapshotObject(ctx context.Context, objectID types.Hash256)
 	} else if inFlight {
 		return false
 	}
-	if err := s.sdk.DeleteObject(ctx, objectID); err != nil && !isObjectNotFound(err) {
-		s.logger.Error("failed to unpin leaked snapshot object", zap.Stringer("objectID", &objectID), zap.Error(err))
+	snap, err := s.store.AdoptSnapshot(objectID, meta.CreatedAt, meta.Generation, meta.ObjectCount)
+	if err != nil {
+		s.logger.Error("failed to adopt snapshot object", zap.Stringer("objectID", &objectID), zap.Error(err))
 		return false
 	}
-	s.logger.Info("unpinned leaked snapshot object", zap.Stringer("objectID", &objectID))
+	s.logger.Info("adopted snapshot object", zap.Int64("snapshotID", snap.ID), zap.Stringer("objectID", &objectID))
 	return true
 }
