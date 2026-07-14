@@ -130,6 +130,7 @@ type SnapshotMetadata struct {
 	CreatedAt   time.Time `json:"createdAt"`
 	DBVersion   int64     `json:"dbVersion"`
 	Encoding    string    `json:"encoding"`
+	Generation  int64     `json:"generation"`
 	ObjectCount int64     `json:"objectCount"`
 	S3DVersion  string    `json:"s3dVersion"`
 }

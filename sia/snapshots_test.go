@@ -7,11 +7,13 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/SiaFoundation/s3d/build"
 	"github.com/SiaFoundation/s3d/internal/testutil"
+	"github.com/SiaFoundation/s3d/sia"
 	"github.com/SiaFoundation/s3d/sia/objects"
 )
 
@@ -54,6 +56,8 @@ func TestCreateSnapshot(t *testing.T) {
 		t.Fatal("unexpected", meta.DBVersion)
 	} else if meta.Encoding != objects.SnapshotEncodingGzip {
 		t.Fatal("unexpected", meta.Encoding)
+	} else if meta.Generation != 1 {
+		t.Fatal("unexpected", meta.Generation)
 	} else if meta.ObjectCount != snap.ObjectCount {
 		t.Fatal("unexpected", meta.ObjectCount)
 	} else if meta.S3DVersion != build.Version() {
@@ -79,7 +83,7 @@ func TestCreateSnapshot(t *testing.T) {
 	}
 
 	// no temporary backup files or sidecars are left behind
-	entries, err := os.ReadDir(backend.Dir)
+	entries, err := os.ReadDir(filepath.Join(backend.Dir, sia.TmpDirectory))
 	if err != nil {
 		t.Fatal(err)
 	}

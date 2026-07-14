@@ -974,7 +974,7 @@ func TestSyncMetadata(t *testing.T) {
 	deletedKey := stypes.Hash256{1, 2, 3}
 
 	// record a snapshot whose backup object matches the deleted event
-	snap, err := store.CreateSnapshot()
+	snap, _, err := store.CreateSnapshot()
 	if err != nil {
 		t.Fatal(err)
 	} else if err := store.MarkSnapshotPinned(snap.ID, deletedKey); err != nil {
@@ -1054,7 +1054,7 @@ func TestSyncMetadata(t *testing.T) {
 
 	// record one snapshot object locally, leak another with no local record
 	recorded := uploadSnapshotObject()
-	recordedSnap, err := store.CreateSnapshot()
+	recordedSnap, _, err := store.CreateSnapshot()
 	if err != nil {
 		t.Fatal(err)
 	} else if err := store.MarkSnapshotPinned(recordedSnap.ID, recorded.ID()); err != nil {
@@ -1062,27 +1062,30 @@ func TestSyncMetadata(t *testing.T) {
 	}
 	leaked := uploadSnapshotObject()
 
-	// the sync unpins the leaked object and leaves the recorded one alone
+	// the sync leaves both objects pinned and adopts the leaked one, an object
+	// without a local record may be a backup made by a previous database
 	memSDK.SetEvents([]sdk.ObjectEvent{
 		{Key: recorded.ID(), UpdatedAt: eventTime.Add(2 * time.Second), Object: &recorded},
 		{Key: leaked.ID(), UpdatedAt: eventTime.Add(3 * time.Second), Object: &leaked},
 	})
 	siaBackend.SyncMetadata(t.Context())
-	if memSDK.Pinned(leaked.ID()) {
-		t.Fatal("expected leaked snapshot object to be unpinned")
+	if !memSDK.Pinned(leaked.ID()) {
+		t.Fatal("expected leaked snapshot object to stay pinned")
 	} else if !memSDK.Pinned(recorded.ID()) {
 		t.Fatal("expected recorded snapshot object to stay pinned")
 	}
 	if snapshots, err := store.ListSnapshots(); err != nil {
 		t.Fatal(err)
-	} else if len(snapshots) != 1 {
+	} else if len(snapshots) != 2 {
 		t.Fatal("unexpected", len(snapshots))
+	} else if snapshots[1].SiaObjectID != leaked.ID() {
+		t.Fatal("mismatch", snapshots[1].SiaObjectID)
 	}
 
 	// an unknown snapshot object is left alone while an upload is in flight,
 	// and the cursor stops before its deferred event
 	blocked := uploadSnapshotObject()
-	inflight, err := store.CreateSnapshot()
+	inflight, _, err := store.CreateSnapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1101,13 +1104,20 @@ func TestSyncMetadata(t *testing.T) {
 	}
 
 	// once no upload is in flight the deferred event is consumed and the
-	// leaked object unpinned
+	// object adopted
 	if err := store.DeleteSnapshot(inflight.ID); err != nil {
 		t.Fatal(err)
 	}
 	siaBackend.SyncMetadata(t.Context())
-	if memSDK.Pinned(blocked.ID()) {
-		t.Fatal("expected leaked snapshot object to be unpinned")
+	if !memSDK.Pinned(blocked.ID()) {
+		t.Fatal("expected leaked snapshot object to stay pinned")
+	}
+	if snapshots, err := store.ListSnapshots(); err != nil {
+		t.Fatal(err)
+	} else if len(snapshots) != 3 {
+		t.Fatal("unexpected", len(snapshots))
+	} else if snapshots[2].SiaObjectID != blocked.ID() {
+		t.Fatal("mismatch", snapshots[2].SiaObjectID)
 	}
 	if cursor, err := store.ObjectsCursor(); err != nil {
 		t.Fatal(err)
