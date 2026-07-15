@@ -1,8 +1,6 @@
 package sqlite
 
 import (
-	"database/sql"
-	"errors"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
@@ -50,18 +48,11 @@ func (s *Store) AdoptSnapshot(objectID types.Hash256, createdAt time.Time, gen, 
 		if _, err := tx.Exec("UPDATE global_settings SET snapshot_gen = MAX(snapshot_gen, $1)", gen); err != nil {
 			return err
 		}
-		err := tx.QueryRow(`
+		return tx.QueryRow(`
 			INSERT INTO snapshots (created_at, gen, object_count, sia_object_id)
 			VALUES ($1, $2, $3, $4)
-			ON CONFLICT (sia_object_id) DO NOTHING
+			ON CONFLICT (sia_object_id) WHERE sia_object_id IS NOT NULL DO UPDATE SET sia_object_id = excluded.sia_object_id
 			RETURNING id, created_at, object_count, sia_object_id`, sqlTime(createdAt), gen, objectCount, sqlHash256(objectID)).Scan(&snap.ID, (*sqlTime)(&snap.CreatedAt), &snap.ObjectCount, (*sqlHash256)(&snap.SiaObjectID))
-		if errors.Is(err, sql.ErrNoRows) {
-			return tx.QueryRow(`
-				SELECT id, created_at, object_count, sia_object_id
-				FROM snapshots
-				WHERE sia_object_id = $1`, sqlHash256(objectID)).Scan(&snap.ID, (*sqlTime)(&snap.CreatedAt), &snap.ObjectCount, (*sqlHash256)(&snap.SiaObjectID))
-		}
-		return err
 	})
 	return
 }
