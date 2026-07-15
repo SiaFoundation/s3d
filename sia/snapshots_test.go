@@ -14,6 +14,7 @@ import (
 
 	"github.com/SiaFoundation/s3d/build"
 	"github.com/SiaFoundation/s3d/internal/testutil"
+	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/sia"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
@@ -21,6 +22,39 @@ import (
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap/zaptest"
 )
+
+// downloadBackup fetches a snapshot's backup object from the SDK and returns
+// the decompressed database image.
+func downloadBackup(t *testing.T, memSDK *testutil.MemorySDK, id types.Hash256) []byte {
+	t.Helper()
+	data, ok := memSDK.ObjectData(id)
+	if !ok {
+		t.Fatal("snapshot object not found")
+	}
+	gz, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := io.ReadAll(gz)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return image
+}
+
+// downloadMetadata fetches and decodes a snapshot object's metadata.
+func downloadMetadata(t *testing.T, memSDK *testutil.MemorySDK, id types.Hash256) objects.SnapshotMetadata {
+	t.Helper()
+	raw, ok := memSDK.ObjectMetadata(id)
+	if !ok {
+		t.Fatal("snapshot object not found")
+	}
+	var meta objects.SnapshotMetadata
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		t.Fatal(err)
+	}
+	return meta
+}
 
 func TestCreateSnapshot(t *testing.T) {
 	memSDK := testutil.NewMemorySDK()
@@ -48,14 +82,8 @@ func TestCreateSnapshot(t *testing.T) {
 	} else if snapshots[0].SiaObjectID != snap.SiaObjectID {
 		t.Fatal("mismatch", snapshots[0].SiaObjectID)
 	}
-	raw, ok := memSDK.ObjectMetadata(snap.SiaObjectID)
-	if !ok {
-		t.Fatal("snapshot object not found")
-	}
-	var meta objects.SnapshotMetadata
-	if err := json.Unmarshal(raw, &meta); err != nil {
-		t.Fatal(err)
-	} else if meta.Type != objects.SnapshotType {
+	meta := downloadMetadata(t, memSDK, snap.SiaObjectID)
+	if meta.Type != objects.SnapshotType {
 		t.Fatal("unexpected", meta.Type)
 	} else if meta.DBVersion != store.DBVersion() {
 		t.Fatal("unexpected", meta.DBVersion)
@@ -72,18 +100,7 @@ func TestCreateSnapshot(t *testing.T) {
 	}
 
 	// the uploaded backup decompresses to a SQLite database
-	data, ok := memSDK.ObjectData(snap.SiaObjectID)
-	if !ok {
-		t.Fatal("snapshot object not found")
-	}
-	gz, err := gzip.NewReader(bytes.NewReader(data))
-	if err != nil {
-		t.Fatal(err)
-	}
-	db, err := io.ReadAll(gz)
-	if err != nil {
-		t.Fatal(err)
-	} else if !bytes.HasPrefix(db, []byte("SQLite format 3\x00")) {
+	if db := downloadBackup(t, memSDK, snap.SiaObjectID); !bytes.HasPrefix(db, []byte("SQLite format 3\x00")) {
 		t.Fatal("unexpected backup header")
 	}
 
@@ -116,13 +133,18 @@ func TestSnapshotRecovery(t *testing.T) {
 	memSDK := testutil.NewMemorySDK()
 	log := zaptest.NewLogger(t)
 
-	openBackend := func(dir string, store *sqlite.Store) *sia.Sia {
+	openBackend := func(dir string) (*sqlite.Store, *sia.Sia) {
 		t.Helper()
+		store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { store.Close() })
 		backend, err := sia.New(t.Context(), memSDK, store, dir, sia.WithLogger(log))
 		if err != nil {
 			t.Fatal(err)
 		}
-		return backend
+		return store, backend
 	}
 
 	// snapshotEvent builds the event the indexer emits for a live snapshot
@@ -138,13 +160,23 @@ func TestSnapshotRecovery(t *testing.T) {
 		return sdk.ObjectEvent{Key: id, UpdatedAt: at, Object: &obj}
 	}
 
-	dirA := t.TempDir()
-	storeA, err := sqlite.OpenDatabase(filepath.Join(dirA, "s3d.sqlite"), log)
-	if err != nil {
-		t.Fatal(err)
+	assertSnapshots := func(store *sqlite.Store, want ...types.Hash256) []s3.Snapshot {
+		t.Helper()
+		snapshots, err := store.ListSnapshots()
+		if err != nil {
+			t.Fatal(err)
+		} else if len(snapshots) != len(want) {
+			t.Fatal("unexpected", len(snapshots))
+		}
+		for i := range want {
+			if snapshots[i].SiaObjectID != want[i] {
+				t.Fatal("mismatch", snapshots[i].SiaObjectID)
+			}
+		}
+		return snapshots
 	}
-	defer storeA.Close()
-	backendA := openBackend(dirA, storeA)
+
+	storeA, backendA := openBackend(t.TempDir())
 
 	// create two snapshots, the second backs up the first's record
 	snap1, err := backendA.CreateSnapshot(t.Context())
@@ -174,57 +206,27 @@ func TestSnapshotRecovery(t *testing.T) {
 	}
 
 	// restore the second snapshot's backup into a fresh directory
-	data, ok := memSDK.ObjectData(snap2.SiaObjectID)
-	if !ok {
-		t.Fatal("snapshot object not found")
-	}
-	gz, err := gzip.NewReader(bytes.NewReader(data))
-	if err != nil {
-		t.Fatal(err)
-	}
-	image, err := io.ReadAll(gz)
-	if err != nil {
-		t.Fatal(err)
-	}
 	dirB := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dirB, "s3d.sqlite"), image, 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(dirB, "s3d.sqlite"), downloadBackup(t, memSDK, snap2.SiaObjectID), 0600); err != nil {
 		t.Fatal(err)
 	}
-	storeB, err := sqlite.OpenDatabase(filepath.Join(dirB, "s3d.sqlite"), log)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer storeB.Close()
-	backendB := openBackend(dirB, storeB)
+	storeB, backendB := openBackend(dirB)
 
 	// the image's own in-flight record was removed on startup, the deleted
 	// first snapshot's record dangles until the sync drops it
-	if snapshots, err := storeB.ListSnapshots(); err != nil {
-		t.Fatal(err)
-	} else if len(snapshots) != 1 {
-		t.Fatal("unexpected", len(snapshots))
-	} else if snapshots[0].SiaObjectID != snap1.SiaObjectID {
-		t.Fatal("mismatch", snapshots[0].SiaObjectID)
-	}
+	assertSnapshots(storeB, snap1.SiaObjectID)
 
 	// the sync replays the first snapshot's deletion and adopts the second
 	// and third from the network
 	eventTime := time.Now().Truncate(time.Second)
-	memSDK.SetEvents([]sdk.ObjectEvent{
+	events := []sdk.ObjectEvent{
 		{Key: snap1.SiaObjectID, UpdatedAt: eventTime.Add(time.Second), Deleted: true},
 		snapshotEvent(snap2.SiaObjectID, eventTime.Add(2*time.Second)),
 		snapshotEvent(snap3.SiaObjectID, eventTime.Add(3*time.Second)),
-	})
+	}
+	memSDK.SetEvents(events)
 	backendB.SyncMetadata(t.Context())
-	if snapshots, err := storeB.ListSnapshots(); err != nil {
-		t.Fatal(err)
-	} else if len(snapshots) != 2 {
-		t.Fatal("unexpected", len(snapshots))
-	} else if snapshots[0].SiaObjectID != snap2.SiaObjectID {
-		t.Fatal("mismatch", snapshots[0].SiaObjectID)
-	} else if snapshots[1].SiaObjectID != snap3.SiaObjectID {
-		t.Fatal("mismatch", snapshots[1].SiaObjectID)
-	} else if snapshots[0].CreatedAt.Unix() != snap2.CreatedAt.Unix() {
+	if snapshots := assertSnapshots(storeB, snap2.SiaObjectID, snap3.SiaObjectID); snapshots[0].CreatedAt.Unix() != snap2.CreatedAt.Unix() {
 		t.Fatal("mismatch", snapshots[0].CreatedAt)
 	}
 
@@ -233,14 +235,7 @@ func TestSnapshotRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, ok := memSDK.ObjectMetadata(snapB.SiaObjectID)
-	if !ok {
-		t.Fatal("snapshot object not found")
-	}
-	var meta objects.SnapshotMetadata
-	if err := json.Unmarshal(raw, &meta); err != nil {
-		t.Fatal(err)
-	} else if meta.Generation != 4 {
+	if meta := downloadMetadata(t, memSDK, snapB.SiaObjectID); meta.Generation != 4 {
 		t.Fatal("unexpected", meta.Generation)
 	}
 	if err := backendB.Close(); err != nil {
@@ -249,31 +244,10 @@ func TestSnapshotRecovery(t *testing.T) {
 
 	// a fresh database with the same app scope recovers every live snapshot
 	// from the network alone
-	dirC := t.TempDir()
-	storeC, err := sqlite.OpenDatabase(filepath.Join(dirC, "s3d.sqlite"), log)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer storeC.Close()
-	backendC := openBackend(dirC, storeC)
-	memSDK.SetEvents([]sdk.ObjectEvent{
-		{Key: snap1.SiaObjectID, UpdatedAt: eventTime.Add(time.Second), Deleted: true},
-		snapshotEvent(snap2.SiaObjectID, eventTime.Add(2*time.Second)),
-		snapshotEvent(snap3.SiaObjectID, eventTime.Add(3*time.Second)),
-		snapshotEvent(snapB.SiaObjectID, eventTime.Add(4*time.Second)),
-	})
+	storeC, backendC := openBackend(t.TempDir())
+	memSDK.SetEvents(append(events, snapshotEvent(snapB.SiaObjectID, eventTime.Add(4*time.Second))))
 	backendC.SyncMetadata(t.Context())
-	if snapshots, err := storeC.ListSnapshots(); err != nil {
-		t.Fatal(err)
-	} else if len(snapshots) != 3 {
-		t.Fatal("unexpected", len(snapshots))
-	} else if snapshots[0].SiaObjectID != snap2.SiaObjectID {
-		t.Fatal("mismatch", snapshots[0].SiaObjectID)
-	} else if snapshots[1].SiaObjectID != snap3.SiaObjectID {
-		t.Fatal("mismatch", snapshots[1].SiaObjectID)
-	} else if snapshots[2].SiaObjectID != snapB.SiaObjectID {
-		t.Fatal("mismatch", snapshots[2].SiaObjectID)
-	}
+	assertSnapshots(storeC, snap2.SiaObjectID, snap3.SiaObjectID, snapB.SiaObjectID)
 	if err := backendC.Close(); err != nil {
 		t.Fatal(err)
 	}
