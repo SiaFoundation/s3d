@@ -55,9 +55,7 @@ func runBackupCreate(ctx context.Context, cmd *flag.FlagSet) {
 	resp, err := http.DefaultClient.Do(req)
 	checkFatalError("failed to send request", err)
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		checkFatalError("failed to create backup", fmt.Errorf("unexpected status %s", resp.Status))
-	}
+	checkFatalError("failed to create backup", adminResponseError(resp))
 
 	var snap s3.Snapshot
 	checkFatalError("failed to decode response", json.NewDecoder(resp.Body).Decode(&snap))
@@ -81,9 +79,7 @@ func runBackupList(ctx context.Context, cmd *flag.FlagSet) {
 	resp, err := http.DefaultClient.Do(req)
 	checkFatalError("failed to send request", err)
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		checkFatalError("failed to list backups", fmt.Errorf("unexpected status %s", resp.Status))
-	}
+	checkFatalError("failed to list backups", adminResponseError(resp))
 
 	var snapshots []s3.Snapshot
 	checkFatalError("failed to decode response", json.NewDecoder(resp.Body).Decode(&snapshots))
@@ -120,8 +116,6 @@ func runBackupDelete(ctx context.Context, cmd *flag.FlagSet) {
 	resp, err := http.DefaultClient.Do(req)
 	checkFatalError("failed to send request", err)
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		checkFatalError("failed to delete backup", fmt.Errorf("unexpected status %s", resp.Status))
-	}
+	checkFatalError("failed to delete backup", adminResponseError(resp))
 	fmt.Printf("Deleted backup %d\n", id)
 }
