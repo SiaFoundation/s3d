@@ -33,6 +33,10 @@ const (
 	// processing orphaned objects runs.
 	orphanLoopInterval = time.Hour
 
+	// syncMetadataInterval is the interval at which object metadata is synced
+	// from the indexer.
+	syncMetadataInterval = time.Hour
+
 	// defaultLifecycleLoopInterval is the default interval at which the
 	// background lifecycle loop runs.
 	defaultLifecycleLoopInterval = time.Hour
@@ -580,7 +584,7 @@ func (s *Sia) deleteOrphanedUploads() (int, error) { //nolint:revive
 
 // syncMetadataLoop periodically syncs object metadata from the indexer.
 func (s *Sia) syncMetadataLoop(ctx context.Context) {
-	t := time.NewTicker(24 * time.Hour)
+	t := time.NewTicker(syncMetadataInterval)
 	defer t.Stop()
 
 	// sync once on startup
