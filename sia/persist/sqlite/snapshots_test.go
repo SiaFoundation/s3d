@@ -175,6 +175,14 @@ func TestSnapshots(t *testing.T) {
 	}
 	store.assertCount(1, "snapshots")
 
+	// adopting the same object again returns the existing record
+	if again, err := store.AdoptSnapshot(siaObjectID, s1.CreatedAt, s1Gen+10, s1.ObjectCount); err != nil {
+		t.Fatal(err)
+	} else if again.ID != adopted.ID {
+		t.Fatal("mismatch", again.ID)
+	}
+	store.assertCount(1, "snapshots")
+
 	// the generation counter is bumped past the adopted generation
 	if _, gen, err := store.CreateSnapshot(); err != nil {
 		t.Fatal(err)

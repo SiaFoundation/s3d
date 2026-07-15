@@ -148,6 +148,10 @@ CREATE TABLE snapshots (
     object_count INTEGER NOT NULL DEFAULT 0
 );
 
+-- one record per backup object, NULLs are distinct so in-flight snapshots are
+-- unaffected
+CREATE UNIQUE INDEX snapshots_sia_object_id_idx ON snapshots(sia_object_id);
+
 CREATE TABLE bucket_lifecycle_configurations (
     bucket_id INTEGER PRIMARY KEY,
     configuration TEXT NOT NULL,
