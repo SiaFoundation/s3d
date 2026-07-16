@@ -104,6 +104,19 @@ func TestSnapshots(t *testing.T) {
 	if _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "a"}); err != nil {
 		t.Fatal(err)
 	}
+
+	orphanGen := func() (gen int64) {
+		t.Helper()
+		if err := store.db.QueryRow("SELECT orphaned_at_gen FROM orphaned_objects WHERE sia_object_id = $1", sqlHash256(objID)).Scan(&gen); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+
+	// the orphan records the generation it was orphaned at and is withheld
+	if gen := orphanGen(); gen != s1Gen {
+		t.Fatal("unexpected", gen)
+	}
 	if orphans, err := store.OrphanedObjects(100); err != nil {
 		t.Fatal(err)
 	} else if len(orphans) != 0 {
@@ -164,7 +177,8 @@ func TestSnapshots(t *testing.T) {
 		t.Fatal("unexpected", orphans)
 	}
 
-	// adopting a snapshot recreates its record
+	// adopting a snapshot recreates its record and raises the orphan's
+	// generation so the adopted snapshot withholds it again
 	adopted, err := store.AdoptSnapshot(siaObjectID, s1.CreatedAt, s1Gen+10, s1.ObjectCount)
 	if err != nil {
 		t.Fatal(err)
@@ -174,73 +188,7 @@ func TestSnapshots(t *testing.T) {
 		t.Fatal("unexpected", adopted.ObjectCount)
 	}
 	store.assertCount(1, "snapshots")
-
-	// adopting the same object again returns the existing record
-	if again, err := store.AdoptSnapshot(siaObjectID, s1.CreatedAt, s1Gen+10, s1.ObjectCount); err != nil {
-		t.Fatal(err)
-	} else if again.ID != adopted.ID {
-		t.Fatal("mismatch", again.ID)
-	}
-	store.assertCount(1, "snapshots")
-
-	// the generation counter is bumped past the adopted generation
-	if _, gen, err := store.CreateSnapshot(); err != nil {
-		t.Fatal(err)
-	} else if gen != s1Gen+11 {
-		t.Fatal("unexpected", gen)
-	}
-}
-
-func TestAdoptSnapshotRaisesOrphanGeneration(t *testing.T) {
-	const bucket = "test-bucket"
-
-	store := initTestDB(t, zaptest.NewLogger(t))
-
-	if err := store.CreateBucket(testAccessKeyID, bucket); err != nil {
-		t.Fatal(err)
-	}
-
-	// upload, pin and delete an object so it is orphaned at generation zero
-	obj := sdk.Object{}
-	sealed := obj.Seal(types.GeneratePrivateKey())
-	objID := sealed.ID()
-	md5 := frand.Entropy128()
-	if _, _, err := store.PutObject(testAccessKeyID, bucket, "a", md5, nil, 1, new(string)); err != nil {
-		t.Fatal(err)
-	} else if err := store.MarkObjectUploaded(bucket, "a", "", md5, sealed, time.Now().Add(time.Hour)); err != nil {
-		t.Fatal(err)
-	} else if _, err := store.MarkObjectPinned(objID); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "a"}); err != nil {
-		t.Fatal(err)
-	}
-
-	orphanGen := func() (gen int64) {
-		t.Helper()
-		if err := store.db.QueryRow("SELECT orphaned_at_gen FROM orphaned_objects WHERE sia_object_id = $1", sqlHash256(objID)).Scan(&gen); err != nil {
-			t.Fatal(err)
-		}
-		return
-	}
-
-	// without snapshots the orphan is eligible for unpinning
-	if gen := orphanGen(); gen != 0 {
-		t.Fatal("unexpected", gen)
-	}
-	if orphans, err := store.OrphanedObjects(100); err != nil {
-		t.Fatal(err)
-	} else if len(orphans) != 1 {
-		t.Fatal("unexpected", len(orphans))
-	}
-
-	// adopting a snapshot from a later generation raises the orphan's
-	// generation so the snapshot withholds it
-	adopted1, err := store.AdoptSnapshot(frand.Entropy256(), time.Now(), 3, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if gen := orphanGen(); gen != 3 {
+	if gen := orphanGen(); gen != s1Gen+10 {
 		t.Fatal("unexpected", gen)
 	}
 	if orphans, err := store.OrphanedObjects(100); err != nil {
@@ -249,20 +197,28 @@ func TestAdoptSnapshotRaisesOrphanGeneration(t *testing.T) {
 		t.Fatal("unexpected", len(orphans))
 	}
 
-	// adopting a snapshot at or below the current generation leaves orphan
-	// generations alone
-	adopted2, err := store.AdoptSnapshot(frand.Entropy256(), time.Now(), 2, 1)
-	if err != nil {
+	// adopting the same object again returns the existing record and leaves
+	// the orphan generation alone
+	if again, err := store.AdoptSnapshot(siaObjectID, s1.CreatedAt, s1Gen+10, s1.ObjectCount); err != nil {
 		t.Fatal(err)
+	} else if again.ID != adopted.ID {
+		t.Fatal("mismatch", again.ID)
 	}
-	if gen := orphanGen(); gen != 3 {
+	store.assertCount(1, "snapshots")
+	if gen := orphanGen(); gen != s1Gen+10 {
 		t.Fatal("unexpected", gen)
 	}
 
-	// deleting the adopted snapshots releases the orphan
-	if err := store.DeleteSnapshot(adopted1.ID); err != nil {
+	// the generation counter is bumped past the adopted generation
+	if _, gen, err := store.CreateSnapshot(); err != nil {
 		t.Fatal(err)
-	} else if err := store.DeleteSnapshot(adopted2.ID); err != nil {
+	} else if gen != s1Gen+11 {
+		t.Fatal("unexpected", gen)
+	}
+
+	// deleting the adopted snapshot releases the orphan, the newer pending
+	// snapshot does not withhold it
+	if err := store.DeleteSnapshot(adopted.ID); err != nil {
 		t.Fatal(err)
 	}
 	if orphans, err := store.OrphanedObjects(100); err != nil {
