@@ -1,6 +1,9 @@
 package sqlite
 
 import (
+	"fmt"
+
+	"go.sia.tech/core/types"
 	"go.uber.org/zap"
 )
 
@@ -167,6 +170,186 @@ INSERT INTO object_parts (bucket_id, name, version_id, part_number, filename, co
 DROP TABLE object_parts_backup;
 
 ALTER TABLE buckets ADD COLUMN versioning_status TEXT NOT NULL DEFAULT '' CHECK (versioning_status IN ('', 'Enabled', 'Suspended'));`)
+		return err
+	},
+	// normalize the sia_object blob on the objects table: sealed objects move
+	// into sia_objects, their slab slices into sia_slab_slices, deduplicated
+	// slabs into sia_slabs (with an initial version of 0) and the slabs'
+	// sectors into sia_slab_sectors. The blob column is dropped from objects
+	// and sia_object_id becomes a reference into sia_objects.
+	func(tx *txn, log *zap.Logger) error {
+		if _, err := tx.Exec(`
+CREATE TABLE sia_objects (
+    id BLOB PRIMARY KEY,
+    encrypted_data_key BLOB NOT NULL,
+    data_signature BLOB NOT NULL,
+    encrypted_metadata_key BLOB,
+    encrypted_metadata BLOB,
+    metadata_signature BLOB NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE sia_slabs (
+    id BLOB PRIMARY KEY,
+    encryption_key BLOB NOT NULL,
+    min_shards INTEGER NOT NULL,
+    version INTEGER NOT NULL
+) WITHOUT ROWID;
+
+CREATE TABLE sia_slab_slices (
+    sia_object_id BLOB NOT NULL,
+    slice_index INTEGER NOT NULL,
+    slab_id BLOB NOT NULL,
+    offset INTEGER NOT NULL,
+    length INTEGER NOT NULL,
+    FOREIGN KEY (sia_object_id) REFERENCES sia_objects(id) ON DELETE CASCADE,
+    FOREIGN KEY (slab_id) REFERENCES sia_slabs(id) ON DELETE CASCADE,
+    PRIMARY KEY (sia_object_id, slice_index)
+) WITHOUT ROWID;
+CREATE INDEX sia_slab_slices_slab_id_idx ON sia_slab_slices(slab_id);
+
+CREATE TABLE sia_slab_sectors (
+    slab_id BLOB NOT NULL,
+    sector_index INTEGER NOT NULL,
+    root BLOB NOT NULL,
+    host_key BLOB NOT NULL,
+    FOREIGN KEY (slab_id) REFERENCES sia_slabs(id) ON DELETE CASCADE,
+    PRIMARY KEY (slab_id, sector_index)
+) WITHOUT ROWID;`); err != nil {
+			return err
+		}
+
+		objStmt, err := tx.Prepare(`
+			INSERT INTO sia_objects (id, encrypted_data_key, data_signature, encrypted_metadata_key, encrypted_metadata, metadata_signature, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`)
+		if err != nil {
+			return err
+		}
+		defer objStmt.Close()
+		slabStmt, err := tx.Prepare(`
+			INSERT INTO sia_slabs (id, encryption_key, min_shards, version)
+			VALUES ($1, $2, $3, 0)
+			ON CONFLICT (id) DO NOTHING`)
+		if err != nil {
+			return err
+		}
+		defer slabStmt.Close()
+		sliceStmt, err := tx.Prepare(`
+			INSERT INTO sia_slab_slices (sia_object_id, slice_index, slab_id, offset, length)
+			VALUES ($1, $2, $3, $4, $5)`)
+		if err != nil {
+			return err
+		}
+		defer sliceStmt.Close()
+		sectorStmt, err := tx.Prepare(`
+			INSERT INTO sia_slab_sectors (slab_id, sector_index, root, host_key)
+			VALUES ($1, $2, $3, $4)
+			ON CONFLICT (slab_id, sector_index) DO UPDATE SET host_key = excluded.host_key`)
+		if err != nil {
+			return err
+		}
+		defer sectorStmt.Close()
+
+		rows, err := tx.Query(`SELECT sia_object_id, sia_object FROM objects WHERE sia_object_id IS NOT NULL GROUP BY sia_object_id`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		normalized := 0
+		for rows.Next() {
+			var id sqlHash256
+			var blob []byte
+			if err := rows.Scan(&id, &blob); err != nil {
+				return err
+			}
+			var legacy legacySealedObject
+			d := types.NewBufDecoder(blob)
+			legacy.DecodeFrom(d)
+			if err := d.Err(); err != nil {
+				return fmt.Errorf("failed to decode sia object %v: %w", types.Hash256(id), err)
+			}
+			sealed := legacy.convert()
+			if sealed.ID() != types.Hash256(id) {
+				return fmt.Errorf("decoded sia object id %v does not match stored id %v", sealed.ID(), types.Hash256(id))
+			}
+
+			if _, err := objStmt.Exec(id, sealed.EncryptedDataKey, sqlSignature(sealed.DataSignature),
+				sealed.EncryptedMetadataKey, sealed.EncryptedMetadata, sqlSignature(sealed.MetadataSignature),
+				sqlTime(sealed.CreatedAt), sqlTime(sealed.UpdatedAt)); err != nil {
+				return fmt.Errorf("failed to insert sia object %v: %w", types.Hash256(id), err)
+			}
+			for i, ss := range sealed.Slabs {
+				slabID := ss.Digest()
+				if _, err := slabStmt.Exec(sqlHash256(slabID), sqlHash256(ss.EncryptionKey), int64(ss.MinShards)); err != nil {
+					return fmt.Errorf("failed to insert slab %v: %w", slabID, err)
+				}
+				if _, err := sliceStmt.Exec(id, i, sqlHash256(slabID), int64(ss.Offset), int64(ss.Length)); err != nil {
+					return fmt.Errorf("failed to insert slab slice %d of sia object %v: %w", i, types.Hash256(id), err)
+				}
+				for j, sec := range ss.Sectors {
+					if _, err := sectorStmt.Exec(sqlHash256(slabID), j, sqlHash256(sec.Root), sqlHash256(sec.HostKey)); err != nil {
+						return fmt.Errorf("failed to insert sector %d of slab %v: %w", j, slabID, err)
+					}
+				}
+			}
+			normalized++
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		rows.Close()
+		log.Info("normalized sia objects", zap.Int("objects", normalized))
+
+		// rebuild objects without the sia_object blob column
+		_, err = tx.Exec(`
+CREATE TABLE object_parts_backup AS SELECT bucket_id, name, version_id, part_number, filename, content_md5, content_length, offset FROM object_parts;
+DROP TABLE object_parts;
+
+CREATE TABLE objects_new (
+    bucket_id INTEGER REFERENCES buckets(id) NOT NULL,
+    name TEXT NOT NULL,
+    version_id TEXT NOT NULL DEFAULT '',
+    seq INTEGER NOT NULL,
+    is_delete_marker INTEGER NOT NULL DEFAULT FALSE,
+    is_latest INTEGER NOT NULL DEFAULT TRUE,
+    content_md5 BLOB NOT NULL,
+    metadata TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    parts_count INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL,
+    filename TEXT,
+    sia_object_id BLOB REFERENCES sia_objects(id),
+    CHECK ((size = 0 AND filename IS NULL AND sia_object_id IS NULL) OR (size > 0 AND (filename IS NOT NULL OR sia_object_id IS NOT NULL))),
+    CHECK (is_delete_marker IN (FALSE, TRUE)),
+    CHECK (is_latest IN (FALSE, TRUE)),
+    PRIMARY KEY (bucket_id, name, version_id)
+) WITHOUT ROWID;
+INSERT INTO objects_new (bucket_id, name, version_id, seq, is_delete_marker, is_latest, content_md5, metadata, size, parts_count, updated_at, filename, sia_object_id)
+    SELECT bucket_id, name, version_id, seq, is_delete_marker, is_latest, content_md5, metadata, size, parts_count, updated_at, filename, sia_object_id FROM objects;
+DROP TABLE objects;
+ALTER TABLE objects_new RENAME TO objects;
+CREATE INDEX objects_sia_object_id_idx ON objects(sia_object_id);
+CREATE INDEX objects_filename_idx ON objects(filename) WHERE filename IS NOT NULL;
+CREATE INDEX objects_bucket_id_updated_at_idx ON objects(bucket_id, updated_at);
+CREATE INDEX objects_bucket_name_seq_idx ON objects(bucket_id, name, seq DESC);
+CREATE UNIQUE INDEX objects_is_latest_idx ON objects(bucket_id, name) WHERE is_latest = TRUE;
+
+CREATE TABLE object_parts (
+    bucket_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    version_id TEXT NOT NULL DEFAULT '',
+    part_number INTEGER NOT NULL,
+    filename TEXT NOT NULL,
+    content_md5 BLOB NOT NULL,
+    content_length INTEGER NOT NULL,
+    offset INTEGER NOT NULL,
+    FOREIGN KEY (bucket_id, name, version_id) REFERENCES objects(bucket_id, name, version_id) ON DELETE CASCADE,
+    PRIMARY KEY (bucket_id, name, version_id, part_number)
+);
+INSERT INTO object_parts (bucket_id, name, version_id, part_number, filename, content_md5, content_length, offset)
+    SELECT bucket_id, name, version_id, part_number, filename, content_md5, content_length, offset FROM object_parts_backup;
+DROP TABLE object_parts_backup;`)
 		return err
 	},
 }

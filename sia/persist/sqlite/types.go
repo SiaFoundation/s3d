@@ -12,7 +12,6 @@ import (
 
 	"github.com/SiaFoundation/s3d/s3"
 	"go.sia.tech/core/types"
-	sdk "go.sia.tech/siastorage"
 )
 
 var (
@@ -20,7 +19,7 @@ var (
 	_ scannerValuer = (*sqlMD5)(nil)
 	_ scannerValuer = (*sqlTime)(nil)
 	_ scannerValuer = (*sqlUploadID)(nil)
-	_ scannerValuer = (*sqlSiaObject)(nil)
+	_ scannerValuer = (*sqlSignature)(nil)
 	_ scannerValuer = (*sqlMetaJSON)(nil)
 )
 
@@ -102,24 +101,23 @@ func (uid sqlUploadID) Value() (driver.Value, error) {
 	return uid[:], nil
 }
 
-type sqlSiaObject sdk.SealedObject
+type sqlSignature types.Signature
 
-func (m *sqlSiaObject) Scan(src any) error {
+func (s *sqlSignature) Scan(src any) error {
 	switch src := src.(type) {
 	case []byte:
-		if len(src) == 0 {
-			*m = sqlSiaObject{}
-			return nil
+		if len(src) != len(sqlSignature{}) {
+			return fmt.Errorf("failed to scan source into Signature due to invalid number of bytes %v != %v: %v", len(src), len(sqlSignature{}), src)
 		}
-		return (*sdk.SealedObject)(m).UnmarshalSia(src)
+		copy(s[:], src)
+		return nil
 	default:
-		return fmt.Errorf("cannot scan %T to SiaObject", src)
+		return fmt.Errorf("cannot scan %T to Signature", src)
 	}
 }
 
-func (m sqlSiaObject) Value() (driver.Value, error) {
-	so := sdk.SealedObject(m)
-	return so.MarshalSia()
+func (s sqlSignature) Value() (driver.Value, error) {
+	return s[:], nil
 }
 
 type sqlMetaJSON map[string]string

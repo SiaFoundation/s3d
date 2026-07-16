@@ -1,14 +1,19 @@
 package sqlite
 
 import (
+	"bytes"
 	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"go.sia.tech/core/types"
+	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
+	"lukechampine.com/frand"
 )
 
 // nolint:misspell
@@ -144,6 +149,147 @@ func initDBVersion(tb testing.TB, fp string, target int64, log *zap.Logger) *Sto
 		tb.Fatal(err)
 	}
 	return store
+}
+
+// TestMigrationSiaObjectNormalization seeds a v1 database with sealed object
+// blobs and verifies the normalization migration splits them into the
+// sia_objects, sia_slabs, sia_slab_slices and sia_slab_sectors tables.
+func TestMigrationSiaObjectNormalization(t *testing.T) {
+	log := zaptest.NewLogger(t)
+	fp := filepath.Join(t.TempDir(), "s3d.sqlite3")
+
+	db, err := sql.Open("sqlite3", sqliteFilepath(fp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(initialSchema); err != nil {
+		t.Fatal(err)
+	}
+
+	// the v1 database predates the versioned slab encoding, so the seeded
+	// blobs use the legacy encoding the normalization migration decodes
+	newSlab := func(sectors int, offset, length uint32) legacySlabSlice {
+		ss := legacySlabSlice{EncryptionKey: frand.Entropy256(), MinShards: 1, Offset: offset, Length: length}
+		for range sectors {
+			ss.Sectors = append(ss.Sectors, legacyPinnedSector{Root: frand.Entropy256(), HostKey: frand.Entropy256()})
+		}
+		return ss
+	}
+	seal := func(ss ...legacySlabSlice) legacySealedObject {
+		so := legacySealedObject{
+			EncryptedDataKey:     frand.Bytes(32),
+			Slabs:                ss,
+			EncryptedMetadataKey: frand.Bytes(32),
+			EncryptedMetadata:    frand.Bytes(16),
+			CreatedAt:            time.Unix(1000, 0),
+			UpdatedAt:            time.Unix(2000, 0),
+		}
+		frand.Read(so.DataSignature[:])
+		frand.Read(so.MetadataSignature[:])
+		return so
+	}
+
+	// two sealed objects slicing one shared slab to exercise deduplication,
+	// plus a copy sharing the first sealed object outright and a third
+	// stand-alone object
+	shared := newSlab(3, 0, 100)
+	sharedTail := shared
+	sharedTail.Offset, sharedTail.Length = 50, 50
+	sealed1 := seal(newSlab(2, 0, 100), shared)
+	sealed2 := seal(sharedTail, newSlab(1, 0, 100))
+	sealed3 := seal(newSlab(1, 0, 100))
+
+	insert := func(name string, sealed legacySealedObject) {
+		t.Helper()
+		var buf bytes.Buffer
+		e := types.NewEncoder(&buf)
+		sealed.EncodeTo(e)
+		if err := e.Flush(); err != nil {
+			t.Fatal(err)
+		}
+		converted := sealed.convert()
+		id := converted.ID()
+		if _, err := db.Exec(`
+			INSERT INTO objects (bucket_id, name, content_md5, metadata, size, updated_at, filename, sia_object_id, sia_object)
+			VALUES (1, ?, x'00', '{}', 10, 0, NULL, ?, ?)`, name, id[:], buf.Bytes()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert("obj1", sealed1)
+	insert("obj2", sealed2)
+	insert("obj1-copy", sealed1)
+	insert("obj3", sealed3)
+
+	// seed rows referencing (or related to) the objects table to verify the
+	// rebuild doesn't drop them via the ON DELETE CASCADE foreign keys
+	if _, err := db.Exec(`INSERT INTO object_parts (bucket_id, name, part_number, filename, content_md5, content_length, offset) VALUES
+		(1, 'obj1', 1, 'part1.dat', x'01', 5, 0),
+		(1, 'obj1', 2, 'part2.dat', x'02', 5, 5)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO orphaned_objects (sia_object_id) VALUES (?)`, frand.Bytes(32)); err != nil {
+		t.Fatal(err)
+	}
+
+	store := &Store{db: db, log: log}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if err := store.init(int64(len(migrations) + 1)); err != nil {
+		t.Fatal(err)
+	}
+
+	// the blob column must be gone while the references remain
+	assertCount := func(query string, want int) {
+		t.Helper()
+		var got int
+		if err := db.QueryRow(query).Scan(&got); err != nil {
+			t.Fatal(err)
+		} else if got != want {
+			t.Fatalf("%q: expected %d, got %d", query, want, got)
+		}
+	}
+	assertCount(`SELECT COUNT(*) FROM pragma_table_info('objects') WHERE name = 'sia_object'`, 0)
+	assertCount(`SELECT COUNT(*) FROM objects WHERE sia_object_id IS NOT NULL`, 4)
+
+	// rows referencing objects survived the table rebuild
+	assertCount(`SELECT COUNT(*) FROM object_parts WHERE bucket_id = 1 AND name = 'obj1'`, 2)
+	assertCount(`SELECT COUNT(*) FROM orphaned_objects`, 1)
+
+	// two sealed objects, four slices and three slabs (the shared one
+	// deduplicated) with six sectors, all slabs at version 0
+	assertCount(`SELECT COUNT(*) FROM sia_objects`, 3)
+	assertCount(`SELECT COUNT(*) FROM sia_slab_slices`, 5)
+	assertCount(`SELECT COUNT(*) FROM sia_slabs`, 4)
+	assertCount(`SELECT COUNT(*) FROM sia_slabs WHERE version = 0`, 4)
+	assertCount(`SELECT COUNT(*) FROM sia_slab_sectors`, 7)
+
+	// the sealed objects round-trip through the normalized tables
+	for _, legacy := range []legacySealedObject{sealed1, sealed2, sealed3} {
+		want := sdk.SealedObject{SealedObject: legacy.convert()}
+		var got sdk.SealedObject
+		err := store.transaction(func(tx *txn) (err error) {
+			got, err = siaObject(tx, want.ID())
+			return
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantBlob, err := want.MarshalSia()
+		if err != nil {
+			t.Fatal(err)
+		}
+		gotBlob, err := got.MarshalSia()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(wantBlob, gotBlob) {
+			t.Fatalf("sealed object %v did not survive normalization", want.ID())
+		}
+	}
 }
 
 func TestMigrationConsistency(t *testing.T) {

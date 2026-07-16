@@ -26,6 +26,45 @@ CREATE TABLE buckets (
 );
 CREATE INDEX buckets_user_id_idx ON buckets(user_id);
 
+CREATE TABLE sia_objects (
+    id BLOB PRIMARY KEY, -- digest of the object's slab slices
+    encrypted_data_key BLOB NOT NULL,
+    data_signature BLOB NOT NULL,
+    encrypted_metadata_key BLOB,
+    encrypted_metadata BLOB,
+    metadata_signature BLOB NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE sia_slabs (
+    id BLOB PRIMARY KEY,
+    encryption_key BLOB NOT NULL,
+    min_shards INTEGER NOT NULL,
+    version INTEGER NOT NULL
+) WITHOUT ROWID;
+
+CREATE TABLE sia_slab_slices (
+    sia_object_id BLOB NOT NULL,
+    slice_index INTEGER NOT NULL, -- position of the slice within the object
+    slab_id BLOB NOT NULL,
+    offset INTEGER NOT NULL,
+    length INTEGER NOT NULL,
+    FOREIGN KEY (sia_object_id) REFERENCES sia_objects(id) ON DELETE CASCADE,
+    FOREIGN KEY (slab_id) REFERENCES sia_slabs(id) ON DELETE CASCADE,
+    PRIMARY KEY (sia_object_id, slice_index)
+) WITHOUT ROWID;
+CREATE INDEX sia_slab_slices_slab_id_idx ON sia_slab_slices(slab_id);
+
+CREATE TABLE sia_slab_sectors (
+    slab_id BLOB NOT NULL,
+    sector_index INTEGER NOT NULL, -- position of the shard within the slab
+    root BLOB NOT NULL,
+    host_key BLOB NOT NULL,
+    FOREIGN KEY (slab_id) REFERENCES sia_slabs(id) ON DELETE CASCADE,
+    PRIMARY KEY (slab_id, sector_index)
+) WITHOUT ROWID;
+
 CREATE TABLE objects (
     bucket_id INTEGER REFERENCES buckets(id) NOT NULL,
     name TEXT NOT NULL,
@@ -39,10 +78,7 @@ CREATE TABLE objects (
     parts_count INTEGER NOT NULL DEFAULT 0,
     updated_at INTEGER NOT NULL,
     filename TEXT, -- name of file for regular uploads or dir for multipart uploads
-    sia_object_id BLOB,
-    sia_object BLOB,
-    -- sia_object_id and sia_object are always set or nulled together
-    CHECK ((sia_object_id IS NULL AND sia_object IS NULL) OR (sia_object_id IS NOT NULL AND sia_object IS NOT NULL)),
+    sia_object_id BLOB REFERENCES sia_objects(id),
     -- non-empty objects must have a filename, a sia_object_id, or both (between uploading and pinning)
     CHECK ((size = 0 AND filename IS NULL AND sia_object_id IS NULL) OR (size > 0 AND (filename IS NOT NULL OR sia_object_id IS NOT NULL))),
     CHECK (is_delete_marker IN (FALSE, TRUE)),
