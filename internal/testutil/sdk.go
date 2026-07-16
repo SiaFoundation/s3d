@@ -31,6 +31,7 @@ type (
 		appKey      types.PrivateKey
 		objects     map[types.Hash256]uploadedObject
 		events      []sdk.ObjectEvent
+		eventsErr   error // when set, ObjectEvents returns this error
 		slabSize    int64
 		failUploads bool
 
@@ -125,11 +126,22 @@ func (s *MemorySDK) SetEvents(events []sdk.ObjectEvent) {
 	s.events = events
 }
 
+// SetEventsError sets the error returned by ObjectEvents.
+func (s *MemorySDK) SetEventsError(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.eventsErr = err
+}
+
 // ObjectEvents returns object events starting from the given cursor, up to the
 // given limit.
 func (s *MemorySDK) ObjectEvents(_ context.Context, cursor slabs.Cursor, limit int) ([]sdk.ObjectEvent, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.eventsErr != nil {
+		return nil, s.eventsErr
+	}
 
 	sorted := slices.Clone(s.events)
 	slices.SortFunc(sorted, func(a, b sdk.ObjectEvent) int {

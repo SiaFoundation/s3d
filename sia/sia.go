@@ -155,6 +155,11 @@ type Sia struct {
 
 	failedUploads atomic.Int64
 
+	// synced reports whether a metadata sync completed since startup. Orphan
+	// processing waits for it so objects referenced by snapshots that are not
+	// adopted yet are not unpinned.
+	synced atomic.Bool
+
 	tg     *threadgroup.ThreadGroup
 	logger *zap.Logger
 }
@@ -476,13 +481,20 @@ func (s *Sia) processOrphansLoop(ctx context.Context) {
 }
 
 // ProcessOrphans unpins orphaned objects from the indexer and removes them
-// from the orphaned_objects table in batches.
+// from the orphaned_objects table in batches. Processing waits for a metadata
+// sync to complete first, the network may hold snapshots that reference
+// orphaned objects but are not adopted yet.
 //
 // NOTE: there is no race condition with re-uploaded objects here because
 // re-uploading an object always creates a new ID. The only way to create
 // duplicate IDs is via copying, and once an object is orphaned it can no
 // longer be copied.
 func (s *Sia) ProcessOrphans(ctx context.Context) {
+	if !s.synced.Load() {
+		s.logger.Debug("deferring orphan processing until object metadata is synced")
+		return
+	}
+
 	const batchSize = 100
 	var totalUnpinned int
 	for {
@@ -620,6 +632,9 @@ func (s *Sia) syncMetadata(ctx context.Context) { //nolint:revive
 			s.logger.Error("failed to fetch object events", zap.Error(err))
 			break
 		} else if len(events) == 0 {
+			// all events are consumed, every snapshot on the network is known
+			// locally so orphan processing is safe
+			s.synced.Store(true)
 			break
 		}
 

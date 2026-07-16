@@ -41,12 +41,23 @@ func (s *Store) CreateSnapshot() (snap s3.Snapshot, gen int64, err error) {
 // AdoptSnapshot records a snapshot for a backup object discovered on the
 // network, e.g. after restoring from a backup made by a previous database. The
 // snapshot generation is bumped to at least the adopted generation so objects
-// orphaned during the adopted snapshot's lifetime stay withheld. Adopting an
-// object that already has a record returns the existing snapshot.
+// orphaned during the adopted snapshot's lifetime stay withheld. Existing
+// orphans from earlier generations are raised to the adopted generation, the
+// adopted snapshot may reference them when the database was restored from an
+// older backup. Adopting an object that already has a record returns the
+// existing snapshot.
 func (s *Store) AdoptSnapshot(objectID types.Hash256, createdAt time.Time, gen, objectCount int64) (snap s3.Snapshot, err error) {
 	err = s.transaction(func(tx *txn) error {
-		if _, err := tx.Exec("UPDATE global_settings SET snapshot_gen = MAX(snapshot_gen, $1)", gen); err != nil {
+		var current int64
+		if err := tx.QueryRow("SELECT snapshot_gen FROM global_settings").Scan(&current); err != nil {
 			return err
+		}
+		if gen > current {
+			if _, err := tx.Exec("UPDATE orphaned_objects SET orphaned_at_gen = $1 WHERE orphaned_at_gen < $1", gen); err != nil {
+				return err
+			} else if _, err := tx.Exec("UPDATE global_settings SET snapshot_gen = $1", gen); err != nil {
+				return err
+			}
 		}
 		return tx.QueryRow(`
 			INSERT INTO snapshots (created_at, gen, object_count, sia_object_id)

@@ -1606,6 +1606,9 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	}
 	t.Cleanup(func() { siaBackend.Close() })
 
+	// complete a metadata sync so orphan processing is enabled
+	siaBackend.SyncMetadata(t.Context())
+
 	s3Tester := testutil.NewTester(t, testutil.WithBackend(siaBackend))
 
 	const bucket = "bucket"
@@ -1697,6 +1700,9 @@ func TestOrphanLifecycle(t *testing.T) {
 	memSDK := testutil.NewMemorySDK()
 	backend, store := testutil.NewBackend(t, testutil.WithSDK(memSDK))
 
+	// complete a metadata sync so orphan processing is enabled
+	backend.SyncMetadata(t.Context())
+
 	const bucket = "bucket"
 	if err := store.CreateBucket(testutil.AccessKeyID, bucket); err != nil {
 		t.Fatal(err)
@@ -1776,5 +1782,47 @@ func TestOrphanLifecycle(t *testing.T) {
 		t.Fatal("expected no s3 objects pinned after all snapshots deleted, got", got)
 	} else if memSDK.Pinned(idB) {
 		t.Fatal("expected B unpinned after its snapshot was deleted")
+	}
+}
+
+func TestProcessOrphansGatedOnSync(t *testing.T) {
+	memSDK := testutil.NewMemorySDK()
+	memSDK.SetEventsError(errors.New("indexer unavailable"))
+	backend, store := testutil.NewBackend(t, testutil.WithSDK(memSDK))
+
+	const bucket = "bucket"
+	if err := store.CreateBucket(testutil.AccessKeyID, bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// pin an object and orphan it
+	id := stageUpload(t, memSDK, store, bucket, "a", time.Now().Add(time.Hour))
+	if err := backend.PinObjects(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := store.DeleteObject(testutil.AccessKeyID, bucket, s3.ObjectID{Key: "a"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// the orphan stays pinned while no metadata sync has completed, the
+	// network may hold snapshots that reference it
+	backend.ProcessOrphans(t.Context())
+	if !memSDK.Pinned(id) {
+		t.Fatal("expected orphan to stay pinned before initial sync")
+	}
+
+	// a failing sync keeps the gate closed
+	backend.SyncMetadata(t.Context())
+	backend.ProcessOrphans(t.Context())
+	if !memSDK.Pinned(id) {
+		t.Fatal("expected orphan to stay pinned after failed sync")
+	}
+
+	// a completed sync opens the gate and the orphan is unpinned
+	memSDK.SetEventsError(nil)
+	backend.SyncMetadata(t.Context())
+	backend.ProcessOrphans(t.Context())
+	if memSDK.Pinned(id) {
+		t.Fatal("expected orphan to be unpinned after sync")
 	}
 }
