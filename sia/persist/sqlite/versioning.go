@@ -83,19 +83,19 @@ func putObject(tx *txn, bid int64, name string, status string, contentMD5 [16]by
 		return objectMutationResult{}, fmt.Errorf("failed to claim current sequence: %w", err)
 	}
 
+	// the sealed object referenced by a copied siaObject already exists in the
+	// sia_objects table, so only the reference is stored here.
 	var id *sqlHash256
-	var sealed *sqlSiaObject
 	if siaObject != nil {
 		id = (*sqlHash256)(&siaObject.ID)
-		sealed = (*sqlSiaObject)(&siaObject.Sealed)
 	}
 
 	if _, err := tx.Exec(`
-		INSERT INTO objects (bucket_id, name, version_id, seq, is_delete_marker, is_latest, sia_object_id, content_md5, metadata, size, parts_count, updated_at, filename, sia_object)
-		VALUES ($1, $2, $3, $4, FALSE, TRUE, $5, $6, $7, $8, $9, $10, $11, $12)
+		INSERT INTO objects (bucket_id, name, version_id, seq, is_delete_marker, is_latest, sia_object_id, content_md5, metadata, size, parts_count, updated_at, filename)
+		VALUES ($1, $2, $3, $4, FALSE, TRUE, $5, $6, $7, $8, $9, $10, $11)
 	`, bid, name, version, seq, id, sqlMD5(contentMD5),
 		sqlMetaJSON(meta), length, partsCount, sqlTime(time.Now()),
-		fileName, sealed); err != nil {
+		fileName); err != nil {
 		return objectMutationResult{}, fmt.Errorf("failed to insert object: %w", err)
 	}
 

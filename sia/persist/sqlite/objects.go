@@ -196,20 +196,16 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, version s3.
 			return s3errs.ErrInvalidPart
 		}
 		var objectID sql.Null[sqlHash256]
-		var siaObj sql.Null[sqlSiaObject]
 		err := tx.QueryRow(`
-			SELECT filename, sia_object_id, metadata, updated_at, size, content_md5, sia_object
+			SELECT filename, sia_object_id, metadata, updated_at, size, content_md5
 			FROM objects
 			WHERE bucket_id = $1 AND name = $2 AND version_id = $3
-		`, bid, name, versionID).Scan(&obj.FileName, &objectID, (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Length, (*sqlMD5)(&obj.ContentMD5), &siaObj)
-		obj.Size = obj.Length
-		if objectID.Valid && siaObj.Valid {
-			obj.SiaObject = &objects.SiaObject{
-				ID:     types.Hash256(objectID.V),
-				Sealed: sdk.SealedObject(siaObj.V),
-			}
+		`, bid, name, versionID).Scan(&obj.FileName, &objectID, (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Length, (*sqlMD5)(&obj.ContentMD5))
+		if err != nil {
+			return err
 		}
-		return err
+		obj.Size = obj.Length
+		return attachSiaObject(tx, obj, objectID)
 	}
 
 	// return error if part number is invalid
@@ -219,20 +215,34 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, version s3.
 
 	// part specified, return part info
 	var partObjID sql.Null[sqlHash256]
-	var siaObj sql.Null[sqlSiaObject]
 	err := tx.QueryRow(`
-		SELECT o.filename, o.sia_object_id, o.sia_object, o.metadata, o.updated_at, o.size, p.offset, p.content_length, p.content_md5, o.sia_object
+		SELECT o.filename, o.sia_object_id, o.metadata, o.updated_at, o.size, p.offset, p.content_length, p.content_md5
 		FROM object_parts p
 		JOIN objects o ON o.bucket_id = p.bucket_id AND o.name = p.name AND o.version_id = p.version_id
 		WHERE o.bucket_id = $1 AND o.name = $2 AND o.version_id = $3 AND p.part_number = $4
-	`, bid, name, versionID, *partNumber).Scan(&obj.FileName, &partObjID, &siaObj, (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Size, &obj.Offset, &obj.Length, (*sqlMD5)(&obj.ContentMD5), &siaObj)
-	if partObjID.Valid && siaObj.Valid {
-		obj.SiaObject = &objects.SiaObject{
-			ID:     types.Hash256(partObjID.V),
-			Sealed: sdk.SealedObject(siaObj.V),
-		}
+	`, bid, name, versionID, *partNumber).Scan(&obj.FileName, &partObjID, (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Size, &obj.Offset, &obj.Length, (*sqlMD5)(&obj.ContentMD5))
+	if err != nil {
+		return err
 	}
-	return err
+	return attachSiaObject(tx, obj, partObjID)
+}
+
+// attachSiaObject loads the sealed object referenced by objectID from the
+// normalized sia object tables and attaches it to obj. A null objectID leaves
+// obj untouched.
+func attachSiaObject(tx *txn, obj *objects.Object, objectID sql.Null[sqlHash256]) error {
+	if !objectID.Valid {
+		return nil
+	}
+	sealed, err := siaObject(tx, types.Hash256(objectID.V))
+	if err != nil {
+		return fmt.Errorf("failed to load sia object %v: %w", types.Hash256(objectID.V), err)
+	}
+	obj.SiaObject = &objects.SiaObject{
+		ID:     types.Hash256(objectID.V),
+		Sealed: sealed,
+	}
+	return nil
 }
 
 // PutObject stores the object and returns the wire-encoded version ID to
@@ -286,13 +296,18 @@ func (s *Store) MarkObjectUploaded(bucket, name, versionID string, contentMD5 [1
 			return objects.ErrObjectModified
 		}
 
+		// store the sealed object before referencing it from the objects row
+		if err := upsertSiaObject(tx, sealed); err != nil {
+			return err
+		}
+
 		// keep the filename set so the file on disk remains available as a
 		// backup until the pin completes.
 		if _, err := tx.Exec(`
 			UPDATE objects
-			SET sia_object_id = $1, sia_object = $2
-			WHERE bucket_id = $3 AND name = $4 AND version_id = $5 AND sia_object_id IS NULL AND filename IS NOT NULL
-		`, sqlHash256(sealed.ID()), sqlSiaObject(sealed), bid, name, versionID); err != nil {
+			SET sia_object_id = $1
+			WHERE bucket_id = $2 AND name = $3 AND version_id = $4 AND sia_object_id IS NULL AND filename IS NOT NULL
+		`, sqlHash256(sealed.ID()), bid, name, versionID); err != nil {
 			return err
 		}
 
@@ -442,7 +457,7 @@ func (s *Store) ScheduleObjectForReupload(siaObjectID types.Hash256) error {
 		}
 
 		if _, err := tx.Exec(`
-			UPDATE objects SET sia_object_id = NULL, sia_object = NULL
+			UPDATE objects SET sia_object_id = NULL
 			WHERE sia_object_id = $1
 		`, sqlHash256(siaObjectID)); err != nil {
 			return err
@@ -476,39 +491,44 @@ func (s *Store) ObjectsForPinning(now time.Time, limit int) ([]objects.UnpinnedO
 	err := s.transaction(func(tx *txn) error {
 		result = result[:0]
 		rows, err := tx.Query(`
-			SELECT u.sia_object_id,
-			       (SELECT sia_object FROM objects WHERE sia_object_id = u.sia_object_id LIMIT 1),
-			       u.pin_before
-			FROM unpinned_objects u
-			WHERE u.next_attempt_at <= $1
-			ORDER BY u.next_attempt_at
+			SELECT sia_object_id, pin_before
+			FROM unpinned_objects
+			WHERE next_attempt_at <= $1
+			ORDER BY next_attempt_at
 			LIMIT $2
 		`, sqlTime(now), limit)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
+		var candidates []objects.UnpinnedObject
 		for rows.Next() {
 			var uo objects.UnpinnedObject
-			var id sqlHash256
-			var sealed *sqlSiaObject
-			if err := rows.Scan(&id, &sealed, (*sqlTime)(&uo.PinBefore)); err != nil {
+			if err := rows.Scan((*sqlHash256)(&uo.SiaObject.ID), (*sqlTime)(&uo.PinBefore)); err != nil {
 				return err
 			}
-			if sealed == nil {
-				// no objects row references this sia_object_id anymore;
-				// insertOrphan drops the unpinned_objects row atomically
-				// with the last reference, so this shouldn't happen. Skip
-				// the row defensively rather than pinning it.
+			candidates = append(candidates, uo)
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		rows.Close()
+
+		for _, uo := range candidates {
+			sealed, err := siaObject(tx, uo.SiaObject.ID)
+			if errors.Is(err, sql.ErrNoRows) {
+				// the sealed object is gone; insertOrphan drops the
+				// unpinned_objects row atomically with the last reference,
+				// so this shouldn't happen. Skip the row defensively rather
+				// than pinning it.
 				continue
+			} else if err != nil {
+				return err
 			}
-			uo.SiaObject = objects.SiaObject{
-				ID:     types.Hash256(id),
-				Sealed: sdk.SealedObject(*sealed),
-			}
+			uo.SiaObject.Sealed = sealed
 			result = append(result, uo)
 		}
-		return rows.Err()
+		return nil
 	})
 	return result, err
 }
@@ -549,31 +569,24 @@ func (s *Store) RescheduleUnpinnedObject(siaObjectID types.Hash256, nextAttemptA
 	})
 }
 
-// UpdateSiaObjects batch updates object metadata in the database within a
-// single transaction. It returns the number of rows that were updated.
+// UpdateSiaObjects batch updates sealed object metadata in the database within
+// a single transaction. It returns the number of sealed objects that were
+// updated; objects that are no longer tracked are skipped.
 func (s *Store) UpdateSiaObjects(siaObjects []objects.SiaObject) (updated int64, err error) {
 	err = s.transaction(func(tx *txn) error {
 		updated = 0 // reset per transaction attempt
 
-		stmt, err := tx.Prepare(`
-			UPDATE objects SET sia_object = $1
-			WHERE sia_object_id = $2
-		`)
-		if err != nil {
-			return err
-		}
-		defer stmt.Close()
-
 		for _, obj := range siaObjects {
-			res, err := stmt.Exec(sqlSiaObject(obj.Sealed), sqlHash256(obj.ID))
-			if err != nil {
+			var exists bool
+			if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM sia_objects WHERE id = $1)`, sqlHash256(obj.ID)).Scan(&exists); err != nil {
+				return err
+			} else if !exists {
+				continue
+			}
+			if err := upsertSiaObject(tx, obj.Sealed); err != nil {
 				return err
 			}
-			n, err := res.RowsAffected()
-			if err != nil {
-				return err
-			}
-			updated += n
+			updated++
 		}
 		return nil
 	})
@@ -923,8 +936,9 @@ func orphanDeleted(tx *txn, row deletedRow) (objects.OrphanedFile, error) {
 }
 
 // insertOrphan finalizes deletion of objectID when no rows in the objects
-// table still reference it: the pin queue entry is dropped and the id is
-// recorded in orphaned_objects so the orphan loop unpins it. The orphan row
+// table still reference it: the normalized sia object rows are removed, the
+// pin queue entry is dropped and the id is recorded in orphaned_objects so
+// the orphan loop unpins it. The orphan row
 // is inserted even when the object was still queued for pinning — a pin may
 // be in flight concurrently (or may already have succeeded without
 // MarkObjectPinned having committed), and skipping the insert would leak
@@ -941,6 +955,11 @@ func insertOrphan(tx *txn, objectID types.Hash256) error {
 	}
 	if referenced {
 		return nil
+	}
+	// the last objects-row reference is gone; drop the sealed object along
+	// with its slices and any slabs referenced only by it.
+	if err := deleteSiaObject(tx, objectID); err != nil {
+		return err
 	}
 	// drop the pin queue entry; if it existed the object was still unpinned.
 	res, err := tx.Exec(`DELETE FROM unpinned_objects WHERE sia_object_id = $1`, sqlHash256(objectID))

@@ -884,6 +884,9 @@ func BenchmarkListObjects(b *testing.B) {
 			if err != nil {
 				return err
 			}
+			if err := upsertSiaObject(tx, sealed); err != nil {
+				return err
+			}
 			now := time.Now()
 			for i := 0; i < dir1; i++ {
 				layer1 := fmt.Sprint(i)
@@ -901,8 +904,8 @@ func BenchmarkListObjects(b *testing.B) {
 							key := layer3 + delimiter + name
 
 							_, err = tx.Exec(`
-			INSERT INTO objects (bucket_id, name, seq, sia_object_id, content_md5, metadata, size, updated_at, sia_object)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, bid, key, 1, sqlHash256(objID), sqlMD5(contentMD5), []byte{}, size, sqlTime(now), sqlSiaObject(sealed))
+			INSERT INTO objects (bucket_id, name, seq, sia_object_id, content_md5, metadata, size, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, bid, key, 1, sqlHash256(objID), sqlMD5(contentMD5), []byte{}, size, sqlTime(now))
 						}
 					}
 				}
@@ -1234,6 +1237,90 @@ func TestObjectsCursor(t *testing.T) {
 	if cursor.Key != key2 {
 		t.Fatalf("expected cursor key %v, got %v", key2, cursor.Key)
 	}
+}
+
+// TestSiaObjectSlabGC verifies that deleting a sealed object removes its slabs
+// and sectors, except for slabs still sliced by another sealed object.
+func TestSiaObjectSlabGC(t *testing.T) {
+	store := initTestDB(t, zaptest.NewLogger(t))
+
+	newSlab := func(sectors int) slabs.SlabSlice {
+		ss := slabs.SlabSlice{EncryptionKey: frand.Entropy256(), MinShards: 1, Length: 100}
+		for range sectors {
+			ss.Sectors = append(ss.Sectors, slabs.PinnedSector{Root: frand.Entropy256(), HostKey: frand.Entropy256()})
+		}
+		return ss
+	}
+	seal := func(ss ...slabs.SlabSlice) sdk.SealedObject {
+		return sdk.SealedObject{SealedObject: slabs.SealedObject{
+			EncryptedDataKey: frand.Bytes(32),
+			Slabs:            ss,
+			CreatedAt:        time.Unix(1000, 0),
+			UpdatedAt:        time.Unix(2000, 0),
+		}}
+	}
+
+	// two sealed objects slicing one shared slab
+	shared := newSlab(3)
+	sealed1 := seal(newSlab(2), shared)
+	sealed2 := seal(shared, newSlab(1))
+
+	err := store.transaction(func(tx *txn) error {
+		if err := upsertSiaObject(tx, sealed1); err != nil {
+			return err
+		}
+		return upsertSiaObject(tx, sealed2)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertCount := func(query string, want int) {
+		t.Helper()
+		var got int
+		if err := store.db.QueryRow(query).Scan(&got); err != nil {
+			t.Fatal(err)
+		} else if got != want {
+			t.Fatalf("%q: expected %d, got %d", query, want, got)
+		}
+	}
+	assertCount(`SELECT COUNT(*) FROM sia_objects`, 2)
+	assertCount(`SELECT COUNT(*) FROM sia_slabs`, 3)
+	assertCount(`SELECT COUNT(*) FROM sia_slab_slices`, 4)
+	assertCount(`SELECT COUNT(*) FROM sia_slab_sectors`, 6)
+
+	// deleting the first object keeps the shared slab and its sectors
+	if err := store.transaction(func(tx *txn) error {
+		return deleteSiaObject(tx, sealed1.ID())
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertCount(`SELECT COUNT(*) FROM sia_objects`, 1)
+	assertCount(`SELECT COUNT(*) FROM sia_slabs`, 2)
+	assertCount(`SELECT COUNT(*) FROM sia_slab_slices`, 2)
+	assertCount(`SELECT COUNT(*) FROM sia_slab_sectors`, 4)
+
+	// the remaining sealed object is intact
+	var got sdk.SealedObject
+	if err := store.transaction(func(tx *txn) (err error) {
+		got, err = siaObject(tx, sealed2.ID())
+		return
+	}); err != nil {
+		t.Fatal(err)
+	} else if got.ID() != sealed2.ID() {
+		t.Fatalf("expected sealed object %v, got %v", sealed2.ID(), got.ID())
+	}
+
+	// deleting the second object empties the tables
+	if err := store.transaction(func(tx *txn) error {
+		return deleteSiaObject(tx, sealed2.ID())
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertCount(`SELECT COUNT(*) FROM sia_objects`, 0)
+	assertCount(`SELECT COUNT(*) FROM sia_slabs`, 0)
+	assertCount(`SELECT COUNT(*) FROM sia_slab_slices`, 0)
+	assertCount(`SELECT COUNT(*) FROM sia_slab_sectors`, 0)
 }
 
 func TestUpdateSiaObjects(t *testing.T) {
