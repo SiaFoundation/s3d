@@ -113,8 +113,9 @@ func TestSnapshots(t *testing.T) {
 		return
 	}
 
-	// the orphan records the generation it was orphaned at and is withheld
-	if gen := orphanGen(); gen != s1Gen {
+	// the orphan records the generation it was orphaned at, one past the
+	// snapshot's completion bump, and is withheld
+	if gen := orphanGen(); gen != s1Gen+1 {
 		t.Fatal("unexpected", gen)
 	}
 	if orphans, err := store.OrphanedObjects(100); err != nil {
@@ -209,10 +210,12 @@ func TestSnapshots(t *testing.T) {
 		t.Fatal("unexpected", gen)
 	}
 
-	// the generation counter is bumped past the adopted generation
-	if _, gen, err := store.CreateSnapshot(); err != nil {
+	// the generation counter is bumped past the adopted generation and its
+	// completion bump
+	snap3, gen, err := store.CreateSnapshot()
+	if err != nil {
 		t.Fatal(err)
-	} else if gen != s1Gen+11 {
+	} else if gen != s1Gen+12 {
 		t.Fatal("unexpected", gen)
 	}
 
@@ -224,6 +227,120 @@ func TestSnapshots(t *testing.T) {
 	if orphans, err := store.OrphanedObjects(100); err != nil {
 		t.Fatal(err)
 	} else if len(orphans) != 1 || orphans[0] != objID {
+		t.Fatal("unexpected", orphans)
+	}
+
+	addObject := func(key string) types.Hash256 {
+		t.Helper()
+		obj := newTestObject()
+		sealed := obj.Seal(types.GeneratePrivateKey())
+		md5 := frand.Entropy128()
+		if _, _, err := store.PutObject(testAccessKeyID, bucket, key, md5, nil, 1, new(string)); err != nil {
+			t.Fatal(err)
+		} else if err := store.MarkObjectUploaded(bucket, key, "", md5, sealed, time.Now().Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		} else if _, err := store.MarkObjectPinned(sealed.ID()); err != nil {
+			t.Fatal(err)
+		}
+		return sealed.ID()
+	}
+
+	// an object deleted while the third snapshot's upload is in flight is
+	// withheld, it may be captured in the backup
+	bID := addObject("b")
+	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	if orphans, err := store.OrphanedObjects(100); err != nil {
+		t.Fatal(err)
+	} else if len(orphans) != 1 || orphans[0] != objID {
+		t.Fatal("unexpected", orphans)
+	}
+
+	// completing the third snapshot keeps it withheld, it existed before the
+	// backup finished
+	if err := store.MarkSnapshotPinned(snap3.ID, frand.Entropy256()); err != nil {
+		t.Fatal(err)
+	}
+	if orphans, err := store.OrphanedObjects(100); err != nil {
+		t.Fatal(err)
+	} else if len(orphans) != 1 || orphans[0] != objID {
+		t.Fatal("unexpected", orphans)
+	}
+	if err := store.RemoveOrphanedObject(objID); err != nil {
+		t.Fatal(err)
+	}
+
+	// an object created after the snapshot completed is provably absent from
+	// its backup, deleting it releases it immediately
+	cID := addObject("c")
+	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "c"}); err != nil {
+		t.Fatal(err)
+	}
+	if orphans, err := store.OrphanedObjects(100); err != nil {
+		t.Fatal(err)
+	} else if len(orphans) != 1 || orphans[0] != cID {
+		t.Fatal("unexpected", orphans)
+	}
+	if err := store.RemoveOrphanedObject(cID); err != nil {
+		t.Fatal(err)
+	}
+
+	// a copy made after a snapshot completes inherits the source's creation
+	// stamp, the shared id predates the snapshot and must stay withheld
+	dID := addObject("d")
+	snap4, _, err := store.CreateSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	} else if err := store.MarkSnapshotPinned(snap4.ID, frand.Entropy256()); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.CopyObject(testAccessKeyID, bucket, "d", s3.VersionRequest{}, bucket, "d-copy", nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "d"}); err != nil {
+		t.Fatal(err)
+	} else if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "d-copy"}); err != nil {
+		t.Fatal(err)
+	}
+	if orphans, err := store.OrphanedObjects(100); err != nil {
+		t.Fatal(err)
+	} else if len(orphans) != 0 {
+		t.Fatal("unexpected", orphans)
+	}
+
+	// an object created after a snapshot is adopted cannot appear in the
+	// adopted backup either
+	adopted2, err := store.AdoptSnapshot(frand.Entropy256(), time.Now(), s1Gen+30, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eID := addObject("e")
+	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "e"}); err != nil {
+		t.Fatal(err)
+	}
+	if orphans, err := store.OrphanedObjects(100); err != nil {
+		t.Fatal(err)
+	} else if len(orphans) != 1 || orphans[0] != eID {
+		t.Fatal("unexpected", orphans)
+	}
+	if err := store.RemoveOrphanedObject(eID); err != nil {
+		t.Fatal(err)
+	}
+
+	// deleting every snapshot releases the remaining orphans
+	if err := store.DeleteSnapshot(snap3.ID); err != nil {
+		t.Fatal(err)
+	} else if err := store.DeleteSnapshot(snap4.ID); err != nil {
+		t.Fatal(err)
+	} else if err := store.DeleteSnapshot(adopted2.ID); err != nil {
+		t.Fatal(err)
+	}
+	if orphans, err := store.OrphanedObjects(100); err != nil {
+		t.Fatal(err)
+	} else if len(orphans) != 2 {
+		t.Fatal("unexpected", orphans)
+	} else if (orphans[0] != bID && orphans[1] != bID) || (orphans[0] != dID && orphans[1] != dID) {
 		t.Fatal("unexpected", orphans)
 	}
 }

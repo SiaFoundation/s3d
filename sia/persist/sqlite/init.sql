@@ -79,6 +79,7 @@ CREATE TABLE objects (
     updated_at INTEGER NOT NULL,
     filename TEXT, -- name of file for regular uploads or dir for multipart uploads
     sia_object_id BLOB REFERENCES sia_objects(id),
+    created_at_gen INTEGER NOT NULL DEFAULT 0, -- snapshot generation when the row was created, copies inherit the source's value
     -- non-empty objects must have a filename, a sia_object_id, or both (between uploading and pinning)
     CHECK ((size = 0 AND filename IS NULL AND sia_object_id IS NULL) OR (size > 0 AND (filename IS NOT NULL OR sia_object_id IS NOT NULL))),
     CHECK (is_delete_marker IN (FALSE, TRUE)),
@@ -136,7 +137,8 @@ CREATE TABLE object_parts (
 
 CREATE TABLE orphaned_objects (
     sia_object_id BLOB PRIMARY KEY,
-    orphaned_at_gen INTEGER NOT NULL DEFAULT 0
+    orphaned_at_gen INTEGER NOT NULL DEFAULT 0,
+    created_at_gen INTEGER NOT NULL DEFAULT 0 -- creation stamp of the last object row that referenced the id
 );
 CREATE INDEX orphaned_objects_gen_idx ON orphaned_objects(orphaned_at_gen);
 
@@ -145,8 +147,11 @@ CREATE TABLE snapshots (
     created_at INTEGER NOT NULL,
     sia_object_id BLOB,
     gen INTEGER NOT NULL DEFAULT 0,
+    gen_completed INTEGER,
     object_count INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE INDEX snapshots_gen_idx ON snapshots(gen, gen_completed);
 
 -- one record per completed backup object
 CREATE UNIQUE INDEX snapshots_sia_object_id_idx ON snapshots(sia_object_id) WHERE sia_object_id IS NOT NULL;

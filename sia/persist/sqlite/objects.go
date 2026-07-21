@@ -407,8 +407,9 @@ func (s *Store) MarkObjectPinned(siaObjectID types.Hash256) (orphans []objects.O
 		} else if n == 0 {
 			// no unpinned_objects row means the object was deleted while the
 			// pin was in flight; mark the sia_object_id as orphaned so the
-			// orphan loop can unpin it.
-			return insertOrphan(tx, siaObjectID)
+			// orphan loop can unpin it. The deleted rows are gone, so no
+			// creation stamp is available.
+			return insertOrphan(tx, siaObjectID, 0)
 		}
 
 		// the object is now pinned; it stays counted as uploaded but is no
@@ -488,11 +489,12 @@ func (s *Store) ScheduleObjectForReupload(siaObjectID types.Hash256) error {
 
 		// the rows about to revert are currently counted as uploaded; once
 		// their sia_object_id is cleared they become pending again (their
-		// backup files are still on disk).
-		var count, totalSize int64
+		// backup files are still on disk). The oldest creation stamp among
+		// them carries over to the orphaned id, copies may share it.
+		var count, totalSize, createdAtGen int64
 		if err := tx.QueryRow(`
-			SELECT COUNT(*), COALESCE(SUM(size), 0) FROM objects WHERE sia_object_id = $1
-		`, sqlHash256(siaObjectID)).Scan(&count, &totalSize); err != nil {
+			SELECT COUNT(*), COALESCE(SUM(size), 0), COALESCE(MIN(created_at_gen), 0) FROM objects WHERE sia_object_id = $1
+		`, sqlHash256(siaObjectID)).Scan(&count, &totalSize, &createdAtGen); err != nil {
 			return err
 		}
 
@@ -518,7 +520,7 @@ func (s *Store) ScheduleObjectForReupload(siaObjectID types.Hash256) error {
 			}
 		}
 
-		return insertOrphan(tx, siaObjectID)
+		return insertOrphan(tx, siaObjectID, createdAtGen)
 	})
 }
 
@@ -708,6 +710,16 @@ func (s *Store) CopyObject(accessKeyID, srcBucket, srcName string, srcVersion s3
 		orphan = res.orphanFile
 		dstVersion := res.dbVersionID
 
+		// the copy inherits the source's creation stamp so their shared
+		// sia_object_id never looks younger than its oldest reference
+		if _, err := tx.Exec(`
+			UPDATE objects SET created_at_gen = (
+				SELECT created_at_gen FROM objects WHERE bucket_id = $1 AND name = $2 AND version_id = $3)
+			WHERE bucket_id = $4 AND name = $5 AND version_id = $6
+		`, srcBid, srcName, srcInternalVersion, dstBid, dstName, dstVersion); err != nil {
+			return err
+		}
+
 		if obj.PartsCount > 0 {
 			_, err = tx.Exec(`
 				INSERT INTO object_parts (bucket_id, name, version_id, part_number, filename, content_md5, content_length, offset)
@@ -819,15 +831,20 @@ func (s *Store) AllFilenames() (filenames []string, err error) {
 	return
 }
 
-// OrphanedObjects returns up to limit object IDs eligible for unpinning. An id
-// whose orphan generation is at or above the lowest surviving snapshot's
-// generation is withheld until that snapshot is deleted.
+// OrphanedObjects returns up to limit object IDs eligible for unpinning. An
+// id is withheld while any snapshot may reference it: the snapshot existed
+// when the id was orphaned and the id's backing row existed before the
+// snapshot's backup finished uploading. An in-flight snapshot has no
+// completion generation yet and withholds every id orphaned since it started.
 func (s *Store) OrphanedObjects(limit int) (ids []types.Hash256, err error) {
 	err = s.transaction(func(tx *txn) error {
 		ids = ids[:0] // reuse same slice if transaction retries
 		rows, err := tx.Query(`
 			SELECT sia_object_id FROM orphaned_objects
-			WHERE NOT EXISTS (SELECT 1 FROM snapshots WHERE gen <= orphaned_at_gen)
+			WHERE NOT EXISTS (
+				SELECT 1 FROM snapshots
+				WHERE gen <= orphaned_at_gen
+				  AND (gen_completed IS NULL OR created_at_gen < gen_completed))
 			LIMIT $1`, limit)
 		if err != nil {
 			return err
@@ -917,6 +934,7 @@ type deletedRow struct {
 	filename       *string
 	size           int64
 	isDeleteMarker bool
+	createdAtGen   int64
 }
 
 // deleteObject deletes the row at (bid, name, versionID), decrementing the
@@ -929,8 +947,8 @@ func deleteObject(tx *txn, bid int64, name string, version string) (row deletedR
 	var wasLatest bool
 	err := tx.QueryRow(`
 		DELETE FROM objects WHERE bucket_id = $1 AND name = $2 AND version_id = $3
-		RETURNING sia_object_id, filename, size, is_delete_marker, is_latest
-	`, bid, name, version).Scan(&id, &row.filename, &row.size, &row.isDeleteMarker, &wasLatest)
+		RETURNING sia_object_id, filename, size, is_delete_marker, is_latest, created_at_gen
+	`, bid, name, version).Scan(&id, &row.filename, &row.size, &row.isDeleteMarker, &wasLatest, &row.createdAtGen)
 	if errors.Is(err, sql.ErrNoRows) {
 		return deletedRow{}, false, nil
 	} else if err != nil {
@@ -970,7 +988,7 @@ func deleteObject(tx *txn, bid int64, name string, version string) (row deletedR
 // nothing was orphaned.
 func orphanDeleted(tx *txn, row deletedRow) (objects.OrphanedFile, error) {
 	if row.siaObjectID != nil {
-		if err := insertOrphan(tx, *row.siaObjectID); err != nil {
+		if err := insertOrphan(tx, *row.siaObjectID, row.createdAtGen); err != nil {
 			return objects.OrphanedFile{}, err
 		}
 	}
@@ -986,8 +1004,10 @@ func orphanDeleted(tx *txn, row deletedRow) (objects.OrphanedFile, error) {
 // MarkObjectPinned having committed), and skipping the insert would leak
 // that pin forever since the orphan loop is the only unpin mechanism. For
 // data that was truly never pinned the unpin is a no-op: the orphan loop
-// treats the indexer's "object not found" as success.
-func insertOrphan(tx *txn, objectID types.Hash256) error {
+// treats the indexer's "object not found" as success. createdAtGen is the
+// creation stamp of the row that referenced the id. Callers without a row to
+// take it from pass 0, withholding the orphan until every snapshot is gone.
+func insertOrphan(tx *txn, objectID types.Hash256, createdAtGen int64) error {
 	if objectID == (types.Hash256{}) {
 		return nil // skip zero-value (empty objects)
 	}
@@ -1015,8 +1035,8 @@ func insertOrphan(tx *txn, objectID types.Hash256) error {
 			return err
 		}
 	}
-	res, err = tx.Exec(`INSERT OR IGNORE INTO orphaned_objects (sia_object_id, orphaned_at_gen)
-		VALUES ($1, (SELECT snapshot_gen FROM global_settings LIMIT 1))`, sqlHash256(objectID))
+	res, err = tx.Exec(`INSERT OR IGNORE INTO orphaned_objects (sia_object_id, orphaned_at_gen, created_at_gen)
+		VALUES ($1, (SELECT snapshot_gen FROM global_settings LIMIT 1), $2)`, sqlHash256(objectID), createdAtGen)
 	if err != nil {
 		return err
 	}
