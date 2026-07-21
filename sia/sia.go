@@ -155,9 +155,8 @@ type Sia struct {
 
 	failedUploads atomic.Int64
 
-	// synced reports whether a metadata sync completed since startup. Orphan
-	// processing waits for it so objects referenced by snapshots that are not
-	// adopted yet are not unpinned.
+	// synced reports whether a metadata sync completed since startup, it
+	// gates orphan processing
 	synced atomic.Bool
 
 	tg     *threadgroup.ThreadGroup
@@ -311,9 +310,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		return nil, fmt.Errorf("failed to create tmp directory: %w", err)
 	}
 
-	// remove snapshots that never finished uploading. their rollback only runs
-	// in-process, so a row left over from a crash would withhold orphaned
-	// objects forever
+	// remove snapshots left incomplete by a crash
 	if n, err := sia.store.DeleteIncompleteSnapshots(); err != nil {
 		return nil, fmt.Errorf("failed to remove incomplete snapshots: %w", err)
 	} else if n > 0 {
@@ -680,8 +677,7 @@ func (s *Sia) syncMetadata(ctx context.Context) { //nolint:revive
 			synced += int(n)
 		}
 
-		// advance the cursor past the consumed events only, a deferred
-		// snapshot event and everything after it is retried on the next sync
+		// advance the cursor past the consumed events only
 		if processed == 0 {
 			break
 		}
@@ -712,11 +708,11 @@ func snapshotMetadata(obj *sdk.Object) (objects.SnapshotMetadata, bool) {
 }
 
 // handleSnapshotObject checks a snapshot backup object against the local
-// records and adopts it when no record exists, e.g. after restoring from a
-// backup made by a previous database. Unpinning such an object instead would
-// destroy backups the database does not know about. It reports whether the
-// event was handled. While a snapshot upload is in flight its object may not
-// be recorded yet, so handling is deferred until no upload is running.
+// records and adopts it when no record exists rather than unpinning it, e.g.
+// after restoring from a backup made by a previous database. It reports
+// whether the event was handled. While a snapshot upload is in flight its
+// object may not be recorded yet, so handling is deferred until no upload is
+// running.
 func (s *Sia) handleSnapshotObject(objectID types.Hash256, meta objects.SnapshotMetadata) bool {
 	known, inFlight, err := s.store.CheckSnapshotObject(objectID)
 	if err != nil {

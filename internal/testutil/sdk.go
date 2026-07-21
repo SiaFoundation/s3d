@@ -284,7 +284,7 @@ func (s *MemorySDK) PinObject(_ context.Context, obj sdk.Object) error {
 	return s.pinErr
 }
 
-// SetPinError configures the error returned by future PinObject calls; pass
+// SetPinError configures the error returned by future PinObject calls. Pass
 // nil to restore the default no-op behavior.
 func (s *MemorySDK) SetPinError(err error) {
 	s.mu.Lock()

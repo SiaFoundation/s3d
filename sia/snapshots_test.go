@@ -230,12 +230,15 @@ func TestSnapshotRecovery(t *testing.T) {
 		t.Fatal("mismatch", snapshots[0].CreatedAt)
 	}
 
-	// the generation counter continues past the adopted snapshots
+	// the generation counter continues past the adopted snapshots and their
+	// completion bumps: adopting the second snapshot bumps the restored
+	// counter to 4, the third raises it to 5 and bumps to 6, so this
+	// snapshot is created at 7
 	snapB, err := backendB.CreateSnapshot(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meta := downloadMetadata(t, memSDK, snapB.SiaObjectID); meta.Generation != 4 {
+	if meta := downloadMetadata(t, memSDK, snapB.SiaObjectID); meta.Generation != 7 {
 		t.Fatal("unexpected", meta.Generation)
 	}
 	if err := backendB.Close(); err != nil {
