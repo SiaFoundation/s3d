@@ -29,7 +29,7 @@ func TestSnapshots(t *testing.T) {
 	md5 := frand.Entropy128()
 	if _, _, err := store.PutObject(testAccessKeyID, bucket, "a", md5, nil, 1, new(string)); err != nil {
 		t.Fatal(err)
-	} else if err := store.MarkObjectUploaded(bucket, "a", md5, sealed, time.Now().Add(time.Hour)); err != nil {
+	} else if err := store.MarkObjectUploaded(bucket, "a", "", md5, sealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	} else if _, err := store.MarkObjectPinned(objID); err != nil {
 		t.Fatal(err)
@@ -101,7 +101,7 @@ func TestSnapshots(t *testing.T) {
 	}
 
 	// delete the object while the first snapshot still references it
-	if _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "a"}); err != nil {
+	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "a"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -341,6 +341,93 @@ func TestSnapshots(t *testing.T) {
 	} else if len(orphans) != 2 {
 		t.Fatal("unexpected", orphans)
 	} else if (orphans[0] != bID && orphans[1] != bID) || (orphans[0] != dID && orphans[1] != dID) {
+		t.Fatal("unexpected", orphans)
+	}
+}
+
+// TestAdoptSnapshotWithholdsExistingOrphans verifies that an adopted snapshot
+// withholds orphans recorded before the adoption even when an earlier adoption
+// advanced the local counter to its generation. This can happen when snapshots
+// from different histories remain on the network after multiple restores.
+func TestAdoptSnapshotWithholdsExistingOrphans(t *testing.T) {
+	const bucket = "test-bucket"
+
+	store := initTestDB(t, zaptest.NewLogger(t))
+
+	if err := store.CreateBucket(testAccessKeyID, bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// upload and pin an object that exists in the database being restored
+	obj := newTestObject()
+	sealed := obj.Seal(types.GeneratePrivateKey())
+	objID := sealed.ID()
+	md5 := frand.Entropy128()
+	if _, _, err := store.PutObject(testAccessKeyID, bucket, "a", md5, nil, 1, new(string)); err != nil {
+		t.Fatal(err)
+	} else if err := store.MarkObjectUploaded(bucket, "a", "", md5, sealed, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	} else if _, err := store.MarkObjectPinned(objID); err != nil {
+		t.Fatal(err)
+	}
+
+	// model the restored database image. Its own snapshot row was incomplete
+	// when the image was made, so startup removes the row but retains the
+	// generation counter.
+	restored, restoredGen, err := store.CreateSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := store.DeleteIncompleteSnapshots(); err != nil {
+		t.Fatal(err)
+	} else if n != 1 {
+		t.Fatal("unexpected", n)
+	}
+
+	// this history deletes the object before discovering the snapshots still
+	// present on the network
+	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "a"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// adopt the restored image's own snapshot. It withholds the orphan and its
+	// completion bump advances the counter to the next generation.
+	earlier, err := store.AdoptSnapshot(frand.Entropy256(), restored.CreatedAt, restoredGen, restored.ObjectCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// another history created a snapshot immediately after restoring the same
+	// image, so its generation is now equal to the counter advanced above. Its
+	// backup may still reference the locally orphaned object.
+	adopted, err := store.AdoptSnapshot(frand.Entropy256(), time.Now(), restoredGen+1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if orphans, err := store.OrphanedObjects(100); err != nil {
+		t.Fatal(err)
+	} else if len(orphans) != 0 {
+		t.Fatal("unexpected", orphans)
+	}
+
+	// deleting the earlier snapshot must leave the orphan withheld by the later
+	// snapshot
+	if err := store.DeleteSnapshot(earlier.ID); err != nil {
+		t.Fatal(err)
+	}
+	if orphans, err := store.OrphanedObjects(100); err != nil {
+		t.Fatal(err)
+	} else if len(orphans) != 0 {
+		t.Fatal("unexpected", orphans)
+	}
+
+	// deleting the later snapshot releases the orphan
+	if err := store.DeleteSnapshot(adopted.ID); err != nil {
+		t.Fatal(err)
+	}
+	if orphans, err := store.OrphanedObjects(100); err != nil {
+		t.Fatal(err)
+	} else if len(orphans) != 1 || orphans[0] != objID {
 		t.Fatal("unexpected", orphans)
 	}
 }

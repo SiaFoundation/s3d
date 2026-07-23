@@ -42,11 +42,13 @@ func (s *Store) CreateSnapshot() (snap s3.Snapshot, gen int64, err error) {
 
 // AdoptSnapshot records a snapshot for a backup object discovered on the
 // network, e.g. after restoring from a backup made by a previous database.
-// The generation counter is raised to at least the adopted generation, and
-// existing orphans with it, since the adopted backup may reference them. As
-// in MarkSnapshotPinned the counter is then bumped once more and recorded as
-// the completion generation. Adopting an object that already has a record
-// returns the existing snapshot.
+// The generation counter is raised to at least the adopted generation.
+// Existing orphans are raised to it even when the counter is already past it:
+// the adopted generation is from a different counter history, so it cannot be
+// ordered against locally recorded orphans and the adopted backup may
+// reference any of them. As in MarkSnapshotPinned the counter is then bumped
+// once more and recorded as the completion generation. Adopting an object
+// that already has a record returns the existing snapshot.
 func (s *Store) AdoptSnapshot(objectID types.Hash256, createdAt time.Time, gen, objectCount int64) (snap s3.Snapshot, err error) {
 	err = s.transaction(func(tx *txn) error {
 		// return the existing record when the object was already adopted
@@ -59,16 +61,10 @@ func (s *Store) AdoptSnapshot(objectID types.Hash256, createdAt time.Time, gen, 
 			return err
 		}
 
-		var current int64
-		if err := tx.QueryRow("SELECT snapshot_gen FROM global_settings").Scan(&current); err != nil {
+		if _, err := tx.Exec("UPDATE orphaned_objects SET orphaned_at_gen = $1 WHERE orphaned_at_gen < $1", gen); err != nil {
 			return err
-		}
-		if gen > current {
-			if _, err := tx.Exec("UPDATE orphaned_objects SET orphaned_at_gen = $1 WHERE orphaned_at_gen < $1", gen); err != nil {
-				return err
-			} else if _, err := tx.Exec("UPDATE global_settings SET snapshot_gen = $1", gen); err != nil {
-				return err
-			}
+		} else if _, err := tx.Exec("UPDATE global_settings SET snapshot_gen = $1 WHERE snapshot_gen < $1", gen); err != nil {
+			return err
 		}
 
 		var completed int64
