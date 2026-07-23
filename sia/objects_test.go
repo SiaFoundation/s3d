@@ -1719,7 +1719,7 @@ func TestOrphanLifecycle(t *testing.T) {
 	if _, err := backend.CreateSnapshot(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.DeleteObject(testutil.AccessKeyID, bucket, s3.ObjectID{Key: "a"}); err != nil {
+	if _, _, _, err := store.DeleteObject(testutil.AccessKeyID, bucket, s3.ObjectID{Key: "a"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1737,7 +1737,7 @@ func TestOrphanLifecycle(t *testing.T) {
 	if _, err := backend.CreateSnapshot(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.DeleteObject(testutil.AccessKeyID, bucket, s3.ObjectID{Key: "b"}); err != nil {
+	if _, _, _, err := store.DeleteObject(testutil.AccessKeyID, bucket, s3.ObjectID{Key: "b"}); err != nil {
 		t.Fatal(err)
 	}
 
