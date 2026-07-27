@@ -175,6 +175,25 @@ uses for a basic overview without requiring a Prometheus stack.
 curl -u ":change-me" http://127.0.0.1:8001/prometheus
 ```
 
+## HTTPS
+
+`s3d` can serve the S3 API over TLS in addition to plain HTTP. Set
+`apiHTTPSAddress` in the config file or pass `-api.s3.https`:
+
+```yaml
+apiAddress: 127.0.0.1:8000
+apiHTTPSAddress: 127.0.0.1:8443
+```
+
+The certificate is a self-signed certificate for `localhost`, `127.0.0.1`, and
+`::1`. It is generated on every start and never written to disk, so clients must
+skip certificate verification. While this is supported, it is recommended to use
+a reverse proxy with a real certificate in production.
+
+```sh
+aws --endpoint-url https://127.0.0.1:8443 --no-verify-ssl s3 ls
+```
+
 ## Compatibility
 
 `s3d` aims to be as compatible as possible with the S3 API. Authentication uses
@@ -247,6 +266,7 @@ generate one.
 | Flag | Description |
 |------|-------------|
 | `-api.s3` | Address to serve the S3 API on (default `127.0.0.1:8000`) |
+| `-api.s3.https` | Address to serve the S3 API on over HTTPS (disabled by default, see [HTTPS](#https)) |
 
 ### Subcommands
 
@@ -294,7 +314,8 @@ file and CLI flags. The order of precedence from lowest to highest is:
 
 ```yaml
 apiAddress: 127.0.0.1:8000
-adminAddress: 127.0.0.1:8001 # serve the admin API on this address (must differ from apiAddress)
+apiHTTPSAddress: "" # also serve the S3 API over HTTPS on this address (disabled when blank, see HTTPS)
+adminAddress: 127.0.0.1:8001 # serve the admin API on this address (must differ from both S3 API addresses)
 adminPassword: change-me # required to access the admin API
 directory: /var/lib/s3d
 log:
