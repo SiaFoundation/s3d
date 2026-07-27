@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -86,6 +87,7 @@ func main() {
 	rootCmd := flagg.Root
 	rootCmd.Usage = flagg.SimpleUsage(rootCmd, rootUsage)
 	rootCmd.StringVar(&cfg.ApiAddress, "api.s3", cfg.ApiAddress, "address to serve S3 API on")
+	rootCmd.StringVar(&cfg.ApiHttpsAddress, "api.s3.https", cfg.ApiHttpsAddress, "address to serve the S3 API on over HTTPS using a self-signed certificate (disabled if empty)")
 	versionCmd := flagg.New("version", versionUsage)
 	configCmd := flagg.New("config", configUsage)
 	loginCmd := flagg.New("login", loginUsage)
@@ -263,11 +265,20 @@ func main() {
 
 	log.Info("s3d", zap.String("version", build.Version()), zap.String("commit", build.Commit()), zap.Time("buildDate", build.Time()))
 
+	checkFatalError("invalid server configuration", validateServerConfig(cfg))
+
 	adminAPIListener, err := startLocalhostListener(cfg.ApiAddress, log.Named("api.listener"))
 	if err != nil {
 		checkFatalError("failed to start S3 API listener", err)
 	}
 	defer adminAPIListener.Close()
+
+	var httpsListener net.Listener
+	if cfg.ApiHttpsAddress != "" {
+		httpsListener, err = startLocalhostListener(cfg.ApiHttpsAddress, log.Named("api.https.listener"))
+		checkFatalError("failed to start S3 HTTPS listener", err)
+		defer httpsListener.Close()
+	}
 
 	store, err := openStore(log)
 	if err != nil {
@@ -308,15 +319,29 @@ func main() {
 		}
 	}()
 
-	// serve the admin API on a separate listener
-	if cfg.AdminAddress == "" {
-		checkFatalError("invalid admin configuration", errors.New("admin address must be set"))
-	} else if cfg.AdminAddress == cfg.ApiAddress {
-		checkFatalError("invalid admin configuration", errors.New("admin address must differ from the S3 API address"))
-	} else if cfg.AdminPassword == "" {
-		checkFatalError("invalid admin configuration", errors.New("admin password must be set"))
+	// optionally serve the same handler over TLS with a certificate generated at
+	// startup
+	if cfg.ApiHttpsAddress != "" {
+		cert, err := selfSignedCertificate()
+		checkFatalError("failed to generate certificate", err)
+
+		tlsListener := tls.NewListener(httpsListener, &tls.Config{
+			Certificates: []tls.Certificate{*cert},
+			MinVersion:   tls.VersionTLS12,
+			NextProtos:   []string{"http/1.1"},
+		})
+
+		go func() {
+			log.Debug("starting S3 API over HTTPS", zap.String("address", cfg.ApiHttpsAddress))
+			if err := server.Serve(tlsListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error("failed to serve S3 API over HTTPS", zap.Error(err))
+			}
+		}()
+
+		log.Info("serving S3 API over HTTPS with a self-signed certificate", zap.Stringer("address", httpsListener.Addr()))
 	}
 
+	// serve the admin API on a separate listener
 	adminListener, err := startLocalhostListener(cfg.AdminAddress, log.Named("admin.listener"))
 	if err != nil {
 		checkFatalError("failed to start admin listener", err)
@@ -368,6 +393,23 @@ func checkFatalError(context string, err error) {
 	}
 	fmt.Fprintf(os.Stderr, "%s: %s\n", context, err)
 	os.Exit(1)
+}
+
+func validateServerConfig(cfg Config) error {
+	switch {
+	case cfg.AdminAddress == "":
+		return errors.New("admin address must be set")
+	case cfg.AdminPassword == "":
+		return errors.New("admin password must be set")
+	case cfg.AdminAddress == cfg.ApiAddress:
+		return errors.New("admin address must differ from the S3 HTTP address")
+	case cfg.ApiHttpsAddress != "" && cfg.AdminAddress == cfg.ApiHttpsAddress:
+		return errors.New("admin address must differ from the S3 HTTPS address")
+	case cfg.ApiHttpsAddress != "" && cfg.ApiAddress == cfg.ApiHttpsAddress:
+		return errors.New("S3 HTTP and HTTPS addresses must differ")
+	default:
+		return nil
+	}
 }
 
 func applicationDirectoryOS() string {
