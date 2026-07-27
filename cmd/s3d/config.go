@@ -237,7 +237,7 @@ func setAdvancedConfig() {
 	fmt.Println("The HTTP address is used to serve the S3 API.")
 	fmt.Println("It should only be exposed to the public internet via an https reverse proxy")
 	for {
-		setListenAddress("HTTP Address", &cfg.ApiAddress, true)
+		setListenAddress("HTTP Address", &cfg.ApiAddress, false)
 		if cfg.ApiAddress != cfg.AdminAddress {
 			break
 		}
@@ -248,7 +248,7 @@ func setAdvancedConfig() {
 	fmt.Println("")
 	fmt.Println("The HTTPS address serves the S3 API with a self-signed certificate that is")
 	fmt.Println("generated on every start and never written to disk. Clients must skip")
-	fmt.Println("certificate verification. Leave it blank to disable HTTPS.")
+	fmt.Println(`certificate verification. Leave blank to keep the current setting or enter "none" to disable HTTPS.`)
 	for {
 		setListenAddress("HTTPS Address", &cfg.ApiHttpsAddress, true)
 		if cfg.ApiHttpsAddress == "" {
@@ -272,7 +272,7 @@ func setAdminAPI() {
 		cfg.AdminAddress = "127.0.0.1:8001"
 	}
 	for {
-		setListenAddress("Admin API Address", &cfg.AdminAddress, true)
+		setListenAddress("Admin API Address", &cfg.AdminAddress, false)
 		if cfg.AdminAddress != cfg.ApiAddress && (cfg.ApiHttpsAddress == "" || cfg.AdminAddress != cfg.ApiHttpsAddress) {
 			break
 		}
@@ -300,11 +300,14 @@ func setListenAddress(context string, value *string, allowEmpty bool) {
 	for {
 		input := readInput(fmt.Sprintf("%s (currently %q)", context, *value))
 		if input == "" {
-			if allowEmpty {
+			if allowEmpty || *value != "" {
 				return
 			}
 			stdoutError(fmt.Sprintf("Invalid %s %q: must not be empty", context, input))
 			continue
+		} else if allowEmpty && strings.EqualFold(input, "none") {
+			*value = ""
+			return
 		}
 
 		host, port, err := net.SplitHostPort(input)

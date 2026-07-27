@@ -185,6 +185,9 @@ apiAddress: 127.0.0.1:8000
 apiHTTPSAddress: 127.0.0.1:8443
 ```
 
+In the configuration wizard, press Enter to keep the current HTTPS setting or
+enter `none` to disable HTTPS.
+
 The certificate is a self-signed certificate for `localhost`, `127.0.0.1`, and
 `::1`. It is generated on every start and never written to disk, so clients must
 skip certificate verification. While this is supported, it is recommended to use

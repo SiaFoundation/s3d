@@ -364,7 +364,7 @@ func main() {
 		}
 	}()
 
-	log.Info("server started", zap.Stringer("admin", adminAPIListener.Addr()), zap.Stringer("application", adminAPIListener.Addr()))
+	log.Info("server started", zap.Stringer("admin", adminListener.Addr()), zap.Stringer("application", adminAPIListener.Addr()))
 	<-ctx.Done()
 	log.Info("shutdown signal received...attempting graceful shutdown...")
 
