@@ -37,6 +37,10 @@ const (
 	// a single "day" when evaluating lifecycle Days windows.
 	defaultLifecycleDayDuration = 24 * time.Hour
 
+	// defaultDiskUsageTimeout is the maximum time a request waits for disk
+	// space to become available before failing with ErrSlowDown.
+	defaultDiskUsageTimeout = 2 * time.Minute
+
 	// UploadsDirectory is the directory name used for storing pending uploads.
 	UploadsDirectory = "uploads"
 )
@@ -115,8 +119,9 @@ type Sia struct {
 
 	directory string
 
-	slabSize       int64
-	diskUsageLimit uint64
+	slabSize         int64
+	diskUsageLimit   uint64
+	diskUsageTimeout time.Duration
 
 	diskUsageMu   sync.Mutex
 	diskUsageWake chan struct{}
@@ -232,6 +237,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		uploadWastePct:        DefaultUploadWastePct,
 		lifecycleLoopInterval: defaultLifecycleLoopInterval,
 		lifecycleDayDuration:  defaultLifecycleDayDuration,
+		diskUsageTimeout:      defaultDiskUsageTimeout,
 		lockedUploads:         make(map[string]*lockedUpload),
 
 		logger: zap.NewNop(),

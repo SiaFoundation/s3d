@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
@@ -21,13 +22,17 @@ import (
 )
 
 // addDiskUsage reserves size bytes against the disk usage limit, blocking
-// until enough space is available. If allowExcess returns true the
-// reservation bypasses the limit; it is re-evaluated each time
+// until enough space is available. If no space frees up within the disk
+// usage timeout it fails with ErrSlowDown so clients can back off and
+// retry instead of pinning a handler indefinitely. If allowExcess returns
+// true the reservation bypasses the limit; it is re-evaluated each time
 // releaseDiskUsage is called.
 func (s *Sia) addDiskUsage(ctx context.Context, size int64, allowExcess func() (bool, error)) error {
 	if size <= 0 || s.diskUsageLimit == 0 {
 		return nil
 	}
+	timeout := time.NewTimer(s.diskUsageTimeout)
+	defer timeout.Stop()
 	for {
 		s.diskUsageMu.Lock()
 		wake := s.diskUsageWake
@@ -53,6 +58,8 @@ func (s *Sia) addDiskUsage(ctx context.Context, size int64, allowExcess func() (
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-timeout.C:
+			return s3errs.ErrSlowDown
 		case <-wake:
 		}
 	}
