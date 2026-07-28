@@ -237,11 +237,13 @@ func setAdvancedConfig() {
 	fmt.Println("The HTTP address is used to serve the S3 API.")
 	fmt.Println("It should only be exposed to the public internet via an https reverse proxy")
 	for {
-		setListenAddress("HTTP Address", &cfg.ApiAddress, false)
-		if cfg.ApiAddress != cfg.AdminAddress {
-			break
+		addr := setListenAddress("HTTP Address", cfg.ApiAddress, false)
+		if addr == cfg.AdminAddress {
+			stdoutError("The HTTP address must differ from the admin API address.")
+			continue
 		}
-		stdoutError("The HTTP address must differ from the admin API address.")
+		cfg.ApiAddress = addr
+		break
 	}
 
 	// https address of the S3 API
@@ -250,16 +252,15 @@ func setAdvancedConfig() {
 	fmt.Println("generated on every start and never written to disk. Clients must skip")
 	fmt.Println(`certificate verification. Leave blank to keep the current setting or enter "none" to disable HTTPS.`)
 	for {
-		setListenAddress("HTTPS Address", &cfg.ApiHttpsAddress, true)
-		if cfg.ApiHttpsAddress == "" {
-			break
-		} else if cfg.ApiHttpsAddress == cfg.ApiAddress {
+		addr := setListenAddress("HTTPS Address", cfg.ApiHttpsAddress, true)
+		if addr == cfg.ApiAddress && addr != "" {
 			stdoutError("The HTTPS address must differ from the HTTP address.")
 			continue
-		} else if cfg.ApiHttpsAddress == cfg.AdminAddress {
+		} else if addr == cfg.AdminAddress && addr != "" {
 			stdoutError("The HTTPS address must differ from the admin API address.")
 			continue
 		}
+		cfg.ApiHttpsAddress = addr
 		break
 	}
 }
@@ -272,11 +273,13 @@ func setAdminAPI() {
 		cfg.AdminAddress = "127.0.0.1:8001"
 	}
 	for {
-		setListenAddress("Admin API Address", &cfg.AdminAddress, false)
-		if cfg.AdminAddress != cfg.ApiAddress && (cfg.ApiHttpsAddress == "" || cfg.AdminAddress != cfg.ApiHttpsAddress) {
-			break
+		addr := setListenAddress("Admin API Address", cfg.AdminAddress, false)
+		if addr == cfg.ApiAddress || (cfg.ApiHttpsAddress != "" && addr == cfg.ApiHttpsAddress) {
+			stdoutError("The admin API address must differ from the HTTP and HTTPS S3 API addresses.")
+			continue
 		}
-		stdoutError("The admin API address must differ from the HTTP and HTTPS S3 API addresses.")
+		cfg.AdminAddress = addr
+		break
 	}
 
 	for {
@@ -295,19 +298,18 @@ func setAdminAPI() {
 	}
 }
 
-func setListenAddress(context string, value *string, allowEmpty bool) {
+func setListenAddress(context string, current string, allowEmpty bool) string {
 	// will continue to prompt until a valid value is entered
 	for {
-		input := readInput(fmt.Sprintf("%s (currently %q)", context, *value))
+		input := readInput(fmt.Sprintf("%s (currently %q)", context, current))
 		if input == "" {
-			if allowEmpty || *value != "" {
-				return
+			if allowEmpty || current != "" {
+				return current
 			}
 			stdoutError(fmt.Sprintf("Invalid %s %q: must not be empty", context, input))
 			continue
 		} else if allowEmpty && strings.EqualFold(input, "none") {
-			*value = ""
-			return
+			return ""
 		}
 
 		host, port, err := net.SplitHostPort(input)
@@ -324,8 +326,7 @@ func setListenAddress(context string, value *string, allowEmpty bool) {
 			stdoutError(fmt.Sprintf("Invalid %s port %q: must be between 0 and 65535", context, input))
 			continue
 		}
-		*value = net.JoinHostPort(host, port)
-		return
+		return net.JoinHostPort(host, port)
 	}
 }
 
