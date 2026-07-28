@@ -8,6 +8,11 @@ import (
 // OrphanLoopInterval exports orphanLoopInterval for testing.
 const OrphanLoopInterval = orphanLoopInterval
 
+// SetDiskUsageTimeout overrides the disk usage timeout for testing.
+func (s *Sia) SetDiskUsageTimeout(d time.Duration) { //nolint:revive
+	s.diskUsageTimeout = d
+}
+
 // ApplyLifecycleRules exports applyLifecycleRules for testing.
 func (s *Sia) ApplyLifecycleRules(ctx context.Context, now time.Time) { //nolint:revive
 	s.applyLifecycleRules(ctx, now)

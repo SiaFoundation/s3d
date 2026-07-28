@@ -1284,6 +1284,65 @@ func TestDiskUsageLimit(t *testing.T) {
 	}
 }
 
+func TestDiskUsageLimitTimeout(t *testing.T) {
+	log := zaptest.NewLogger(t)
+	dir := t.TempDir()
+	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	if err := store.CreateUser(testutil.Owner); err != nil {
+		t.Fatal(err)
+	} else if err := store.CreateAccessKey(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey); err != nil {
+		t.Fatal(err)
+	}
+
+	const limit = 500
+	memSDK := testutil.NewMemorySDK()
+	memSDK.SetSlabSize(100)
+	backend, err := sia.New(t.Context(), memSDK, store, dir,
+		sia.WithUploadDisabled(),
+		sia.WithDiskUsageLimit(limit),
+		sia.WithLogger(log))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { backend.Close() })
+	backend.SetDiskUsageTimeout(100 * time.Millisecond)
+	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
+
+	const bucket = "bucket"
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// push usage over the limit
+	if _, err := s3Tester.PutObject(t.Context(), bucket, "a", bytes.NewReader(frand.Bytes(600)), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// a put blocked at the limit fails with SlowDown once the wait times out
+	data := frand.Bytes(10)
+	_, err = backend.PutObject(t.Context(), testutil.AccessKeyID, bucket, "b", bytes.NewReader(data), s3.PutObjectOptions{ContentLength: int64(len(data))})
+	if !errors.Is(err, s3errs.ErrSlowDown) {
+		t.Fatal("unexpected", err)
+	}
+
+	// a blocked put unblocks when its context is cancelled before the timeout
+	backend.SetDiskUsageTimeout(time.Minute)
+	ctx, cancel := context.WithCancel(t.Context())
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+	_, err = backend.PutObject(ctx, testutil.AccessKeyID, bucket, "c", bytes.NewReader(data), s3.PutObjectOptions{ContentLength: int64(len(data))})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatal("unexpected", err)
+	}
+}
+
 func TestDiskUsageLimitOngoingMultipartUpload(t *testing.T) {
 	log := zaptest.NewLogger(t)
 	dir := t.TempDir()
