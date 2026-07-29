@@ -522,13 +522,10 @@ func (s *s3) hostBucketBaseMiddleware(handler auth.AuthenticatedHandler) auth.Au
 //
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_Operations_Amazon_Simple_Storage_Service.html
 func (s *s3) routeBase(w http.ResponseWriter, r *http.Request, accessKeyID *string) {
-	// close and drain the request body to allow connection reuse
-	defer func() {
-		if r.Body != nil {
-			_, _ = io.Copy(io.Discard, r.Body)
-			_ = r.Body.Close()
-		}
-	}()
+	// NOTE: the request body is intentionally not drained here. net/http
+	// discards small unread remainders itself to keep the connection alive
+	// and closes the connection for large ones, so a rejected upload never
+	// consumes the full body.
 
 	var (
 		path   = strings.TrimPrefix(r.URL.Path, "/")
