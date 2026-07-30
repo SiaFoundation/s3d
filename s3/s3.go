@@ -457,7 +457,7 @@ func (s s3) authMiddleware(handler auth.AuthenticatedHandler) http.Handler {
 			akid, err := auth.HandleAuth(req, s.backend, region, time.Now())
 			if err != nil {
 				s.logger.Debug("authentication failed", zap.Error(err))
-				writeErrorResponse(w, err)
+				writeErrorResponse(w, req, err)
 				return
 			}
 			accessKeyID = &akid
@@ -522,10 +522,8 @@ func (s *s3) hostBucketBaseMiddleware(handler auth.AuthenticatedHandler) auth.Au
 //
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_Operations_Amazon_Simple_Storage_Service.html
 func (s *s3) routeBase(w http.ResponseWriter, r *http.Request, accessKeyID *string) {
-	// NOTE: the request body is intentionally not drained here. net/http
-	// discards small unread remainders itself to keep the connection alive
-	// and closes the connection for large ones, so a rejected upload never
-	// consumes the full body.
+	// NOTE: the request body is not drained here. Handlers consume it on
+	// success and writeErrorResponse performs a bounded drain on failure.
 
 	var (
 		path   = strings.TrimPrefix(r.URL.Path, "/")
@@ -582,7 +580,7 @@ func (s *s3) routeBase(w http.ResponseWriter, r *http.Request, accessKeyID *stri
 		} else {
 			log.Error("failed to handle request", zap.Error(err))
 		}
-		writeErrorResponse(w, err)
+		writeErrorResponse(w, r, err)
 	}
 }
 

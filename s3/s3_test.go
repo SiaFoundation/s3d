@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -250,5 +251,70 @@ func TestHostBucketStyles(t *testing.T) {
 				t.Fatalf("expected body %q, got %q", "hello", body)
 			}
 		})
+	}
+}
+
+// TestErrorResponseDrain verifies that a rejected request with an unread body
+// still receives its error response over a connection that stays reusable and
+// that a body over the drain cap closes the connection instead.
+func TestErrorResponseDrain(t *testing.T) {
+	backend, _ := testutil.NewBackend(t)
+	handler := s3.New(backend, s3.WithLogger(zaptest.NewLogger(t)))
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	// anonymous puts are rejected with AccessDenied before the body is read
+	var reused bool
+	trace := &httptrace.ClientTrace{
+		GotConn: func(info httptrace.GotConnInfo) { reused = info.Reused },
+	}
+	ctx := httptrace.WithClientTrace(t.Context(), trace)
+
+	doPut := func(size int64) *http.Response {
+		t.Helper()
+		body := bytes.Repeat([]byte("a"), int(size))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPut, server.URL+"/bucket/object", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := server.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+			t.Fatal(err)
+		} else if err := resp.Body.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+
+	// a body of minimum part size is drained so the response arrives on a
+	// connection that stays alive
+	resp := doPut(s3.MinUploadPartSize)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatal("unexpected", resp.StatusCode)
+	} else if resp.Close {
+		t.Fatal("expected connection to stay alive")
+	}
+
+	// the second request reuses the drained connection
+	resp = doPut(s3.MinUploadPartSize)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatal("unexpected", resp.StatusCode)
+	} else if !reused {
+		t.Fatal("expected connection reuse")
+	}
+
+	// a body over the drain cap is not consumed and the connection is marked
+	// to close after the response
+	big := bytes.Repeat([]byte("a"), int(3*s3.MinUploadPartSize))
+	req := httptest.NewRequest(http.MethodPut, "/bucket/object", bytes.NewReader(big))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatal("unexpected", rec.Code)
+	} else if rec.Header().Get("Connection") != "close" {
+		t.Fatal("expected Connection close header")
 	}
 }
