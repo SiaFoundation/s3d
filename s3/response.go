@@ -88,6 +88,13 @@ func writeErrorResponse(w http.ResponseWriter, r *http.Request, err error) {
 // capped in size and time so a rejected upload never consumes an arbitrarily
 // large body. It returns true if the body was fully consumed.
 func drainRequestBody(w http.ResponseWriter, r *http.Request) bool {
+	// skip the drain when the declared body already exceeds the cap so a
+	// rejected upload does not delay its response reading bytes that end up
+	// discarded anyway
+	if r.ContentLength > maxDrainBytes {
+		return false
+	}
+
 	rc := http.NewResponseController(w)
 	hasDeadline := rc.SetReadDeadline(time.Now().Add(maxDrainTime)) == nil
 	_, err := io.CopyN(io.Discard, r.Body, maxDrainBytes+1)
