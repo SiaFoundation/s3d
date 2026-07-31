@@ -13,7 +13,7 @@ require (
 	go.sia.tech/coreutils v0.23.6-0.20260717131215-dfd89d065259
 	go.sia.tech/indexd v0.4.1
 	go.sia.tech/jape v0.14.1
-	go.sia.tech/siastorage v0.1.1-0.20260714120443-c13c06751808
+	go.sia.tech/siastorage v0.1.1-0.20260730113653-ca2ffd94f7a0
 	go.uber.org/zap v1.28.0
 	golang.org/x/term v0.45.0
 	gopkg.in/ini.v1 v1.67.3
