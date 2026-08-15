@@ -138,6 +138,18 @@ type PutObjectOptions struct {
 	ContentLength int64
 	ContentMD5    *[16]byte
 	ContentSHA256 *[32]byte
+	Preconditions ObjectPreconditions
+}
+
+// CopyObjectOptions contains options for a CopyObject operation.
+//
+// Meta is the metadata to apply to the copy, replacing the source's when
+// Replace is set and merged into it otherwise.
+type CopyObjectOptions struct {
+	Meta                     map[string]string
+	Replace                  bool
+	SourcePreconditions      ObjectPreconditions
+	DestinationPreconditions ObjectPreconditions
 }
 
 var unsupportedObjectSubresources = map[string]struct{}{
@@ -211,40 +223,12 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, accessKeyID, dst
 		return s3errs.ErrInvalidRequest
 	}
 
-	// if If-Match or If-None-Match headers are present, handle them
-	ifMatch := r.Header.Get("X-Amz-Copy-Source-If-Match")
-	ifNoneMatch := r.Header.Get("X-Amz-Copy-Source-If-None-Match")
-	if ifMatch != "" || ifNoneMatch != "" {
-		obj, err := s.backend.HeadObject(r.Context(), &accessKeyID, srcBucket, srcObject, srcVersion, nil, nil)
-		if err != nil {
-			return err
-		} else if obj.Body != nil {
-			obj.Body.Close()
-		}
-
-		// a delete marker has no data to copy. Resolve this before the ETag
-		// preconditions, which would otherwise match its zeroed ETag.
-		if obj.IsDeleteMarker {
-			if srcVersion.Specified {
-				return s3errs.ErrInvalidRequest
-			}
-			return s3errs.ErrNoSuchKey
-		}
-
-		var partsCount int
-		if obj.PartsCount != nil {
-			partsCount = int(*obj.PartsCount)
-		}
-		etag := FormatETag(obj.ContentMD5[:], partsCount)
-		if ifMatch != "" && !etagMatches(ifMatch, etag) {
-			return s3errs.ErrPreconditionFailed
-		}
-		if ifNoneMatch != "" && etagMatches(ifNoneMatch, etag) {
-			return s3errs.ErrPreconditionFailed
-		}
-	}
-
-	result, err := s.backend.CopyObject(r.Context(), accessKeyID, srcBucket, srcObject, srcVersion, dstBucket, dstObject, replace, meta)
+	result, err := s.backend.CopyObject(r.Context(), accessKeyID, srcBucket, srcObject, srcVersion, dstBucket, dstObject, CopyObjectOptions{
+		Meta:                     meta,
+		Replace:                  replace,
+		SourcePreconditions:      copySourcePreconditions(r.Header),
+		DestinationPreconditions: requestPreconditions(r.Header),
+	})
 	if err != nil {
 		return err
 	}
@@ -270,31 +254,9 @@ func (s *s3) deleteObject(w http.ResponseWriter, r *http.Request, accessKeyID st
 		zap.String("version", version.LogValue()))
 	log.Debug("delete object")
 
-	// check preconditions
-	oid := ObjectID{Key: object}
-	if version.Specified {
-		id := version.ID
-		oid.VersionID = &id
-	}
-	if v, exists := r.Header["X-Amz-If-Match-Last-Modified-Time"]; exists {
-		t, err := time.Parse(http.TimeFormat, v[0])
-		if err != nil {
-			return s3errs.ErrInvalidArgument
-		}
-		lastMod := NewHttpTime(t)
-		oid.LastModifiedTime = &lastMod
-	}
-
-	if v, exists := r.Header["X-Amz-If-Match-Size"]; exists {
-		size, err := strconv.ParseInt(v[0], 10, 64)
-		if err != nil {
-			return s3errs.ErrInvalidArgument
-		}
-		oid.Size = &size
-	}
-
-	if v, exists := r.Header["If-Match"]; exists && v[0] != "*" {
-		oid.ETag = &v[0]
+	oid, err := deleteObjectID(r.Header, object, version)
+	if err != nil {
+		return err
 	}
 
 	result, err := s.backend.DeleteObject(r.Context(), accessKeyID, bucket, oid)
@@ -813,6 +775,7 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID strin
 		ContentMD5:    contentMD5,
 		ContentSHA256: contentSHA256,
 		Meta:          meta,
+		Preconditions: requestPreconditions(r.Header),
 	})
 	if err != nil {
 		return err
@@ -856,18 +819,6 @@ func ParseETag(s string) [16]byte {
 	copy(etag[:], decoded)
 
 	return etag
-}
-
-func etagMatches(header, etag string) bool {
-	if header == "*" {
-		return true
-	}
-	for _, v := range strings.Split(header, ",") {
-		if strings.TrimSpace(v) == etag {
-			return true
-		}
-	}
-	return false
 }
 
 // parseSource parses an X-Amz-Copy-Source string and returns the bucket,
@@ -1053,21 +1004,24 @@ func (r *ObjectVersionsListResult) AddPrefix(prefix string) {
 	r.NextKeyMarker, r.NextVersionIDMarker = prefix, ""
 }
 
-// ObjectRange specifies a byte range within an object. The backend can derive
-// this from a ObjectRangeRequest using the size of the object.
+// ObjectRange specifies a byte range within an object. The backend derives this
+// from an ObjectRangeRequest or a CopySourceRange using the size of the object.
 type ObjectRange struct {
 	Start, Length int64
 }
 
 // ObjectRangeRequest specifies a requested byte range within an object. Clients
-// provide this since they don't necessarily know the size of an object.
+// provide this since they don't necessarily know the size of an object. A nil
+// request is an absent Range header, which is not the same as one covering the
+// whole object: only the latter responds 206 with a Content-Range.
 type ObjectRangeRequest struct {
 	Start, End int64
 	FromEnd    bool
 }
 
 // Range computes the actual byte range to retrieve based on the
-// ObjectRangeRequest and the total size of the object.
+// ObjectRangeRequest and the total size of the object. A nil request resolves to
+// a nil range, meaning the whole object as an unranged response.
 func (o *ObjectRangeRequest) Range(size int64) (*ObjectRange, error) {
 	if o == nil {
 		return nil, nil
@@ -1102,6 +1056,53 @@ func (o *ObjectRangeRequest) Range(size int64) (*ObjectRange, error) {
 	}
 
 	return &ObjectRange{Start: start, Length: length}, nil
+}
+
+// CopySourceRange is the byte range requested by an X-Amz-Copy-Source-Range
+// header. A nil range is the whole source object.
+type CopySourceRange struct {
+	Start, End int64
+}
+
+// Range computes the byte range to copy from a source object of the given
+// size. Returns ErrInvalidRange if the object is empty or the range does not fit
+// within it, and ErrInvalidArgument if the range itself is malformed. The bounds
+// are re-checked here since a backend may construct a range directly.
+func (c *CopySourceRange) Range(size int64) (ObjectRange, error) {
+	if size <= 0 {
+		return ObjectRange{}, s3errs.ErrInvalidRange
+	} else if c == nil {
+		return ObjectRange{Start: 0, Length: size}, nil
+	} else if c.Start < 0 || c.End < c.Start {
+		return ObjectRange{}, s3errs.ErrInvalidArgument
+	} else if c.End >= size {
+		return ObjectRange{}, s3errs.ErrInvalidRange
+	}
+	return ObjectRange{
+		Start:  c.Start,
+		Length: c.End - c.Start + 1,
+	}, nil
+}
+
+// parseCopySourceRange validates the X-Amz-Copy-Source-Range header, returning
+// nil when it is absent. It only allows a single range of the form
+// "bytes=start-end" and returns ErrInvalidArgument for malformed headers. The
+// backend resolves the range, being the layer that knows the source size.
+func parseCopySourceRange(header string) (*CopySourceRange, error) {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return nil, nil
+	}
+
+	var rng CopySourceRange
+	var suffix string
+	n, _ := fmt.Sscanf(header, "bytes=%d-%d%s", &rng.Start, &rng.End, &suffix)
+	if n != 2 {
+		return nil, s3errs.ErrInvalidArgument
+	} else if rng.Start < 0 || rng.End < rng.Start {
+		return nil, s3errs.ErrInvalidArgument
+	}
+	return &rng, nil
 }
 
 func decodeXMLBody(r io.Reader, v interface{}) error {
@@ -1298,28 +1299,8 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 	w.Header().Set("ETag", etag)
 	w.Header().Set("Last-Modified", obj.LastModified.UTC().Format(http.TimeFormat))
 
-	// evaluate conditional headers per RFC 7232 Section 6 precedence:
-	// If-Match > If-Unmodified-Since > If-None-Match > If-Modified-Since
-	if ifMatch := r.Header.Get("If-Match"); ifMatch != "" {
-		if !etagMatches(ifMatch, etag) {
-			return s3errs.ErrPreconditionFailed
-		}
-	} else if ifUnmodifiedSince := r.Header.Get("If-Unmodified-Since"); ifUnmodifiedSince != "" {
-		t, _ := http.ParseTime(ifUnmodifiedSince)
-		if !t.IsZero() && obj.LastModified.After(t) {
-			return s3errs.ErrPreconditionFailed
-		}
-	}
-
-	if ifNoneMatch := r.Header.Get("If-None-Match"); ifNoneMatch != "" {
-		if etagMatches(ifNoneMatch, etag) {
-			return s3errs.ErrNotModified
-		}
-	} else {
-		ifModifiedSince, _ := http.ParseTime(r.Header.Get("If-Modified-Since"))
-		if !ifModifiedSince.IsZero() && !ifModifiedSince.Before(obj.LastModified) {
-			return s3errs.ErrNotModified
-		}
+	if err := requestPreconditions(r.Header).check(etag, obj.LastModified); err != nil {
+		return err
 	}
 
 	if obj.PartsCount != nil && r.URL.Query().Get("partNumber") != "" {

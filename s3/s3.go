@@ -25,10 +25,10 @@ type Backend interface {
 	UserInfo(ctx context.Context, accessKeyID string) (*UserInfo, error)
 
 	// CopyObject copies an object from the source bucket and object key to the
-	// destination bucket and object key. The provided metadata map contains any
-	// metadata that should either be merged into the copied object or replace
-	// the metadata except for the x-amz-acl header. The replace flag indicates
-	// whether the metadata should be replaced (true) or merged (false).
+	// destination bucket and object key. opts.Meta contains any metadata that
+	// should either be merged into the copied object or replace the metadata
+	// except for the x-amz-acl header. opts.Replace indicates whether the
+	// metadata should be replaced (true) or merged (false).
 	//
 	// - If the source bucket does not exist, [ErrNoSuchBucket] must be returned.
 	//
@@ -46,7 +46,13 @@ type Backend interface {
 	//   current version ([ErrNoSuchKey] if it is a delete marker), a specified
 	//   request the exact version ("" is the null version, [ErrNoSuchVersion] if
 	//   absent).
-	CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject string, srcVersion VersionRequest, dstBucket, dstObject string, replace bool, meta map[string]string) (*CopyObjectResult, error)
+	//
+	// - opts.SourcePreconditions must be evaluated against the source object,
+	//   via ObjectPreconditions.CheckCopySource.
+	//
+	// - opts.DestinationPreconditions must be evaluated against the current
+	//   version of the destination, via ObjectPreconditions.CheckWrite.
+	CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject string, srcVersion VersionRequest, dstBucket, dstObject string, opts CopyObjectOptions) (*CopyObjectResult, error)
 
 	// CreateBucket creates a new bucket with the given name for the user
 	// identified by the given access key. Re-creating a bucket the user
@@ -74,6 +80,14 @@ type Backend interface {
 	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
 	//
+	// - object's preconditions apply to the version the delete resolves to,
+	//   which is the current version unless a version is named, and must be
+	//   evaluated via ObjectID.CheckDelete.
+	//
+	// - With nothing to delete the delete stays the no-op it is when
+	//   unconditional, reporting no version and no delete marker. That covers a
+	//   key with no versions, a key whose current version is a delete marker,
+	//   and a named version that is not there.
 	DeleteObject(ctx context.Context, accessKeyID, bucket string, object ObjectID) (*DeleteObjectResult, error)
 
 	// DeleteObjects deletes multiple objects from the specified bucket for the
@@ -86,6 +100,10 @@ type Backend interface {
 	//
 	// - If any of the objects with the given keys in the specified bucket do not
 	//   exist, they must still be reported as deleted.
+	//
+	// - Each object carries the same preconditions as DeleteObject, with the
+	//   same outcomes, except that a failed precondition fails only that object,
+	//   which is reported in the result's Error list.
 	DeleteObjects(ctx context.Context, accessKeyID, bucket string, objects []ObjectID) (*ObjectsDeleteResult, error)
 
 	// GetObject retrieves the object with the given key from the specified
@@ -156,6 +174,9 @@ type Backend interface {
 	//
 	// - If ContentMD5 is set in opts, and the MD5 checksum of the data read
 	//   from 'r' does not match, [ErrBadDigest] must be returned.
+	//
+	// - opts.Preconditions must be evaluated against the current version of the
+	//   object, via ObjectPreconditions.CheckWrite.
 	PutObject(ctx context.Context, accessKeyID string, bucket, object string, r io.Reader, opts PutObjectOptions) (*PutObjectResult, error)
 
 	// CreateMultipartUpload creates a new multipart upload for the specified
@@ -224,6 +245,13 @@ type Backend interface {
 	//
 	// - If the multipart upload ID is not known or no longer active,
 	//   [ErrNoSuchUpload] must be returned.
+	//
+	// - opts.SourcePreconditions must be evaluated against the source object,
+	//   via ObjectPreconditions.CheckCopySource.
+	//
+	// - opts.Range must be resolved against the size of the source object, via
+	//   CopySourceRange.Range. A resolved range larger than
+	//   [MaxUploadPartSize] returns [ErrEntityTooLarge].
 	UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObject string, srcVersion VersionRequest, dstBucket, dstObject string, uploadID UploadID, opts UploadPartCopyOptions) (*UploadPartCopyResult, error)
 
 	// ListParts lists uploaded parts for the specified multipart upload.
@@ -250,7 +278,10 @@ type Backend interface {
 	//   [ErrInvalidPartOrder] must be returned.
 	//
 	// - If the last part is below the minimum size, [ErrEntityTooSmall] must be returned.
-	CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, object string, uploadID UploadID, parts []CompleteMultipartPart) (*CompleteMultipartUploadResult, error)
+	//
+	// - preconditions must be evaluated against the current version of the
+	//   object, via ObjectPreconditions.CheckWrite.
+	CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, object string, uploadID UploadID, parts []CompleteMultipartPart, preconditions ObjectPreconditions) (*CompleteMultipartUploadResult, error)
 
 	// PutBucketLifecycleConfiguration sets the lifecycle configuration for the
 	// specified bucket, replacing any existing configuration.

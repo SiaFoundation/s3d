@@ -201,22 +201,15 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object string
 
 // UploadPartCopy uploads a part by copying data from an existing object.
 func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObject string, srcVersion s3.VersionRequest, dstBucket, dstObject string, uploadID s3.UploadID, opts s3.UploadPartCopyOptions) (_ *s3.UploadPartCopyResult, err error) {
-	// check if the multipart upload exists
-	if _, err := s.store.HasMultipartUpload(accessKeyID, dstBucket, dstObject, uploadID); err != nil {
-		return nil, err
-	}
-
 	// fetch source object metadata (the requested version, or the current
-	// version when unspecified)
+	// version when unspecified). The source is resolved first so a bad copy
+	// source is reported as such rather than as a missing upload.
 	obj, err := s.store.GetObject(accessKeyID, srcBucket, srcObject, srcVersion, nil)
 	if err != nil {
 		return nil, err
-	} else if obj.IsDeleteMarker {
-		// a delete marker has nothing to copy
-		if srcVersion.Specified {
-			return nil, s3errs.ErrInvalidRequest
-		}
-		return nil, s3errs.ErrNoSuchKey
+	}
+	if err := opts.SourcePreconditions.CheckCopySource(obj.Attrs(), srcVersion); err != nil {
+		return nil, err
 	}
 
 	// the copied source version, reported only for a versioned source bucket
@@ -225,32 +218,39 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 		srcVersionWire = s3.FormatVersion(obj.VersionID)
 	}
 
-	// validate range
-	if opts.Range.Length <= 0 || opts.Range.Start < 0 || opts.Range.Start >= obj.Length || opts.Range.Length > obj.Length-opts.Range.Start {
-		return nil, s3errs.ErrInvalidRange
-	} else if opts.Range.Length > s3.MaxUploadPartSize {
+	// resolve the requested range against the source object
+	objRange, err := opts.Range.Range(obj.Length)
+	if err != nil {
+		return nil, err
+	} else if objRange.Length > s3.MaxUploadPartSize {
 		return nil, s3errs.ErrEntityTooLarge
 	}
 
-	// allow exceeding the limit once any part has been stored so
-	// concurrent parts of the same upload can complete
+	// check if the multipart upload exists
+	if _, err := s.store.HasMultipartUpload(accessKeyID, dstBucket, dstObject, uploadID); err != nil {
+		return nil, err
+	}
+
+	// allow exceeding the limit once any part has been stored so concurrent
+	// parts of the same upload can complete. addDiskUsage re-evaluates this
+	// while it waits, so it must re-read rather than reuse the check above.
 	allowExcess := func() (bool, error) {
 		return s.store.HasMultipartUpload(accessKeyID, dstBucket, dstObject, uploadID)
 	}
-	if err := s.addDiskUsage(ctx, opts.Range.Length, allowExcess); err != nil {
+	if err := s.addDiskUsage(ctx, objRange.Length, allowExcess); err != nil {
 		return nil, err
 	}
 	var partPath string
 	defer func() {
 		if err != nil {
-			s.cleanupOrphan(partPath, opts.Range.Length)
+			s.cleanupOrphan(partPath, objRange.Length)
 		}
 	}()
 
 	// open a reader for the requested range of the source object
 	var src io.ReadCloser
 	if obj.FileName != nil {
-		src, err = s.openUpload(srcBucket, srcObject, obj.VersionID, obj.FileName, obj.IsMultipart(), &opts.Range)
+		src, err = s.openUpload(srcBucket, srcObject, obj.VersionID, obj.FileName, obj.IsMultipart(), &objRange)
 		if err != nil {
 			return nil, fmt.Errorf("failed to open source upload: %w", err)
 		}
@@ -262,7 +262,7 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 		if err != nil {
 			return nil, fmt.Errorf("failed to unseal object: %w", err)
 		}
-		src, err = s.sdk.Download(pinnedObj, &opts.Range)
+		src, err = s.sdk.Download(pinnedObj, &objRange)
 		if err != nil {
 			return nil, fmt.Errorf("failed to download source object: %w", err)
 		}
@@ -287,11 +287,11 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 
 	// copy the requested range to the part file
 	md5Hash := md5.New()
-	contentLength, err := io.Copy(io.MultiWriter(partFile, md5Hash), io.LimitReader(src, opts.Range.Length))
+	contentLength, err := io.Copy(io.MultiWriter(partFile, md5Hash), io.LimitReader(src, objRange.Length))
 	if err != nil {
 		return nil, fmt.Errorf("failed to copy source data: %w", err)
 	}
-	if contentLength != opts.Range.Length {
+	if contentLength != objRange.Length {
 		return nil, s3errs.ErrInvalidRange
 	}
 
@@ -334,7 +334,7 @@ func (s *Sia) ListParts(ctx context.Context, accessKeyID, bucket, object string,
 }
 
 // CompleteMultipartUpload completes a multipart upload.
-func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, object string, uploadID s3.UploadID, parts []s3.CompleteMultipartPart) (*s3.CompleteMultipartUploadResult, error) {
+func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, object string, uploadID s3.UploadID, parts []s3.CompleteMultipartPart, preconditions s3.ObjectPreconditions) (*s3.CompleteMultipartUploadResult, error) {
 	// get multipart upload
 	uploaded, err := s.store.MultipartParts(accessKeyID, bucket, object, uploadID)
 	if err != nil {
@@ -392,7 +392,7 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, 
 	}
 
 	// complete the multipart upload in the database
-	versionID, orphan, err := s.store.CompleteMultipartUpload(accessKeyID, bucket, object, uploadID, contentMD5, contentLength)
+	versionID, orphan, err := s.store.CompleteMultipartUpload(accessKeyID, bucket, object, uploadID, contentMD5, contentLength, preconditions)
 	if err != nil {
 		return nil, fmt.Errorf("failed to complete multipart upload in store: %w", err)
 	}

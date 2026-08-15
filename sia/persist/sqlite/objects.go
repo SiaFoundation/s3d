@@ -85,7 +85,7 @@ func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (
 		// otherwise apply a versioning-aware delete to the current object.
 		res, err := deleteCurrentObject(tx, bid, objectID.Key, status, objectID)
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil // unversioned bucket with nothing to delete
+			return nil // nothing to delete; report success without a version
 		} else if err != nil {
 			return err
 		}
@@ -95,43 +95,79 @@ func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (
 	return versionID, isDeleteMarker, orphan, err
 }
 
-// checkObjectPreconditions validates objectID's preconditions against the
-// current version of (bid, name), for deletes that create a delete marker
-// without removing a row. ErrPreconditionFailed if no current object exists
-// (including a delete marker) or a precondition does not match.
-func checkObjectPreconditions(tx *txn, bid int64, name string, objectID s3.ObjectID) error {
-	if objectID.ETag == nil && objectID.Size == nil && objectID.LastModifiedTime == nil {
-		return nil
-	}
+// scanObjectAttrs scans the attributes preconditions are matched against,
+// reporting whether the row exists.
+func scanObjectAttrs(r *row) (attrs s3.ObjectAttrs, found bool, _ error) {
 	var contentMD5 [16]byte
-	var size int64
-	var updatedAt time.Time
-	var isDeleteMarker bool
-	err := tx.QueryRow(`
-		SELECT content_md5, size, updated_at, is_delete_marker
-		FROM objects
-		WHERE bucket_id = $1 AND name = $2 AND is_latest = TRUE
-	`, bid, name).Scan((*sqlMD5)(&contentMD5), &size, (*sqlTime)(&updatedAt), &isDeleteMarker)
-	if errors.Is(err, sql.ErrNoRows) || isDeleteMarker {
-		return s3errs.ErrPreconditionFailed // no current object to match against
+	var partsCount int32
+	err := r.Scan((*sqlMD5)(&contentMD5), &partsCount, &attrs.Size, (*sqlTime)(&attrs.LastModified), &attrs.IsDeleteMarker)
+	if errors.Is(err, sql.ErrNoRows) {
+		return s3.ObjectAttrs{}, false, nil
 	} else if err != nil {
-		return err
+		return s3.ObjectAttrs{}, false, err
 	}
-	return matchPreconditions(objectID, contentMD5, size, updatedAt)
+	// a multipart object's ETag carries its part count
+	attrs.ETag = s3.FormatETag(contentMD5[:], int(partsCount))
+	return attrs, true, nil
 }
 
-// matchPreconditions returns ErrPreconditionFailed if any of objectID's
-// If-Match-style preconditions (ETag, Size, LastModifiedTime) is set and does
-// not match the given object attributes.
-func matchPreconditions(objectID s3.ObjectID, contentMD5 [16]byte, size int64, updatedAt time.Time) error {
-	if objectID.ETag != nil && *objectID.ETag != s3.FormatETag(contentMD5[:], 0) {
-		return s3errs.ErrPreconditionFailed
-	} else if objectID.Size != nil && *objectID.Size != size {
-		return s3errs.ErrPreconditionFailed
-	} else if objectID.LastModifiedTime != nil && !updatedAt.Truncate(time.Second).Equal(objectID.LastModifiedTime.StdTime()) {
-		return s3errs.ErrPreconditionFailed
+// currentObjectAttrs reads the attributes of the current version of (bid, name),
+// reporting whether the key has one.
+func currentObjectAttrs(tx *txn, bid int64, name string) (s3.ObjectAttrs, bool, error) {
+	return scanObjectAttrs(tx.QueryRow(`
+		SELECT content_md5, parts_count, size, updated_at, is_delete_marker
+		FROM objects
+		WHERE bucket_id = $1 AND name = $2 AND is_latest = TRUE
+	`, bid, name))
+}
+
+// versionObjectAttrs reads the attributes of the (bid, name, version) row,
+// reporting whether it exists.
+func versionObjectAttrs(tx *txn, bid int64, name, version string) (s3.ObjectAttrs, bool, error) {
+	return scanObjectAttrs(tx.QueryRow(`
+		SELECT content_md5, parts_count, size, updated_at, is_delete_marker
+		FROM objects
+		WHERE bucket_id = $1 AND name = $2 AND version_id = $3
+	`, bid, name, version))
+}
+
+// checkObjectPreconditions validates objectID's preconditions against the
+// current version of (bid, name), for deletes that create a delete marker
+// without removing a row. sql.ErrNoRows means there is no object the
+// preconditions apply to, so the caller leaves the key alone; a key with no
+// versions and one whose current version is a delete marker are both no object.
+func checkObjectPreconditions(tx *txn, bid int64, name string, objectID s3.ObjectID) error {
+	if !objectID.HasPreconditions() {
+		return nil
 	}
-	return nil
+	attrs, found, err := currentObjectAttrs(tx, bid, name)
+	if err != nil {
+		return err
+	} else if !found {
+		return sql.ErrNoRows
+	} else if attrs.IsDeleteMarker && !objectID.HasSpecificPreconditions() {
+		// the wildcard only asserts that an object is there, and none is; a
+		// precondition naming a particular object is failed by CheckDelete
+		// below.
+		return sql.ErrNoRows
+	}
+	return objectID.CheckDelete(attrs)
+}
+
+// checkWritePreconditions evaluates the preconditions against the current
+// version of name. It runs in the same transaction as the write so concurrent
+// writers cannot both satisfy the same precondition.
+func checkWritePreconditions(tx *txn, bid int64, name string, p s3.ObjectPreconditions) error {
+	if !p.HasWritePreconditions() {
+		return nil
+	}
+	attrs, found, err := currentObjectAttrs(tx, bid, name)
+	if err != nil {
+		return err
+	} else if !found {
+		return p.CheckWrite(nil)
+	}
+	return p.CheckWrite(&attrs)
 }
 
 // GetObject retrieves an object. An unspecified version returns the current
@@ -250,14 +286,17 @@ func attachSiaObject(tx *txn, obj *objects.Object, objectID sql.Null[sqlHash256]
 // version). An enabled bucket creates a new version; otherwise the null version
 // is overwritten, orphaning any prior object ID or pending file that is no
 // longer referenced (the latter returned so the caller can remove it from disk).
-func (s *Store) PutObject(accessKeyID, bucket, name string, contentMD5 [16]byte, meta map[string]string, length int64, fileName *string) (versionID string, orphan objects.OrphanedFile, _ error) {
+func (s *Store) PutObject(accessKeyID, bucket, name string, opts objects.PutOptions) (versionID string, orphan objects.OrphanedFile, _ error) {
 	err := s.transaction(func(tx *txn) error {
 		versionID, orphan = "", objects.OrphanedFile{} // reset per attempt
 		bid, status, err := bucketIDAndVersioning(tx, accessKeyID, bucket)
 		if err != nil {
 			return err
 		}
-		res, err := putObject(tx, bid, name, status, contentMD5, meta, length, 0, fileName, nil)
+		if err := checkWritePreconditions(tx, bid, name, opts.Preconditions); err != nil {
+			return err
+		}
+		res, err := putObject(tx, bid, name, status, opts.ContentMD5, opts.Meta, opts.Length, 0, opts.FileName, nil)
 		versionID, orphan = res.reportVersionID, res.orphanFile
 		return err
 	})
@@ -594,10 +633,10 @@ func (s *Store) UpdateSiaObjects(siaObjects []objects.SiaObject) (updated int64,
 }
 
 // CopyObject atomically reads the source object and writes it to the
-// destination within a single transaction, applying metadata per the replace
-// flag. The result carries the wire-encoded version IDs of the new copy and the
+// destination within a single transaction, applying opts.Meta per opts.Replace.
+// The result carries the wire-encoded version IDs of the new copy and the
 // source copied; an orphaned pending file is returned for the caller to remove.
-func (s *Store) CopyObject(accessKeyID, srcBucket, srcName string, srcVersion s3.VersionRequest, dstBucket, dstName string, meta map[string]string, replace bool) (_ *s3.CopyObjectResult, orphan objects.OrphanedFile, err error) {
+func (s *Store) CopyObject(accessKeyID, srcBucket, srcName string, srcVersion s3.VersionRequest, dstBucket, dstName string, opts s3.CopyObjectOptions) (_ *s3.CopyObjectResult, orphan objects.OrphanedFile, err error) {
 	var obj objects.Object
 	var versionID, srcVersionWire string
 	err = s.transaction(func(tx *txn) error {
@@ -614,22 +653,18 @@ func (s *Store) CopyObject(accessKeyID, srcBucket, srcName string, srcVersion s3
 		if err := getObject(tx, &obj, srcBid, srcName, srcVersion, nil); err != nil {
 			return err
 		}
-		// a delete marker has nothing to copy
-		if obj.IsDeleteMarker {
-			if srcVersion.Specified {
-				return s3errs.ErrInvalidRequest
-			}
-			return s3errs.ErrNoSuchKey
+		if err := opts.SourcePreconditions.CheckCopySource(obj.Attrs(), srcVersion); err != nil {
+			return err
 		}
 		srcInternalVersion := obj.VersionID
 		if srcStatus != "" {
 			srcVersionWire = s3.FormatVersion(srcInternalVersion)
 		}
 
-		if replace {
-			obj.Meta = meta
+		if opts.Replace {
+			obj.Meta = opts.Meta
 		} else {
-			maps.Copy(obj.Meta, meta)
+			maps.Copy(obj.Meta, opts.Meta)
 		}
 
 		// a same-bucket copy shares the source's id and versioning status, so
@@ -640,6 +675,9 @@ func (s *Store) CopyObject(accessKeyID, srcBucket, srcName string, srcVersion s3
 			if err != nil {
 				return err
 			}
+		}
+		if err := checkWritePreconditions(tx, dstBid, dstName, opts.DestinationPreconditions); err != nil {
+			return err
 		}
 
 		// a self-copy onto the same null version rewrites the row in place to
@@ -867,13 +905,11 @@ func newOrphanedFile(tx *txn, filename *string, size int64) (objects.OrphanedFil
 }
 
 // deletedRow holds the columns of a deleted object row that the caller needs to
-// enforce preconditions and to orphan the row's backing data.
+// orphan the row's backing data and to report the delete.
 type deletedRow struct {
 	siaObjectID    *types.Hash256
 	filename       *string
 	size           int64
-	contentMD5     [16]byte
-	updatedAt      time.Time
 	isDeleteMarker bool
 }
 
@@ -887,8 +923,8 @@ func deleteObject(tx *txn, bid int64, name string, version string) (row deletedR
 	var wasLatest bool
 	err := tx.QueryRow(`
 		DELETE FROM objects WHERE bucket_id = $1 AND name = $2 AND version_id = $3
-		RETURNING sia_object_id, filename, size, content_md5, updated_at, is_delete_marker, is_latest
-	`, bid, name, version).Scan(&id, &row.filename, &row.size, (*sqlMD5)(&row.contentMD5), (*sqlTime)(&row.updatedAt), &row.isDeleteMarker, &wasLatest)
+		RETURNING sia_object_id, filename, size, is_delete_marker, is_latest
+	`, bid, name, version).Scan(&id, &row.filename, &row.size, &row.isDeleteMarker, &wasLatest)
 	if errors.Is(err, sql.ErrNoRows) {
 		return deletedRow{}, false, nil
 	} else if err != nil {

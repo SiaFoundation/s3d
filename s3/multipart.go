@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -43,8 +42,9 @@ type UploadPartOptions struct {
 // UploadPartCopyOptions contains options for copying an individual part in a
 // multipart upload.
 type UploadPartCopyOptions struct {
-	PartNumber int
-	Range      ObjectRange
+	PartNumber          int
+	Range               *CopySourceRange
+	SourcePreconditions ObjectPreconditions
 }
 
 // UploadPartResult contains metadata about an uploaded part, such as the
@@ -353,31 +353,17 @@ func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, accessKeyID, dstBu
 		return err
 	}
 
-	// fetch source metadata to determine size and validate range
-	obj, err := s.backend.HeadObject(r.Context(), &accessKeyID, srcBucket, srcObject, srcVersion, nil, nil)
-	if err != nil {
-		return err
-	} else if obj.Body != nil {
-		obj.Body.Close()
-	}
-
-	// a delete marker has no data to copy
-	if obj.IsDeleteMarker {
-		if srcVersion.Specified {
-			return s3errs.ErrInvalidRequest
-		}
-		return s3errs.ErrNoSuchKey
-	}
-
-	// parse range
-	objRange, err := parseRange(rnge, obj.Size)
+	// the backend resolves the range and the source preconditions, having read
+	// the source object itself
+	srcRange, err := parseCopySourceRange(rnge)
 	if err != nil {
 		return err
 	}
 
 	result, err := s.backend.UploadPartCopy(r.Context(), accessKeyID, srcBucket, srcObject, srcVersion, dstBucket, dstObject, uploadID, UploadPartCopyOptions{
-		PartNumber: partNumber,
-		Range:      objRange,
+		PartNumber:          partNumber,
+		Range:               srcRange,
+		SourcePreconditions: copySourcePreconditions(r.Header),
 	})
 	if err != nil {
 		return err
@@ -536,7 +522,7 @@ func (s *s3) completeMultipartUpload(w http.ResponseWriter, r *http.Request, acc
 		}
 	}
 
-	res, err := s.backend.CompleteMultipartUpload(r.Context(), accessKeyID, bucket, object, uploadID, parts)
+	res, err := s.backend.CompleteMultipartUpload(r.Context(), accessKeyID, bucket, object, uploadID, parts, requestPreconditions(r.Header))
 	if err != nil {
 		return err
 	}
@@ -580,38 +566,6 @@ func parsePartNumber(s string) (*int32, error) {
 	}
 	val := int32(partNumber)
 	return &val, nil
-}
-
-// parseRange validates the X-Amz-Copy-Source-Range header. It only allows a
-// single range of the form "bytes=start-end" and returns ErrInvalidArgument for
-// malformed headers or ErrInvalidRange if the range exceeds the source object
-// size.
-func parseRange(header string, size int64) (ObjectRange, error) {
-	header = strings.TrimSpace(header)
-
-	if size <= 0 {
-		return ObjectRange{}, s3errs.ErrInvalidRange
-	} else if header == "" {
-		return ObjectRange{Start: 0, Length: size}, nil
-	}
-
-	var start, end int64
-	var suffix string
-	n, _ := fmt.Sscanf(header, "bytes=%d-%d%s", &start, &end, &suffix)
-	if n != 2 {
-		return ObjectRange{}, s3errs.ErrInvalidArgument
-	}
-
-	if start < 0 || end < start {
-		return ObjectRange{}, s3errs.ErrInvalidArgument
-	} else if end >= size {
-		return ObjectRange{}, s3errs.ErrInvalidRange
-	}
-
-	return ObjectRange{
-		Start:  start,
-		Length: end - start + 1,
-	}, nil
 }
 
 func listPartsPageFromQuery(query url.Values) (ListPartsPage, error) {

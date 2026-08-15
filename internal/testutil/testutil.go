@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
@@ -42,6 +43,23 @@ type S3Tester struct {
 	cfg     aws.Config
 	backend s3.Backend
 	client  *service.Client
+}
+
+// Preconditions are the conditional headers a request can carry; a nil field is
+// an absent header. Writes only carry the ETag conditions.
+type Preconditions struct {
+	IfMatch           *string
+	IfNoneMatch       *string
+	IfModifiedSince   *time.Time
+	IfUnmodifiedSince *time.Time
+}
+
+// DeleteConditions are the conditional headers a delete can carry; a nil field
+// is an absent header.
+type DeleteConditions struct {
+	IfMatch                 *string
+	IfMatchSize             *int64
+	IfMatchLastModifiedTime *time.Time
 }
 
 // ChangeAccessKey creates a copy of the tester that uses the provided keypair
@@ -104,6 +122,23 @@ func (t *S3Tester) CopyObject(ctx context.Context, srcBucket, srcObject, dstBuck
 	return hash[:], nil
 }
 
+// ConditionalCopyObject copies an object, applying src to the source and dst to
+// the object the copy replaces.
+func (t *S3Tester) ConditionalCopyObject(ctx context.Context, srcBucket, srcObject, dstBucket, dstObject string, src, dst Preconditions) error {
+	_, err := t.client.CopyObject(ctx, &service.CopyObjectInput{
+		CopySource:                  aws.String(fmt.Sprintf("%s/%s", srcBucket, url.QueryEscape(srcObject))),
+		Bucket:                      aws.String(dstBucket),
+		Key:                         aws.String(dstObject),
+		CopySourceIfMatch:           src.IfMatch,
+		CopySourceIfNoneMatch:       src.IfNoneMatch,
+		CopySourceIfModifiedSince:   src.IfModifiedSince,
+		CopySourceIfUnmodifiedSince: src.IfUnmodifiedSince,
+		IfMatch:                     dst.IfMatch,
+		IfNoneMatch:                 dst.IfNoneMatch,
+	})
+	return err
+}
+
 // CreateBucket creates a new S3 bucket.
 func (t *S3Tester) CreateBucket(ctx context.Context, bucket string) error {
 	_, err := t.client.CreateBucket(ctx, &service.CreateBucketInput{
@@ -128,6 +163,19 @@ func (t *S3Tester) DeleteObject(ctx context.Context, bucket, object string) erro
 		Key:    aws.String(object),
 	})
 	return err
+}
+
+// ConditionalDeleteObject deletes the version addressed by versionID (the
+// current version when nil), applying c to it.
+func (t *S3Tester) ConditionalDeleteObject(ctx context.Context, bucket, object string, versionID *string, c DeleteConditions) (*service.DeleteObjectOutput, error) {
+	return t.client.DeleteObject(ctx, &service.DeleteObjectInput{
+		Bucket:                  aws.String(bucket),
+		Key:                     aws.String(object),
+		VersionId:               versionID,
+		IfMatch:                 c.IfMatch,
+		IfMatchSize:             c.IfMatchSize,
+		IfMatchLastModifiedTime: c.IfMatchLastModifiedTime,
+	})
 }
 
 // DeleteObjects deletes multiple S3 objects at once. If quiet is set to true,
@@ -348,6 +396,17 @@ func (t *S3Tester) PutObject(ctx context.Context, bucket, object string, r io.Re
 	return hash[:], nil
 }
 
+// ConditionalPutObject puts an object, applying p to the object it replaces.
+func (t *S3Tester) ConditionalPutObject(ctx context.Context, bucket, object string, r io.Reader, p Preconditions) (*service.PutObjectOutput, error) {
+	return t.client.PutObject(ctx, &service.PutObjectInput{
+		Bucket:      aws.String(bucket),
+		Key:         aws.String(object),
+		Body:        r,
+		IfMatch:     p.IfMatch,
+		IfNoneMatch: p.IfNoneMatch,
+	})
+}
+
 // CreateMultipartUpload is a convenience wrapper around the AWS SDK's
 // CreateMultipartUpload API.
 func (t *S3Tester) CreateMultipartUpload(ctx context.Context, bucket, object string, meta map[string]string) (*service.CreateMultipartUploadOutput, error) {
@@ -392,20 +451,31 @@ func (t *S3Tester) UploadPart(ctx context.Context, bucket, object, uploadID stri
 	return t.client.UploadPart(ctx, input)
 }
 
+// UploadPartCopyOptions are the options for an UploadPartCopy request.
+type UploadPartCopyOptions struct {
+	PartNumber          int32
+	Range               *s3.ObjectRange
+	SourcePreconditions Preconditions
+}
+
 // UploadPartCopy copies a single part from an existing object as part of a
 // multipart upload.
-func (t *S3Tester) UploadPartCopy(ctx context.Context, srcBucket, srcObject, dstBucket, dstObject, uploadID string, partNumber int32, rnge *s3.ObjectRange) (*service.UploadPartCopyOutput, error) {
+func (t *S3Tester) UploadPartCopy(ctx context.Context, srcBucket, srcObject, dstBucket, dstObject, uploadID string, opts UploadPartCopyOptions) (*service.UploadPartCopyOutput, error) {
 	var copySourceRange *string
-	if rnge != nil {
+	if rnge := opts.Range; rnge != nil {
 		copySourceRange = aws.String(fmt.Sprintf("bytes=%d-%d", rnge.Start, rnge.Start+rnge.Length-1))
 	}
 	input := &service.UploadPartCopyInput{
-		CopySource:      aws.String(fmt.Sprintf("%s/%s", srcBucket, url.QueryEscape(srcObject))),
-		Bucket:          aws.String(dstBucket),
-		Key:             aws.String(dstObject),
-		UploadId:        aws.String(uploadID),
-		PartNumber:      aws.Int32(partNumber),
-		CopySourceRange: copySourceRange,
+		CopySource:                  aws.String(fmt.Sprintf("%s/%s", srcBucket, url.QueryEscape(srcObject))),
+		Bucket:                      aws.String(dstBucket),
+		Key:                         aws.String(dstObject),
+		UploadId:                    aws.String(uploadID),
+		PartNumber:                  aws.Int32(opts.PartNumber),
+		CopySourceRange:             copySourceRange,
+		CopySourceIfMatch:           opts.SourcePreconditions.IfMatch,
+		CopySourceIfNoneMatch:       opts.SourcePreconditions.IfNoneMatch,
+		CopySourceIfModifiedSince:   opts.SourcePreconditions.IfModifiedSince,
+		CopySourceIfUnmodifiedSince: opts.SourcePreconditions.IfUnmodifiedSince,
 	}
 	return t.client.UploadPartCopy(ctx, input)
 }
@@ -434,6 +504,21 @@ func (t *S3Tester) CompleteMultipartUpload(ctx context.Context, bucket, object, 
 		},
 	}
 	return t.client.CompleteMultipartUpload(ctx, input)
+}
+
+// ConditionalCompleteMultipartUpload completes a multipart upload, applying p
+// to the object it replaces.
+func (t *S3Tester) ConditionalCompleteMultipartUpload(ctx context.Context, bucket, object, uploadID string, parts []types.CompletedPart, p Preconditions) (*service.CompleteMultipartUploadOutput, error) {
+	return t.client.CompleteMultipartUpload(ctx, &service.CompleteMultipartUploadInput{
+		Bucket:      aws.String(bucket),
+		Key:         aws.String(object),
+		UploadId:    aws.String(uploadID),
+		IfMatch:     p.IfMatch,
+		IfNoneMatch: p.IfNoneMatch,
+		MultipartUpload: &types.CompletedMultipartUpload{
+			Parts: parts,
+		},
+	})
 }
 
 // PutBucketLifecycleConfiguration is a convenience wrapper around the AWS SDK's

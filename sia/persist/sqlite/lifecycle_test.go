@@ -7,6 +7,7 @@ import (
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.uber.org/zap"
 	"lukechampine.com/frand"
 )
@@ -138,17 +139,17 @@ func TestExpireObjects(t *testing.T) {
 
 	// pending on-disk object that should expire
 	oldFile := "old.obj"
-	if _, _, err := store.PutObject(accessKeyID, bucket, "logs/old", frand.Entropy128(), nil, 100, &oldFile); err != nil {
+	if _, _, err := store.PutObject(accessKeyID, bucket, "logs/old", objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 100, FileName: &oldFile}); err != nil {
 		t.Fatal(err)
 	}
 	// recent object under the same prefix that should survive
 	newFile := "new.obj"
-	if _, _, err := store.PutObject(accessKeyID, bucket, "logs/new", frand.Entropy128(), nil, 200, &newFile); err != nil {
+	if _, _, err := store.PutObject(accessKeyID, bucket, "logs/new", objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 200, FileName: &newFile}); err != nil {
 		t.Fatal(err)
 	}
 	// object under a different prefix that should survive
 	otherFile := "other.obj"
-	if _, _, err := store.PutObject(accessKeyID, bucket, "data/keep", frand.Entropy128(), nil, 300, &otherFile); err != nil {
+	if _, _, err := store.PutObject(accessKeyID, bucket, "data/keep", objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 300, FileName: &otherFile}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -184,11 +185,11 @@ func TestExpireObjectsVersions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	oldVersion, _, err := store.PutObject(accessKeyID, bucket, key, frand.Entropy128(), nil, 100, new(string))
+	oldVersion, _, err := store.PutObject(accessKeyID, bucket, key, objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 100, FileName: new(string)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	currentVersion, _, err := store.PutObject(accessKeyID, bucket, key, frand.Entropy128(), nil, 200, new(string))
+	currentVersion, _, err := store.PutObject(accessKeyID, bucket, key, objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 200, FileName: new(string)})
 	if err != nil {
 		t.Fatal(err)
 	}
