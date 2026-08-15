@@ -1402,7 +1402,10 @@ func TestDiskUsageLimitOngoingMultipartUpload(t *testing.T) {
 
 	// UploadPartCopy should also be allowed to exceed the limit for
 	// an ongoing multipart upload
-	if _, err := s3Tester.UploadPartCopy(ctx, bucket, "src", bucket, object, *resp.UploadId, 3, &s3.ObjectRange{Start: 0, Length: int64(len(srcData))}); err != nil {
+	if _, err := s3Tester.UploadPartCopy(ctx, bucket, "src", bucket, object, *resp.UploadId, testutil.UploadPartCopyOptions{
+		PartNumber: 3,
+		Range:      &s3.ObjectRange{Start: 0, Length: int64(len(srcData))},
+	}); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -40,7 +40,7 @@ func (s *Store) CreateMultipartUpload(accessKeyID, bucket, name string, uploadID
 // object's ID has no remaining references, it is inserted into the
 // orphaned_objects table. If the overwrite leaves a previously pending file
 // unreferenced, its filename is returned so the caller can remove it from disk.
-func (s *Store) CompleteMultipartUpload(accessKeyID, bucket, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64) (versionID string, orphan objects.OrphanedFile, _ error) {
+func (s *Store) CompleteMultipartUpload(accessKeyID, bucket, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64, preconditions s3.ObjectPreconditions) (versionID string, orphan objects.OrphanedFile, _ error) {
 	err := s.transaction(func(tx *txn) error {
 		versionID, orphan = "", objects.OrphanedFile{} // reset per attempt
 		bid, status, err := bucketIDAndVersioning(tx, accessKeyID, bucket)
@@ -56,6 +56,9 @@ func (s *Store) CompleteMultipartUpload(accessKeyID, bucket, name string, upload
 		}
 		if !exists {
 			return s3errs.ErrNoSuchUpload
+		}
+		if err := checkWritePreconditions(tx, bid, name, preconditions); err != nil {
+			return err
 		}
 
 		// validate parts exist

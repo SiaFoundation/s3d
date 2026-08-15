@@ -6,6 +6,7 @@ import (
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.uber.org/zap/zaptest"
 	"lukechampine.com/frand"
 )
@@ -25,7 +26,7 @@ func TestSuspendedDeletePreconditionAgainstCurrentVersion(t *testing.T) {
 
 	// a real (non-null) current version with a known ETag; no null version exists
 	md5 := frand.Entropy128()
-	if _, _, err := store.PutObject(testAccessKeyID, bucket, "key", md5, nil, 0, nil); err != nil {
+	if _, _, err := store.PutObject(testAccessKeyID, bucket, "key", objects.PutOptions{ContentMD5: md5}); err != nil {
 		t.Fatal(err)
 	}
 
