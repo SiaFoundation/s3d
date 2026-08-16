@@ -478,12 +478,7 @@ func TestConditionalPutObject(t *testing.T) {
 	}
 	get := func(object string) string {
 		t.Helper()
-		obj, err := s3Tester.GetObject(t.Context(), bucket, object, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer obj.Body.Close()
-		data, err := io.ReadAll(obj.Body)
+		data, err := s3Tester.GetObjectVersion(t.Context(), bucket, object, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

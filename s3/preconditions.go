@@ -205,7 +205,7 @@ func deleteObjectID(h http.Header, object string, version VersionRequest) (Objec
 		oid.Size = &size
 	}
 	if v := h.Get("X-Amz-If-Match-Last-Modified-Time"); v != "" {
-		t, err := time.Parse(http.TimeFormat, v)
+		t, err := http.ParseTime(v)
 		if err != nil {
 			return ObjectID{}, s3errs.ErrInvalidArgument
 		}
