@@ -91,8 +91,8 @@ func putObject(tx *txn, bid int64, name string, status string, contentMD5 [16]by
 	}
 
 	if _, err := tx.Exec(`
-		INSERT INTO objects (bucket_id, name, version_id, seq, is_delete_marker, is_latest, sia_object_id, content_md5, metadata, size, parts_count, updated_at, filename, created_at_gen)
-		VALUES ($1, $2, $3, $4, FALSE, TRUE, $5, $6, $7, $8, $9, $10, $11, (SELECT snapshot_gen FROM global_settings))
+		INSERT INTO objects (bucket_id, name, version_id, seq, is_delete_marker, is_latest, sia_object_id, content_md5, metadata, size, parts_count, updated_at, filename)
+		VALUES ($1, $2, $3, $4, FALSE, TRUE, $5, $6, $7, $8, $9, $10, $11)
 	`, bid, name, version, seq, id, sqlMD5(contentMD5),
 		sqlMetaJSON(meta), length, partsCount, sqlTime(time.Now()),
 		fileName); err != nil {

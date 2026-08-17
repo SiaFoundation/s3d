@@ -259,6 +259,10 @@ func TestMigrationSiaObjectNormalization(t *testing.T) {
 	assertCount(`SELECT COUNT(*) FROM object_parts WHERE bucket_id = 1 AND name = 'obj1'`, 2)
 	assertCount(`SELECT COUNT(*) FROM orphaned_objects`, 1)
 
+	// migrated rows predate the first snapshot, so they carry generation 0
+	assertCount(`SELECT COUNT(*) FROM sia_objects WHERE created_at_gen = 0`, 3)
+	assertCount(`SELECT COUNT(*) FROM orphaned_objects WHERE orphaned_at_gen = 0 AND created_at_gen = 0`, 1)
+
 	// two sealed objects, four slices and three slabs (the shared one
 	// deduplicated) with six sectors, all slabs at version 0
 	assertCount(`SELECT COUNT(*) FROM sia_objects`, 3)

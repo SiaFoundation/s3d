@@ -2,6 +2,7 @@ package objects
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"go.sia.tech/core/types"
@@ -103,4 +104,27 @@ type SnapshotMetadata struct {
 	Generation  int64     `json:"generation"`
 	ObjectCount int64     `json:"objectCount"`
 	S3DVersion  string    `json:"s3dVersion"`
+}
+
+// Validate rejects metadata no version of s3d can have written. Unknown
+// encodings and database versions pass so a snapshot from a newer s3d is still
+// recognized. S3DVersion is unchecked, it is empty in unstamped builds.
+func (m SnapshotMetadata) Validate() error {
+	switch {
+	case m.Type != SnapshotType:
+		return fmt.Errorf("unexpected type %q", m.Type)
+	case m.CreatedAt.IsZero():
+		return errors.New("missing creation time")
+	case m.Encoding == "":
+		return errors.New("missing encoding")
+	case m.DBVersion <= 0:
+		return fmt.Errorf("invalid database version %d", m.DBVersion)
+	case m.Generation <= 0:
+		// the generation is bumped before the snapshot row is inserted, so it
+		// is never 0
+		return fmt.Errorf("invalid generation %d", m.Generation)
+	case m.ObjectCount < 0:
+		return fmt.Errorf("invalid object count %d", m.ObjectCount)
+	}
+	return nil
 }

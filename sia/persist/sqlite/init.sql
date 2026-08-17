@@ -34,7 +34,8 @@ CREATE TABLE sia_objects (
     encrypted_metadata BLOB,
     metadata_signature BLOB NOT NULL,
     created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    updated_at INTEGER NOT NULL,
+    created_at_gen INTEGER NOT NULL -- snapshot generation the id was first referenced at, kept on upsert
 );
 
 CREATE TABLE sia_slabs (
@@ -79,7 +80,6 @@ CREATE TABLE objects (
     updated_at INTEGER NOT NULL,
     filename TEXT, -- name of file for regular uploads or dir for multipart uploads
     sia_object_id BLOB REFERENCES sia_objects(id),
-    created_at_gen INTEGER NOT NULL DEFAULT 0, -- snapshot generation when the row was created, copies inherit the source's value
     -- non-empty objects must have a filename, a sia_object_id, or both (between uploading and pinning)
     CHECK ((size = 0 AND filename IS NULL AND sia_object_id IS NULL) OR (size > 0 AND (filename IS NOT NULL OR sia_object_id IS NOT NULL))),
     CHECK (is_delete_marker IN (FALSE, TRUE)),
@@ -137,8 +137,8 @@ CREATE TABLE object_parts (
 
 CREATE TABLE orphaned_objects (
     sia_object_id BLOB PRIMARY KEY,
-    orphaned_at_gen INTEGER NOT NULL DEFAULT 0,
-    created_at_gen INTEGER NOT NULL DEFAULT 0 -- creation stamp of the last object row that referenced the id
+    orphaned_at_gen INTEGER NOT NULL,
+    created_at_gen INTEGER NOT NULL -- creation stamp carried over from the sia object
 );
 CREATE INDEX orphaned_objects_gen_idx ON orphaned_objects(orphaned_at_gen);
 
@@ -146,7 +146,7 @@ CREATE TABLE snapshots (
     id INTEGER PRIMARY KEY,
     created_at INTEGER NOT NULL,
     sia_object_id BLOB,
-    gen INTEGER NOT NULL DEFAULT 0,
+    gen INTEGER NOT NULL,
     gen_completed INTEGER,
     object_count INTEGER NOT NULL DEFAULT 0
 );
