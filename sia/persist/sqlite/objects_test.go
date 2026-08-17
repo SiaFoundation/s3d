@@ -1311,7 +1311,8 @@ func TestSiaObjectSlabGC(t *testing.T) {
 
 	// deleting the first object keeps the shared slab and its sectors
 	if err := store.transaction(func(tx *txn) error {
-		return deleteSiaObject(tx, sealed1.ID())
+		_, err := deleteSiaObject(tx, sealed1.ID())
+		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1333,7 +1334,8 @@ func TestSiaObjectSlabGC(t *testing.T) {
 
 	// deleting the second object empties the tables
 	if err := store.transaction(func(tx *txn) error {
-		return deleteSiaObject(tx, sealed2.ID())
+		_, err := deleteSiaObject(tx, sealed2.ID())
+		return err
 	}); err != nil {
 		t.Fatal(err)
 	}

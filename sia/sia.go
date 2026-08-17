@@ -155,8 +155,8 @@ type Sia struct {
 
 	failedUploads atomic.Int64
 
-	// synced reports whether a metadata sync completed since startup, it
-	// gates orphan processing
+	// synced reports whether a metadata sync drained the event stream without
+	// failing, it gates orphan processing
 	synced atomic.Bool
 
 	tg     *threadgroup.ThreadGroup
@@ -609,6 +609,14 @@ func (s *Sia) syncMetadataLoop(ctx context.Context) {
 	}
 }
 
+// syncFailed logs a failure that cut a metadata sync short and gates orphan
+// processing again. A sync that did not reach the end of the event stream
+// cannot prove that every snapshot on the network is known locally.
+func (s *Sia) syncFailed(msg string, fields ...zap.Field) {
+	s.logger.Error(msg, fields...)
+	s.synced.Store(false)
+}
+
 // syncMetadata fetches object events from the indexer since the last sync
 // and applies metadata updates to local objects.
 func (s *Sia) syncMetadata(ctx context.Context) { //nolint:revive
@@ -617,7 +625,7 @@ func (s *Sia) syncMetadata(ctx context.Context) { //nolint:revive
 	// fetch the cursor
 	cursor, err := s.store.ObjectsCursor()
 	if err != nil {
-		s.logger.Error("failed to get objects cursor", zap.Error(err))
+		s.syncFailed("failed to get objects cursor", zap.Error(err))
 		return
 	}
 
@@ -626,7 +634,7 @@ func (s *Sia) syncMetadata(ctx context.Context) { //nolint:revive
 	for ctx.Err() == nil {
 		events, err := s.sdk.ObjectEvents(ctx, cursor, batchSize)
 		if err != nil {
-			s.logger.Error("failed to fetch object events", zap.Error(err))
+			s.syncFailed("failed to fetch object events", zap.Error(err))
 			break
 		} else if len(events) == 0 {
 			// all events are consumed, every snapshot on the network is known
@@ -644,7 +652,7 @@ func (s *Sia) syncMetadata(ctx context.Context) { //nolint:revive
 				// drop snapshots whose backup object was deleted on the
 				// indexer so they stop withholding orphans
 				if n, err := s.store.DeleteSnapshotsBySiaObject(ev.Key); err != nil {
-					s.logger.Error("failed to delete snapshot for deleted object", zap.Stringer("objectID", &ev.Key), zap.Error(err))
+					s.syncFailed("failed to delete snapshot for deleted object", zap.Stringer("objectID", &ev.Key), zap.Error(err))
 					break
 				} else if n > 0 {
 					s.logger.Info("deleted snapshot for deleted object", zap.Stringer("objectID", &ev.Key))
@@ -671,7 +679,7 @@ func (s *Sia) syncMetadata(ctx context.Context) { //nolint:revive
 		if len(batch) > 0 {
 			n, err := s.store.UpdateSiaObjects(batch)
 			if err != nil {
-				s.logger.Error("failed to batch update Sia objects", zap.Error(err))
+				s.syncFailed("failed to batch update Sia objects", zap.Error(err))
 				break
 			}
 			synced += int(n)
@@ -684,7 +692,7 @@ func (s *Sia) syncMetadata(ctx context.Context) { //nolint:revive
 		last := events[processed-1]
 		cursor = slabs.Cursor{After: last.UpdatedAt, Key: last.Key}
 		if err := s.store.SetObjectsCursor(cursor); err != nil {
-			s.logger.Error("failed to update objects cursor", zap.Error(err))
+			s.syncFailed("failed to update objects cursor", zap.Error(err))
 			break
 		}
 		if processed < len(events) {
@@ -712,11 +720,18 @@ func snapshotMetadata(obj *sdk.Object) (objects.SnapshotMetadata, bool) {
 // after restoring from a backup made by a previous database. It reports
 // whether the event was handled. While a snapshot upload is in flight its
 // object may not be recorded yet, so handling is deferred until no upload is
-// running.
+// running. Metadata s3d can't have written is ignored, leaving the object
+// pinned.
 func (s *Sia) handleSnapshotObject(objectID types.Hash256, meta objects.SnapshotMetadata) bool {
+	if err := meta.Validate(); err != nil {
+		// adopting would withhold every orphan the object might reference, and
+		// deferring would stall the cursor and block orphan processing
+		s.logger.Warn("ignoring malformed snapshot object", zap.Stringer("objectID", &objectID), zap.Error(err))
+		return true
+	}
 	known, inFlight, err := s.store.CheckSnapshotObject(objectID)
 	if err != nil {
-		s.logger.Error("failed to check snapshot object", zap.Stringer("objectID", &objectID), zap.Error(err))
+		s.syncFailed("failed to check snapshot object", zap.Stringer("objectID", &objectID), zap.Error(err))
 		return false
 	} else if known {
 		return true
@@ -725,7 +740,7 @@ func (s *Sia) handleSnapshotObject(objectID types.Hash256, meta objects.Snapshot
 	}
 	snap, err := s.store.AdoptSnapshot(objectID, meta.CreatedAt, meta.Generation, meta.ObjectCount)
 	if err != nil {
-		s.logger.Error("failed to adopt snapshot object", zap.Stringer("objectID", &objectID), zap.Error(err))
+		s.syncFailed("failed to adopt snapshot object", zap.Stringer("objectID", &objectID), zap.Error(err))
 		return false
 	}
 	s.logger.Info("adopted snapshot object", zap.Int64("snapshotID", snap.ID), zap.Stringer("objectID", &objectID))

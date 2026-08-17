@@ -1038,29 +1038,36 @@ func TestSyncMetadata(t *testing.T) {
 
 	// uploads an object tagged as a snapshot backup to the SDK without
 	// recording it locally
-	snapMeta, err := json.Marshal(objects.SnapshotMetadata{Type: objects.SnapshotType})
-	if err != nil {
-		t.Fatal(err)
-	}
-	uploadSnapshotObject := func() sdk.Object {
+	uploadSnapshotObject := func(meta objects.SnapshotMetadata) sdk.Object {
 		t.Helper()
+		raw, err := json.Marshal(meta)
+		if err != nil {
+			t.Fatal(err)
+		}
 		obj := sdk.NewEmptyObject()
-		obj.UpdateMetadata(snapMeta)
+		obj.UpdateMetadata(raw)
 		if err := memSDK.Upload(t.Context(), &obj, bytes.NewReader(frand.Bytes(8))); err != nil {
 			t.Fatal(err)
 		}
 		return obj
 	}
+	snapMeta := objects.SnapshotMetadata{
+		Type:       objects.SnapshotType,
+		CreatedAt:  eventTime,
+		DBVersion:  store.DBVersion(),
+		Encoding:   objects.SnapshotEncodingGzip,
+		Generation: 1,
+	}
 
 	// record one snapshot object locally, leak another with no local record
-	recorded := uploadSnapshotObject()
+	recorded := uploadSnapshotObject(snapMeta)
 	recordedSnap, _, err := store.CreateSnapshot()
 	if err != nil {
 		t.Fatal(err)
 	} else if err := store.MarkSnapshotPinned(recordedSnap.ID, recorded.ID()); err != nil {
 		t.Fatal(err)
 	}
-	leaked := uploadSnapshotObject()
+	leaked := uploadSnapshotObject(snapMeta)
 
 	// the sync leaves both objects pinned and adopts the leaked one, an object
 	// without a local record may be a backup made by a previous database
@@ -1084,7 +1091,7 @@ func TestSyncMetadata(t *testing.T) {
 
 	// an unknown snapshot object is left alone while an upload is in flight,
 	// and the cursor stops before its deferred event
-	blocked := uploadSnapshotObject()
+	blocked := uploadSnapshotObject(snapMeta)
 	inflight, _, err := store.CreateSnapshot()
 	if err != nil {
 		t.Fatal(err)
@@ -1123,6 +1130,27 @@ func TestSyncMetadata(t *testing.T) {
 		t.Fatal(err)
 	} else if !cursor.After.Equal(eventTime.Add(5 * time.Second)) {
 		t.Fatalf("expected cursor at %v, got %v", eventTime.Add(5*time.Second), cursor.After)
+	}
+
+	// a tagged object with metadata s3d can't have written is left pinned
+	// instead of adopted, and the cursor still advances past it
+	malformed := uploadSnapshotObject(objects.SnapshotMetadata{Type: objects.SnapshotType})
+	memSDK.SetEvents([]sdk.ObjectEvent{
+		{Key: malformed.ID(), UpdatedAt: eventTime.Add(6 * time.Second), Object: &malformed},
+	})
+	siaBackend.SyncMetadata(t.Context())
+	if !memSDK.Pinned(malformed.ID()) {
+		t.Fatal("expected malformed snapshot object to stay pinned")
+	}
+	if snapshots, err := store.ListSnapshots(); err != nil {
+		t.Fatal(err)
+	} else if len(snapshots) != 3 {
+		t.Fatal("unexpected", len(snapshots))
+	}
+	if cursor, err := store.ObjectsCursor(); err != nil {
+		t.Fatal(err)
+	} else if !cursor.After.Equal(eventTime.Add(6 * time.Second)) {
+		t.Fatalf("expected cursor at %v, got %v", eventTime.Add(6*time.Second), cursor.After)
 	}
 }
 
