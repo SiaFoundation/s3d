@@ -157,7 +157,8 @@ type Sia struct {
 
 	// synced reports whether a metadata sync drained the event stream without
 	// failing, it gates orphan processing
-	synced atomic.Bool
+	synced     atomic.Bool
+	orphanWake chan struct{}
 
 	tg     *threadgroup.ThreadGroup
 	logger *zap.Logger
@@ -270,6 +271,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 	}
 	sia.diskUsageWake = make(chan struct{})
 	sia.pinWake = make(chan struct{}, 1)
+	sia.orphanWake = make(chan struct{}, 1)
 	for _, opt := range opts {
 		opt(sia)
 	}
@@ -450,29 +452,45 @@ func isObjectNotFound(err error) bool {
 	return err != nil && strings.Contains(err.Error(), slabs.ErrObjectNotFound.Error())
 }
 
+// wakeOrphanLoop signals the orphan loop to run without waiting for its tick.
+func (s *Sia) wakeOrphanLoop() {
+	select {
+	case s.orphanWake <- struct{}{}:
+	default:
+	}
+}
+
 // processOrphansLoop periodically processes orphaned objects.
 func (s *Sia) processOrphansLoop(ctx context.Context) {
 	t := time.NewTicker(orphanLoopInterval)
 	defer t.Stop()
 
+	// pruning stays on the tick, a wake only means orphans became eligible
+	// before it
+	prune := true
 	for {
 		s.ProcessOrphans(ctx)
 		if ctx.Err() != nil {
 			return
 		}
 
-		s.logger.Info("pruning orphaned slabs")
-		start := time.Now()
-		if err := s.sdk.PruneSlabs(ctx, api.WithBefore(time.Now().Add(-time.Hour))); err != nil {
-			s.logger.Error("failed to prune slabs after processing orphans", zap.Error(err))
-		} else {
-			s.logger.Info("finished pruning orphaned slabs from Sia network", zap.Duration("elapsed", time.Since(start)))
+		if prune {
+			s.logger.Info("pruning orphaned slabs")
+			start := time.Now()
+			if err := s.sdk.PruneSlabs(ctx, api.WithBefore(time.Now().Add(-time.Hour))); err != nil {
+				s.logger.Error("failed to prune slabs after processing orphans", zap.Error(err))
+			} else {
+				s.logger.Info("finished pruning orphaned slabs from Sia network", zap.Duration("elapsed", time.Since(start)))
+			}
 		}
 
 		select {
 		case <-ctx.Done():
 			return
+		case <-s.orphanWake:
+			prune = false
 		case <-t.C:
+			prune = true
 		}
 	}
 }
@@ -638,8 +656,11 @@ func (s *Sia) syncMetadata(ctx context.Context) { //nolint:revive
 			break
 		} else if len(events) == 0 {
 			// all events are consumed, every snapshot on the network is known
-			// locally so orphan processing is safe
-			s.synced.Store(true)
+			// locally so orphan processing is safe. Only a gate that was closed
+			// leaves the orphan loop waiting on a wake
+			if !s.synced.Swap(true) {
+				s.wakeOrphanLoop()
+			}
 			break
 		}
 

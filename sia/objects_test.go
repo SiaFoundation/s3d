@@ -1843,11 +1843,13 @@ func TestProcessOrphansGatedOnSync(t *testing.T) {
 		t.Fatal("expected orphan to stay pinned after failed sync")
 	}
 
-	// a completed sync opens the gate and the orphan is unpinned
+	// a completed sync opens the gate and wakes the orphan loop, which unpins
+	// the orphan without waiting for its next tick
 	memSDK.SetEventsError(nil)
 	backend.SyncMetadata(t.Context())
-	backend.ProcessOrphans(t.Context())
-	if memSDK.Pinned(id) {
-		t.Fatal("expected orphan to be unpinned after sync")
+	for start := time.Now(); memSDK.Pinned(id); time.Sleep(10 * time.Millisecond) {
+		if time.Since(start) > 5*time.Second {
+			t.Fatal("expected the woken orphan loop to unpin the orphan")
+		}
 	}
 }
