@@ -40,6 +40,7 @@ Commands:
 	login		Register this s3d instance with the indexer
 	status		Print a basic overview of the running s3d instance
 	flush		Upload all pending objects to Sia immediately
+	snapshots	Manage database snapshots backed up to Sia
 	users		Manage users
 	keys		Manage S3 access keys
 	snapshots	Manage SQLite database snapshots
@@ -109,6 +110,13 @@ func main() {
 	snapshotsCreateCmd := flagg.New("create", snapshotsCreateUsage)
 	snapshotsListCmd := flagg.New("list", snapshotsListUsage)
 	snapshotsDeleteCmd := flagg.New("delete", snapshotsDeleteUsage)
+	snapshotsRestoreCmd := flagg.New("restore", snapshotsRestoreUsage)
+
+	var snapshotsListRemote, snapshotsRestoreForce bool
+	var snapshotsRestoreOut string
+	snapshotsListCmd.BoolVar(&snapshotsListRemote, "remote", false, "list the snapshots stored on the Sia network")
+	snapshotsRestoreCmd.BoolVar(&snapshotsRestoreForce, "force", false, "overwrite an existing database")
+	snapshotsRestoreCmd.StringVar(&snapshotsRestoreOut, "out", "", "directory to write the restored database to (defaults to the data directory)")
 
 	var keysCreateAccessKey, keysCreateSecretKey string
 	keysCreateCmd.StringVar(&keysCreateAccessKey, "access-key", "", "access key ID (auto-generated if empty)")
@@ -155,6 +163,7 @@ func main() {
 					{Cmd: snapshotsCreateCmd},
 					{Cmd: snapshotsListCmd},
 					{Cmd: snapshotsDeleteCmd},
+					{Cmd: snapshotsRestoreCmd},
 				},
 			},
 		},
@@ -233,10 +242,13 @@ func main() {
 		runSnapshotsCreate(ctx, snapshotsCreateCmd)
 		return
 	case snapshotsListCmd:
-		runSnapshotsList(ctx, snapshotsListCmd)
+		runSnapshotsList(ctx, snapshotsListCmd, snapshotsListRemote)
 		return
 	case snapshotsDeleteCmd:
 		runSnapshotsDelete(ctx, snapshotsDeleteCmd)
+		return
+	case snapshotsRestoreCmd:
+		runSnapshotsRestore(ctx, snapshotsRestoreCmd, snapshotsRestoreForce, snapshotsRestoreOut)
 		return
 	case rootCmd:
 		if len(cmd.Args()) != 0 {

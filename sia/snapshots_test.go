@@ -56,6 +56,17 @@ func downloadMetadata(t *testing.T, memSDK *testutil.MemorySDK, id types.Hash256
 	return meta
 }
 
+// snapshotEvent builds the event the indexer emits for a live snapshot object,
+// carrying the object's slabs and metadata.
+func snapshotEvent(t *testing.T, memSDK *testutil.MemorySDK, id types.Hash256, at time.Time) sdk.ObjectEvent {
+	t.Helper()
+	obj, ok := memSDK.Object(id)
+	if !ok {
+		t.Fatal("snapshot object not found")
+	}
+	return sdk.ObjectEvent{Key: id, UpdatedAt: at, Object: &obj}
+}
+
 func TestCreateSnapshot(t *testing.T) {
 	memSDK := testutil.NewMemorySDK()
 	backend, store := testutil.NewBackend(t, testutil.WithSDK(memSDK))
@@ -115,6 +126,15 @@ func TestCreateSnapshot(t *testing.T) {
 		}
 	}
 
+	// the backend lists the snapshot it recorded
+	if listed, err := backend.ListSnapshots(t.Context()); err != nil {
+		t.Fatal(err)
+	} else if len(listed) != 1 {
+		t.Fatal("unexpected", len(listed))
+	} else if listed[0].SiaObjectID != snap.SiaObjectID {
+		t.Fatal("mismatch", listed[0].SiaObjectID)
+	}
+
 	// a pin failure rolls the snapshot and object back
 	memSDK.SetPinError(errors.New("pin failed"))
 	if _, err := backend.CreateSnapshot(t.Context()); err == nil {
@@ -126,6 +146,25 @@ func TestCreateSnapshot(t *testing.T) {
 		t.Fatal("rollback left an extra snapshot", len(snapshots))
 	} else if memSDK.ObjectCount() != 1 {
 		t.Fatal("rollback left an extra object", memSDK.ObjectCount())
+	}
+
+	// deleting a snapshot unpins its backup object and drops the record
+	if err := backend.DeleteSnapshot(t.Context(), snap.ID); err != nil {
+		t.Fatal(err)
+	} else if memSDK.Pinned(snap.SiaObjectID) {
+		t.Fatal("backup object still pinned")
+	} else if memSDK.ObjectCount() != 0 {
+		t.Fatal("unexpected", memSDK.ObjectCount())
+	}
+	if snapshots, err := store.ListSnapshots(); err != nil {
+		t.Fatal(err)
+	} else if len(snapshots) != 0 {
+		t.Fatal("unexpected", len(snapshots))
+	}
+
+	// deleting a snapshot that is already gone reports not found
+	if err := backend.DeleteSnapshot(t.Context(), snap.ID); !errors.Is(err, s3.ErrSnapshotNotFound) {
+		t.Fatal("unexpected", err)
 	}
 }
 
@@ -145,19 +184,6 @@ func TestSnapshotRecovery(t *testing.T) {
 			t.Fatal(err)
 		}
 		return store, backend
-	}
-
-	// snapshotEvent builds the event the indexer emits for a live snapshot
-	// object, carrying the object's metadata
-	snapshotEvent := func(id types.Hash256, at time.Time) sdk.ObjectEvent {
-		t.Helper()
-		raw, ok := memSDK.ObjectMetadata(id)
-		if !ok {
-			t.Fatal("snapshot object not found")
-		}
-		obj := sdk.NewEmptyObject()
-		obj.UpdateMetadata(raw)
-		return sdk.ObjectEvent{Key: id, UpdatedAt: at, Object: &obj}
 	}
 
 	assertSnapshots := func(store *sqlite.Store, want ...types.Hash256) []s3.Snapshot {
@@ -221,8 +247,8 @@ func TestSnapshotRecovery(t *testing.T) {
 	eventTime := time.Now().Truncate(time.Second)
 	events := []sdk.ObjectEvent{
 		{Key: snap1.SiaObjectID, UpdatedAt: eventTime.Add(time.Second), Deleted: true},
-		snapshotEvent(snap2.SiaObjectID, eventTime.Add(2*time.Second)),
-		snapshotEvent(snap3.SiaObjectID, eventTime.Add(3*time.Second)),
+		snapshotEvent(t, memSDK, snap2.SiaObjectID, eventTime.Add(2*time.Second)),
+		snapshotEvent(t, memSDK, snap3.SiaObjectID, eventTime.Add(3*time.Second)),
 	}
 	memSDK.SetEvents(events)
 	backendB.SyncMetadata(t.Context())
@@ -248,10 +274,72 @@ func TestSnapshotRecovery(t *testing.T) {
 	// a fresh database with the same app scope recovers every live snapshot
 	// from the network alone
 	storeC, backendC := openBackend(t.TempDir())
-	memSDK.SetEvents(append(events, snapshotEvent(snapB.SiaObjectID, eventTime.Add(4*time.Second))))
+	memSDK.SetEvents(append(events, snapshotEvent(t, memSDK, snapB.SiaObjectID, eventTime.Add(4*time.Second))))
 	backendC.SyncMetadata(t.Context())
 	assertSnapshots(storeC, snap2.SiaObjectID, snap3.SiaObjectID, snapB.SiaObjectID)
 	if err := backendC.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestListRemoteSnapshots(t *testing.T) {
+	memSDK := testutil.NewMemorySDK()
+	backend, _ := testutil.NewBackend(t, testutil.WithSDK(memSDK))
+
+	snap1, err := backend.CreateSnapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap2, err := backend.CreateSnapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// an ordinary object carries no snapshot tag and must be ignored
+	other, err := memSDK.AddObject(t.Context(), strings.NewReader("not a snapshot"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	at := time.Now().Truncate(time.Second)
+	events := []sdk.ObjectEvent{
+		snapshotEvent(t, memSDK, snap2.SiaObjectID, at.Add(2*time.Second)),
+		snapshotEvent(t, memSDK, snap1.SiaObjectID, at.Add(time.Second)),
+		{Key: other.ID(), UpdatedAt: at.Add(3 * time.Second), Object: &other},
+	}
+	memSDK.SetEvents(events)
+
+	// the network is enumerated oldest first
+	remote, err := sia.ListRemoteSnapshots(t.Context(), memSDK)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(remote) != 2 {
+		t.Fatal("unexpected", len(remote))
+	} else if remote[0].ObjectID != snap1.SiaObjectID {
+		t.Fatal("mismatch", remote[0].ObjectID)
+	} else if remote[1].ObjectID != snap2.SiaObjectID {
+		t.Fatal("mismatch", remote[1].ObjectID)
+	} else if remote[1].Metadata.Generation != 3 {
+		t.Fatal("unexpected", remote[1].Metadata.Generation)
+	} else if remote[1].Metadata.CreatedAt.Unix() != snap2.CreatedAt.Unix() {
+		t.Fatal("mismatch", remote[1].Metadata.CreatedAt)
+	}
+
+	// the backup downloads and decompresses to a database image
+	var buf bytes.Buffer
+	if err := sia.DownloadSnapshot(memSDK, remote[1], &buf); err != nil {
+		t.Fatal(err)
+	} else if !bytes.HasPrefix(buf.Bytes(), []byte("SQLite format 3\x00")) {
+		t.Fatal("unexpected backup header")
+	}
+
+	// a deleted snapshot drops out of the listing
+	memSDK.SetEvents(append(events, sdk.ObjectEvent{Key: snap1.SiaObjectID, UpdatedAt: at.Add(4 * time.Second), Deleted: true}))
+	if remote, err := sia.ListRemoteSnapshots(t.Context(), memSDK); err != nil {
+		t.Fatal(err)
+	} else if len(remote) != 1 {
+		t.Fatal("unexpected", len(remote))
+	} else if remote[0].ObjectID != snap2.SiaObjectID {
+		t.Fatal("mismatch", remote[0].ObjectID)
 	}
 }

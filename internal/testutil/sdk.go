@@ -245,6 +245,13 @@ func (s *MemorySDK) ObjectMetadata(id types.Hash256) (json.RawMessage, bool) {
 	return o.meta.Metadata(), true
 }
 
+// Object returns the stored object for an id, carrying the slabs and metadata
+// a real object event would.
+func (s *MemorySDK) Object(id types.Hash256) (sdk.Object, bool) {
+	o, ok := s.lookup(id)
+	return o.meta, ok
+}
+
 // SetSlabSize overrides the slab size for testing.
 func (s *MemorySDK) SetSlabSize(size int64) {
 	s.mu.Lock()
