@@ -19,8 +19,9 @@ func etagMatches(condition, etag string) bool {
 	if condition == wildcardETag {
 		return true
 	}
+	etag = strings.Trim(etag, `"`)
 	for _, v := range strings.Split(condition, ",") {
-		if strings.TrimSpace(v) == etag {
+		if strings.Trim(strings.TrimSpace(v), `"`) == etag {
 			return true
 		}
 	}
