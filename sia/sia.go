@@ -393,10 +393,27 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 	}
 
 	tmp := filepath.Join(s.directory, TmpDirectory, fmt.Sprintf("snapshot-%x.tmp", frand.Bytes(8)))
+	backupStart := time.Now()
 	if err := s.store.Backup(ctx, tmp); err != nil {
 		return s3.Snapshot{}, fmt.Errorf("failed to back up database: %w", err)
 	}
 	defer removeFile(tmp)
+
+	// the backup holds the database's only connection, so this duration is how
+	// long every other request waited. Log it with the image size so the stall
+	// can be related to the database it came from
+	backupDuration := time.Since(backupStart)
+	var imageSize int64
+	if info, sErr := os.Stat(tmp); sErr != nil {
+		s.logger.Warn("failed to stat snapshot backup", zap.Error(sErr))
+	} else {
+		imageSize = info.Size()
+	}
+	s.logger.Info("snapshot backup complete",
+		zap.Int64("snapshotID", snap.ID),
+		zap.Duration("blocked", backupDuration),
+		zap.Int64("imageSize", imageSize),
+		zap.Int64("objectCount", snap.ObjectCount))
 
 	meta, err := json.Marshal(objects.SnapshotMetadata{
 		Type:        objects.SnapshotType,
@@ -420,8 +437,9 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 	// compress the snapshot during upload since database files compress well
 	// and Sia storage is paid per byte
 	pr, pw := io.Pipe()
+	compressed := new(atomic.Int64)
 	go func() {
-		gw := gzip.NewWriter(pw)
+		gw := gzip.NewWriter(countingWriter{w: pw, n: compressed})
 		if _, err := io.Copy(gw, f); err != nil {
 			pw.CloseWithError(fmt.Errorf("failed to compress snapshot: %w", err))
 			return
@@ -450,7 +468,27 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 		return s3.Snapshot{}, fmt.Errorf("failed to record snapshot object: %w", err)
 	}
 	snap.SiaObjectID = pinned
+
+	s.logger.Info("snapshot complete",
+		zap.Int64("snapshotID", snap.ID),
+		zap.Stringer("objectID", &pinned),
+		zap.Duration("blocked", backupDuration),
+		zap.Duration("total", time.Since(backupStart)),
+		zap.Int64("imageSize", imageSize),
+		zap.Int64("uploadedSize", compressed.Load()))
 	return snap, nil
+}
+
+// countingWriter totals the bytes written through it.
+type countingWriter struct {
+	w io.Writer
+	n *atomic.Int64
+}
+
+func (c countingWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.n.Add(int64(n))
+	return n, err
 }
 
 // isObjectNotFound reports whether err indicates the object does not exist on
