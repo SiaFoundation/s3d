@@ -371,8 +371,8 @@ func TestGetObject(t *testing.T) {
 		t.Fatalf("expected object length %d, got %d", 2, multipartPart2.Length)
 	} else if multipartPart2.Size != totalSize {
 		t.Fatalf("expected object size %d, got %d", totalSize, multipartPart2.Size)
-	} else if multipartPart2.ContentMD5 != part2MD5 {
-		t.Fatalf("expected object MD5 %v, got %v", part2MD5, multipartPart2.ContentMD5)
+	} else if multipartPart2.ContentMD5 != multipartMD5 {
+		t.Fatalf("expected object MD5 %v, got %v", multipartMD5, multipartPart2.ContentMD5)
 	} else if len(multipartPart2.Meta) != len(multipartMeta) || multipartPart2.Meta["baz"] != "qux" {
 		t.Fatalf("expected object metadata %v, got %v", multipartMeta, multipartPart2.Meta)
 	} else if multipartPart2.SiaObject == nil {

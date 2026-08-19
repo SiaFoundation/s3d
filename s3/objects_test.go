@@ -301,7 +301,8 @@ func TestGetAndHeadObjectPart(t *testing.T) {
 		}
 
 		expected := data[start : end+1]
-		expectedHash := md5.Sum(expected)
+		// a part read reports the object's ETag, not the part's digest
+		expectedHash := s3.ParseETag(*completed.ETag)
 
 		if obj.ContentMD5 != expectedHash {
 			t.Fatal("hash mismatch", obj.ContentMD5, expectedHash[:])

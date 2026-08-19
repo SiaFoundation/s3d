@@ -1291,8 +1291,9 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 		}
 	}
 
+	// a part read is a ranged GET, so it reports the whole object's ETag
 	var partsCount int
-	if obj.PartsCount != nil && r.URL.Query().Get("partNumber") == "" {
+	if obj.PartsCount != nil {
 		partsCount = int(*obj.PartsCount)
 	}
 	etag := FormatETag(obj.ContentMD5[:], partsCount)
@@ -1303,8 +1304,12 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 		return err
 	}
 
-	if obj.PartsCount != nil && r.URL.Query().Get("partNumber") != "" {
-		w.Header().Set("x-amz-mp-parts-count", fmt.Sprintf("%d", *obj.PartsCount))
+	if r.URL.Query().Get("partNumber") != "" {
+		partsCount := int32(1) // a non-multipart object reads as a single part
+		if obj.PartsCount != nil {
+			partsCount = *obj.PartsCount
+		}
+		w.Header().Set("x-amz-mp-parts-count", fmt.Sprintf("%d", partsCount))
 	}
 
 	w.Header().Set("Accept-Ranges", "bytes")
