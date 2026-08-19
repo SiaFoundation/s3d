@@ -9,13 +9,18 @@ import (
 
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.sia.tech/core/types"
+	"go.sia.tech/indexd/api"
 	"go.sia.tech/indexd/slabs"
 	sdk "go.sia.tech/siastorage"
 )
 
 // remoteSnapshotBatchSize is the number of object events fetched per request
-// while enumerating the account.
-const remoteSnapshotBatchSize = 100
+// while enumerating the account. Recovery has to read every object in the
+// account to find the snapshot tag, since that tag is inside client encrypted
+// metadata the indexer cannot filter on, so this bounds the number of round
+// trips. It is the indexer's maximum accepted limit: a larger value is rejected
+// with a 400 rather than clamped.
+const remoteSnapshotBatchSize = api.MaxLimit
 
 // RemoteSnapshot is a snapshot backup object stored on the Sia network.
 type RemoteSnapshot struct {
