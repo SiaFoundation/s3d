@@ -169,6 +169,7 @@ type SDK interface {
 	Account(ctx context.Context) (app.AccountResponse, error)
 	DeleteObject(ctx context.Context, id types.Hash256) error
 	Download(obj sdk.Object, rnge *s3.ObjectRange) (io.ReadCloser, error)
+	Object(ctx context.Context, id types.Hash256) (sdk.Object, error)
 	ObjectEvents(ctx context.Context, cursor slabs.Cursor, limit int) ([]sdk.ObjectEvent, error)
 	OptimalDataSize() (int64, error)
 	Upload(ctx context.Context, obj *sdk.Object, r io.Reader) error

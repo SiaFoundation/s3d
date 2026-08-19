@@ -83,6 +83,26 @@ func ListRemoteSnapshots(ctx context.Context, sdk SDK) ([]RemoteSnapshot, error)
 	return snapshots, nil
 }
 
+// FetchRemoteSnapshot retrieves a single snapshot by its Sia object ID without
+// enumerating the account. Enumeration has to read and decrypt every object to
+// find the snapshot tag, so its cost grows with the account; this does not. The
+// object ID is returned when a snapshot is created, which makes it the token to
+// keep for recovery.
+func FetchRemoteSnapshot(ctx context.Context, sdk SDK, objectID types.Hash256) (RemoteSnapshot, error) {
+	obj, err := sdk.Object(ctx, objectID)
+	if err != nil {
+		return RemoteSnapshot{}, fmt.Errorf("failed to fetch object: %w", err)
+	}
+
+	meta, ok := snapshotMetadata(&obj)
+	if !ok {
+		return RemoteSnapshot{}, fmt.Errorf("object %v is not a snapshot", objectID)
+	} else if err := meta.Validate(); err != nil {
+		return RemoteSnapshot{}, fmt.Errorf("object %v has invalid snapshot metadata: %w", objectID, err)
+	}
+	return RemoteSnapshot{ObjectID: objectID, Metadata: meta, object: obj}, nil
+}
+
 // DownloadSnapshot downloads a snapshot's backup object and writes the
 // decompressed database image to w.
 func DownloadSnapshot(sdk SDK, snap RemoteSnapshot, w io.Writer) error {

@@ -60,9 +60,14 @@ S3D_CONFIG_FILE.`
 
 Restore the database from a snapshot stored on Sia.
 
-Locates the snapshot by enumerating the account, downloads and decompresses its
-backup, and writes it to the data directory. Refuses to overwrite an existing
-database unless --force is set.
+Given a Sia object ID, the snapshot is fetched directly in a single request.
+Given "latest", the account is enumerated to find the newest snapshot, which
+reads and decrypts every object and so takes longer the more you have stored.
+The object ID is printed when a snapshot is created and by 'snapshots list', so
+keeping it somewhere safe makes recovery much faster.
+
+The backup is then downloaded, decompressed and written to the data directory.
+Refuses to overwrite an existing database unless --force is set.
 
 The app key is always read from the configured data directory, so this requires
 an instance that has already run 's3d login'. With --out the restored database is
@@ -175,12 +180,29 @@ func runSnapshotsRestore(ctx context.Context, cmd *flag.FlagSet, force bool, out
 	sdkClient, closeStore := openSDK()
 	defer closeStore()
 
-	fmt.Println("Enumerating snapshots on the Sia network. This may take a while...")
-	snapshots, err := sia.ListRemoteSnapshots(ctx, sdkClient)
-	checkFatalError("failed to list remote snapshots", err)
+	// an explicit object ID is fetched directly. Enumerating reads and decrypts
+	// every object in the account to find the snapshot tag, so it costs more the
+	// more you have stored, while a direct fetch is one request. The ID is
+	// printed when a snapshot is created, which makes it worth keeping
+	var snap sia.RemoteSnapshot
+	if target == latestSnapshot {
+		fmt.Println("Enumerating snapshots on the Sia network. This may take a while...")
+		snapshots, err := sia.ListRemoteSnapshots(ctx, sdkClient)
+		checkFatalError("failed to list remote snapshots", err)
 
-	snap, err := selectSnapshot(snapshots, target)
-	checkFatalError("failed to restore snapshot", err)
+		snap, err = selectSnapshot(snapshots, target)
+		checkFatalError("failed to restore snapshot", err)
+	} else {
+		var objectID types.Hash256
+		checkFatalError("invalid Sia object id", objectID.UnmarshalText([]byte(target)))
+
+		fmt.Println("Fetching snapshot", objectID)
+		fetched, err := sia.FetchRemoteSnapshot(ctx, sdkClient, objectID)
+		checkFatalError("failed to fetch snapshot", err)
+
+		snap, err = selectSnapshot([]sia.RemoteSnapshot{fetched}, target)
+		checkFatalError("failed to restore snapshot", err)
+	}
 
 	checkFatalError("failed to create data directory", os.MkdirAll(destDir, 0700))
 
@@ -225,13 +247,16 @@ func restoreDir(dataDir, out string) string {
 
 // selectSnapshot picks the snapshot matching target, which is either "latest"
 // or a Sia object ID, and reports whether this build can read its database.
+// latestSnapshot selects the newest snapshot rather than a specific object ID.
+const latestSnapshot = "latest"
+
 func selectSnapshot(snapshots []sia.RemoteSnapshot, target string) (sia.RemoteSnapshot, error) {
 	if len(snapshots) == 0 {
 		return sia.RemoteSnapshot{}, errors.New("no snapshots found on the network")
 	}
 
 	snap := snapshots[len(snapshots)-1]
-	if target != "latest" {
+	if target != latestSnapshot {
 		var objectID types.Hash256
 		if err := objectID.UnmarshalText([]byte(target)); err != nil {
 			return sia.RemoteSnapshot{}, fmt.Errorf("invalid Sia object id: %w", err)

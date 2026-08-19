@@ -41,6 +41,8 @@ type (
 
 		pinErr      error // when non-nil, PinObject returns this error
 		pinAttempts int   // number of PinObject calls observed
+
+		objectEventCalls int
 	}
 
 	uploadedObject struct {
@@ -139,6 +141,7 @@ func (s *MemorySDK) ObjectEvents(_ context.Context, cursor slabs.Cursor, limit i
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	s.objectEventCalls++
 	if s.eventsErr != nil {
 		return nil, s.eventsErr
 	}
@@ -245,9 +248,27 @@ func (s *MemorySDK) ObjectMetadata(id types.Hash256) (json.RawMessage, bool) {
 	return o.meta.Metadata(), true
 }
 
-// Object returns the stored object for an id, carrying the slabs and metadata
-// a real object event would.
-func (s *MemorySDK) Object(id types.Hash256) (sdk.Object, bool) {
+// ObjectEventCalls returns how many times the event stream was enumerated.
+// Fetching a snapshot by id must not enumerate at all.
+func (s *MemorySDK) ObjectEventCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.objectEventCalls
+}
+
+// Object retrieves a single object by id, without enumerating the account.
+func (s *MemorySDK) Object(_ context.Context, id types.Hash256) (sdk.Object, error) {
+	o, ok := s.lookup(id)
+	if !ok {
+		return sdk.Object{}, errors.New("object not found")
+	}
+	return o.meta, nil
+}
+
+// StoredObject returns the stored object for an id, carrying the slabs and
+// metadata a real object event would. It is a test accessor, distinct from the
+// SDK's Object method.
+func (s *MemorySDK) StoredObject(id types.Hash256) (sdk.Object, bool) {
 	o, ok := s.lookup(id)
 	return o.meta, ok
 }

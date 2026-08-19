@@ -21,6 +21,7 @@ import (
 	"go.sia.tech/core/types"
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap/zaptest"
+	"lukechampine.com/frand"
 )
 
 // downloadSnapshot fetches a snapshot's Sia object from the SDK and returns
@@ -60,7 +61,7 @@ func downloadMetadata(t *testing.T, memSDK *testutil.MemorySDK, id types.Hash256
 // carrying the object's slabs and metadata.
 func snapshotEvent(t *testing.T, memSDK *testutil.MemorySDK, id types.Hash256, at time.Time) sdk.ObjectEvent {
 	t.Helper()
-	obj, ok := memSDK.Object(id)
+	obj, ok := memSDK.StoredObject(id)
 	if !ok {
 		t.Fatal("snapshot object not found")
 	}
@@ -341,5 +342,54 @@ func TestListRemoteSnapshots(t *testing.T) {
 		t.Fatal("unexpected", len(remote))
 	} else if remote[0].ObjectID != snap2.SiaObjectID {
 		t.Fatal("mismatch", remote[0].ObjectID)
+	}
+}
+
+// TestFetchRemoteSnapshot covers the recovery shortcut: fetching a snapshot by
+// its object ID must not enumerate the account, because enumeration reads and
+// decrypts every object and so grows with how much is stored.
+func TestFetchRemoteSnapshot(t *testing.T) {
+	memSDK := testutil.NewMemorySDK()
+	backend, _ := testutil.NewBackend(t, testutil.WithSDK(memSDK))
+
+	snap, err := backend.CreateSnapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := memSDK.AddObject(t.Context(), strings.NewReader("not a snapshot"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	before := memSDK.ObjectEventCalls()
+	remote, err := sia.FetchRemoteSnapshot(t.Context(), memSDK, snap.SiaObjectID)
+	if err != nil {
+		t.Fatal(err)
+	} else if remote.ObjectID != snap.SiaObjectID {
+		t.Fatal("mismatch", remote.ObjectID)
+	} else if remote.Metadata.ObjectCount != snap.ObjectCount {
+		t.Fatal("unexpected", remote.Metadata.ObjectCount)
+	} else if calls := memSDK.ObjectEventCalls(); calls != before {
+		t.Fatal("fetching by id enumerated the account", calls-before, "times")
+	}
+
+	// the fetched snapshot is usable, not just described
+	var buf bytes.Buffer
+	if err := sia.DownloadSnapshot(memSDK, remote, &buf); err != nil {
+		t.Fatal(err)
+	} else if !bytes.HasPrefix(buf.Bytes(), []byte("SQLite format 3\x00")) {
+		t.Fatal("unexpected backup header")
+	}
+
+	// an object that is not a snapshot is rejected rather than restored
+	if _, err := sia.FetchRemoteSnapshot(t.Context(), memSDK, other.ID()); err == nil {
+		t.Fatal("expected an error")
+	} else if !strings.Contains(err.Error(), "not a snapshot") {
+		t.Fatal("unexpected", err)
+	}
+
+	// so is an id that does not exist
+	if _, err := sia.FetchRemoteSnapshot(t.Context(), memSDK, types.Hash256(frand.Entropy256())); err == nil {
+		t.Fatal("expected an error")
 	}
 }
