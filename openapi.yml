@@ -190,10 +190,6 @@ components:
       type: object
       description: A database snapshot uploaded to Sia.
       properties:
-        id:
-          type: integer
-          format: int64
-          description: ID of the snapshot.
         createdAt:
           type: string
           format: date-time

@@ -16,7 +16,11 @@ var ErrSnapshotNotFound = errors.New("snapshot not found")
 // Snapshot describes a database snapshot uploaded to Sia. It is returned by the
 // [POST] /snapshots endpoint.
 type Snapshot struct {
-	ID          int64         `json:"id"`
+	// ID is the local database row, needed because a snapshot row is inserted
+	// before its backup object exists. It is deliberately not serialized:
+	// snapshots are addressed by their Sia object ID, and a row ID is
+	// meaningless outside the one database that issued it.
+	ID          int64         `json:"-"`
 	CreatedAt   time.Time     `json:"createdAt"`
 	SiaObjectID types.Hash256 `json:"siaObjectID"`
 	ObjectCount int64         `json:"objectCount"`
