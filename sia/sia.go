@@ -512,32 +512,29 @@ func (s *Sia) ListSnapshots(_ context.Context) ([]s3.Snapshot, error) {
 	return s.store.ListSnapshots()
 }
 
-// DeleteSnapshot removes the snapshot with the given id and unpins its Sia
-// object from the Sia network, releasing the objects the snapshot pinned so
-// they can be unpinned once nothing else references them.
-func (s *Sia) DeleteSnapshot(ctx context.Context, id int64) error {
-	snapshots, err := s.store.ListSnapshots()
-	if err != nil {
-		return fmt.Errorf("failed to list snapshots: %w", err)
-	}
-	var objectID types.Hash256
-	for _, snap := range snapshots {
-		if snap.ID == id {
-			objectID = snap.SiaObjectID
-			break
-		}
-	}
-	if objectID == (types.Hash256{}) {
-		return s3.ErrSnapshotNotFound
-	}
-
-	// unpin the snapshot object before deleting the record, the sync loop drops
-	// snapshots whose object was deleted, so a failure after the unpin heals
+// DeleteSnapshot unpins a snapshot's backup object from the Sia network and
+// removes its record, releasing the orphaned objects it was withholding.
+//
+// Snapshots are addressed by their Sia object ID, which is the only identifier
+// that survives losing the database. The row ID is local to one database and is
+// meaningless during the recovery the feature exists for.
+func (s *Sia) DeleteSnapshot(ctx context.Context, objectID types.Hash256) error {
+	// unpin before dropping the record. A record left behind by a failed
+	// delete is reconciled by the sync loop, but an unreferenced backup object
+	// is never collected
 	if err := s.sdk.DeleteObject(ctx, objectID); err != nil && !isObjectNotFound(err) {
 		return fmt.Errorf("failed to unpin snapshot object: %w", err)
-	} else if err := s.store.DeleteSnapshot(id); err != nil && !errors.Is(err, s3.ErrSnapshotNotFound) {
-		return fmt.Errorf("failed to delete snapshot: %w", err)
 	}
+
+	deleted, err := s.store.DeleteSnapshotsBySiaObject(objectID)
+	if err != nil {
+		return fmt.Errorf("failed to delete snapshot: %w", err)
+	} else if deleted == 0 {
+		return s3.ErrSnapshotNotFound
+	}
+	s.logger.Info("deleted snapshot", zap.Stringer("objectID", &objectID))
+
+	s.wakeOrphanLoop()
 	return nil
 }
 

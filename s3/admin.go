@@ -2,7 +2,6 @@ package s3
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -122,17 +121,16 @@ func (s *s3) handleListSnapshots(jc jape.Context) {
 	jc.Encode(snapshots)
 }
 
-// handleDeleteSnapshot deletes the snapshot with the id given in the path.
+// handleDeleteSnapshot unpins a snapshot's backup object and removes its
+// record, releasing the orphaned objects it was withholding. Snapshots are
+// addressed by their Sia object ID.
 func (s *s3) handleDeleteSnapshot(jc jape.Context) {
-	var id int64
-	if jc.DecodeParam("id", &id) != nil {
-		return
-	} else if id <= 0 {
-		jc.Error(fmt.Errorf("id must be positive: %d", id), http.StatusBadRequest)
+	var objectID types.Hash256
+	if jc.DecodeParam("objectID", &objectID) != nil {
 		return
 	}
 
-	err := s.backend.DeleteSnapshot(jc.Request.Context(), id)
+	err := s.backend.DeleteSnapshot(jc.Request.Context(), objectID)
 	if errors.Is(err, ErrSnapshotNotFound) {
 		jc.Error(ErrSnapshotNotFound, http.StatusNotFound)
 		return

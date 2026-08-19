@@ -118,31 +118,33 @@ paths:
                   $ref: "#/components/schemas/Snapshot"
         "500":
           description: The snapshots could not be listed.
-  /snapshots/{id}:
+  /snapshots/{objectID}:
     delete:
       tags:
         - system
       summary: Delete a database snapshot
       description: >
-        Deletes the snapshot with the given id, unpinning its Sia object
-        and releasing the objects it pinned so they can be unpinned once
-        nothing else references them.
+        Unpins the snapshot's backup object from the Sia network and removes its
+        record, releasing the orphaned objects it was withholding. Snapshots are
+        addressed by their Sia object ID.
       operationId: deleteSnapshot
       parameters:
-        - name: id
+        - name: objectID
           in: path
           required: true
+          description: >
+            The Sia object ID of the snapshot to delete. This is the only
+            identifier that survives losing the database, so it is how snapshots
+            are addressed.
           schema:
-            type: integer
-            format: int64
-          description: The id of the snapshot to delete.
+            type: string
       responses:
         "200":
           description: The snapshot was deleted.
         "400":
-          description: The id must be a positive integer.
+          description: The Sia object ID could not be parsed.
         "404":
-          description: No snapshot with the given id exists.
+          description: No snapshot with that Sia object ID exists.
         "500":
           description: The snapshot could not be deleted.
 

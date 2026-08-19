@@ -150,7 +150,7 @@ func TestCreateSnapshot(t *testing.T) {
 	}
 
 	// deleting a snapshot unpins its backup object and drops the record
-	if err := backend.DeleteSnapshot(t.Context(), snap.ID); err != nil {
+	if err := backend.DeleteSnapshot(t.Context(), snap.SiaObjectID); err != nil {
 		t.Fatal(err)
 	} else if memSDK.Pinned(snap.SiaObjectID) {
 		t.Fatal("backup object still pinned")
@@ -164,7 +164,7 @@ func TestCreateSnapshot(t *testing.T) {
 	}
 
 	// deleting a snapshot that is already gone reports not found
-	if err := backend.DeleteSnapshot(t.Context(), snap.ID); !errors.Is(err, s3.ErrSnapshotNotFound) {
+	if err := backend.DeleteSnapshot(t.Context(), snap.SiaObjectID); !errors.Is(err, s3.ErrSnapshotNotFound) {
 		t.Fatal("unexpected", err)
 	}
 }

@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"text/tabwriter"
 	"time"
 
@@ -48,10 +47,14 @@ With --remote, enumerate the snapshots stored on the Sia network instead. This
 reads the app key from the local database rather than the admin API, so it works
 against a stopped daemon.`
 
-	snapshotsDeleteUsage = `Usage: s3d snapshots delete <id>
+	snapshotsDeleteUsage = `Usage: s3d snapshots delete <sia object id>
 
 Unpin a snapshot's backup object from Sia and remove its record, releasing the
 orphaned objects it was withholding.
+
+Snapshots are addressed by their Sia object ID, printed when a snapshot is
+created and by 'snapshots list'. It is the only identifier that survives losing
+the database.
 
 Reads the admin address and password from the loaded config file or
 S3D_CONFIG_FILE.`
@@ -88,8 +91,10 @@ func runSnapshotsCreate(ctx context.Context, cmd *flag.FlagSet) {
 	err := adminRequest(ctx, http.MethodPost, cfg.AdminAddress, cfg.AdminPassword, "/snapshots", &snapshot)
 	checkFatalError("failed to create snapshot", err)
 
-	fmt.Printf("Created snapshot %d with %d objects.\n", snapshot.ID, snapshot.ObjectCount)
+	fmt.Printf("Created snapshot with %d objects.\n", snapshot.ObjectCount)
 	fmt.Println("Sia object ID:", snapshot.SiaObjectID)
+	fmt.Println("Keep this ID: it identifies the snapshot for restore and delete, and is the only")
+	fmt.Println("identifier that survives losing the database.")
 }
 
 func runSnapshotsList(ctx context.Context, cmd *flag.FlagSet, remote bool) {
@@ -114,9 +119,9 @@ func runSnapshotsList(ctx context.Context, cmd *flag.FlagSet, remote bool) {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tCREATED\tOBJECTS\tSIA OBJECT ID")
+	fmt.Fprintln(w, "SIA OBJECT ID\tCREATED\tOBJECTS")
 	for _, snap := range snapshots {
-		fmt.Fprintf(w, "%d\t%s\t%d\t%s\n", snap.ID, snap.CreatedAt.Format(time.RFC3339), snap.ObjectCount, snap.SiaObjectID)
+		fmt.Fprintf(w, "%s\t%s\t%d\n", snap.SiaObjectID, snap.CreatedAt.Format(time.RFC3339), snap.ObjectCount)
 	}
 	w.Flush()
 }
@@ -135,10 +140,10 @@ func listRemoteSnapshots(ctx context.Context) {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "CREATED\tOBJECTS\tDB VERSION\tS3D VERSION\tSIA OBJECT ID")
+	fmt.Fprintln(w, "SIA OBJECT ID\tCREATED\tOBJECTS\tDB VERSION\tS3D VERSION")
 	for _, snap := range snapshots {
 		m := snap.Metadata
-		fmt.Fprintf(w, "%s\t%d\t%d\t%s\t%s\n", m.CreatedAt.Format(time.RFC3339), m.ObjectCount, m.DBVersion, m.S3DVersion, snap.ObjectID)
+		fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%s\n", snap.ObjectID, m.CreatedAt.Format(time.RFC3339), m.ObjectCount, m.DBVersion, m.S3DVersion)
 	}
 	w.Flush()
 }
@@ -150,16 +155,16 @@ func runSnapshotsDelete(ctx context.Context, cmd *flag.FlagSet) {
 	}
 	requireAdminConfig()
 
-	id, err := strconv.ParseInt(cmd.Arg(0), 10, 64)
-	checkFatalError("invalid snapshot id", err)
+	var objectID types.Hash256
+	checkFatalError("invalid Sia object id", objectID.UnmarshalText([]byte(cmd.Arg(0))))
 
-	err = adminRequest(ctx, http.MethodDelete, cfg.AdminAddress, cfg.AdminPassword, "/snapshots/"+strconv.FormatInt(id, 10), nil)
+	err := adminRequest(ctx, http.MethodDelete, cfg.AdminAddress, cfg.AdminPassword, "/snapshots/"+objectID.String(), nil)
 	if errors.Is(err, errNotFound) {
-		checkFatalError("failed to delete snapshot", fmt.Errorf("no snapshot with id %d", id))
+		checkFatalError("failed to delete snapshot", fmt.Errorf("no snapshot with Sia object id %s", objectID))
 	}
 	checkFatalError("failed to delete snapshot", err)
 
-	fmt.Printf("Deleted snapshot %d.\n", id)
+	fmt.Println("Deleted snapshot", objectID)
 }
 
 func runSnapshotsRestore(ctx context.Context, cmd *flag.FlagSet, force bool, out string) {

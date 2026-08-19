@@ -141,8 +141,9 @@ func TestCreateSnapshot(t *testing.T) {
 		t.Fatal("mismatch", snapshots[0].SiaObjectID)
 	}
 
-	// deleting the snapshot removes it from the list
-	delURL := baseURL + "/snapshots/" + strconv.FormatInt(snapshots[0].ID, 10)
+	// snapshots are addressed by their Sia object ID, the only identifier that
+	// survives losing the database
+	delURL := baseURL + "/snapshots/" + snapshots[0].SiaObjectID.String()
 	delReq, err := http.NewRequestWithContext(t.Context(), http.MethodDelete, delURL, nil)
 	if err != nil {
 		t.Fatal(err)
