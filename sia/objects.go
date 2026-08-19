@@ -336,7 +336,10 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 	case partNumber != nil:
 		resp.Range = &s3.ObjectRange{Start: obj.Offset, Length: obj.Length}
 		resp.Size = obj.Size
-		resp.PartsCount = aws.Int32(max(obj.PartsCount, 1))
+		// nil for a non-multipart object, so its ETag gets no part suffix
+		if obj.PartsCount > 0 {
+			resp.PartsCount = aws.Int32(obj.PartsCount)
+		}
 	default:
 		rnge, err := requestedRange.Range(obj.Length)
 		if err != nil {

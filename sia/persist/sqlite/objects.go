@@ -249,10 +249,11 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, version s3.
 		return s3errs.ErrInvalidPart
 	}
 
-	// part specified, return part info
+	// part specified, return part info. the MD5 read is the object's, not the
+	// part's, because ContentMD5 and PartsCount are the object's ETag inputs
 	var partObjID sql.Null[sqlHash256]
 	err := tx.QueryRow(`
-		SELECT o.filename, o.sia_object_id, o.metadata, o.updated_at, o.size, p.offset, p.content_length, p.content_md5
+		SELECT o.filename, o.sia_object_id, o.metadata, o.updated_at, o.size, p.offset, p.content_length, o.content_md5
 		FROM object_parts p
 		JOIN objects o ON o.bucket_id = p.bucket_id AND o.name = p.name AND o.version_id = p.version_id
 		WHERE o.bucket_id = $1 AND o.name = $2 AND o.version_id = $3 AND p.part_number = $4
