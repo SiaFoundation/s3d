@@ -28,6 +28,11 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+// SchemaVersion returns the database schema version this build expects.
+func SchemaVersion() int64 {
+	return int64(len(migrations) + 1)
+}
+
 // DBVersion returns the current database schema version.
 func (s *Store) DBVersion() int64 {
 	return getDBVersion(s.db)
@@ -127,7 +132,7 @@ func OpenDatabase(fp string, log *zap.Logger) (*Store, error) {
 		db:  db,
 		log: log,
 	}
-	if err := store.init(int64(len(migrations) + 1)); err != nil {
+	if err := store.init(SchemaVersion()); err != nil {
 		return nil, err
 	}
 	sqliteVersion, _, _ := sqlite3.Version()

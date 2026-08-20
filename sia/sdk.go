@@ -96,6 +96,12 @@ func (s *IndexdSDK) DeleteObject(ctx context.Context, id types.Hash256) error {
 	return s.inner.DeleteObject(ctx, id)
 }
 
+// Object retrieves a single object from the indexer by id. Unlike enumerating
+// the event stream, the cost does not grow with the size of the account.
+func (s *IndexdSDK) Object(ctx context.Context, id types.Hash256) (sdk.Object, error) {
+	return s.inner.Object(ctx, id)
+}
+
 // ObjectEvents returns object events from the indexer, starting from the
 // given cursor, up to the given limit.
 func (s *IndexdSDK) ObjectEvents(ctx context.Context, cursor slabs.Cursor, limit int) ([]sdk.ObjectEvent, error) {

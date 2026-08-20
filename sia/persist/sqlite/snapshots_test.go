@@ -91,12 +91,12 @@ func TestSnapshots(t *testing.T) {
 	}
 
 	// setting the object id on a missing snapshot reports not found
-	if err := store.MarkSnapshotPinned(s1.ID+100, siaObjectID); !errors.Is(err, objects.ErrSnapshotNotFound) {
+	if err := store.MarkSnapshotPinned(s1.ID+100, siaObjectID); !errors.Is(err, s3.ErrSnapshotNotFound) {
 		t.Fatal("unexpected", err)
 	}
 
 	// deleting a non-existent snapshot reports not found
-	if err := store.DeleteSnapshot(s1.ID + 100); !errors.Is(err, objects.ErrSnapshotNotFound) {
+	if err := store.DeleteSnapshot(s1.ID + 100); !errors.Is(err, s3.ErrSnapshotNotFound) {
 		t.Fatal("unexpected", err)
 	}
 
@@ -178,6 +178,13 @@ func TestSnapshots(t *testing.T) {
 		t.Fatal("unexpected", orphans)
 	}
 
+	// deleting a snapshot that no longer exists reports not found
+	if err := store.DeleteSnapshot(s1.ID); !errors.Is(err, s3.ErrSnapshotNotFound) {
+		t.Fatal("expected ErrSnapshotNotFound, got", err)
+	} else if err := store.DeleteSnapshot(99999); !errors.Is(err, s3.ErrSnapshotNotFound) {
+		t.Fatal("expected ErrSnapshotNotFound, got", err)
+	}
+
 	// adopting a snapshot recreates its record and raises the orphan's
 	// generation so the adopted snapshot withholds it again
 	adopted, err := store.AdoptSnapshot(siaObjectID, s1.CreatedAt, s1Gen+10, s1.ObjectCount)
@@ -246,7 +253,7 @@ func TestSnapshots(t *testing.T) {
 	}
 
 	// an object deleted while the third snapshot's upload is in flight is
-	// withheld, it may be captured in the backup
+	// withheld, it may be captured in the snapshot
 	bID := addObject("b")
 	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "b"}); err != nil {
 		t.Fatal(err)
@@ -258,7 +265,7 @@ func TestSnapshots(t *testing.T) {
 	}
 
 	// completing the third snapshot keeps it withheld, it existed before the
-	// backup finished
+	// snapshot finished
 	if err := store.MarkSnapshotPinned(snap3.ID, frand.Entropy256()); err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +279,7 @@ func TestSnapshots(t *testing.T) {
 	}
 
 	// an object created after the snapshot completed is provably absent from
-	// its backup, deleting it releases it immediately
+	// it, deleting it releases it immediately
 	cID := addObject("c")
 	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "c"}); err != nil {
 		t.Fatal(err)
@@ -310,7 +317,7 @@ func TestSnapshots(t *testing.T) {
 	}
 
 	// an object created after a snapshot is adopted cannot appear in the
-	// adopted backup either
+	// adopted snapshot either
 	adopted2, err := store.AdoptSnapshot(frand.Entropy256(), time.Now(), s1Gen+30, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -398,8 +405,8 @@ func TestAdoptSnapshotWithholdsExistingOrphans(t *testing.T) {
 	}
 
 	// another history created a snapshot immediately after restoring the same
-	// image, so its generation is now equal to the counter advanced above. Its
-	// backup may still reference the locally orphaned object.
+	// image, so its generation is now equal to the counter advanced above. It
+	// may still reference the locally orphaned object.
 	adopted, err := store.AdoptSnapshot(frand.Entropy256(), time.Now(), restoredGen+1, 1)
 	if err != nil {
 		t.Fatal(err)

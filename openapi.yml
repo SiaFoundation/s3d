@@ -80,11 +80,14 @@ paths:
         - system
       summary: Upload a database snapshot to Sia
       description: >
-        Backs up the SQLite metadata database and uploads it to the Sia network
-        as a tagged, pinned object so it can be recovered later. Objects that a
-        snapshot references are not unpinned until the snapshot is deleted.
-        Database writes are blocked for the duration of the backup, so this can
-        be long-running on large databases.
+        Flushes any pending objects to the Sia network, then backs up the
+        SQLite metadata database and uploads it to the Sia network as a
+        tagged, pinned object so it can be recovered later. The request may
+        block while pending objects upload, and the resulting snapshot
+        references every object flushed before the snapshot was taken.
+        Objects that a snapshot references are not unpinned until the
+        snapshot is deleted. Database writes are blocked while the database
+        is copied, so this can be long-running on large databases.
       operationId: createSnapshot
       responses:
         "200":
@@ -95,6 +98,55 @@ paths:
                 $ref: "#/components/schemas/Snapshot"
         "500":
           description: The snapshot could not be created.
+    get:
+      tags:
+        - system
+      summary: List database snapshots
+      description: >
+        Lists the recorded database snapshots. A snapshot prevents the
+        objects it references from being unpinned from the Sia network until
+        the snapshot is deleted.
+      operationId: listSnapshots
+      responses:
+        "200":
+          description: The recorded snapshots.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Snapshot"
+        "500":
+          description: The snapshots could not be listed.
+  /snapshots/{objectID}:
+    delete:
+      tags:
+        - system
+      summary: Delete a database snapshot
+      description: >
+        Unpins the snapshot's backup object from the Sia network and removes its
+        record, releasing the orphaned objects it was withholding. Snapshots are
+        addressed by their Sia object ID.
+      operationId: deleteSnapshot
+      parameters:
+        - name: objectID
+          in: path
+          required: true
+          description: >
+            The Sia object ID of the snapshot to delete. This is the only
+            identifier that survives losing the database, so it is how snapshots
+            are addressed.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The snapshot was deleted.
+        "400":
+          description: The Sia object ID could not be parsed.
+        "404":
+          description: No snapshot with that Sia object ID exists.
+        "500":
+          description: The snapshot could not be deleted.
 
 components:
   securitySchemes:
@@ -136,19 +188,15 @@ components:
           description: In-progress multipart uploads.
     Snapshot:
       type: object
-      description: A database backup uploaded to Sia.
+      description: A database snapshot uploaded to Sia.
       properties:
-        id:
-          type: integer
-          format: int64
-          description: ID of the snapshot.
         createdAt:
           type: string
           format: date-time
           description: Time the snapshot was recorded.
         siaObjectID:
           type: string
-          description: ID of the Sia object holding the backup.
+          description: ID of the Sia object holding the snapshot.
         objectCount:
           type: integer
           format: int64

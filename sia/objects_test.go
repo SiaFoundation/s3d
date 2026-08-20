@@ -973,7 +973,7 @@ func TestSyncMetadata(t *testing.T) {
 	eventTime := time.Now().Truncate(time.Second)
 	deletedKey := stypes.Hash256{1, 2, 3}
 
-	// record a snapshot whose backup object matches the deleted event
+	// record a snapshot whose Sia object matches the deleted event
 	snap, _, err := store.CreateSnapshot()
 	if err != nil {
 		t.Fatal(err)
@@ -1036,8 +1036,8 @@ func TestSyncMetadata(t *testing.T) {
 		t.Fatal("cursor should not change on no-op sync")
 	}
 
-	// uploads an object tagged as a snapshot backup to the SDK without
-	// recording it locally
+	// uploads an object tagged as a snapshot to the SDK without recording it
+	// locally
 	uploadSnapshotObject := func(meta objects.SnapshotMetadata) sdk.Object {
 		t.Helper()
 		raw, err := json.Marshal(meta)
@@ -1070,7 +1070,7 @@ func TestSyncMetadata(t *testing.T) {
 	leaked := uploadSnapshotObject(snapMeta)
 
 	// the sync leaves both objects pinned and adopts the leaked one, an object
-	// without a local record may be a backup made by a previous database
+	// without a local record may be a snapshot made by a previous database
 	memSDK.SetEvents([]sdk.ObjectEvent{
 		{Key: recorded.ID(), UpdatedAt: eventTime.Add(2 * time.Second), Object: &recorded},
 		{Key: leaked.ID(), UpdatedAt: eventTime.Add(3 * time.Second), Object: &leaked},

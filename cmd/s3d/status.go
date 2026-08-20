@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"net/http"
@@ -42,32 +41,12 @@ func runStatus(ctx context.Context, cmd *flag.FlagSet) {
 }
 
 func fetchUploadStats(ctx context.Context, addr, password string) (s3.UploadStats, error) {
-	url := "http://" + addr + "/stats/uploads"
-
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return s3.UploadStats{}, fmt.Errorf("failed to build request: %w", err)
-	}
-	req.SetBasicAuth("", password)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return s3.UploadStats{}, fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return s3.UploadStats{}, fmt.Errorf("unexpected status %s", resp.Status)
-	}
-
 	var stats s3.UploadStats
-	if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
-		return s3.UploadStats{}, fmt.Errorf("failed to decode response: %w", err)
-	}
-	return stats, nil
+	err := adminRequest(ctx, http.MethodGet, addr, password, "/stats/uploads", &stats)
+	return stats, err
 }
 
 // humanBytes formats n as a human-readable byte count using binary units.
