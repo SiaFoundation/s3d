@@ -153,7 +153,7 @@ CREATE TABLE snapshots (
 
 CREATE INDEX snapshots_gen_idx ON snapshots(gen, gen_completed);
 
--- one record per completed backup object
+-- one record per completed snapshot object
 CREATE UNIQUE INDEX snapshots_sia_object_id_idx ON snapshots(sia_object_id) WHERE sia_object_id IS NOT NULL;
 
 CREATE TABLE bucket_lifecycle_configurations (

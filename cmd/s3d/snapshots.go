@@ -14,39 +14,39 @@ import (
 )
 
 const (
-	backupUsage = `Usage: s3d backup <command>
+	snapshotsUsage = `Usage: s3d snapshots <command>
 
-Manage database backups uploaded to the Sia network via the admin API.
+Manage database snapshots uploaded to the Sia network via the admin API.
 
 Commands:
-  create    Create a backup
-  list      List backups
-  delete    Delete a backup`
+  create    Create a snapshot
+  list      List snapshots
+  delete    Delete a snapshot`
 
-	backupCreateUsage = `Usage: s3d backup create
+	snapshotsCreateUsage = `Usage: s3d snapshots create
 
 Back up the database and upload it to the Sia network as a snapshot,
 preventing the objects it references from being unpinned while the snapshot
 exists.`
 
-	backupListUsage = `Usage: s3d backup list
+	snapshotsListUsage = `Usage: s3d snapshots list
 
-List the recorded database backups.`
+List the recorded database snapshots.`
 
-	backupDeleteUsage = `Usage: s3d backup delete <id>
+	snapshotsDeleteUsage = `Usage: s3d snapshots delete <id>
 
-Delete the backup snapshot with the given id, unpinning its backup object and
-releasing the objects it pinned.`
+Delete the snapshot with the given id, unpinning its Sia object and releasing
+the objects it pinned.`
 )
 
-func runBackupCreate(ctx context.Context, cmd *flag.FlagSet) {
+func runSnapshotsCreate(ctx context.Context, cmd *flag.FlagSet) {
 	if len(cmd.Args()) != 0 {
 		cmd.Usage()
 		os.Exit(1)
 	}
 	requireAdminConfig()
 
-	// a backup blocks until complete and can take a while, so no timeout is
+	// a snapshot blocks until complete and can take a while, so no timeout is
 	// imposed beyond the parent context
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+cfg.AdminAddress+"/snapshots", nil)
 	checkFatalError("failed to build request", err)
@@ -55,14 +55,14 @@ func runBackupCreate(ctx context.Context, cmd *flag.FlagSet) {
 	resp, err := http.DefaultClient.Do(req)
 	checkFatalError("failed to send request", err)
 	defer resp.Body.Close()
-	checkFatalError("failed to create backup", adminResponseError(resp))
+	checkFatalError("failed to create snapshot", adminResponseError(resp))
 
 	var snap s3.Snapshot
 	checkFatalError("failed to decode response", json.NewDecoder(resp.Body).Decode(&snap))
-	fmt.Printf("Created backup %d with Sia object ID %s\n", snap.ID, snap.SiaObjectID)
+	fmt.Printf("Created snapshot %d with Sia object ID %s\n", snap.ID, snap.SiaObjectID)
 }
 
-func runBackupList(ctx context.Context, cmd *flag.FlagSet) {
+func runSnapshotsList(ctx context.Context, cmd *flag.FlagSet) {
 	if len(cmd.Args()) != 0 {
 		cmd.Usage()
 		os.Exit(1)
@@ -79,13 +79,13 @@ func runBackupList(ctx context.Context, cmd *flag.FlagSet) {
 	resp, err := http.DefaultClient.Do(req)
 	checkFatalError("failed to send request", err)
 	defer resp.Body.Close()
-	checkFatalError("failed to list backups", adminResponseError(resp))
+	checkFatalError("failed to list snapshots", adminResponseError(resp))
 
 	var snapshots []s3.Snapshot
 	checkFatalError("failed to decode response", json.NewDecoder(resp.Body).Decode(&snapshots))
 
 	if len(snapshots) == 0 {
-		fmt.Println("No backups found.")
+		fmt.Println("No snapshots found.")
 		return
 	}
 	for _, snap := range snapshots {
@@ -93,7 +93,7 @@ func runBackupList(ctx context.Context, cmd *flag.FlagSet) {
 	}
 }
 
-func runBackupDelete(ctx context.Context, cmd *flag.FlagSet) {
+func runSnapshotsDelete(ctx context.Context, cmd *flag.FlagSet) {
 	if len(cmd.Args()) != 1 {
 		cmd.Usage()
 		os.Exit(1)
@@ -116,6 +116,6 @@ func runBackupDelete(ctx context.Context, cmd *flag.FlagSet) {
 	resp, err := http.DefaultClient.Do(req)
 	checkFatalError("failed to send request", err)
 	defer resp.Body.Close()
-	checkFatalError("failed to delete backup", adminResponseError(resp))
-	fmt.Printf("Deleted backup %d\n", id)
+	checkFatalError("failed to delete snapshot", adminResponseError(resp))
+	fmt.Printf("Deleted snapshot %d\n", id)
 }

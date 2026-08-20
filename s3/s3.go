@@ -350,15 +350,15 @@ type Backend interface {
 	FlushObjects(ctx context.Context) error
 
 	// CreateSnapshot backs up the database, uploads it to Sia as a tagged
-	// snapshot object, and records the object ID. The backup is written to a
-	// temporary file and removed after upload.
+	// snapshot object, and records the object ID. The database copy is written
+	// to a temporary file and removed after upload.
 	CreateSnapshot(ctx context.Context) (Snapshot, error)
 
-	// ListSnapshots returns the recorded database backups.
+	// ListSnapshots returns the recorded database snapshots.
 	ListSnapshots(ctx context.Context) ([]Snapshot, error)
 
 	// DeleteSnapshot removes the snapshot with the given id, unpinning its
-	// backup object from Sia and releasing the objects it pinned so they can
+	// snapshot object from Sia and releasing the objects it pinned so they can
 	// be unpinned once nothing else references them.
 	DeleteSnapshot(ctx context.Context, id int64) error
 }
@@ -457,7 +457,7 @@ func corsMiddleware(handler http.Handler) http.Handler {
 // Prometheus metrics, /stats/uploads, which serves the same stats as JSON,
 // /objects/flush, which uploads all pending objects regardless of padding,
 // and /snapshots and /snapshots/:id, which create, list, and delete database
-// backups uploaded to Sia.
+// snapshots uploaded to Sia.
 func NewAdmin(b Backend, opts ...Option) http.Handler {
 	s3 := &s3{
 		backend: b,

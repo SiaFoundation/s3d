@@ -821,7 +821,7 @@ func (s *Store) AllFilenames() (filenames []string, err error) {
 // OrphanedObjects returns up to limit object IDs eligible for unpinning. An
 // id is withheld while any snapshot may reference it: the snapshot existed
 // when the id was orphaned and the id was first referenced before the
-// snapshot's backup finished uploading. An in-flight snapshot has no
+// snapshot finished uploading. An in-flight snapshot has no
 // completion generation yet and withholds every id orphaned since it started.
 func (s *Store) OrphanedObjects(limit int) (ids []types.Hash256, err error) {
 	err = s.transaction(func(tx *txn) error {
@@ -992,7 +992,7 @@ func orphanDeleted(tx *txn, row deletedRow) (objects.OrphanedFile, error) {
 // data that was truly never pinned the unpin is a no-op: the orphan loop
 // treats the indexer's "object not found" as success. The orphan carries over
 // the sealed object's creation stamp so the orphan loop can tell whether a
-// snapshot's backup could still reference it.
+// snapshot could still reference it.
 func insertOrphan(tx *txn, objectID types.Hash256) error {
 	if objectID == (types.Hash256{}) {
 		return nil // skip zero-value (empty objects)

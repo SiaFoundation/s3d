@@ -23,9 +23,9 @@ import (
 	"go.uber.org/zap/zaptest"
 )
 
-// downloadBackup fetches a snapshot's backup object from the SDK and returns
+// downloadSnapshot fetches a snapshot's Sia object from the SDK and returns
 // the decompressed database image.
-func downloadBackup(t *testing.T, memSDK *testutil.MemorySDK, id types.Hash256) []byte {
+func downloadSnapshot(t *testing.T, memSDK *testutil.MemorySDK, id types.Hash256) []byte {
 	t.Helper()
 	data, ok := memSDK.ObjectData(id)
 	if !ok {
@@ -99,12 +99,12 @@ func TestCreateSnapshot(t *testing.T) {
 		t.Fatal("expected non-zero created at")
 	}
 
-	// the uploaded backup decompresses to a SQLite database
-	if db := downloadBackup(t, memSDK, snap.SiaObjectID); !bytes.HasPrefix(db, []byte("SQLite format 3\x00")) {
-		t.Fatal("unexpected backup header")
+	// the uploaded snapshot decompresses to a SQLite database
+	if db := downloadSnapshot(t, memSDK, snap.SiaObjectID); !bytes.HasPrefix(db, []byte("SQLite format 3\x00")) {
+		t.Fatal("unexpected snapshot header")
 	}
 
-	// no temporary backup files or sidecars are left behind
+	// no temporary snapshot files or sidecars are left behind
 	entries, err := os.ReadDir(filepath.Join(backend.Dir, sia.TmpDirectory))
 	if err != nil {
 		t.Fatal(err)
@@ -189,14 +189,14 @@ func TestSnapshotRecovery(t *testing.T) {
 	}
 
 	// delete the first snapshot and unpin its object, its record now only
-	// lives on inside the second snapshot's backup
+	// lives on inside the second snapshot
 	if err := storeA.DeleteSnapshot(snap1.ID); err != nil {
 		t.Fatal(err)
 	} else if err := memSDK.DeleteObject(t.Context(), snap1.SiaObjectID); err != nil {
 		t.Fatal(err)
 	}
 
-	// a third snapshot only exists on the network, not in the second backup
+	// a third snapshot only exists on the network, not in the second snapshot
 	snap3, err := backendA.CreateSnapshot(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -205,9 +205,9 @@ func TestSnapshotRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// restore the second snapshot's backup into a fresh directory
+	// restore the second snapshot into a fresh directory
 	dirB := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dirB, "s3d.sqlite"), downloadBackup(t, memSDK, snap2.SiaObjectID), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(dirB, "s3d.sqlite"), downloadSnapshot(t, memSDK, snap2.SiaObjectID), 0600); err != nil {
 		t.Fatal(err)
 	}
 	storeB, backendB := openBackend(dirB)

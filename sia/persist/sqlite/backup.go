@@ -37,7 +37,7 @@ func withSQLiteConn(conn *sql.Conn, fn func(*sqlite3.SQLiteConn) error) error {
 
 // Backup creates a backup of the open database at destPath using the SQLite
 // backup API. The backup runs over the store's own connection, so writes to
-// the database are blocked for the duration of the backup but the snapshot is
+// the database are blocked for the duration of the backup but the copy is
 // always consistent.
 func (s *Store) Backup(ctx context.Context, destPath string) (err error) {
 	// prevent overwriting the destination file

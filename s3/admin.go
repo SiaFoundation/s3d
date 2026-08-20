@@ -14,7 +14,7 @@ import (
 // ErrSnapshotNotFound is returned when deleting a snapshot that does not exist.
 var ErrSnapshotNotFound = errors.New("snapshot not found")
 
-// Snapshot describes a database backup uploaded to Sia. It is returned by the
+// Snapshot describes a database snapshot uploaded to Sia. It is returned by the
 // [POST] /snapshots endpoint.
 type Snapshot struct {
 	ID          int64         `json:"id"`
@@ -113,7 +113,7 @@ func (s *s3) handleCreateSnapshot(jc jape.Context) {
 	jc.Encode(snapshot)
 }
 
-// handleListSnapshots lists the recorded database backups.
+// handleListSnapshots lists the recorded database snapshots.
 func (s *s3) handleListSnapshots(jc jape.Context) {
 	snapshots, err := s.backend.ListSnapshots(jc.Request.Context())
 	if jc.Check("failed to list snapshots", err) != nil {

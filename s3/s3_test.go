@@ -112,7 +112,7 @@ func TestCreateSnapshot(t *testing.T) {
 		t.Fatal("expected snapshot to have a sia object id")
 	}
 
-	listBackups := func() []s3.Snapshot {
+	listSnapshots := func() []s3.Snapshot {
 		t.Helper()
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, baseURL+"/snapshots", nil)
 		if err != nil {
@@ -133,8 +133,8 @@ func TestCreateSnapshot(t *testing.T) {
 		return snapshots
 	}
 
-	// the backup is listed as a snapshot
-	snapshots := listBackups()
+	// the snapshot is listed
+	snapshots := listSnapshots()
 	if len(snapshots) != 1 {
 		t.Fatalf("expected 1 snapshot, got %d", len(snapshots))
 	} else if snapshots[0].SiaObjectID != snapshot.SiaObjectID {
@@ -156,7 +156,7 @@ func TestCreateSnapshot(t *testing.T) {
 		t.Fatalf("expected 200, got %d", delResp.StatusCode)
 	}
 
-	if snapshots := listBackups(); len(snapshots) != 0 {
+	if snapshots := listSnapshots(); len(snapshots) != 0 {
 		t.Fatalf("expected 0 snapshots after delete, got %d", len(snapshots))
 	}
 }

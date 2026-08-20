@@ -42,7 +42,7 @@ Commands:
 	flush		Upload all pending objects to Sia immediately
 	users		Manage users
 	keys		Manage S3 access keys
-	backup		Manage SQLite database backups
+	snapshots	Manage SQLite database snapshots
 `
 
 	versionUsage = `Usage: s3d version
@@ -105,10 +105,10 @@ func main() {
 	keysDeleteCmd := flagg.New("delete", keysDeleteUsage)
 	keysListCmd := flagg.New("list", keysListUsage)
 
-	backupCmd := flagg.New("backup", backupUsage)
-	backupCreateCmd := flagg.New("create", backupCreateUsage)
-	backupListCmd := flagg.New("list", backupListUsage)
-	backupDeleteCmd := flagg.New("delete", backupDeleteUsage)
+	snapshotsCmd := flagg.New("snapshots", snapshotsUsage)
+	snapshotsCreateCmd := flagg.New("create", snapshotsCreateUsage)
+	snapshotsListCmd := flagg.New("list", snapshotsListUsage)
+	snapshotsDeleteCmd := flagg.New("delete", snapshotsDeleteUsage)
 
 	var keysCreateAccessKey, keysCreateSecretKey string
 	keysCreateCmd.StringVar(&keysCreateAccessKey, "access-key", "", "access key ID (auto-generated if empty)")
@@ -150,11 +150,11 @@ func main() {
 				},
 			},
 			{
-				Cmd: backupCmd,
+				Cmd: snapshotsCmd,
 				Sub: []flagg.Tree{
-					{Cmd: backupCreateCmd},
-					{Cmd: backupListCmd},
-					{Cmd: backupDeleteCmd},
+					{Cmd: snapshotsCreateCmd},
+					{Cmd: snapshotsListCmd},
+					{Cmd: snapshotsDeleteCmd},
 				},
 			},
 		},
@@ -223,20 +223,20 @@ func main() {
 	case keysListCmd:
 		runKeysList(keysListCmd)
 		return
-	case backupCmd:
+	case snapshotsCmd:
 		cmd.Usage()
 		if len(cmd.Args()) != 0 {
 			os.Exit(1)
 		}
 		return
-	case backupCreateCmd:
-		runBackupCreate(ctx, backupCreateCmd)
+	case snapshotsCreateCmd:
+		runSnapshotsCreate(ctx, snapshotsCreateCmd)
 		return
-	case backupListCmd:
-		runBackupList(ctx, backupListCmd)
+	case snapshotsListCmd:
+		runSnapshotsList(ctx, snapshotsListCmd)
 		return
-	case backupDeleteCmd:
-		runBackupDelete(ctx, backupDeleteCmd)
+	case snapshotsDeleteCmd:
+		runSnapshotsDelete(ctx, snapshotsDeleteCmd)
 		return
 	case rootCmd:
 		if len(cmd.Args()) != 0 {

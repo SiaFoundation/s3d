@@ -116,8 +116,8 @@ type OrphanedFile struct {
 // recovery can identify snapshots among all account objects.
 const SnapshotType = "s3d-snapshot"
 
-// SnapshotEncodingGzip is the encoding recorded for snapshots whose backup is
-// gzip compressed before upload.
+// SnapshotEncodingGzip is the encoding recorded for snapshots that are gzip
+// compressed before upload.
 const SnapshotEncodingGzip = "gzip"
 
 // SnapshotMetadata is attached to a snapshot's Sia object. It lets recovery

@@ -53,7 +53,7 @@ const (
 	UploadsDirectory = "uploads"
 
 	// TmpDirectory is the directory name used for temporary files, e.g.
-	// snapshot backups awaiting upload. It is cleared on startup.
+	// database snapshots awaiting upload. It is cleared on startup.
 	TmpDirectory = "tmp"
 )
 
@@ -359,9 +359,9 @@ func (s *Sia) Close() error {
 func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 	// flush pending objects to Sia first so every object captured by the
 	// snapshot has been uploaded and pinned, rather than living only on local
-	// disk where the backup cannot reference it
+	// disk where the snapshot cannot reference it
 	if err := s.FlushObjects(ctx); err != nil {
-		return s3.Snapshot{}, fmt.Errorf("failed to flush objects before backup: %w", err)
+		return s3.Snapshot{}, fmt.Errorf("failed to flush objects before snapshot: %w", err)
 	}
 
 	snap, gen, err := s.store.CreateSnapshot()
@@ -388,13 +388,13 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 
 	removeFile := func(path string) {
 		if rErr := os.Remove(path); rErr != nil && !errors.Is(rErr, os.ErrNotExist) {
-			s.logger.Warn("failed to remove snapshot backup file", zap.String("path", path), zap.Error(rErr))
+			s.logger.Warn("failed to remove snapshot file", zap.String("path", path), zap.Error(rErr))
 		}
 	}
 
 	tmp := filepath.Join(s.directory, TmpDirectory, fmt.Sprintf("snapshot-%x.tmp", frand.Bytes(8)))
 	if err := s.store.Backup(ctx, tmp); err != nil {
-		return s3.Snapshot{}, fmt.Errorf("failed to create backup: %w", err)
+		return s3.Snapshot{}, fmt.Errorf("failed to back up database: %w", err)
 	}
 	defer removeFile(tmp)
 
@@ -413,17 +413,17 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 
 	f, err := os.Open(tmp)
 	if err != nil {
-		return s3.Snapshot{}, fmt.Errorf("failed to open snapshot backup: %w", err)
+		return s3.Snapshot{}, fmt.Errorf("failed to open snapshot file: %w", err)
 	}
 	defer f.Close()
 
-	// compress the backup during upload since database files compress well
+	// compress the snapshot during upload since database files compress well
 	// and Sia storage is paid per byte
 	pr, pw := io.Pipe()
 	go func() {
 		gw := gzip.NewWriter(pw)
 		if _, err := io.Copy(gw, f); err != nil {
-			pw.CloseWithError(fmt.Errorf("failed to compress backup: %w", err))
+			pw.CloseWithError(fmt.Errorf("failed to compress snapshot: %w", err))
 			return
 		}
 		pw.CloseWithError(gw.Close())
@@ -468,12 +468,12 @@ func (s *Sia) wakeOrphanLoop() {
 	}
 }
 
-// ListSnapshots returns the recorded database backups.
+// ListSnapshots returns the recorded database snapshots.
 func (s *Sia) ListSnapshots(_ context.Context) ([]s3.Snapshot, error) {
 	return s.store.ListSnapshots()
 }
 
-// DeleteSnapshot removes the snapshot with the given id and unpins its backup
+// DeleteSnapshot removes the snapshot with the given id and unpins its Sia
 // object from the Sia network, releasing the objects the snapshot pinned so
 // they can be unpinned once nothing else references them.
 func (s *Sia) DeleteSnapshot(ctx context.Context, id int64) error {
@@ -492,7 +492,7 @@ func (s *Sia) DeleteSnapshot(ctx context.Context, id int64) error {
 		return s3.ErrSnapshotNotFound
 	}
 
-	// unpin the backup object before deleting the record, the sync loop drops
+	// unpin the snapshot object before deleting the record, the sync loop drops
 	// snapshots whose object was deleted, so a failure after the unpin heals
 	if err := s.sdk.DeleteObject(ctx, objectID); err != nil && !isObjectNotFound(err) {
 		return fmt.Errorf("failed to unpin snapshot object: %w", err)
@@ -712,8 +712,8 @@ func (s *Sia) syncMetadata(ctx context.Context) { //nolint:revive
 		processed := 0
 		for _, ev := range events {
 			if ev.Deleted {
-				// drop snapshots whose backup object was deleted on the
-				// indexer so they stop withholding orphans
+				// drop snapshots whose object was deleted on the indexer so
+				// they stop withholding orphans
 				if n, err := s.store.DeleteSnapshotsBySiaObject(ev.Key); err != nil {
 					s.syncFailed("failed to delete snapshot for deleted object", zap.Stringer("objectID", &ev.Key), zap.Error(err))
 					break
@@ -769,7 +769,7 @@ func (s *Sia) syncMetadata(ctx context.Context) { //nolint:revive
 }
 
 // snapshotMetadata parses the object's metadata and reports whether it tags
-// the object as a snapshot backup.
+// the object as a snapshot.
 func snapshotMetadata(obj *sdk.Object) (objects.SnapshotMetadata, bool) {
 	var meta objects.SnapshotMetadata
 	if raw := obj.Metadata(); len(raw) == 0 || json.Unmarshal(raw, &meta) != nil {
@@ -778,9 +778,9 @@ func snapshotMetadata(obj *sdk.Object) (objects.SnapshotMetadata, bool) {
 	return meta, meta.Type == objects.SnapshotType
 }
 
-// handleSnapshotObject checks a snapshot backup object against the local
-// records and adopts it when no record exists rather than unpinning it, e.g.
-// after restoring from a backup made by a previous database. It reports
+// handleSnapshotObject checks a snapshot object against the local records and
+// adopts it when no record exists rather than unpinning it, e.g. after
+// restoring from a snapshot made by a previous database. It reports
 // whether the event was handled. While a snapshot upload is in flight its
 // object may not be recorded yet, so handling is deferred until no upload is
 // running. Metadata s3d can't have written is ignored, leaving the object
