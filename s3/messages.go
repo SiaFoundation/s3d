@@ -268,6 +268,8 @@ type (
 	ObjectID struct {
 		Key string `xml:"Key"`
 
+		// ETag, Size and LastModifiedTime are preconditions on the version the
+		// delete resolves to, nil when absent. ETag may be the wildcard.
 		ETag             *string   `xml:"ETag,omitempty"`
 		Size             *int64    `xml:"Size,omitempty"`
 		LastModifiedTime *HttpTime `xml:"LastModifiedTime,omitempty"`

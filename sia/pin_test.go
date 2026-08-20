@@ -8,6 +8,7 @@ import (
 
 	"github.com/SiaFoundation/s3d/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3"
+	"github.com/SiaFoundation/s3d/sia/objects"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"lukechampine.com/frand"
 )
@@ -28,7 +29,7 @@ func stageUpload(t *testing.T, memSDK *testutil.MemorySDK, store *sqlite.Store, 
 
 	fn := name + ".upload"
 	md5 := frand.Entropy128()
-	if _, _, err := store.PutObject(testutil.AccessKeyID, bucket, name, md5, nil, int64(len(data)), &fn); err != nil {
+	if _, _, err := store.PutObject(testutil.AccessKeyID, bucket, name, objects.PutOptions{ContentMD5: md5, Length: int64(len(data)), FileName: &fn}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.MarkObjectUploaded(bucket, name, "", md5, sealed, pinBefore); err != nil {
@@ -171,7 +172,7 @@ func TestPinLoopPinsCopyAfterSourceDeleted(t *testing.T) {
 	stageUpload(t, memSDK, store, bucket, srcName, time.Now().Add(time.Hour))
 
 	// copy src -> dst while src is uploaded but not yet pinned
-	if _, _, err := store.CopyObject(testutil.AccessKeyID, bucket, srcName, s3.NoVersion(), bucket, dstName, nil, true); err != nil {
+	if _, _, err := store.CopyObject(testutil.AccessKeyID, bucket, srcName, s3.NoVersion(), bucket, dstName, s3.CopyObjectOptions{Replace: true}); err != nil {
 		t.Fatal(err)
 	}
 

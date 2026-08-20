@@ -17,6 +17,7 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia"
+	"github.com/SiaFoundation/s3d/sia/objects"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	s3Types "github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -664,7 +665,7 @@ func TestMultipartUploadPartCopy(t *testing.T) {
 		Start:  s3.MinUploadPartSize / 2,
 		Length: s3.MinUploadPartSize,
 	}
-	res, err := s3Tester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, uploadID, 1, rnge)
+	res, err := s3Tester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, uploadID, testutil.UploadPartCopyOptions{PartNumber: 1, Range: rnge})
 	if err != nil {
 		t.Fatal(err)
 	} else if res.CopyPartResult == nil || res.CopyPartResult.ETag == nil {
@@ -697,26 +698,29 @@ func TestMultipartUploadPartCopy(t *testing.T) {
 	}
 
 	// assert [s3errs.ErrNoSuchBucket] is returned for missing bucket
-	_, err = s3Tester.UploadPartCopy(t.Context(), "missing-bucket", objectSrc, bucketDst, objectDst, uploadID, 1, rnge)
+	_, err = s3Tester.UploadPartCopy(t.Context(), "missing-bucket", objectSrc, bucketDst, objectDst, uploadID, testutil.UploadPartCopyOptions{PartNumber: 1, Range: rnge})
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchBucket, err)
 
 	// assert [s3errs.ErrNoSuchKey] is returned for missing source object
-	_, err = s3Tester.UploadPartCopy(t.Context(), bucketSrc, "missing-object", bucketDst, objectDst, uploadID, 1, rnge)
+	_, err = s3Tester.UploadPartCopy(t.Context(), bucketSrc, "missing-object", bucketDst, objectDst, uploadID, testutil.UploadPartCopyOptions{PartNumber: 1, Range: rnge})
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchKey, err)
 
 	// assert [s3errs.ErrNoSuchUpload] is returned for invalid upload id
-	_, err = s3Tester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, "nonexistent-upload", 1, rnge)
+	_, err = s3Tester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, "nonexistent-upload", testutil.UploadPartCopyOptions{PartNumber: 1, Range: rnge})
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchUpload, err)
 
 	// assert [s3errs.ErrInvalidRange] is returned for out-of-bounds range
-	_, err = s3Tester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, uploadID, 1, &s3.ObjectRange{
-		Start:  int64(len(srcData)) - 1,
-		Length: 2,
+	_, err = s3Tester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, uploadID, testutil.UploadPartCopyOptions{
+		PartNumber: 1,
+		Range: &s3.ObjectRange{
+			Start:  int64(len(srcData)) - 1,
+			Length: 2,
+		},
 	})
 	testutil.AssertS3Error(t, s3errs.ErrInvalidRange, err)
 
 	// assert [s3errs.ErrEntityTooLarge] is returned for oversized range
-	if _, _, err := store.PutObject(testutil.AccessKeyID, bucketSrc, objectSrc, [16]byte{}, nil, s3.MaxUploadPartSize+1, new(string)); err != nil {
+	if _, _, err := store.PutObject(testutil.AccessKeyID, bucketSrc, objectSrc, objects.PutOptions{Length: s3.MaxUploadPartSize + 1, FileName: new(string)}); err != nil {
 		t.Fatal(err)
 	}
 	mu, err = s3Tester.CreateMultipartUpload(t.Context(), bucketDst, objectDst, nil)
@@ -725,9 +729,12 @@ func TestMultipartUploadPartCopy(t *testing.T) {
 	} else if mu.UploadId == nil {
 		t.Fatal("expected upload id in response")
 	}
-	_, err = s3Tester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, *mu.UploadId, 1, &s3.ObjectRange{
-		Start:  0,
-		Length: s3.MaxUploadPartSize + 1,
+	_, err = s3Tester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, *mu.UploadId, testutil.UploadPartCopyOptions{
+		PartNumber: 1,
+		Range: &s3.ObjectRange{
+			Start:  0,
+			Length: s3.MaxUploadPartSize + 1,
+		},
 	})
 	testutil.AssertS3Error(t, s3errs.ErrEntityTooLarge, err)
 }

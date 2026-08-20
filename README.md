@@ -209,6 +209,19 @@ AWS Signature V4 exclusively. SigV4A is not implemented. Supported
 
 Bucket lifecycle configuration supports prefix-based `AbortIncompleteMultipartUpload` rules and current-object `Expiration` rules.
 
+Conditional requests are supported. `GetObject` and `HeadObject` honor
+`If-Match`, `If-None-Match`, `If-Modified-Since` and `If-Unmodified-Since`, and
+the copy source of `CopyObject` and `UploadPartCopy` honors the matching
+`x-amz-copy-source-if-*` headers.
+
+`PutObject`, `CopyObject` and `CompleteMultipartUpload` honor `If-Match` and
+`If-None-Match` against the current version of the destination, evaluated
+atomically with the write. `DeleteObject` honors `If-Match` (including the `*`
+wildcard), `x-amz-if-match-size` and `x-amz-if-match-last-modified-time`, and
+each object of a multi delete honors its `ETag`, `Size` and `LastModifiedTime`
+elements, where a failed precondition fails only that object. A conditional
+delete with nothing to delete is a no-op, as an unconditional one is.
+
 ### Operations
 
 | Operation | Status |

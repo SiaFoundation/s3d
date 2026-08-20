@@ -10,6 +10,7 @@ import (
 	"github.com/SiaFoundation/s3d/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/sia"
+	"github.com/SiaFoundation/s3d/sia/objects"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"go.uber.org/zap/zaptest"
 	"lukechampine.com/frand"
@@ -54,7 +55,7 @@ func TestDeleteOrphanedUploads(t *testing.T) {
 	createObject := func(filename string, referenced bool) {
 		t.Helper()
 		if referenced {
-			if _, _, err := store.PutObject(testutil.AccessKeyID, "bucket", filename, frand.Entropy128(), nil, 100, &filename); err != nil {
+			if _, _, err := store.PutObject(testutil.AccessKeyID, "bucket", filename, objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 100, FileName: &filename}); err != nil {
 				t.Fatal(err)
 			}
 		}

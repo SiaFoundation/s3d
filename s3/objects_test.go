@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -154,6 +155,56 @@ func TestGetAndHeadObject(t *testing.T) {
 		t.Fatal(err)
 	}
 	getResp.Body.Close()
+
+	// if-match and if-unmodified-since read conditions
+	matched, err := s3Tester.Client().GetObject(t.Context(), &service.GetObjectInput{
+		Bucket:  aws.String(bucket),
+		Key:     aws.String(object),
+		IfMatch: getResp.ETag,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	matched.Body.Close()
+	_, err = s3Tester.Client().GetObject(t.Context(), &service.GetObjectInput{
+		Bucket:  aws.String(bucket),
+		Key:     aws.String(object),
+		IfMatch: aws.String(`"nonexistent"`),
+	})
+	testutil.AssertS3Error(t, s3errs.ErrPreconditionFailed, err)
+	_, err = s3Tester.Client().GetObject(t.Context(), &service.GetObjectInput{
+		Bucket:      aws.String(bucket),
+		Key:         aws.String(object),
+		IfNoneMatch: getResp.ETag,
+	})
+	testutil.AssertS3StatusCode(t, s3errs.ErrNotModified, err)
+	matched, err = s3Tester.Client().GetObject(t.Context(), &service.GetObjectInput{
+		Bucket:            aws.String(bucket),
+		Key:               aws.String(object),
+		IfUnmodifiedSince: aws.Time(time.Now().Add(time.Hour)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	matched.Body.Close()
+	_, err = s3Tester.Client().GetObject(t.Context(), &service.GetObjectInput{
+		Bucket:            aws.String(bucket),
+		Key:               aws.String(object),
+		IfUnmodifiedSince: aws.Time(time.Now().Add(-time.Hour)),
+	})
+	testutil.AssertS3Error(t, s3errs.ErrPreconditionFailed, err)
+
+	// if-match takes precedence over if-unmodified-since
+	matched, err = s3Tester.Client().GetObject(t.Context(), &service.GetObjectInput{
+		Bucket:            aws.String(bucket),
+		Key:               aws.String(object),
+		IfMatch:           getResp.ETag,
+		IfUnmodifiedSince: aws.Time(time.Now().Add(-time.Hour)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	matched.Body.Close()
 
 	// if-modified-since with a time in the future should return 304
 	_, err = s3Tester.Client().GetObject(t.Context(), &service.GetObjectInput{
@@ -410,6 +461,407 @@ func TestPutObject(t *testing.T) {
 		s3Tester := testutil.NewTester(t, testutil.WithTLS(), testutil.WithKeyPair("other", "foo", "bar"))
 		test(t, s3Tester)
 	})
+}
+
+func TestConditionalPutObject(t *testing.T) {
+	s3Tester := testutil.NewTester(t)
+	const (
+		bucket = "conditional-put"
+		object = "object"
+	)
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	put := func(object, body string, p testutil.Preconditions) (*service.PutObjectOutput, error) {
+		return s3Tester.ConditionalPutObject(t.Context(), bucket, object, strings.NewReader(body), p)
+	}
+	get := func(object string) string {
+		t.Helper()
+		data, err := s3Tester.GetObjectVersion(t.Context(), bucket, object, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+
+	initial, err := put(object, "initial", testutil.Preconditions{IfNoneMatch: aws.String("*")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = put(object, "not-written", testutil.Preconditions{IfNoneMatch: aws.String("*")})
+	testutil.AssertS3Error(t, s3errs.ErrPreconditionFailed, err)
+	if got := get(object); got != "initial" {
+		t.Fatalf("failed conditional put changed object to %q", got)
+	}
+
+	_, err = put(object, "not-written", testutil.Preconditions{IfMatch: aws.String(`"wrong"`)})
+	testutil.AssertS3Error(t, s3errs.ErrPreconditionFailed, err)
+	updated, err := put(object, "updated", testutil.Preconditions{IfMatch: initial.ETag})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := get(object); got != "updated" {
+		t.Fatalf("conditional put stored %q", got)
+	}
+
+	// an If-Match names an object to replace, so with nothing there it reports a
+	// missing key rather than a failed condition, even for the wildcard
+	_, err = put("missing", "not-written", testutil.Preconditions{IfMatch: aws.String("*")})
+	testutil.AssertS3Error(t, s3errs.ErrNoSuchKey, err)
+	_, err = put("missing", "not-written", testutil.Preconditions{IfMatch: aws.String(`"whatever"`)})
+	testutil.AssertS3Error(t, s3errs.ErrNoSuchKey, err)
+	if _, err := put("missing", "created", testutil.Preconditions{IfNoneMatch: aws.String("*")}); err != nil {
+		t.Fatal(err)
+	}
+
+	// a non-wildcard If-None-Match holds while the current object differs from
+	// the named ETag
+	_, err = put(object, "not-written", testutil.Preconditions{IfNoneMatch: updated.ETag})
+	testutil.AssertS3Error(t, s3errs.ErrPreconditionFailed, err)
+	if got := get(object); got != "updated" {
+		t.Fatalf("failed conditional put changed object to %q", got)
+	}
+	current, err := put(object, "updated-again", testutil.Preconditions{IfNoneMatch: aws.String(`"whatever"`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := get(object); got != "updated-again" {
+		t.Fatalf("conditional put stored %q", got)
+	}
+
+	// an If-Match list holds when any of its ETags matches
+	_, err = put(object, "not-written", testutil.Preconditions{IfMatch: aws.String(`"wrong", "also-wrong"`)})
+	testutil.AssertS3Error(t, s3errs.ErrPreconditionFailed, err)
+	updated, err = put(object, "updated", testutil.Preconditions{IfMatch: aws.String(`"wrong", ` + *current.ETag)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := get(object); got != "updated" {
+		t.Fatalf("conditional put stored %q", got)
+	}
+
+	// the check and the write are atomic, so only one of two concurrent writers
+	// can satisfy the same condition
+	assertOneWinner := func(object string, p testutil.Preconditions) {
+		t.Helper()
+		type result struct {
+			body string
+			err  error
+		}
+		start := make(chan struct{})
+		results := make(chan result, 2)
+		for _, body := range []string{"writer-a", "writer-b"} {
+			go func() {
+				<-start
+				_, err := put(object, body, p)
+				results <- result{body: body, err: err}
+			}()
+		}
+		close(start)
+		var winner string
+		for range 2 {
+			res := <-results
+			if res.err != nil {
+				testutil.AssertS3Error(t, s3errs.ErrPreconditionFailed, res.err)
+			} else if winner != "" {
+				t.Fatal("both conditional writers succeeded")
+			} else {
+				winner = res.body
+			}
+		}
+		if winner == "" {
+			t.Fatal("no conditional writer succeeded")
+		} else if got := get(object); got != winner {
+			t.Fatalf("stored %q, expected winning body %q", got, winner)
+		}
+	}
+	assertOneWinner(object, testutil.Preconditions{IfMatch: updated.ETag})
+	assertOneWinner("create-once", testutil.Preconditions{IfNoneMatch: aws.String("*")})
+
+	// in a versioned bucket the conditions apply to the current version, and a
+	// current delete marker counts as no object
+	if err := s3Tester.PutBucketVersioning(t.Context(), bucket, types.BucketVersioningStatusEnabled); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := put("versioned", "old-version", testutil.Preconditions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s3Tester.DeleteObject(t.Context(), bucket, "versioned"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := put("versioned", "new-current", testutil.Preconditions{IfNoneMatch: aws.String("*")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s3Tester.DeleteObject(t.Context(), bucket, "versioned"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = put("versioned", "not-written", testutil.Preconditions{IfMatch: aws.String("*")})
+	testutil.AssertS3Error(t, s3errs.ErrNoSuchKey, err)
+	_, err = put("versioned", "not-written", testutil.Preconditions{IfMatch: aws.String(`"whatever"`)})
+	testutil.AssertS3Error(t, s3errs.ErrNoSuchKey, err)
+}
+
+func TestConditionalCopyObject(t *testing.T) {
+	s3Tester := testutil.NewTester(t)
+	const bucket = "conditional-copy"
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	srcMD5, err := s3Tester.PutObject(t.Context(), bucket, "source", strings.NewReader("source-data"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s3Tester.PutObject(t.Context(), bucket, "other", strings.NewReader("other-data"), nil); err != nil {
+		t.Fatal(err)
+	}
+	srcETag := s3.FormatETag(srcMD5, 0)
+	head, err := s3Tester.HeadObject(t.Context(), bucket, "source", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// copies "source" onto dstObject
+	copyObject := func(dstObject string, src, dst testutil.Preconditions) error {
+		return s3Tester.ConditionalCopyObject(t.Context(), bucket, "source", bucket, dstObject, src, dst)
+	}
+	if err := copyObject("etag-ok", testutil.Preconditions{IfMatch: aws.String(srcETag)}, testutil.Preconditions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// a matching ETag takes precedence over a failing date condition
+	if err := copyObject("etag-precedence", testutil.Preconditions{
+		IfMatch:           aws.String(srcETag),
+		IfUnmodifiedSince: aws.Time(head.LastModified.Add(-time.Hour)),
+	}, testutil.Preconditions{}); err != nil {
+		t.Fatal(err)
+	}
+	err = copyObject("etag-fail", testutil.Preconditions{IfMatch: aws.String(`"wrong"`)}, testutil.Preconditions{})
+	testutil.AssertS3Error(t, s3errs.ErrPreconditionFailed, err)
+	err = copyObject("none-match-fail", testutil.Preconditions{IfNoneMatch: aws.String(srcETag)}, testutil.Preconditions{})
+	testutil.AssertS3Error(t, s3errs.ErrPreconditionFailed, err)
+
+	if err := copyObject("date-ok", testutil.Preconditions{
+		IfModifiedSince: aws.Time(head.LastModified.Add(-time.Hour)),
+	}, testutil.Preconditions{}); err != nil {
+		t.Fatal(err)
+	}
+	err = copyObject("date-fail", testutil.Preconditions{
+		IfModifiedSince: aws.Time(head.LastModified.Add(time.Hour)),
+	}, testutil.Preconditions{})
+	testutil.AssertS3Error(t, s3errs.ErrPreconditionFailed, err)
+	if err := copyObject("unmodified-ok", testutil.Preconditions{
+		IfUnmodifiedSince: aws.Time(head.LastModified.Add(time.Hour)),
+	}, testutil.Preconditions{}); err != nil {
+		t.Fatal(err)
+	}
+	err = copyObject("unmodified-fail", testutil.Preconditions{
+		IfUnmodifiedSince: aws.Time(head.LastModified.Add(-time.Hour)),
+	}, testutil.Preconditions{})
+	testutil.AssertS3Error(t, s3errs.ErrPreconditionFailed, err)
+
+	if err := copyObject("destination", testutil.Preconditions{}, testutil.Preconditions{IfNoneMatch: aws.String("*")}); err != nil {
+		t.Fatal(err)
+	}
+	err = copyObject("destination", testutil.Preconditions{}, testutil.Preconditions{IfNoneMatch: aws.String("*")})
+	testutil.AssertS3Error(t, s3errs.ErrPreconditionFailed, err)
+	if err := copyObject("destination", testutil.Preconditions{}, testutil.Preconditions{IfMatch: aws.String(srcETag)}); err != nil {
+		t.Fatal(err)
+	}
+
+	// with no destination to match against, an If-Match names an object that is
+	// not there, even for the wildcard
+	err = copyObject("absent", testutil.Preconditions{}, testutil.Preconditions{IfMatch: aws.String("*")})
+	testutil.AssertS3Error(t, s3errs.ErrNoSuchKey, err)
+	err = copyObject("absent", testutil.Preconditions{}, testutil.Preconditions{IfMatch: aws.String(srcETag)})
+	testutil.AssertS3Error(t, s3errs.ErrNoSuchKey, err)
+	if _, err := s3Tester.HeadObject(t.Context(), bucket, "absent", nil); err == nil {
+		t.Fatal("a failed destination condition must not create the object")
+	}
+
+	// a failed destination condition leaves the existing object alone
+	err = s3Tester.ConditionalCopyObject(t.Context(), bucket, "other", bucket, "destination",
+		testutil.Preconditions{}, testutil.Preconditions{IfNoneMatch: aws.String("*")})
+	testutil.AssertS3Error(t, s3errs.ErrPreconditionFailed, err)
+	untouched, err := s3Tester.HeadObject(t.Context(), bucket, "destination", nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if got := s3.FormatETag(untouched.ContentMD5[:], 0); got != srcETag {
+		t.Fatalf("a failed destination condition changed the object to %q", got)
+	}
+
+	// a non-wildcard destination If-None-Match compares against the destination,
+	// which holds a copy of the source and so matches the source's ETag
+	err = copyObject("destination", testutil.Preconditions{}, testutil.Preconditions{IfNoneMatch: aws.String(srcETag)})
+	testutil.AssertS3Error(t, s3errs.ErrPreconditionFailed, err)
+	if err := copyObject("destination", testutil.Preconditions{}, testutil.Preconditions{IfNoneMatch: aws.String(`"different"`)}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestConditionalDeleteObject(t *testing.T) {
+	s3Tester := testutil.NewTester(t)
+	const bucket = "conditional-delete"
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// a multipart object's ETag carries its part count, so the condition is
+	// matched against that rather than the bare MD5
+	const multipartObject = "multipart"
+	uploadID, parts := newTestMultipartUpload(t, s3Tester, bucket, multipartObject, [][]byte{
+		bytes.Repeat([]byte("a"), int(s3.MinUploadPartSize)),
+		bytes.Repeat([]byte("b"), 16),
+	})
+	completed, err := s3Tester.CompleteMultipartUpload(t.Context(), bucket, multipartObject, uploadID, parts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s3Tester.ConditionalDeleteObject(t.Context(), bucket, multipartObject, nil, testutil.DeleteConditions{
+		IfMatch: aws.String(`"wrong"`),
+	})
+	testutil.AssertS3Error(t, s3errs.ErrPreconditionFailed, err)
+	if _, err := s3Tester.ConditionalDeleteObject(t.Context(), bucket, multipartObject, nil, testutil.DeleteConditions{
+		IfMatch: completed.ETag,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// the wildcard matches any existing object, in both the single and the
+	// multi delete
+	if _, err := s3Tester.PutObject(t.Context(), bucket, "wildcard", strings.NewReader("data"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s3Tester.ConditionalDeleteObject(t.Context(), bucket, "wildcard", nil, testutil.DeleteConditions{
+		IfMatch: aws.String("*"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s3Tester.PutObject(t.Context(), bucket, "multi-wildcard", strings.NewReader("data"), nil); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := s3Tester.DeleteObjects(t.Context(), bucket, []types.ObjectIdentifier{
+		{Key: aws.String("multi-wildcard"), ETag: aws.String("*")},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(resp.Errors) != 0 {
+		t.Fatalf("expected the wildcard to match, got %v", *resp.Errors[0].Code)
+	} else if len(resp.Deleted) != 1 {
+		t.Fatalf("expected 1 deleted object, got %d", len(resp.Deleted))
+	}
+
+	// a current delete marker is no object to delete: the wildcard asserts only
+	// that one is there, so the delete is a no-op, while a condition naming a
+	// particular object fails
+	if err := s3Tester.PutBucketVersioning(t.Context(), bucket, types.BucketVersioningStatusEnabled); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s3Tester.PutObject(t.Context(), bucket, "versioned", strings.NewReader("data"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s3Tester.DeleteObject(t.Context(), bucket, "versioned"); err != nil {
+		t.Fatal(err)
+	}
+	wildcard, err := s3Tester.ConditionalDeleteObject(t.Context(), bucket, "versioned", nil, testutil.DeleteConditions{
+		IfMatch: aws.String("*"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if wildcard.VersionId != nil {
+		t.Fatalf("a no-op delete reported version %q", *wildcard.VersionId)
+	} else if wildcard.DeleteMarker != nil && *wildcard.DeleteMarker {
+		t.Fatal("a no-op delete reported a delete marker")
+	}
+	_, err = s3Tester.ConditionalDeleteObject(t.Context(), bucket, "versioned", nil, testutil.DeleteConditions{
+		IfMatch: aws.String(`"whatever"`),
+	})
+	testutil.AssertS3Error(t, s3errs.ErrPreconditionFailed, err)
+
+	// with nothing to delete the no-op must repeat, rather than leave a marker
+	// the next call fails against
+	for range 2 {
+		if _, err := s3Tester.ConditionalDeleteObject(t.Context(), bucket, "never-existed", nil, testutil.DeleteConditions{
+			IfMatch: aws.String(`"whatever"`),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// a named version is there to delete, so the condition is matched against
+	// it, and a delete marker is not the object the wildcard asserts is there
+	versions, err := s3Tester.ListObjectVersionsPage(t.Context(), bucket, &service.ListObjectVersionsInput{
+		Prefix: aws.String("versioned"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if len(versions.DeleteMarkers) != 1 {
+		t.Fatalf("expected 1 delete marker, got %d", len(versions.DeleteMarkers))
+	}
+	markerVersion := versions.DeleteMarkers[0].VersionId
+	_, err = s3Tester.ConditionalDeleteObject(t.Context(), bucket, "versioned", markerVersion, testutil.DeleteConditions{
+		IfMatch: aws.String("*"),
+	})
+	testutil.AssertS3Error(t, s3errs.ErrPreconditionFailed, err)
+	if _, err := s3Tester.ConditionalDeleteObject(t.Context(), bucket, "versioned", markerVersion, testutil.DeleteConditions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// a version that is not there has nothing for a condition to apply to, so
+	// the delete succeeds as a no-op
+	for _, c := range []testutil.DeleteConditions{
+		{IfMatch: aws.String("*")},
+		{IfMatch: aws.String(`"whatever"`)},
+		{}, // unconditionally, for comparison
+	} {
+		if _, err := s3Tester.ConditionalDeleteObject(t.Context(), bucket, "versioned", aws.String("does-not-exist"), c); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestConditionalDeleteObjectMissingKey checks that a conditional delete of a
+// missing key succeeds as a no-op in every versioning state, since there is no
+// object for the condition to apply to.
+func TestConditionalDeleteObjectMissingKey(t *testing.T) {
+	s3Tester := testutil.NewTester(t)
+
+	for _, tc := range []struct {
+		name   string
+		status types.BucketVersioningStatus
+	}{
+		{name: "unversioned"},
+		{name: "enabled", status: types.BucketVersioningStatusEnabled},
+		{name: "suspended", status: types.BucketVersioningStatusSuspended},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bucket := "missing-key-" + tc.name
+			if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+				t.Fatal(err)
+			}
+			if tc.status != "" {
+				if err := s3Tester.PutBucketVersioning(t.Context(), bucket, tc.status); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			// a fresh key per case: on a versioned bucket the delete leaves a
+			// delete marker behind, which is a different condition to evaluate
+			for i, c := range []testutil.DeleteConditions{
+				{IfMatch: aws.String("*")},
+				{IfMatch: aws.String(`"whatever"`)},
+				{IfMatchSize: aws.Int64(4)},
+				{IfMatchLastModifiedTime: aws.Time(time.Now())},
+				{}, // unconditionally, for comparison
+			} {
+				object := fmt.Sprintf("missing-%d", i)
+				if _, err := s3Tester.ConditionalDeleteObject(t.Context(), bucket, object, nil, c); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
 }
 
 func TestCopyObject(t *testing.T) {
