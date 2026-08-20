@@ -27,7 +27,7 @@ func TestSnapshots(t *testing.T) {
 	sealed := obj.Seal(types.GeneratePrivateKey())
 	objID := sealed.ID()
 	md5 := frand.Entropy128()
-	if _, _, err := store.PutObject(testAccessKeyID, bucket, "a", md5, nil, 1, new(string)); err != nil {
+	if _, _, err := store.PutObject(testAccessKeyID, bucket, "a", objects.PutOptions{ContentMD5: md5, Length: 1, FileName: new(string)}); err != nil {
 		t.Fatal(err)
 	} else if err := store.MarkObjectUploaded(bucket, "a", "", md5, sealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
@@ -37,7 +37,7 @@ func TestSnapshots(t *testing.T) {
 
 	// a pending object with only an on-disk file
 	pending := "pending-file"
-	if _, _, err := store.PutObject(testAccessKeyID, bucket, "pending", frand.Entropy128(), nil, 5, &pending); err != nil {
+	if _, _, err := store.PutObject(testAccessKeyID, bucket, "pending", objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 5, FileName: &pending}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -235,7 +235,7 @@ func TestSnapshots(t *testing.T) {
 		obj := newTestObject()
 		sealed := obj.Seal(types.GeneratePrivateKey())
 		md5 := frand.Entropy128()
-		if _, _, err := store.PutObject(testAccessKeyID, bucket, key, md5, nil, 1, new(string)); err != nil {
+		if _, _, err := store.PutObject(testAccessKeyID, bucket, key, objects.PutOptions{ContentMD5: md5, Length: 1, FileName: new(string)}); err != nil {
 			t.Fatal(err)
 		} else if err := store.MarkObjectUploaded(bucket, key, "", md5, sealed, time.Now().Add(time.Hour)); err != nil {
 			t.Fatal(err)
@@ -295,7 +295,7 @@ func TestSnapshots(t *testing.T) {
 	} else if err := store.MarkSnapshotPinned(snap4.ID, frand.Entropy256()); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.CopyObject(testAccessKeyID, bucket, "d", s3.VersionRequest{}, bucket, "d-copy", nil, false); err != nil {
+	if _, _, err := store.CopyObject(testAccessKeyID, bucket, "d", s3.NoVersion(), bucket, "d-copy", s3.CopyObjectOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "d"}); err != nil {
@@ -363,7 +363,7 @@ func TestAdoptSnapshotWithholdsExistingOrphans(t *testing.T) {
 	sealed := obj.Seal(types.GeneratePrivateKey())
 	objID := sealed.ID()
 	md5 := frand.Entropy128()
-	if _, _, err := store.PutObject(testAccessKeyID, bucket, "a", md5, nil, 1, new(string)); err != nil {
+	if _, _, err := store.PutObject(testAccessKeyID, bucket, "a", objects.PutOptions{ContentMD5: md5, Length: 1, FileName: new(string)}); err != nil {
 		t.Fatal(err)
 	} else if err := store.MarkObjectUploaded(bucket, "a", "", md5, sealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
