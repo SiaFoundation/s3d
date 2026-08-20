@@ -1,3 +1,9 @@
+## 0.1.3 (2026-08-20)
+
+### Features
+
+- Support conditional operations
+
 ## 0.1.2 (2026-08-12)
 
 ### Features
