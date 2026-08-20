@@ -187,7 +187,7 @@ func TestUploadPartCopy(t *testing.T) {
 
 	// upload object to copy parts from
 	id, parts := newTestMultipartUpload(t, s3Tester, bucketSrc, objectSrc, [][]byte{p1Data, p2Data})
-	_, err := s3Tester.CompleteMultipartUpload(t.Context(), bucketSrc, objectSrc, id, parts)
+	completedSource, err := s3Tester.CompleteMultipartUpload(t.Context(), bucketSrc, objectSrc, id, parts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,10 +201,26 @@ func TestUploadPartCopy(t *testing.T) {
 	}
 	uploadID := *res2.UploadId
 
+	// assert [s3errs.ErrPreconditionFailed] is returned for a failed source condition
+	_, err = s3Tester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, uploadID, testutil.UploadPartCopyOptions{
+		PartNumber:          2,
+		SourcePreconditions: testutil.Preconditions{IfMatch: aws.String(`"wrong"`)},
+	})
+	testutil.AssertS3Error(t, s3errs.ErrPreconditionFailed, err)
+	if _, err := s3Tester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, uploadID, testutil.UploadPartCopyOptions{
+		PartNumber:          2,
+		SourcePreconditions: testutil.Preconditions{IfMatch: completedSource.ETag},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	// upload the second part first, copying from the source object
-	res3, err := s3Tester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, uploadID, 2, &s3.ObjectRange{
-		Start:  s3.MinUploadPartSize / 2,
-		Length: s3.MinUploadPartSize,
+	res3, err := s3Tester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, uploadID, testutil.UploadPartCopyOptions{
+		PartNumber: 2,
+		Range: &s3.ObjectRange{
+			Start:  s3.MinUploadPartSize / 2,
+			Length: s3.MinUploadPartSize,
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -260,7 +276,7 @@ func TestUploadPartCopy(t *testing.T) {
 	uploadID = *res5.UploadId
 
 	// upload a part, copy the entire source object
-	res6, err := s3Tester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, uploadID, 1, nil)
+	res6, err := s3Tester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, uploadID, testutil.UploadPartCopyOptions{PartNumber: 1})
 	if err != nil {
 		t.Fatal(err)
 	} else if res6.CopyPartResult == nil {
@@ -296,24 +312,24 @@ func TestUploadPartCopy(t *testing.T) {
 	}
 
 	// assert [s3errs.ErrInvalidArgument] is returned for invalid part number
-	_, err = s3Tester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, s3.NewUploadID().String(), math.MaxInt32, nil)
+	_, err = s3Tester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, s3.NewUploadID().String(), testutil.UploadPartCopyOptions{PartNumber: math.MaxInt32})
 	testutil.AssertS3Error(t, s3errs.ErrInvalidArgument, err)
 
 	// assert [s3errs.ErrNoSuchUpload] is returned for invalid upload id
-	_, err = s3Tester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, s3.NewUploadID().String(), 1, nil)
+	_, err = s3Tester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, s3.NewUploadID().String(), testutil.UploadPartCopyOptions{PartNumber: 1})
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchUpload, err)
 
 	// assert [s3errs.ErrAccessDenied] is returned for unauthorized access
 	otherTester := s3Tester.ChangeAccessKey(t, "foo", "bar")
-	_, err = otherTester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, uploadID, 1, nil)
+	_, err = otherTester.UploadPartCopy(t.Context(), bucketSrc, objectSrc, bucketDst, objectDst, uploadID, testutil.UploadPartCopyOptions{PartNumber: 1})
 	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
 
 	// assert [s3errs.ErrNoSuchBucket] is returned for nonexistent bucket
-	_, err = s3Tester.UploadPartCopy(t.Context(), "missing-bucket", objectSrc, bucketDst, objectDst, uploadID, 1, nil)
+	_, err = s3Tester.UploadPartCopy(t.Context(), "missing-bucket", objectSrc, bucketDst, objectDst, uploadID, testutil.UploadPartCopyOptions{PartNumber: 1})
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchBucket, err)
 
 	// assert [s3errs.ErrNoSuchKey] is returned for nonexistent source object
-	_, err = s3Tester.UploadPartCopy(t.Context(), bucketSrc, "missing-object", bucketDst, objectDst, uploadID, 1, nil)
+	_, err = s3Tester.UploadPartCopy(t.Context(), bucketSrc, "missing-object", bucketDst, objectDst, uploadID, testutil.UploadPartCopyOptions{PartNumber: 1})
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchKey, err)
 }
 
@@ -430,6 +446,53 @@ func TestCompleteMultipartUpload(t *testing.T) {
 	uploadID, parts = newTestMultipartUpload(t, s3Tester, bucket, object, [][]byte{p1Data, p2Data})
 	_, err = otherTester.CompleteMultipartUpload(t.Context(), bucket, object, uploadID, parts)
 	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+}
+
+func TestConditionalCompleteMultipartUpload(t *testing.T) {
+	s3Tester := testutil.NewTester(t)
+	const (
+		bucket = "conditional-complete"
+		object = "object"
+	)
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	complete := func(body string, p testutil.Preconditions) (*service.CompleteMultipartUploadOutput, error) {
+		uploadID, parts := newTestMultipartUpload(t, s3Tester, bucket, object, [][]byte{[]byte(body)})
+		return s3Tester.ConditionalCompleteMultipartUpload(t.Context(), bucket, object, uploadID, parts, p)
+	}
+
+	// an If-Match names an object to replace, so with nothing there it reports a
+	// missing key rather than a failed condition, even for the wildcard
+	_, err := complete("not-written", testutil.Preconditions{IfMatch: aws.String("*")})
+	testutil.AssertS3Error(t, s3errs.ErrNoSuchKey, err)
+	_, err = complete("not-written", testutil.Preconditions{IfMatch: aws.String(`"whatever"`)})
+	testutil.AssertS3Error(t, s3errs.ErrNoSuchKey, err)
+
+	initial, err := complete("initial", testutil.Preconditions{IfNoneMatch: aws.String("*")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = complete("not-written", testutil.Preconditions{IfNoneMatch: aws.String("*")})
+	testutil.AssertS3Error(t, s3errs.ErrPreconditionFailed, err)
+	_, err = complete("not-written", testutil.Preconditions{IfNoneMatch: initial.ETag})
+	testutil.AssertS3Error(t, s3errs.ErrPreconditionFailed, err)
+	_, err = complete("not-written", testutil.Preconditions{IfMatch: aws.String(`"wrong"`)})
+	testutil.AssertS3Error(t, s3errs.ErrPreconditionFailed, err)
+
+	// a non-wildcard If-None-Match holds while the current object differs from
+	// the named ETag
+	if _, err := complete("differs", testutil.Preconditions{IfNoneMatch: aws.String(`"whatever"`)}); err != nil {
+		t.Fatal(err)
+	}
+	current, err := complete("updated", testutil.Preconditions{IfMatch: aws.String("*")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := complete("updated-again", testutil.Preconditions{IfMatch: current.ETag}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestListMultipartUploads(t *testing.T) {

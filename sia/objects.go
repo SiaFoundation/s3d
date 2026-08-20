@@ -232,11 +232,10 @@ func (s *Sia) cleanupOrphanFile(o objects.OrphanedFile) {
 }
 
 // CopyObject copies an object from the source bucket and object key to the
-// destination bucket and object key. The provided metadata map contains any
-// metadata that should be merged into the copied object except for the
-// x-amz-acl header.
-func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject string, srcVersion s3.VersionRequest, dstBucket, dstObject string, replace bool, meta map[string]string) (*s3.CopyObjectResult, error) {
-	result, orphan, err := s.store.CopyObject(accessKeyID, srcBucket, srcObject, srcVersion, dstBucket, dstObject, meta, replace)
+// destination bucket and object key. opts.Meta contains any metadata that
+// should be merged into the copied object except for the x-amz-acl header.
+func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject string, srcVersion s3.VersionRequest, dstBucket, dstObject string, opts s3.CopyObjectOptions) (*s3.CopyObjectResult, error) {
+	result, orphan, err := s.store.CopyObject(accessKeyID, srcBucket, srcObject, srcVersion, dstBucket, dstObject, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -456,10 +455,33 @@ func (s *Sia) ListObjectVersions(ctx context.Context, accessKeyID *string, bucke
 	return result, nil
 }
 
+// checkWritePreconditions evaluates the preconditions against the current
+// version of the object a write would replace. It runs outside the write's
+// transaction, so it is a fail-fast check only; the store re-checks atomically.
+func (s *Sia) checkWritePreconditions(accessKeyID, bucket, object string, p s3.ObjectPreconditions) error {
+	if !p.HasWritePreconditions() {
+		return nil
+	}
+	obj, err := s.store.GetObject(accessKeyID, bucket, object, s3.NoVersion(), nil)
+	if errors.Is(err, s3errs.ErrNoSuchKey) {
+		return p.CheckWrite(nil)
+	} else if err != nil {
+		return err
+	}
+	attrs := obj.Attrs()
+	return p.CheckWrite(&attrs)
+}
+
 // PutObject puts an object with the given key into the specified bucket.
 func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object string, r io.Reader, opts s3.PutObjectOptions) (_ *s3.PutObjectResult, err error) {
 	// fail fast if the bucket is inaccessible before streaming the body to disk
 	if err := s.store.HeadBucket(accessKeyID, bucket); err != nil {
+		return nil, err
+	}
+
+	// likewise for a precondition that already cannot hold, so a doomed write
+	// does not stream its whole body first
+	if err := s.checkWritePreconditions(accessKeyID, bucket, object, opts.Preconditions); err != nil {
 		return nil, err
 	}
 
@@ -529,7 +551,13 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	}
 
 	// store the object in the database
-	versionID, orphan, err := s.store.PutObject(accessKeyID, bucket, object, contentMD5, opts.Meta, size, fileName)
+	versionID, orphan, err := s.store.PutObject(accessKeyID, bucket, object, objects.PutOptions{
+		ContentMD5:    contentMD5,
+		Meta:          opts.Meta,
+		Length:        size,
+		FileName:      fileName,
+		Preconditions: opts.Preconditions,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to store object metadata: %w", err)
 	}

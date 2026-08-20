@@ -131,7 +131,8 @@ func putObject(tx *txn, bid int64, name string, status string, contentMD5 [16]by
 // replaces the null version with a null delete marker, and an unversioned
 // bucket deletes the null version outright. Preconditions are enforced against
 // the current version (the removed null version when unversioned). Returns
-// sql.ErrNoRows only for an unversioned bucket with no null version.
+// sql.ErrNoRows when there is nothing to delete: an unversioned bucket with no
+// null version, or a conditional delete that resolves to no current object.
 func deleteCurrentObject(tx *txn, bid int64, name string, status string, objectID s3.ObjectID) (objectMutationResult, error) {
 	switch status {
 	case s3.VersioningStatusEnabled:
@@ -186,16 +187,25 @@ func deleteCurrentObject(tx *txn, bid int64, name string, status string, objectI
 
 // deleteSpecificVersion permanently deletes the (bid, name, version) row after
 // checking objectID's preconditions, then orphans its backing data. Returns
-// sql.ErrNoRows if no such row exists.
+// sql.ErrNoRows if no such row exists. A named version is there to delete, so
+// its preconditions are matched against it.
 func deleteSpecificVersion(tx *txn, bid int64, name string, version string, objectID s3.ObjectID) (objectMutationResult, error) {
+	if objectID.HasPreconditions() {
+		attrs, found, err := versionObjectAttrs(tx, bid, name, version)
+		if err != nil {
+			return objectMutationResult{}, fmt.Errorf("failed to read version attributes: %w", err)
+		} else if !found {
+			return objectMutationResult{}, sql.ErrNoRows
+		} else if err := objectID.CheckDelete(attrs); err != nil {
+			return objectMutationResult{}, err
+		}
+	}
+
 	row, found, err := deleteObject(tx, bid, name, version)
 	if err != nil {
 		return objectMutationResult{}, fmt.Errorf("failed to delete version: %w", err)
 	} else if !found {
 		return objectMutationResult{}, sql.ErrNoRows
-	}
-	if err := matchPreconditions(objectID, row.contentMD5, row.size, row.updatedAt); err != nil {
-		return objectMutationResult{}, err
 	}
 	orphan, err := orphanDeleted(tx, row)
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/SiaFoundation/s3d/s3"
 	"go.sia.tech/core/types"
 	sdk "go.sia.tech/siastorage"
 )
@@ -47,6 +48,35 @@ type SiaObject struct {
 // IsMultipart returns true if the object is a multipart upload (i.e. has parts).
 func (o *Object) IsMultipart() bool {
 	return o.PartsCount > 0
+}
+
+// ETag returns the object's S3 ETag, which encodes its part count for a
+// multipart object.
+func (o *Object) ETag() string {
+	return s3.FormatETag(o.ContentMD5[:], int(o.PartsCount))
+}
+
+// Attrs returns the attributes preconditions are matched against.
+func (o *Object) Attrs() s3.ObjectAttrs {
+	return s3.ObjectAttrs{
+		ETag:           o.ETag(),
+		Size:           o.Size,
+		LastModified:   o.LastModified,
+		IsDeleteMarker: o.IsDeleteMarker,
+	}
+}
+
+// PutOptions are the options for storing an object's metadata.
+type PutOptions struct {
+	ContentMD5 [16]byte
+	Meta       map[string]string
+	Length     int64
+
+	// FileName is the pending upload file backing the object, or nil when the
+	// object has no data on disk.
+	FileName *string
+
+	Preconditions s3.ObjectPreconditions
 }
 
 // ObjectForUpload contains the fields needed to upload an object.
