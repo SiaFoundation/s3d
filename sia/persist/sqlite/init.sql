@@ -34,7 +34,8 @@ CREATE TABLE sia_objects (
     encrypted_metadata BLOB,
     metadata_signature BLOB NOT NULL,
     created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    updated_at INTEGER NOT NULL,
+    created_at_gen INTEGER NOT NULL -- snapshot generation the id was first referenced at, kept on upsert
 );
 
 CREATE TABLE sia_slabs (
@@ -135,8 +136,25 @@ CREATE TABLE object_parts (
 );
 
 CREATE TABLE orphaned_objects (
-    sia_object_id BLOB PRIMARY KEY
+    sia_object_id BLOB PRIMARY KEY,
+    orphaned_at_gen INTEGER NOT NULL,
+    created_at_gen INTEGER NOT NULL -- creation stamp carried over from the sia object
 );
+CREATE INDEX orphaned_objects_gen_idx ON orphaned_objects(orphaned_at_gen);
+
+CREATE TABLE snapshots (
+    id INTEGER PRIMARY KEY,
+    created_at INTEGER NOT NULL,
+    sia_object_id BLOB,
+    gen INTEGER NOT NULL,
+    gen_completed INTEGER,
+    object_count INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX snapshots_gen_idx ON snapshots(gen, gen_completed);
+
+-- one record per completed backup object
+CREATE UNIQUE INDEX snapshots_sia_object_id_idx ON snapshots(sia_object_id) WHERE sia_object_id IS NOT NULL;
 
 CREATE TABLE bucket_lifecycle_configurations (
     bucket_id INTEGER PRIMARY KEY,
@@ -166,6 +184,7 @@ CREATE TABLE global_settings (
 	indexer_url TEXT,
 	last_sync_at INTEGER NOT NULL DEFAULT 0,
 	last_sync_key BLOB NOT NULL DEFAULT X'0000000000000000000000000000000000000000000000000000000000000000',
+	snapshot_gen INTEGER NOT NULL DEFAULT 0,
 	-- app_key and indexer_url are always set or nulled together
 	CHECK ((app_key IS NULL AND indexer_url IS NULL) OR (app_key IS NOT NULL AND indexer_url IS NOT NULL))
 );

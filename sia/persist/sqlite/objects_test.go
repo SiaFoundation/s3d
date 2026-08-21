@@ -1093,7 +1093,15 @@ func TestOrphanedObjects(t *testing.T) {
 		t.Fatalf("expected no orphans with remaining reference, got %d", len(orphans))
 	}
 
-	// delete second object - last reference gone, should be orphaned
+	// snapshot the object while "b" still references it, so the generation it
+	// pins withholds the object once its last reference is gone
+	snap, _, err := store.CreateSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// delete the last reference, orphaning the object at the snapshot's
+	// generation so the snapshot withholds it from unpinning
 	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "b"}); err != nil {
 		t.Fatal(err)
 	}
@@ -1101,8 +1109,20 @@ func TestOrphanedObjects(t *testing.T) {
 	orphans, err = store.OrphanedObjects(100)
 	if err != nil {
 		t.Fatal(err)
+	} else if len(orphans) != 0 {
+		t.Fatalf("expected snapshotted orphan to be withheld, got %d", len(orphans))
+	}
+
+	// removing the snapshot raises the floor and releases the orphan
+	if err := store.DeleteSnapshot(snap.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	orphans, err = store.OrphanedObjects(100)
+	if err != nil {
+		t.Fatal(err)
 	} else if len(orphans) != 1 || orphans[0] != objID {
-		t.Fatalf("expected orphan %v, got %v", objID, orphans)
+		t.Fatalf("expected orphan %v after snapshot deleted, got %v", objID, orphans)
 	}
 
 	// remove orphan
@@ -1291,7 +1311,8 @@ func TestSiaObjectSlabGC(t *testing.T) {
 
 	// deleting the first object keeps the shared slab and its sectors
 	if err := store.transaction(func(tx *txn) error {
-		return deleteSiaObject(tx, sealed1.ID())
+		_, err := deleteSiaObject(tx, sealed1.ID())
+		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1313,7 +1334,8 @@ func TestSiaObjectSlabGC(t *testing.T) {
 
 	// deleting the second object empties the tables
 	if err := store.transaction(func(tx *txn) error {
-		return deleteSiaObject(tx, sealed2.ID())
+		_, err := deleteSiaObject(tx, sealed2.ID())
+		return err
 	}); err != nil {
 		t.Fatal(err)
 	}

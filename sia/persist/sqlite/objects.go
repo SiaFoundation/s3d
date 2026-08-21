@@ -819,11 +819,21 @@ func (s *Store) AllFilenames() (filenames []string, err error) {
 	return
 }
 
-// OrphanedObjects returns up to limit object IDs from the orphaned_objects table.
+// OrphanedObjects returns up to limit object IDs eligible for unpinning. An
+// id is withheld while any snapshot may reference it: the snapshot existed
+// when the id was orphaned and the id was first referenced before the
+// snapshot's backup finished uploading. An in-flight snapshot has no
+// completion generation yet and withholds every id orphaned since it started.
 func (s *Store) OrphanedObjects(limit int) (ids []types.Hash256, err error) {
 	err = s.transaction(func(tx *txn) error {
 		ids = ids[:0] // reuse same slice if transaction retries
-		rows, err := tx.Query("SELECT sia_object_id FROM orphaned_objects LIMIT $1", limit)
+		rows, err := tx.Query(`
+			SELECT sia_object_id FROM orphaned_objects
+			WHERE NOT EXISTS (
+				SELECT 1 FROM snapshots
+				WHERE gen <= orphaned_at_gen
+				  AND (gen_completed IS NULL OR created_at_gen < gen_completed))
+			LIMIT $1`, limit)
 		if err != nil {
 			return err
 		}
@@ -981,7 +991,9 @@ func orphanDeleted(tx *txn, row deletedRow) (objects.OrphanedFile, error) {
 // MarkObjectPinned having committed), and skipping the insert would leak
 // that pin forever since the orphan loop is the only unpin mechanism. For
 // data that was truly never pinned the unpin is a no-op: the orphan loop
-// treats the indexer's "object not found" as success.
+// treats the indexer's "object not found" as success. The orphan carries over
+// the sealed object's creation stamp so the orphan loop can tell whether a
+// snapshot's backup could still reference it.
 func insertOrphan(tx *txn, objectID types.Hash256) error {
 	if objectID == (types.Hash256{}) {
 		return nil // skip zero-value (empty objects)
@@ -995,7 +1007,8 @@ func insertOrphan(tx *txn, objectID types.Hash256) error {
 	}
 	// the last objects-row reference is gone; drop the sealed object along
 	// with its slices and any slabs referenced only by it.
-	if err := deleteSiaObject(tx, objectID); err != nil {
+	createdAtGen, err := deleteSiaObject(tx, objectID)
+	if err != nil {
 		return err
 	}
 	// drop the pin queue entry; if it existed the object was still unpinned.
@@ -1010,7 +1023,8 @@ func insertOrphan(tx *txn, objectID types.Hash256) error {
 			return err
 		}
 	}
-	res, err = tx.Exec("INSERT OR IGNORE INTO orphaned_objects (sia_object_id) VALUES ($1)", sqlHash256(objectID))
+	res, err = tx.Exec(`INSERT OR IGNORE INTO orphaned_objects (sia_object_id, orphaned_at_gen, created_at_gen)
+		VALUES ($1, (SELECT snapshot_gen FROM global_settings LIMIT 1), $2)`, sqlHash256(objectID), createdAtGen)
 	if err != nil {
 		return err
 	}
