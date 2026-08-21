@@ -477,7 +477,9 @@ func (s *Sia) processOrphansLoop(ctx context.Context) {
 		if prune {
 			s.logger.Info("pruning orphaned slabs")
 			start := time.Now()
-			if err := s.sdk.PruneSlabs(ctx, api.WithBefore(time.Now().Add(-time.Hour))); err != nil {
+			// slabs are pinned before their object, so anything newer than
+			// pinDeadline may still belong to an upload that is retrying its pin
+			if err := s.sdk.PruneSlabs(ctx, api.WithBefore(time.Now().Add(-pinDeadline))); err != nil {
 				s.logger.Error("failed to prune slabs after processing orphans", zap.Error(err))
 			} else {
 				s.logger.Info("finished pruning orphaned slabs from Sia network", zap.Duration("elapsed", time.Since(start)))
