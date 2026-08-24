@@ -360,7 +360,7 @@ CREATE TABLE snapshots (
 	sia_object_id BLOB,
 	gen INTEGER NOT NULL,
 	gen_completed INTEGER,
-	object_count INTEGER NOT NULL DEFAULT 0
+	object_count INTEGER NOT NULL
 );
 CREATE UNIQUE INDEX snapshots_sia_object_id_idx ON snapshots(sia_object_id) WHERE sia_object_id IS NOT NULL;
 CREATE INDEX snapshots_gen_idx ON snapshots(gen, gen_completed);

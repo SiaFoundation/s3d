@@ -16,10 +16,10 @@ import (
 // always reported as known or in flight.
 func (s *Store) CheckSnapshotObject(objectID types.Hash256) (known, inFlight bool, err error) {
 	err = s.transaction(func(tx *txn) error {
-		if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM snapshots WHERE sia_object_id = $1)", sqlHash256(objectID)).Scan(&known); err != nil {
-			return err
-		}
-		return tx.QueryRow("SELECT EXISTS(SELECT 1 FROM snapshots WHERE sia_object_id IS NULL)").Scan(&inFlight)
+		return tx.QueryRow(`
+			SELECT EXISTS(SELECT 1 FROM snapshots WHERE sia_object_id = $1),
+			       EXISTS(SELECT 1 FROM snapshots WHERE sia_object_id IS NULL)`,
+			sqlHash256(objectID)).Scan(&known, &inFlight)
 	})
 	return
 }

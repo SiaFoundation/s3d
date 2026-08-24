@@ -8,6 +8,9 @@ import (
 // OrphanLoopInterval exports orphanLoopInterval for testing.
 const OrphanLoopInterval = orphanLoopInterval
 
+// PruneSlabsInterval exports pruneSlabsInterval for testing.
+const PruneSlabsInterval = pruneSlabsInterval
+
 // SetDiskUsageTimeout overrides the disk usage timeout for testing.
 func (s *Sia) SetDiskUsageTimeout(d time.Duration) { //nolint:revive
 	s.diskUsageTimeout = d

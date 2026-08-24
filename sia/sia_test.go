@@ -124,10 +124,9 @@ func TestDeleteOrphanedUploads(t *testing.T) {
 	assertRemoved(uid2.String())
 }
 
-// TestPruneSlabs verifies that the Sia backend's background orphan processing
-// loop invokes PruneSlabs immediately on startup and once per interval
-// thereafter, so slab garbage left behind by previously-unpinned objects is
-// reclaimed promptly.
+// TestPruneSlabs verifies that the Sia backend's background prune loop invokes
+// PruneSlabs once per interval, so slab garbage left behind by uploads that
+// never pinned their object is reclaimed.
 func TestPruneSlabs(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		memSDK := testutil.NewMemorySDK()
@@ -147,16 +146,15 @@ func TestPruneSlabs(t *testing.T) {
 		defer siaBackend.Close()
 
 		synctest.Wait()
-		if got := memSDK.PruneSlabsCalls(); got != 1 {
-			t.Fatalf("after startup: expected 1 PruneSlabs call, got %d", got)
+		if got := memSDK.PruneSlabsCalls(); got != 0 {
+			t.Fatalf("after startup: expected 0 PruneSlabs calls, got %d", got)
 		}
 
 		for i := 1; i <= 4; i++ {
-			time.Sleep(sia.OrphanLoopInterval)
+			time.Sleep(sia.PruneSlabsInterval)
 			synctest.Wait()
-			want := 1 + i
-			if got := memSDK.PruneSlabsCalls(); got != want {
-				t.Fatalf("after %d intervals: expected %d PruneSlabs calls, got %d", i, want, got)
+			if got := memSDK.PruneSlabsCalls(); got != i {
+				t.Fatalf("after %d intervals: expected %d PruneSlabs calls, got %d", i, i, got)
 			}
 		}
 	})

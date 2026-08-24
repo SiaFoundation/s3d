@@ -33,9 +33,13 @@ const (
 	// processing orphaned objects runs.
 	orphanLoopInterval = time.Hour
 
+	// pruneSlabsInterval is the interval at which unreferenced slabs are pruned
+	// from the Sia network.
+	pruneSlabsInterval = 24 * time.Hour
+
 	// syncMetadataInterval is the interval at which object metadata is synced
 	// from the indexer.
-	syncMetadataInterval = time.Hour
+	syncMetadataInterval = time.Minute
 
 	// defaultLifecycleLoopInterval is the default interval at which the
 	// background lifecycle loop runs.
@@ -333,6 +337,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 
 	if err := errors.Join(
 		launchBgLoop(sia.processOrphansLoop),
+		launchBgLoop(sia.pruneSlabsLoop),
 		launchBgLoop(sia.syncMetadataLoop),
 		launchBgLoop(sia.uploadLoop),
 		launchBgLoop(sia.lifecycleLoop),
@@ -465,34 +470,44 @@ func (s *Sia) processOrphansLoop(ctx context.Context) {
 	t := time.NewTicker(orphanLoopInterval)
 	defer t.Stop()
 
-	// pruning stays on the tick, a wake only means orphans became eligible
-	// before it
-	prune := true
 	for {
 		s.ProcessOrphans(ctx)
 		if ctx.Err() != nil {
 			return
 		}
 
-		if prune {
-			s.logger.Info("pruning orphaned slabs")
-			start := time.Now()
-			// slabs are pinned before their object, so anything newer than
-			// pinDeadline may still belong to an upload that is retrying its pin
-			if err := s.sdk.PruneSlabs(ctx, api.WithBefore(time.Now().Add(-pinDeadline))); err != nil {
-				s.logger.Error("failed to prune slabs after processing orphans", zap.Error(err))
-			} else {
-				s.logger.Info("finished pruning orphaned slabs from Sia network", zap.Duration("elapsed", time.Since(start)))
-			}
-		}
-
 		select {
 		case <-ctx.Done():
 			return
 		case <-s.orphanWake:
-			prune = false
 		case <-t.C:
-			prune = true
+		}
+	}
+}
+
+// pruneSlabsLoop periodically unpins slabs that are no longer referenced by an
+// object. Deleting an object already unpins the slabs it was the last reference
+// to, so this only catches slabs left behind by an upload that never pinned its
+// object.
+func (s *Sia) pruneSlabsLoop(ctx context.Context) {
+	t := time.NewTicker(pruneSlabsInterval)
+	defer t.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+
+		s.logger.Info("pruning orphaned slabs")
+		start := time.Now()
+		// slabs are pinned before their object, so anything newer than
+		// pinDeadline may still belong to an upload that is retrying its pin
+		if err := s.sdk.PruneSlabs(ctx, api.WithBefore(time.Now().Add(-pinDeadline))); err != nil {
+			s.logger.Error("failed to prune slabs", zap.Error(err))
+		} else {
+			s.logger.Info("finished pruning orphaned slabs from Sia network", zap.Duration("elapsed", time.Since(start)))
 		}
 	}
 }
