@@ -431,3 +431,101 @@ func TestAdoptSnapshotWithholdsExistingOrphans(t *testing.T) {
 		t.Fatal("unexpected", orphans)
 	}
 }
+
+// TestSnapshotWithholdsObjectsChangedDuringBackup covers the gap between the
+// snapshot row being inserted and the backup actually reading the database.
+// The backup runs a VACUUM INTO on its own connection, so an object can be
+// uploaded and deleted while the copy is being taken. The completion
+// generation bracket, not any atomicity between the two calls, is what has to
+// keep such an object pinned.
+func TestSnapshotWithholdsObjectsChangedDuringBackup(t *testing.T) {
+	const bucket = "test-bucket"
+
+	store := initTestDB(t, zaptest.NewLogger(t))
+
+	if err := store.CreateBucket(testAccessKeyID, bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	addObject := func(key string) types.Hash256 {
+		t.Helper()
+		obj := newTestObject()
+		sealed := obj.Seal(types.GeneratePrivateKey())
+		md5 := frand.Entropy128()
+		if _, _, err := store.PutObject(testAccessKeyID, bucket, key, objects.PutOptions{ContentMD5: md5, Length: 1, FileName: new(string)}); err != nil {
+			t.Fatal(err)
+		} else if err := store.MarkObjectUploaded(bucket, key, "", md5, sealed, time.Now().Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		} else if _, err := store.MarkObjectPinned(sealed.ID()); err != nil {
+			t.Fatal(err)
+		}
+		return sealed.ID()
+	}
+
+	// an object that exists before the snapshot starts, so the copy holds it
+	beforeID := addObject("before")
+
+	// T1: the row is inserted and the generation bumped, no backup has run yet
+	snap, _, err := store.CreateSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// the gap. Everything here happens while the backup is being taken, which
+	// the old blocking implementation made impossible
+	duringID := addObject("during")
+	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "during"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "before"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// both are withheld while the snapshot has no completion generation, since
+	// nothing yet knows which of them the copy captured
+	if orphans, err := store.OrphanedObjects(100); err != nil {
+		t.Fatal(err)
+	} else if len(orphans) != 0 {
+		t.Fatal("an object changed during the backup was released", orphans)
+	}
+
+	// T3: the backup finished and was pinned, closing the bracket
+	if err := store.MarkSnapshotPinned(snap.ID, frand.Entropy256()); err != nil {
+		t.Fatal(err)
+	}
+
+	// both stay withheld. The one uploaded during the backup may be in the
+	// copy, and the one that predates it certainly is
+	if orphans, err := store.OrphanedObjects(100); err != nil {
+		t.Fatal(err)
+	} else if len(orphans) != 0 {
+		t.Fatal("an object the copy may reference was released", orphans)
+	}
+
+	// an object uploaded after the bracket closed cannot be in the copy, so
+	// deleting it releases immediately
+	afterID := addObject("after")
+	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "after"}); err != nil {
+		t.Fatal(err)
+	}
+	if orphans, err := store.OrphanedObjects(100); err != nil {
+		t.Fatal(err)
+	} else if len(orphans) != 1 || orphans[0] != afterID {
+		t.Fatal("unexpected", orphans)
+	}
+	if err := store.RemoveOrphanedObject(afterID); err != nil {
+		t.Fatal(err)
+	}
+
+	// deleting the snapshot releases everything it was withholding
+	if err := store.DeleteSnapshot(snap.ID); err != nil {
+		t.Fatal(err)
+	}
+	if orphans, err := store.OrphanedObjects(100); err != nil {
+		t.Fatal(err)
+	} else if len(orphans) != 2 {
+		t.Fatal("unexpected", orphans)
+	} else if (orphans[0] != beforeID && orphans[1] != beforeID) || (orphans[0] != duringID && orphans[1] != duringID) {
+		t.Fatal("unexpected", orphans)
+	}
+}
