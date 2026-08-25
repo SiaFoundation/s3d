@@ -83,8 +83,8 @@ paths:
         Backs up the SQLite metadata database and uploads it to the Sia network
         as a tagged, pinned object so it can be recovered later. Objects that a
         snapshot references are not unpinned until the snapshot is deleted.
-        Database writes are blocked for the duration of the backup, so this can
-        be long-running on large databases.
+        The backup runs in the background without blocking database reads or
+        writes.
       operationId: createSnapshot
       responses:
         "200":
