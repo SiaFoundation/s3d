@@ -376,6 +376,8 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 			// context, otherwise the object stays pinned with no local record
 			if dErr := s.sdk.DeleteObject(context.WithoutCancel(ctx), pinned); dErr != nil && !isObjectNotFound(dErr) {
 				s.logger.Error("failed to unpin snapshot object during rollback", zap.Stringer("objectID", &pinned), zap.Error(dErr))
+				// block orphan processing until we're synced
+				s.synced.Store(false)
 			}
 		}
 		if dErr := s.store.DeleteSnapshot(snap.ID); dErr != nil {
