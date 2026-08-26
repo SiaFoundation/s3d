@@ -30,6 +30,7 @@ type (
 		mu          sync.Mutex
 		appKey      types.PrivateKey
 		objects     map[types.Hash256]uploadedObject
+		staged      map[types.Hash256]uploadedObject
 		events      []sdk.ObjectEvent
 		eventsErr   error // when set, ObjectEvents returns this error
 		slabSize    int64
@@ -63,6 +64,7 @@ func NewMemorySDK() *MemorySDK {
 		slabSize:         40 << 20,
 		appKey:           types.GeneratePrivateKey(),
 		objects:          make(map[types.Hash256]uploadedObject),
+		staged:           make(map[types.Hash256]uploadedObject),
 		remainingStorage: math.MaxUint64,
 	}
 }
@@ -202,8 +204,9 @@ func (s *MemorySDK) Pinned(id types.Hash256) bool {
 	return ok
 }
 
-// Upload stores the object's data in memory keyed by its ID and records its
-// metadata. It implements the sia.SDK interface.
+// Upload stages the object's data in memory keyed by its ID and records its
+// metadata. Like the production SDK the object is only stored once it is
+// pinned. It implements the sia.SDK interface.
 func (s *MemorySDK) Upload(_ context.Context, obj *sdk.Object, r io.Reader) error {
 	data, err := io.ReadAll(r)
 	if err != nil {
@@ -213,17 +216,22 @@ func (s *MemorySDK) Upload(_ context.Context, obj *sdk.Object, r io.Reader) erro
 	defer s.mu.Unlock()
 	// give the object a slab so its ID is content-derived and unique
 	setSlabs(obj, []slabs.SlabSlice{{EncryptionKey: frand.Entropy256(), Length: uint32(len(data))}})
-	s.objects[obj.ID()] = uploadedObject{data: data, meta: *obj}
+	s.staged[obj.ID()] = uploadedObject{data: data, meta: *obj}
 	return nil
 }
 
-// AddObject uploads data as a fresh object and returns it. It is a test
-// convenience for seeding objects, not part of the SDK interface.
+// AddObject uploads data as a fresh object, stores it as if pinned, and
+// returns it. It is a test convenience for seeding objects, not part of the
+// SDK interface.
 func (s *MemorySDK) AddObject(ctx context.Context, r io.Reader) (sdk.Object, error) {
 	obj := sdk.NewEmptyObject()
 	if err := s.Upload(ctx, &obj, r); err != nil {
 		return sdk.Object{}, err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.objects[obj.ID()] = s.staged[obj.ID()]
+	delete(s.staged, obj.ID())
 	return obj, nil
 }
 
@@ -276,12 +284,19 @@ func (s *MemorySDK) UploadPacked() (sia.PackedUpload, error) {
 	return &memoryPackedUpload{sdk: s}, nil
 }
 
-// PinObject pins the given object.
+// PinObject pins the given object, storing a staged upload.
 func (s *MemorySDK) PinObject(_ context.Context, obj sdk.Object) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pinAttempts++
-	return s.pinErr
+	if s.pinErr != nil {
+		return s.pinErr
+	}
+	if o, ok := s.staged[obj.ID()]; ok {
+		s.objects[obj.ID()] = o
+		delete(s.staged, obj.ID())
+	}
+	return nil
 }
 
 // SetPinError configures the error returned by future PinObject calls. Pass

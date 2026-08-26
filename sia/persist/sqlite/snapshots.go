@@ -10,32 +10,29 @@ import (
 	"go.sia.tech/core/types"
 )
 
-// CheckSnapshotObject reports whether a snapshot references the given Sia
-// object and whether any snapshot upload is still in flight. Both are
-// evaluated in a single transaction so a snapshot recorded concurrently is
-// always reported as known or in flight.
-func (s *Store) CheckSnapshotObject(objectID types.Hash256) (known, inFlight bool, err error) {
+// HasSnapshotObject reports whether a snapshot references the given Sia
+// object.
+func (s *Store) HasSnapshotObject(objectID types.Hash256) (known bool, err error) {
 	err = s.transaction(func(tx *txn) error {
-		return tx.QueryRow(`
-			SELECT EXISTS(SELECT 1 FROM snapshots WHERE sia_object_id = $1),
-			       EXISTS(SELECT 1 FROM snapshots WHERE sia_object_id IS NULL)`,
-			sqlHash256(objectID)).Scan(&known, &inFlight)
+		return tx.QueryRow("SELECT EXISTS(SELECT 1 FROM snapshots WHERE sia_object_id = $1)",
+			sqlHash256(objectID)).Scan(&known)
 	})
 	return
 }
 
 // CreateSnapshot bumps the snapshot generation and records a snapshot of the
-// current uploaded object count. The Sia object ID is filled in later with
-// MarkSnapshotPinned once the backup is uploaded.
-func (s *Store) CreateSnapshot() (snap s3.Snapshot, gen int64, err error) {
+// current uploaded object count. The nonce identifies the in-flight upload,
+// the Sia object ID is filled in later with MarkSnapshotPinned once the
+// pinned backup object is observed.
+func (s *Store) CreateSnapshot(nonce types.Hash256) (snap s3.Snapshot, gen int64, err error) {
 	err = s.transaction(func(tx *txn) error {
 		if err := tx.QueryRow("UPDATE global_settings SET snapshot_gen = snapshot_gen + 1 RETURNING snapshot_gen").Scan(&gen); err != nil {
 			return err
 		}
 		return tx.QueryRow(`
-			INSERT INTO snapshots (created_at, gen, object_count)
-			VALUES ($1, $2, (SELECT stat_value FROM stats WHERE stat = $3))
-			RETURNING id, created_at, object_count`, sqlTime(time.Now()), gen, statUploadedObjects).Scan(&snap.ID, (*sqlTime)(&snap.CreatedAt), &snap.ObjectCount)
+			INSERT INTO snapshots (created_at, nonce, gen, object_count)
+			VALUES ($1, $2, $3, (SELECT stat_value FROM stats WHERE stat = $4))
+			RETURNING id, created_at, object_count`, sqlTime(time.Now()), sqlHash256(nonce), gen, statUploadedObjects).Scan(&snap.ID, (*sqlTime)(&snap.CreatedAt), &snap.ObjectCount)
 	})
 	return
 }
@@ -79,17 +76,17 @@ func (s *Store) AdoptSnapshot(objectID types.Hash256, createdAt time.Time, gen, 
 	return
 }
 
-// MarkSnapshotPinned records the Sia object ID for an uploaded snapshot. The
-// generation counter is bumped once more and recorded as the snapshot's
-// completion generation, object rows created at or after it cannot appear in
-// the backup.
-func (s *Store) MarkSnapshotPinned(id int64, objectID types.Hash256) error {
+// MarkSnapshotPinned records the Sia object ID for the incomplete snapshot
+// with the given nonce. The generation counter is bumped once more and
+// recorded as the snapshot's completion generation, object rows created at or
+// after it cannot appear in the backup.
+func (s *Store) MarkSnapshotPinned(nonce types.Hash256, objectID types.Hash256) error {
 	return s.transaction(func(tx *txn) error {
 		var completed int64
 		if err := tx.QueryRow("UPDATE global_settings SET snapshot_gen = snapshot_gen + 1 RETURNING snapshot_gen").Scan(&completed); err != nil {
 			return err
 		}
-		res, err := tx.Exec("UPDATE snapshots SET sia_object_id = $1, gen_completed = $2 WHERE id = $3", sqlHash256(objectID), completed, id)
+		res, err := tx.Exec("UPDATE snapshots SET sia_object_id = $1, gen_completed = $2 WHERE nonce = $3 AND sia_object_id IS NULL", sqlHash256(objectID), completed, sqlHash256(nonce))
 		if err != nil {
 			return err
 		}
@@ -127,22 +124,12 @@ func (s *Store) ListSnapshots() (snapshots []s3.Snapshot, err error) {
 	return
 }
 
-// DeleteSnapshot removes a snapshot from the store, releasing orphans only it
-// was withholding. It does not unpin the snapshot's backup object from the
-// Sia network, callers exposing snapshot deletion must unpin it themselves or
-// it leaks.
-func (s *Store) DeleteSnapshot(snapshotID int64) error {
+// DeleteIncompleteSnapshot removes a snapshot that has no backup object
+// recorded yet. A snapshot completed in the meantime is left in place.
+func (s *Store) DeleteIncompleteSnapshot(snapshotID int64) error {
 	return s.transaction(func(tx *txn) error {
-		res, err := tx.Exec("DELETE FROM snapshots WHERE id = $1", snapshotID)
-		if err != nil {
-			return err
-		}
-		if n, err := res.RowsAffected(); err != nil {
-			return err
-		} else if n == 0 {
-			return objects.ErrSnapshotNotFound
-		}
-		return nil
+		_, err := tx.Exec("DELETE FROM snapshots WHERE id = $1 AND sia_object_id IS NULL", snapshotID)
+		return err
 	})
 }
 

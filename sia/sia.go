@@ -163,6 +163,7 @@ type Sia struct {
 	// failing, it gates orphan processing
 	synced     atomic.Bool
 	orphanWake chan struct{}
+	syncWake   chan struct{}
 
 	tg     *threadgroup.ThreadGroup
 	logger *zap.Logger
@@ -247,11 +248,11 @@ type Store interface {
 	ExpireObjects(bucket string, prefix string, before time.Time, limit int) (int, []objects.OrphanedFile, error)
 
 	Backup(ctx context.Context, destPath string) error
-	CheckSnapshotObject(objectID types.Hash256) (known, inFlight bool, err error)
-	CreateSnapshot() (s3.Snapshot, int64, error)
+	HasSnapshotObject(objectID types.Hash256) (bool, error)
+	CreateSnapshot(nonce types.Hash256) (s3.Snapshot, int64, error)
 	AdoptSnapshot(objectID types.Hash256, createdAt time.Time, gen, objectCount int64) (s3.Snapshot, error)
-	MarkSnapshotPinned(id int64, objectID types.Hash256) error
-	DeleteSnapshot(id int64) error
+	MarkSnapshotPinned(nonce types.Hash256, objectID types.Hash256) error
+	DeleteIncompleteSnapshot(id int64) error
 	DeleteIncompleteSnapshots() (int64, error)
 	DeleteSnapshotsBySiaObject(objectID types.Hash256) (int64, error)
 	DBVersion() int64
@@ -276,6 +277,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 	sia.diskUsageWake = make(chan struct{})
 	sia.pinWake = make(chan struct{}, 1)
 	sia.orphanWake = make(chan struct{}, 1)
+	sia.syncWake = make(chan struct{}, 1)
 	for _, opt := range opts {
 		opt(sia)
 	}
@@ -356,31 +358,26 @@ func (s *Sia) Close() error {
 }
 
 // CreateSnapshot records a snapshot, backs up the database to a temporary
-// file, uploads it gzip compressed to Sia as a tagged snapshot object, pins
-// it, and records the object ID on the snapshot. The temporary file is removed
-// once the upload completes. On failure the snapshot and any pinned object are
-// rolled back.
+// file, uploads it gzip compressed to Sia as a tagged snapshot object, and
+// pins it. The temporary file is removed once the upload completes. On failure
+// the snapshot is rolled back. The object ID is recorded on the snapshot by
+// the sync loop once it observes the pinned object.
 func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
-	snap, gen, err := s.store.CreateSnapshot()
+	// the nonce ties the uploaded object's metadata to the snapshot record,
+	// generations can collide across database histories
+	nonce := types.Hash256(frand.Entropy256())
+	snap, gen, err := s.store.CreateSnapshot(nonce)
 	if err != nil {
 		return s3.Snapshot{}, fmt.Errorf("failed to create snapshot: %w", err)
 	}
 
-	var pinned types.Hash256
 	defer func() {
 		if err == nil {
 			return
 		}
-		if pinned != (types.Hash256{}) {
-			// the unpin must run even when the failure is a cancelled request
-			// context, otherwise the object stays pinned with no local record
-			if dErr := s.sdk.DeleteObject(context.WithoutCancel(ctx), pinned); dErr != nil && !isObjectNotFound(dErr) {
-				s.logger.Error("failed to unpin snapshot object during rollback", zap.Stringer("objectID", &pinned), zap.Error(dErr))
-				// block orphan processing until we're synced
-				s.synced.Store(false)
-			}
-		}
-		if dErr := s.store.DeleteSnapshot(snap.ID); dErr != nil {
+		// the sync loop may have completed the snapshot already, only an
+		// incomplete record is rolled back
+		if dErr := s.store.DeleteIncompleteSnapshot(snap.ID); dErr != nil {
 			s.logger.Error("failed to roll back snapshot", zap.Int64("snapshotID", snap.ID), zap.Error(dErr))
 		}
 	}()
@@ -403,6 +400,7 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 		DBVersion:   s.store.DBVersion(),
 		Encoding:    objects.SnapshotEncodingGzip,
 		Generation:  gen,
+		Nonce:       nonce,
 		ObjectCount: snap.ObjectCount,
 		S3DVersion:  build.Version(),
 	})
@@ -435,20 +433,19 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 	if err := s.sdk.Upload(ctx, &obj, pr); err != nil {
 		return s3.Snapshot{}, fmt.Errorf("failed to upload snapshot: %w", err)
 	}
-	pinned = obj.ID()
 
 	if err := s.sdk.PinObject(ctx, obj); err != nil {
+		// the pin may have landed on the indexer even though the request
+		// failed, block orphan processing until the sync loop reconciles
+		s.synced.Store(false)
+		s.wakeSyncLoop()
 		return s3.Snapshot{}, fmt.Errorf("failed to pin snapshot: %w", err)
 	}
 
-	// NOTE: a crash between pinning the object and marking it pinned leaves a
-	// pinned object without a record. The sync loop adopts snapshot objects
-	// without a local record, so the snapshot reappears after the next sync.
-
-	if err := s.store.MarkSnapshotPinned(snap.ID, pinned); err != nil {
-		return s3.Snapshot{}, fmt.Errorf("failed to record snapshot object: %w", err)
-	}
-	snap.SiaObjectID = pinned
+	// a successful pin completes the backup, the sync loop observes the
+	// pinned object and records its ID on the snapshot
+	s.wakeSyncLoop()
+	snap.SiaObjectID = obj.ID()
 	return snap, nil
 }
 
@@ -628,6 +625,15 @@ func (s *Sia) deleteOrphanedUploads() (int, error) { //nolint:revive
 	return removed, nil
 }
 
+// wakeSyncLoop signals the metadata sync loop to run without waiting for its
+// tick.
+func (s *Sia) wakeSyncLoop() {
+	select {
+	case s.syncWake <- struct{}{}:
+	default:
+	}
+}
+
 // syncMetadataLoop periodically syncs object metadata from the indexer.
 func (s *Sia) syncMetadataLoop(ctx context.Context) {
 	t := time.NewTicker(syncMetadataInterval)
@@ -640,6 +646,8 @@ func (s *Sia) syncMetadataLoop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-s.syncWake:
+			s.syncMetadata(ctx)
 		case <-t.C:
 			s.syncMetadata(ctx)
 		}
@@ -756,26 +764,32 @@ func snapshotMetadata(obj *sdk.Object) (objects.SnapshotMetadata, bool) {
 }
 
 // handleSnapshotObject checks a snapshot backup object against the local
-// records and adopts it when no record exists rather than unpinning it, e.g.
-// after restoring from a backup made by a previous database. It reports
-// whether the event was handled. While a snapshot upload is in flight its
-// object may not be recorded yet, so handling is deferred until no upload is
-// running. Metadata s3d can't have written is ignored, leaving the object
-// pinned.
+// records, completes the in-flight record whose upload produced it, and
+// adopts it when no record exists rather than unpinning it, e.g. after
+// restoring from a backup made by a previous database. It reports whether the
+// event was handled. Metadata s3d can't have written is ignored, leaving the
+// object pinned.
 func (s *Sia) handleSnapshotObject(objectID types.Hash256, meta objects.SnapshotMetadata) bool {
 	if err := meta.Validate(); err != nil {
-		// adopting would withhold every orphan the object might reference, and
-		// deferring would stall the cursor and block orphan processing
+		// adopting would withhold every orphan the object might reference
 		s.logger.Warn("ignoring malformed snapshot object", zap.Stringer("objectID", &objectID), zap.Error(err))
 		return true
 	}
-	known, inFlight, err := s.store.CheckSnapshotObject(objectID)
+	known, err := s.store.HasSnapshotObject(objectID)
 	if err != nil {
 		s.syncFailed("failed to check snapshot object", zap.Stringer("objectID", &objectID), zap.Error(err))
 		return false
 	} else if known {
 		return true
-	} else if inFlight {
+	}
+
+	// an in-flight record shares its nonce with the object metadata its
+	// upload wrote, completing it records the object ID
+	if err := s.store.MarkSnapshotPinned(meta.Nonce, objectID); err == nil {
+		s.logger.Info("completed snapshot", zap.Stringer("objectID", &objectID))
+		return true
+	} else if !errors.Is(err, objects.ErrSnapshotNotFound) {
+		s.syncFailed("failed to complete snapshot", zap.Stringer("objectID", &objectID), zap.Error(err))
 		return false
 	}
 	snap, err := s.store.AdoptSnapshot(objectID, meta.CreatedAt, meta.Generation, meta.ObjectCount)

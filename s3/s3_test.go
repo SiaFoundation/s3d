@@ -113,13 +113,16 @@ func TestCreateSnapshot(t *testing.T) {
 		t.Fatal("expected snapshot to have a sia object id")
 	}
 
-	// the snapshot is recorded in the store
+	// the record is not listed until the sync loop completes it
+	if known, err := store.HasSnapshotObject(snapshot.SiaObjectID); err != nil {
+		t.Fatal(err)
+	} else if known {
+		t.Fatal("unexpected known object")
+	}
 	if snapshots, err := store.ListSnapshots(); err != nil {
 		t.Fatal(err)
-	} else if len(snapshots) != 1 {
-		t.Fatalf("expected 1 snapshot, got %d", len(snapshots))
-	} else if snapshots[0].SiaObjectID != snapshot.SiaObjectID {
-		t.Fatal("mismatch", snapshots[0].SiaObjectID)
+	} else if len(snapshots) != 0 {
+		t.Fatal("unexpected", len(snapshots))
 	}
 }
 

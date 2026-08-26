@@ -974,10 +974,10 @@ func TestSyncMetadata(t *testing.T) {
 	deletedKey := stypes.Hash256{1, 2, 3}
 
 	// record a snapshot whose backup object matches the deleted event
-	snap, _, err := store.CreateSnapshot()
-	if err != nil {
+	snapNonce := frand.Entropy256()
+	if _, _, err := store.CreateSnapshot(snapNonce); err != nil {
 		t.Fatal(err)
-	} else if err := store.MarkSnapshotPinned(snap.ID, deletedKey); err != nil {
+	} else if err := store.MarkSnapshotPinned(snapNonce, deletedKey); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1036,8 +1036,8 @@ func TestSyncMetadata(t *testing.T) {
 		t.Fatal("cursor should not change on no-op sync")
 	}
 
-	// uploads an object tagged as a snapshot backup to the SDK without
-	// recording it locally
+	// uploads and pins an object tagged as a snapshot backup to the SDK
+	// without recording it locally
 	uploadSnapshotObject := func(meta objects.SnapshotMetadata) sdk.Object {
 		t.Helper()
 		raw, err := json.Marshal(meta)
@@ -1048,6 +1048,8 @@ func TestSyncMetadata(t *testing.T) {
 		obj.UpdateMetadata(raw)
 		if err := memSDK.Upload(t.Context(), &obj, bytes.NewReader(frand.Bytes(8))); err != nil {
 			t.Fatal(err)
+		} else if err := memSDK.PinObject(t.Context(), obj); err != nil {
+			t.Fatal(err)
 		}
 		return obj
 	}
@@ -1057,14 +1059,15 @@ func TestSyncMetadata(t *testing.T) {
 		DBVersion:  store.DBVersion(),
 		Encoding:   objects.SnapshotEncodingGzip,
 		Generation: 1,
+		Nonce:      frand.Entropy256(),
 	}
 
 	// record one snapshot object locally, leak another with no local record
 	recorded := uploadSnapshotObject(snapMeta)
-	recordedSnap, _, err := store.CreateSnapshot()
-	if err != nil {
+	recordedNonce := frand.Entropy256()
+	if _, _, err := store.CreateSnapshot(recordedNonce); err != nil {
 		t.Fatal(err)
-	} else if err := store.MarkSnapshotPinned(recordedSnap.ID, recorded.ID()); err != nil {
+	} else if err := store.MarkSnapshotPinned(recordedNonce, recorded.ID()); err != nil {
 		t.Fatal(err)
 	}
 	leaked := uploadSnapshotObject(snapMeta)
@@ -1089,41 +1092,27 @@ func TestSyncMetadata(t *testing.T) {
 		t.Fatal("mismatch", snapshots[1].SiaObjectID)
 	}
 
-	// an unknown snapshot object is left alone while an upload is in flight,
-	// and the cursor stops before its deferred event
-	blocked := uploadSnapshotObject(snapMeta)
-	inflight, _, err := store.CreateSnapshot()
+	// an unknown snapshot object is adopted even while an upload is in flight,
+	// and the cursor advances past its event
+	foreign := uploadSnapshotObject(snapMeta)
+	pendingNonce := frand.Entropy256()
+	pending, _, err := store.CreateSnapshot(pendingNonce)
 	if err != nil {
 		t.Fatal(err)
 	}
 	memSDK.SetEvents([]sdk.ObjectEvent{
 		{Key: recorded.ID(), UpdatedAt: eventTime.Add(4 * time.Second), Object: &recorded},
-		{Key: blocked.ID(), UpdatedAt: eventTime.Add(5 * time.Second), Object: &blocked},
+		{Key: foreign.ID(), UpdatedAt: eventTime.Add(5 * time.Second), Object: &foreign},
 	})
 	siaBackend.SyncMetadata(t.Context())
-	if !memSDK.Pinned(blocked.ID()) {
-		t.Fatal("expected unknown snapshot object to stay pinned during upload")
-	}
-	if cursor, err := store.ObjectsCursor(); err != nil {
-		t.Fatal(err)
-	} else if !cursor.After.Equal(eventTime.Add(4 * time.Second)) {
-		t.Fatalf("expected cursor at %v, got %v", eventTime.Add(4*time.Second), cursor.After)
-	}
-
-	// once no upload is in flight the deferred event is consumed and the
-	// object adopted
-	if err := store.DeleteSnapshot(inflight.ID); err != nil {
-		t.Fatal(err)
-	}
-	siaBackend.SyncMetadata(t.Context())
-	if !memSDK.Pinned(blocked.ID()) {
-		t.Fatal("expected leaked snapshot object to stay pinned")
+	if !memSDK.Pinned(foreign.ID()) {
+		t.Fatal("expected unknown snapshot object to stay pinned")
 	}
 	if snapshots, err := store.ListSnapshots(); err != nil {
 		t.Fatal(err)
 	} else if len(snapshots) != 3 {
 		t.Fatal("unexpected", len(snapshots))
-	} else if snapshots[2].SiaObjectID != blocked.ID() {
+	} else if snapshots[2].SiaObjectID != foreign.ID() {
 		t.Fatal("mismatch", snapshots[2].SiaObjectID)
 	}
 	if cursor, err := store.ObjectsCursor(); err != nil {
@@ -1132,11 +1121,30 @@ func TestSyncMetadata(t *testing.T) {
 		t.Fatalf("expected cursor at %v, got %v", eventTime.Add(5*time.Second), cursor.After)
 	}
 
+	// the in-flight record shares its nonce with its object's metadata and
+	// completes from the object's event
+	pendingMeta := snapMeta
+	pendingMeta.Nonce = pendingNonce
+	pendingObj := uploadSnapshotObject(pendingMeta)
+	memSDK.SetEvents([]sdk.ObjectEvent{
+		{Key: pendingObj.ID(), UpdatedAt: eventTime.Add(6 * time.Second), Object: &pendingObj},
+	})
+	siaBackend.SyncMetadata(t.Context())
+	if snapshots, err := store.ListSnapshots(); err != nil {
+		t.Fatal(err)
+	} else if len(snapshots) != 4 {
+		t.Fatal("unexpected", len(snapshots))
+	} else if snapshots[2].ID != pending.ID {
+		t.Fatal("mismatch", snapshots[2].ID)
+	} else if snapshots[2].SiaObjectID != pendingObj.ID() {
+		t.Fatal("mismatch", snapshots[2].SiaObjectID)
+	}
+
 	// a tagged object with metadata s3d can't have written is left pinned
 	// instead of adopted, and the cursor still advances past it
 	malformed := uploadSnapshotObject(objects.SnapshotMetadata{Type: objects.SnapshotType})
 	memSDK.SetEvents([]sdk.ObjectEvent{
-		{Key: malformed.ID(), UpdatedAt: eventTime.Add(6 * time.Second), Object: &malformed},
+		{Key: malformed.ID(), UpdatedAt: eventTime.Add(7 * time.Second), Object: &malformed},
 	})
 	siaBackend.SyncMetadata(t.Context())
 	if !memSDK.Pinned(malformed.ID()) {
@@ -1144,13 +1152,13 @@ func TestSyncMetadata(t *testing.T) {
 	}
 	if snapshots, err := store.ListSnapshots(); err != nil {
 		t.Fatal(err)
-	} else if len(snapshots) != 3 {
+	} else if len(snapshots) != 4 {
 		t.Fatal("unexpected", len(snapshots))
 	}
 	if cursor, err := store.ObjectsCursor(); err != nil {
 		t.Fatal(err)
-	} else if !cursor.After.Equal(eventTime.Add(6 * time.Second)) {
-		t.Fatalf("expected cursor at %v, got %v", eventTime.Add(6*time.Second), cursor.After)
+	} else if !cursor.After.Equal(eventTime.Add(7 * time.Second)) {
+		t.Fatalf("expected cursor at %v, got %v", eventTime.Add(7*time.Second), cursor.After)
 	}
 }
 
@@ -1746,10 +1754,15 @@ func TestOrphanLifecycle(t *testing.T) {
 		t.Fatal("expected 2 pinned objects, got", got)
 	}
 
-	// snapshot S1 captures both objects, then delete A
-	if _, err := backend.CreateSnapshot(t.Context()); err != nil {
+	// snapshot S1 captures both objects and completes via the sync, then
+	// delete A
+	snap1, err := backend.CreateSnapshot(t.Context())
+	if err != nil {
 		t.Fatal(err)
 	}
+	eventTime := time.Now().Truncate(time.Second)
+	memSDK.SetEvents([]sdk.ObjectEvent{snapshotEvent(t, memSDK, snap1.SiaObjectID, eventTime)})
+	backend.SyncMetadata(t.Context())
 	if _, _, _, err := store.DeleteObject(testutil.AccessKeyID, bucket, s3.ObjectID{Key: "a"}); err != nil {
 		t.Fatal(err)
 	}
@@ -1765,9 +1778,15 @@ func TestOrphanLifecycle(t *testing.T) {
 
 	// snapshot S2 is taken after A was deleted, then delete B.
 	// memSDK now holds A, B, snap1 and snap2, so 4 total
-	if _, err := backend.CreateSnapshot(t.Context()); err != nil {
+	snap2, err := backend.CreateSnapshot(t.Context())
+	if err != nil {
 		t.Fatal(err)
 	}
+	memSDK.SetEvents([]sdk.ObjectEvent{
+		snapshotEvent(t, memSDK, snap1.SiaObjectID, eventTime),
+		snapshotEvent(t, memSDK, snap2.SiaObjectID, eventTime.Add(time.Second)),
+	})
+	backend.SyncMetadata(t.Context())
 	if _, _, _, err := store.DeleteObject(testutil.AccessKeyID, bucket, s3.ObjectID{Key: "b"}); err != nil {
 		t.Fatal(err)
 	}
@@ -1788,7 +1807,7 @@ func TestOrphanLifecycle(t *testing.T) {
 	// deleting S1 lowers the floor past A's generation, so the orphan loop
 	// unpins A while B remains withheld by the newer S2.
 	// memSDK retains B, snap1 and snap2, so 3 total with A unpinned
-	if err := store.DeleteSnapshot(snapshots[0].ID); err != nil {
+	if _, err := store.DeleteSnapshotsBySiaObject(snapshots[0].SiaObjectID); err != nil {
 		t.Fatal(err)
 	}
 	backend.ProcessOrphans(t.Context())
@@ -1802,7 +1821,7 @@ func TestOrphanLifecycle(t *testing.T) {
 
 	// deleting S2 releases B as well.
 	// memSDK retains snap1 and snap2, so 2 total with B unpinned
-	if err := store.DeleteSnapshot(snapshots[1].ID); err != nil {
+	if _, err := store.DeleteSnapshotsBySiaObject(snapshots[1].SiaObjectID); err != nil {
 		t.Fatal(err)
 	}
 	backend.ProcessOrphans(t.Context())

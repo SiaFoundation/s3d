@@ -56,6 +56,19 @@ func downloadMetadata(t *testing.T, memSDK *testutil.MemorySDK, id types.Hash256
 	return meta
 }
 
+// snapshotEvent builds the event the indexer emits for a live snapshot
+// object, carrying the object's metadata.
+func snapshotEvent(t *testing.T, memSDK *testutil.MemorySDK, id types.Hash256, at time.Time) sdk.ObjectEvent {
+	t.Helper()
+	raw, ok := memSDK.ObjectMetadata(id)
+	if !ok {
+		t.Fatal("snapshot object not found")
+	}
+	obj := sdk.NewEmptyObject()
+	obj.UpdateMetadata(raw)
+	return sdk.ObjectEvent{Key: id, UpdatedAt: at, Object: &obj}
+}
+
 func TestCreateSnapshot(t *testing.T) {
 	memSDK := testutil.NewMemorySDK()
 	backend, store := testutil.NewBackend(t, testutil.WithSDK(memSDK))
@@ -72,6 +85,15 @@ func TestCreateSnapshot(t *testing.T) {
 	} else if memSDK.PinAttempts() != 1 {
 		t.Fatal("unexpected", memSDK.PinAttempts())
 	}
+
+	// the record completes once the sync observes the pinned object
+	if snapshots, err := store.ListSnapshots(); err != nil {
+		t.Fatal(err)
+	} else if len(snapshots) != 0 {
+		t.Fatal("unexpected", len(snapshots))
+	}
+	memSDK.SetEvents([]sdk.ObjectEvent{snapshotEvent(t, memSDK, snap.SiaObjectID, time.Now())})
+	backend.SyncMetadata(t.Context())
 
 	// the snapshot is recorded with a sia object id and the tag is on the object
 	snapshots, err := store.ListSnapshots()
@@ -97,6 +119,8 @@ func TestCreateSnapshot(t *testing.T) {
 		t.Fatal("unexpected", meta.S3DVersion)
 	} else if meta.CreatedAt.IsZero() {
 		t.Fatal("expected non-zero created at")
+	} else if meta.Nonce == (types.Hash256{}) {
+		t.Fatal("expected non-zero nonce")
 	}
 
 	// the uploaded backup decompresses to a SQLite database
@@ -115,7 +139,7 @@ func TestCreateSnapshot(t *testing.T) {
 		}
 	}
 
-	// a pin failure rolls the snapshot and object back
+	// a pin failure rolls the snapshot back, the staged object is never stored
 	memSDK.SetPinError(errors.New("pin failed"))
 	if _, err := backend.CreateSnapshot(t.Context()); err == nil {
 		t.Fatal("expected error")
@@ -147,19 +171,6 @@ func TestSnapshotRecovery(t *testing.T) {
 		return store, backend
 	}
 
-	// snapshotEvent builds the event the indexer emits for a live snapshot
-	// object, carrying the object's metadata
-	snapshotEvent := func(id types.Hash256, at time.Time) sdk.ObjectEvent {
-		t.Helper()
-		raw, ok := memSDK.ObjectMetadata(id)
-		if !ok {
-			t.Fatal("snapshot object not found")
-		}
-		obj := sdk.NewEmptyObject()
-		obj.UpdateMetadata(raw)
-		return sdk.ObjectEvent{Key: id, UpdatedAt: at, Object: &obj}
-	}
-
 	assertSnapshots := func(store *sqlite.Store, want ...types.Hash256) []s3.Snapshot {
 		t.Helper()
 		snapshots, err := store.ListSnapshots()
@@ -177,20 +188,29 @@ func TestSnapshotRecovery(t *testing.T) {
 	}
 
 	storeA, backendA := openBackend(t.TempDir())
+	eventTime := time.Now().Truncate(time.Second)
 
-	// create two snapshots, the second backs up the first's record
+	// create two snapshots, completing each record via the sync, the second
+	// backs up the first's completed record
 	snap1, err := backendA.CreateSnapshot(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
+	memSDK.SetEvents([]sdk.ObjectEvent{snapshotEvent(t, memSDK, snap1.SiaObjectID, eventTime)})
+	backendA.SyncMetadata(t.Context())
 	snap2, err := backendA.CreateSnapshot(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
+	memSDK.SetEvents([]sdk.ObjectEvent{
+		snapshotEvent(t, memSDK, snap1.SiaObjectID, eventTime),
+		snapshotEvent(t, memSDK, snap2.SiaObjectID, eventTime.Add(time.Second)),
+	})
+	backendA.SyncMetadata(t.Context())
 
 	// delete the first snapshot and unpin its object, its record now only
 	// lives on inside the second snapshot's backup
-	if err := storeA.DeleteSnapshot(snap1.ID); err != nil {
+	if _, err := storeA.DeleteSnapshotsBySiaObject(snap1.SiaObjectID); err != nil {
 		t.Fatal(err)
 	} else if err := memSDK.DeleteObject(t.Context(), snap1.SiaObjectID); err != nil {
 		t.Fatal(err)
@@ -210,6 +230,7 @@ func TestSnapshotRecovery(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dirB, "s3d.sqlite"), downloadBackup(t, memSDK, snap2.SiaObjectID), 0600); err != nil {
 		t.Fatal(err)
 	}
+	memSDK.SetEvents(nil)
 	storeB, backendB := openBackend(dirB)
 
 	// the image's own in-flight record was removed on startup, the deleted
@@ -218,11 +239,10 @@ func TestSnapshotRecovery(t *testing.T) {
 
 	// the sync replays the first snapshot's deletion and adopts the second
 	// and third from the network
-	eventTime := time.Now().Truncate(time.Second)
 	events := []sdk.ObjectEvent{
-		{Key: snap1.SiaObjectID, UpdatedAt: eventTime.Add(time.Second), Deleted: true},
-		snapshotEvent(snap2.SiaObjectID, eventTime.Add(2*time.Second)),
-		snapshotEvent(snap3.SiaObjectID, eventTime.Add(3*time.Second)),
+		{Key: snap1.SiaObjectID, UpdatedAt: eventTime.Add(2 * time.Second), Deleted: true},
+		snapshotEvent(t, memSDK, snap2.SiaObjectID, eventTime.Add(3*time.Second)),
+		snapshotEvent(t, memSDK, snap3.SiaObjectID, eventTime.Add(4*time.Second)),
 	}
 	memSDK.SetEvents(events)
 	backendB.SyncMetadata(t.Context())
@@ -248,7 +268,7 @@ func TestSnapshotRecovery(t *testing.T) {
 	// a fresh database with the same app scope recovers every live snapshot
 	// from the network alone
 	storeC, backendC := openBackend(t.TempDir())
-	memSDK.SetEvents(append(events, snapshotEvent(snapB.SiaObjectID, eventTime.Add(4*time.Second))))
+	memSDK.SetEvents(append(events, snapshotEvent(t, memSDK, snapB.SiaObjectID, eventTime.Add(5*time.Second))))
 	backendC.SyncMetadata(t.Context())
 	assertSnapshots(storeC, snap2.SiaObjectID, snap3.SiaObjectID, snapB.SiaObjectID)
 	if err := backendC.Close(); err != nil {

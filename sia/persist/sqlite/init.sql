@@ -146,6 +146,7 @@ CREATE TABLE snapshots (
     id INTEGER PRIMARY KEY,
     created_at INTEGER NOT NULL,
     sia_object_id BLOB,
+    nonce BLOB, -- identifies the in-flight upload, unset on adopted snapshots
     gen INTEGER NOT NULL,
     gen_completed INTEGER,
     object_count INTEGER NOT NULL
