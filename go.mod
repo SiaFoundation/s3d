@@ -11,7 +11,7 @@ require (
 	github.com/minio/minio-go/v7 v7.3.0
 	go.sia.tech/core v0.21.7
 	go.sia.tech/coreutils v0.24.0
-	go.sia.tech/indexd v0.4.3
+	go.sia.tech/indexd v0.4.4
 	go.sia.tech/jape v0.14.1
 	go.sia.tech/siastorage v0.2.0
 	go.uber.org/zap v1.28.0
