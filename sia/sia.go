@@ -248,14 +248,15 @@ type Store interface {
 	ExpireObjects(bucket string, prefix string, before time.Time, limit int) (int, []objects.OrphanedFile, error)
 
 	Backup(ctx context.Context, destPath string) error
-	HasSnapshotObject(objectID types.Hash256) (bool, error)
-	CreateSnapshot(nonce types.Hash256) (s3.Snapshot, int64, error)
+	DBVersion() int64
+
 	AdoptSnapshot(objectID types.Hash256, createdAt time.Time, gen, objectCount int64) (s3.Snapshot, error)
-	MarkSnapshotPinned(nonce types.Hash256, objectID types.Hash256) error
+	CreateSnapshot(nonce types.Hash256) (s3.Snapshot, int64, error)
 	DeleteIncompleteSnapshot(id int64) error
 	DeleteIncompleteSnapshots() (int64, error)
 	DeleteSnapshotsBySiaObject(objectID types.Hash256) (int64, error)
-	DBVersion() int64
+	HasSnapshotObject(objectID types.Hash256) (bool, error)
+	MarkSnapshotPinned(nonce types.Hash256, objectID types.Hash256) error
 }
 
 // New creates a new Sia backend instance.
@@ -357,11 +358,10 @@ func (s *Sia) Close() error {
 	return nil
 }
 
-// CreateSnapshot records a snapshot, backs up the database to a temporary
-// file, uploads it gzip compressed to Sia as a tagged snapshot object, and
-// pins it. The temporary file is removed once the upload completes. On failure
-// the snapshot is rolled back. The object ID is recorded on the snapshot by
-// the sync loop once it observes the pinned object.
+// CreateSnapshot records a snapshot, backs up the database, uploads it gzip
+// compressed to Sia as a tagged snapshot object, and pins it. On failure the
+// snapshot is rolled back. The object ID is recorded on the snapshot by the
+// sync loop once it observes the pinned object.
 func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 	// the nonce ties the uploaded object's metadata to the snapshot record,
 	// generations can collide across database histories

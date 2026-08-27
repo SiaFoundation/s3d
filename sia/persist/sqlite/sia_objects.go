@@ -166,9 +166,9 @@ func siaObject(tx *txn, id types.Hash256) (sdk.SealedObject, error) {
 
 // deleteSiaObject removes the sealed object with the given id along with its
 // slab slices and returns the generation it was created at. Slabs no longer
-// referenced by any slice are removed together with their sectors; slabs shared
-// with other objects are kept. A missing row reports generation 0, withholding
-// the id from the orphan loop until every snapshot is gone.
+// referenced by any slice are removed together with their sectors. Slabs
+// shared with other objects are kept. A missing row reports generation 0,
+// withholding the id from the orphan loop until every snapshot is gone.
 func deleteSiaObject(tx *txn, id types.Hash256) (createdAtGen int64, _ error) {
 	// remove slabs referenced only by this object; their slices (which all
 	// belong to this object) and their sectors are removed by the cascades

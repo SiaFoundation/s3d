@@ -350,8 +350,7 @@ type Backend interface {
 	FlushObjects(ctx context.Context) error
 
 	// CreateSnapshot backs up the database, uploads it to Sia as a tagged
-	// snapshot object, and records the object ID. The backup is written to a
-	// temporary file and removed after upload.
+	// snapshot object, and records the object ID.
 	CreateSnapshot(ctx context.Context) (Snapshot, error)
 }
 
