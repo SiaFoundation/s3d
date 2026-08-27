@@ -1,6 +1,8 @@
 package s3
 
 import (
+	"errors"
+	"net/http"
 	"time"
 
 	"github.com/SiaFoundation/s3d/internal/prometheus"
@@ -8,10 +10,17 @@ import (
 	"go.sia.tech/jape"
 )
 
-// Snapshot describes a database backup uploaded to Sia. It is returned by the
+// ErrSnapshotNotFound is returned when deleting a snapshot that does not exist.
+var ErrSnapshotNotFound = errors.New("snapshot not found")
+
+// Snapshot describes a database snapshot uploaded to Sia. It is returned by the
 // [POST] /snapshots endpoint.
 type Snapshot struct {
-	ID          int64         `json:"id"`
+	// ID is the local database row, needed because a snapshot row is inserted
+	// before its Sia object exists. It is deliberately not serialized:
+	// snapshots are addressed by their Sia object ID, and a row ID is
+	// meaningless outside the one database that issued it.
+	ID          int64         `json:"-"`
 	CreatedAt   time.Time     `json:"createdAt"`
 	SiaObjectID types.Hash256 `json:"siaObjectID"`
 	ObjectCount int64         `json:"objectCount"`
@@ -105,4 +114,30 @@ func (s *s3) handleCreateSnapshot(jc jape.Context) {
 		return
 	}
 	jc.Encode(snapshot)
+}
+
+// handleListSnapshots lists the recorded database snapshots.
+func (s *s3) handleListSnapshots(jc jape.Context) {
+	snapshots, err := s.backend.ListSnapshots(jc.Request.Context())
+	if jc.Check("failed to list snapshots", err) != nil {
+		return
+	}
+	jc.Encode(snapshots)
+}
+
+// handleDeleteSnapshot unpins a snapshot's Sia object and removes its
+// record, releasing the orphaned objects it was withholding. Snapshots are
+// addressed by their Sia object ID.
+func (s *s3) handleDeleteSnapshot(jc jape.Context) {
+	var objectID types.Hash256
+	if jc.DecodeParam("objectID", &objectID) != nil {
+		return
+	}
+
+	err := s.backend.DeleteSnapshot(jc.Request.Context(), objectID)
+	if errors.Is(err, ErrSnapshotNotFound) {
+		jc.Error(ErrSnapshotNotFound, http.StatusNotFound)
+		return
+	}
+	jc.Check("failed to delete snapshot", err)
 }
