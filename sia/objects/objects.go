@@ -19,8 +19,8 @@ var (
 	// object does not exist.
 	ErrObjectNotFound = errors.New("object not found")
 
-	// ErrSnapshotNotFound is returned by snapshot operations that address a
-	// snapshot by id when no snapshot with that id exists.
+	// ErrSnapshotNotFound is returned by snapshot operations when no snapshot
+	// matches the addressed id and expected state.
 	ErrSnapshotNotFound = errors.New("snapshot not found")
 )
 

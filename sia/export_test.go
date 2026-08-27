@@ -5,9 +5,6 @@ import (
 	"time"
 )
 
-// OrphanLoopInterval exports orphanLoopInterval for testing.
-const OrphanLoopInterval = orphanLoopInterval
-
 // PruneSlabsInterval exports pruneSlabsInterval for testing.
 const PruneSlabsInterval = pruneSlabsInterval
 

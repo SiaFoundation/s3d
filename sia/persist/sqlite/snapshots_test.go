@@ -63,7 +63,7 @@ func TestSnapshots(t *testing.T) {
 		t.Fatal("unexpected known object")
 	}
 
-	// an uploaded snapshot is listed once its object id is recorded
+	// a snapshot is listed once it is marked pinned
 	var siaObjectID types.Hash256
 	frand.Read(siaObjectID[:])
 	if err := store.MarkSnapshotPinning(s1.ID, siaObjectID); err != nil {
@@ -88,8 +88,8 @@ func TestSnapshots(t *testing.T) {
 		t.Fatal("unexpected", snapshots[0].ObjectCount)
 	}
 
-	// setting the object id on a missing snapshot reports not found, as does
-	// completing an already completed one
+	// completing an unknown object reports not found, as does completing an
+	// already completed snapshot
 	if err := store.MarkSnapshotPinned(frand.Entropy256()); !errors.Is(err, objects.ErrSnapshotNotFound) {
 		t.Fatal("unexpected", err)
 	} else if err := store.MarkSnapshotPinned(siaObjectID); !errors.Is(err, objects.ErrSnapshotNotFound) {

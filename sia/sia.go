@@ -165,6 +165,11 @@ type Sia struct {
 	orphanWake chan struct{}
 	syncWake   chan struct{}
 
+	// syncMu serializes event consumption with snapshot pinning. A sync pass
+	// that runs while a pin is in flight could advance the event cursor past
+	// the pin's event before it commits, losing it forever.
+	syncMu sync.Mutex
+
 	// snapshotConfirmDelay is how long after a snapshot is marked for deletion
 	// a not found reply from the indexer is distrusted, in nanoseconds
 	snapshotConfirmDelay atomic.Int64
@@ -447,7 +452,12 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 		return s3.Snapshot{}, fmt.Errorf("failed to record snapshot object: %w", err)
 	}
 
-	if err := s.sdk.PinObject(ctx, obj); err != nil {
+	// hold the sync gate across the pin so the sync loop cannot advance the
+	// event cursor past the pin's event before it commits
+	s.syncMu.Lock()
+	err = s.sdk.PinObject(ctx, obj)
+	s.syncMu.Unlock()
+	if err != nil {
 		return s3.Snapshot{}, fmt.Errorf("failed to pin snapshot: %w", err)
 	}
 
@@ -703,8 +713,6 @@ func (s *Sia) syncFailed(msg string, fields ...zap.Field) {
 // syncMetadata fetches object events from the indexer since the last sync
 // and applies metadata updates to local objects.
 func (s *Sia) syncMetadata(ctx context.Context) { //nolint:revive
-	const batchSize = 100
-
 	// fetch the cursor
 	cursor, err := s.store.ObjectsCursor()
 	if err != nil {
@@ -712,91 +720,108 @@ func (s *Sia) syncMetadata(ctx context.Context) { //nolint:revive
 		return
 	}
 
-	// fetch and apply events
+	// fetch and apply events one batch at a time so a snapshot pin waits for
+	// at most one batch
 	var synced int
 	for ctx.Err() == nil {
-		events, err := s.sdk.ObjectEvents(ctx, cursor, batchSize)
-		if err != nil {
-			s.syncFailed("failed to fetch object events", zap.Error(err))
-			break
-		} else if len(events) == 0 {
-			// stale snapshots not completed by the drained stream never got their pin
-			if n, err := s.store.ExpireStaleSnapshots(); err != nil {
-				s.syncFailed("failed to expire stale snapshots", zap.Error(err))
-				break
-			} else if n > 0 {
-				s.logger.Info("expired stale snapshots", zap.Int64("expired", n))
-			}
-
-			// every snapshot on the network is known locally so orphan
-			// processing is safe. Only a gate that was closed leaves the
-			// orphan loop waiting on a wake
-			if !s.synced.Swap(true) {
-				s.wakeOrphanLoop()
-			}
+		next, n, more := s.syncBatch(ctx, cursor)
+		synced += n
+		if !more {
 			break
 		}
-
-		// consume events in order, stopping at the first snapshot object that
-		// can't be reconciled yet so it is retried on the next sync
-		var batch []objects.SiaObject
-		processed := 0
-		for _, ev := range events {
-			if ev.Deleted {
-				// drop snapshots whose backup object was deleted on the
-				// indexer so they stop withholding orphans
-				if n, err := s.store.DeleteSnapshotsBySiaObject(ev.Key); err != nil {
-					s.syncFailed("failed to delete snapshot for deleted object", zap.Stringer("objectID", &ev.Key), zap.Error(err))
-					break
-				} else if n > 0 {
-					s.logger.Info("deleted snapshot for deleted object", zap.Stringer("objectID", &ev.Key))
-				}
-				processed++
-				continue
-			} else if ev.Object == nil {
-				s.logger.Warn("skipping event with nil object", zap.Stringer("objectID", &ev.Key))
-				processed++
-				continue
-			} else if meta, ok := snapshotMetadata(ev.Object); ok {
-				if !s.handleSnapshotObject(ev.Key, meta) {
-					break
-				}
-				processed++
-				continue
-			}
-
-			sealed := s.sdk.SealObject(*ev.Object)
-			batch = append(batch, objects.SiaObject{ID: sealed.ID(), Sealed: sealed})
-			processed++
-		}
-
-		if len(batch) > 0 {
-			n, err := s.store.UpdateSiaObjects(batch)
-			if err != nil {
-				s.syncFailed("failed to batch update Sia objects", zap.Error(err))
-				break
-			}
-			synced += int(n)
-		}
-
-		// advance the cursor past the consumed events only
-		if processed == 0 {
-			break
-		}
-		last := events[processed-1]
-		cursor = slabs.Cursor{After: last.UpdatedAt, Key: last.Key}
-		if err := s.store.SetObjectsCursor(cursor); err != nil {
-			s.syncFailed("failed to update objects cursor", zap.Error(err))
-			break
-		}
-		if processed < len(events) {
-			break
-		}
+		cursor = next
 	}
 
 	if synced > 0 {
 		s.logger.Info("synced object metadata", zap.Int("synced", synced))
 	}
+}
+
+// syncBatch consumes one batch of object events under the sync gate and
+// advances the cursor past the consumed events. It returns the next cursor,
+// the number of objects updated, and whether another batch should be fetched.
+func (s *Sia) syncBatch(ctx context.Context, cursor slabs.Cursor) (slabs.Cursor, int, bool) {
+	const batchSize = 100
+
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+
+	events, err := s.sdk.ObjectEvents(ctx, cursor, batchSize)
+	if err != nil {
+		s.syncFailed("failed to fetch object events", zap.Error(err))
+		return cursor, 0, false
+	} else if len(events) == 0 {
+		// stale snapshots not completed by the drained stream never got their pin
+		if n, err := s.store.ExpireStaleSnapshots(); err != nil {
+			s.syncFailed("failed to expire stale snapshots", zap.Error(err))
+			return cursor, 0, false
+		} else if n > 0 {
+			s.logger.Info("expired stale snapshots", zap.Int64("expired", n))
+		}
+
+		// every snapshot on the network is known locally so orphan
+		// processing is safe. Only a gate that was closed leaves the
+		// orphan loop waiting on a wake
+		if !s.synced.Swap(true) {
+			s.wakeOrphanLoop()
+		}
+		return cursor, 0, false
+	}
+
+	// consume events in order, stopping at the first snapshot object that
+	// can't be reconciled yet so it is retried on the next sync
+	var batch []objects.SiaObject
+	processed := 0
+	for _, ev := range events {
+		if ev.Deleted {
+			// drop snapshots whose backup object was deleted on the
+			// indexer so they stop withholding orphans
+			if n, err := s.store.DeleteSnapshotsBySiaObject(ev.Key); err != nil {
+				s.syncFailed("failed to delete snapshot for deleted object", zap.Stringer("objectID", &ev.Key), zap.Error(err))
+				break
+			} else if n > 0 {
+				s.logger.Info("deleted snapshot for deleted object", zap.Stringer("objectID", &ev.Key))
+			}
+			processed++
+			continue
+		} else if ev.Object == nil {
+			s.logger.Warn("skipping event with nil object", zap.Stringer("objectID", &ev.Key))
+			processed++
+			continue
+		} else if meta, ok := snapshotMetadata(ev.Object); ok {
+			if !s.handleSnapshotObject(ev.Key, meta) {
+				break
+			}
+			processed++
+			continue
+		}
+
+		sealed := s.sdk.SealObject(*ev.Object)
+		batch = append(batch, objects.SiaObject{ID: sealed.ID(), Sealed: sealed})
+		processed++
+	}
+
+	var synced int
+	if len(batch) > 0 {
+		n, err := s.store.UpdateSiaObjects(batch)
+		if err != nil {
+			s.syncFailed("failed to batch update Sia objects", zap.Error(err))
+			return cursor, 0, false
+		}
+		synced = int(n)
+	}
+
+	// advance the cursor past the consumed events only
+	if processed == 0 {
+		return cursor, synced, false
+	}
+	last := events[processed-1]
+	cursor = slabs.Cursor{After: last.UpdatedAt, Key: last.Key}
+	if err := s.store.SetObjectsCursor(cursor); err != nil {
+		s.syncFailed("failed to update objects cursor", zap.Error(err))
+		return cursor, synced, false
+	}
+	return cursor, synced, processed == len(events)
 }
 
 // snapshotMetadata parses the object's metadata and reports whether it tags

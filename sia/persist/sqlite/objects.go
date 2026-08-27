@@ -822,7 +822,7 @@ func (s *Store) AllFilenames() (filenames []string, err error) {
 // OrphanedObjects returns up to limit object IDs eligible for unpinning. An
 // id is withheld while any snapshot may reference it: the snapshot existed
 // when the id was orphaned and the id was first referenced before the
-// snapshot's backup finished uploading. An in-flight snapshot has no
+// snapshot completed. An in-flight snapshot has no
 // completion generation yet and withholds every id orphaned since it started.
 func (s *Store) OrphanedObjects(limit int) (ids []types.Hash256, err error) {
 	err = s.transaction(func(tx *txn) error {
