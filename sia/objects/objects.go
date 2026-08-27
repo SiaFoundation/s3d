@@ -137,6 +137,12 @@ type SnapshotMetadata struct {
 	S3DVersion  string        `json:"s3dVersion"`
 }
 
+// maxSnapshotGeneration caps the generation accepted from snapshot metadata.
+// Adopting a snapshot raises the local counter to its generation and later
+// bumps it further, so a value near the int64 limit would overflow the
+// counter into a SQLite REAL and wedge the sync loop on the event.
+const maxSnapshotGeneration = 1 << 62 // 4.6e18
+
 // Validate rejects metadata no version of s3d can have written. Unknown
 // encodings and database versions pass so a snapshot from a newer s3d is still
 // recognized. S3DVersion is unchecked, it is empty in unstamped builds.
@@ -150,9 +156,9 @@ func (m SnapshotMetadata) Validate() error {
 		return errors.New("missing encoding")
 	case m.DBVersion <= 0:
 		return fmt.Errorf("invalid database version %d", m.DBVersion)
-	case m.Generation <= 0:
+	case m.Generation <= 0 || m.Generation > maxSnapshotGeneration:
 		// the generation is bumped before the snapshot row is inserted, so it
-		// is never 0
+		// is never 0, and no counter ever gets near the upper cap
 		return fmt.Errorf("invalid generation %d", m.Generation)
 	case m.Nonce == (types.Hash256{}):
 		return errors.New("missing nonce")

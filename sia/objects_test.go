@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1159,6 +1160,29 @@ func TestSyncMetadata(t *testing.T) {
 		t.Fatal(err)
 	} else if !cursor.After.Equal(eventTime.Add(7 * time.Second)) {
 		t.Fatalf("expected cursor at %v, got %v", eventTime.Add(7*time.Second), cursor.After)
+	}
+
+	// a generation near the int64 limit would overflow the counter on
+	// adoption, the object is left pinned and the cursor still advances
+	overflowMeta := snapMeta
+	overflowMeta.Generation = math.MaxInt64
+	overflow := uploadSnapshotObject(overflowMeta)
+	memSDK.SetEvents([]sdk.ObjectEvent{
+		{Key: overflow.ID(), UpdatedAt: eventTime.Add(8 * time.Second), Object: &overflow},
+	})
+	siaBackend.SyncMetadata(t.Context())
+	if !memSDK.Pinned(overflow.ID()) {
+		t.Fatal("expected overflow snapshot object to stay pinned")
+	}
+	if snapshots, err := store.ListSnapshots(); err != nil {
+		t.Fatal(err)
+	} else if len(snapshots) != 4 {
+		t.Fatal("unexpected", len(snapshots))
+	}
+	if cursor, err := store.ObjectsCursor(); err != nil {
+		t.Fatal(err)
+	} else if !cursor.After.Equal(eventTime.Add(8 * time.Second)) {
+		t.Fatalf("expected cursor at %v, got %v", eventTime.Add(8*time.Second), cursor.After)
 	}
 }
 
