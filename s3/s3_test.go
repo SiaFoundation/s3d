@@ -113,11 +113,12 @@ func TestCreateSnapshot(t *testing.T) {
 		t.Fatal("expected snapshot to have a sia object id")
 	}
 
-	// the record is not listed until the sync loop completes it
+	// the object is recorded before the pin, but the record is not listed
+	// until the sync loop completes it
 	if known, err := store.HasSnapshotObject(snapshot.SiaObjectID); err != nil {
 		t.Fatal(err)
-	} else if known {
-		t.Fatal("unexpected known object")
+	} else if !known {
+		t.Fatal("expected known object")
 	}
 	if snapshots, err := store.ListSnapshots(); err != nil {
 		t.Fatal(err)

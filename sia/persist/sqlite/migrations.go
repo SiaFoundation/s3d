@@ -357,8 +357,10 @@ DROP TABLE object_parts_backup;`)
 CREATE TABLE snapshots (
 	id INTEGER PRIMARY KEY,
 	created_at INTEGER NOT NULL,
+	state INTEGER NOT NULL, -- lifecycle state, values defined in snapshots.go
+	stale INTEGER, -- set on pinning rows at startup, cleared on completion
+	deleting_since INTEGER, -- when the state became deleting
 	sia_object_id BLOB,
-	nonce BLOB, -- identifies the in-flight upload, unset on adopted snapshots
 	gen INTEGER NOT NULL,
 	gen_completed INTEGER,
 	object_count INTEGER NOT NULL

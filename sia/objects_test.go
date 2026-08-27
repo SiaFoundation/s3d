@@ -975,10 +975,11 @@ func TestSyncMetadata(t *testing.T) {
 	deletedKey := stypes.Hash256{1, 2, 3}
 
 	// record a snapshot whose backup object matches the deleted event
-	snapNonce := frand.Entropy256()
-	if _, _, err := store.CreateSnapshot(snapNonce); err != nil {
+	if snap, _, err := store.CreateSnapshot(); err != nil {
 		t.Fatal(err)
-	} else if err := store.MarkSnapshotPinned(snapNonce, deletedKey); err != nil {
+	} else if err := store.MarkSnapshotPinning(snap.ID, deletedKey); err != nil {
+		t.Fatal(err)
+	} else if err := store.MarkSnapshotPinned(deletedKey); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1065,10 +1066,11 @@ func TestSyncMetadata(t *testing.T) {
 
 	// record one snapshot object locally, leak another with no local record
 	recorded := uploadSnapshotObject(snapMeta)
-	recordedNonce := frand.Entropy256()
-	if _, _, err := store.CreateSnapshot(recordedNonce); err != nil {
+	if rec, _, err := store.CreateSnapshot(); err != nil {
 		t.Fatal(err)
-	} else if err := store.MarkSnapshotPinned(recordedNonce, recorded.ID()); err != nil {
+	} else if err := store.MarkSnapshotPinning(rec.ID, recorded.ID()); err != nil {
+		t.Fatal(err)
+	} else if err := store.MarkSnapshotPinned(recorded.ID()); err != nil {
 		t.Fatal(err)
 	}
 	leaked := uploadSnapshotObject(snapMeta)
@@ -1096,8 +1098,7 @@ func TestSyncMetadata(t *testing.T) {
 	// an unknown snapshot object is adopted even while an upload is in flight,
 	// and the cursor advances past its event
 	foreign := uploadSnapshotObject(snapMeta)
-	pendingNonce := frand.Entropy256()
-	pending, _, err := store.CreateSnapshot(pendingNonce)
+	pending, _, err := store.CreateSnapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1122,11 +1123,14 @@ func TestSyncMetadata(t *testing.T) {
 		t.Fatalf("expected cursor at %v, got %v", eventTime.Add(5*time.Second), cursor.After)
 	}
 
-	// the in-flight record shares its nonce with its object's metadata and
-	// completes from the object's event
+	// the in-flight record carries its object's ID and completes from the
+	// object's event
 	pendingMeta := snapMeta
-	pendingMeta.Nonce = pendingNonce
+	pendingMeta.Nonce = frand.Entropy256()
 	pendingObj := uploadSnapshotObject(pendingMeta)
+	if err := store.MarkSnapshotPinning(pending.ID, pendingObj.ID()); err != nil {
+		t.Fatal(err)
+	}
 	memSDK.SetEvents([]sdk.ObjectEvent{
 		{Key: pendingObj.ID(), UpdatedAt: eventTime.Add(6 * time.Second), Object: &pendingObj},
 	})

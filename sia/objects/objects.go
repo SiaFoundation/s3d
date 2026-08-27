@@ -116,6 +116,13 @@ type OrphanedFile struct {
 	Size     int64
 }
 
+// DeletingSnapshot identifies a snapshot marked for deletion and when it was
+// marked.
+type DeletingSnapshot struct {
+	ObjectID types.Hash256
+	Since    time.Time
+}
+
 // SnapshotType is the discriminator written to a snapshot object's metadata so
 // recovery can identify snapshots among all account objects.
 const SnapshotType = "s3d-snapshot"

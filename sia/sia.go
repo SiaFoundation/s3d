@@ -165,6 +165,10 @@ type Sia struct {
 	orphanWake chan struct{}
 	syncWake   chan struct{}
 
+	// snapshotConfirmDelay is how long after a snapshot is marked for deletion
+	// a not found reply from the indexer is distrusted, in nanoseconds
+	snapshotConfirmDelay atomic.Int64
+
 	tg     *threadgroup.ThreadGroup
 	logger *zap.Logger
 }
@@ -251,12 +255,15 @@ type Store interface {
 	DBVersion() int64
 
 	AdoptSnapshot(objectID types.Hash256, createdAt time.Time, gen, objectCount int64) (s3.Snapshot, error)
-	CreateSnapshot(nonce types.Hash256) (s3.Snapshot, int64, error)
-	DeleteIncompleteSnapshot(id int64) error
-	DeleteIncompleteSnapshots() (int64, error)
+	CreateSnapshot() (s3.Snapshot, int64, error)
 	DeleteSnapshotsBySiaObject(objectID types.Hash256) (int64, error)
+	ExpireStaleSnapshots() (int64, error)
 	HasSnapshotObject(objectID types.Hash256) (bool, error)
-	MarkSnapshotPinned(nonce types.Hash256, objectID types.Hash256) error
+	MarkSnapshotPinned(objectID types.Hash256) error
+	MarkSnapshotPinning(id int64, objectID types.Hash256) error
+	RollbackIncompleteSnapshots() (int64, int64, error)
+	RollbackSnapshot(id int64) error
+	SnapshotsForDeletion() ([]objects.DeletingSnapshot, error)
 }
 
 // New creates a new Sia backend instance.
@@ -275,6 +282,9 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		logger: zap.NewNop(),
 		tg:     threadgroup.New(),
 	}
+	// a pin can only produce a durable object while the unpinned upload's
+	// retention holds, so past pinDeadline a not found reply is final
+	sia.snapshotConfirmDelay.Store(int64(pinDeadline))
 	sia.diskUsageWake = make(chan struct{})
 	sia.pinWake = make(chan struct{}, 1)
 	sia.orphanWake = make(chan struct{}, 1)
@@ -319,11 +329,11 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		return nil, fmt.Errorf("failed to create tmp directory: %w", err)
 	}
 
-	// remove snapshots left incomplete by a crash
-	if n, err := sia.store.DeleteIncompleteSnapshots(); err != nil {
-		return nil, fmt.Errorf("failed to remove incomplete snapshots: %w", err)
-	} else if n > 0 {
-		sia.logger.Info("removed incomplete snapshots", zap.Int64("removed", n))
+	// roll back snapshots left incomplete by a crash
+	if deleted, stale, err := sia.store.RollbackIncompleteSnapshots(); err != nil {
+		return nil, fmt.Errorf("failed to roll back incomplete snapshots: %w", err)
+	} else if deleted > 0 || stale > 0 {
+		sia.logger.Info("rolled back incomplete snapshots", zap.Int64("deleted", deleted), zap.Int64("stale", stale))
 	}
 
 	launchBgLoop := func(loopFn func(context.Context)) error {
@@ -360,13 +370,10 @@ func (s *Sia) Close() error {
 
 // CreateSnapshot records a snapshot, backs up the database, uploads it gzip
 // compressed to Sia as a tagged snapshot object, and pins it. On failure the
-// snapshot is rolled back. The object ID is recorded on the snapshot by the
-// sync loop once it observes the pinned object.
+// snapshot is rolled back. The record is completed by the sync loop once it
+// observes the pinned object.
 func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
-	// the nonce ties the uploaded object's metadata to the snapshot record,
-	// generations can collide across database histories
-	nonce := types.Hash256(frand.Entropy256())
-	snap, gen, err := s.store.CreateSnapshot(nonce)
+	snap, gen, err := s.store.CreateSnapshot()
 	if err != nil {
 		return s3.Snapshot{}, fmt.Errorf("failed to create snapshot: %w", err)
 	}
@@ -375,11 +382,13 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 		if err == nil {
 			return
 		}
-		// the sync loop may have completed the snapshot already, only an
-		// incomplete record is rolled back
-		if dErr := s.store.DeleteIncompleteSnapshot(snap.ID); dErr != nil {
+		// a record whose pin may have reached the network is marked for
+		// deletion rather than removed
+		if dErr := s.store.RollbackSnapshot(snap.ID); dErr != nil {
 			s.logger.Error("failed to roll back snapshot", zap.Int64("snapshotID", snap.ID), zap.Error(dErr))
+			return
 		}
+		s.wakeOrphanLoop()
 	}()
 
 	removeFile := func(path string) {
@@ -394,13 +403,14 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 	}
 	defer removeFile(tmp)
 
+	// the nonce makes the uploaded object unique across otherwise identical backups
 	meta, err := json.Marshal(objects.SnapshotMetadata{
 		Type:        objects.SnapshotType,
 		CreatedAt:   snap.CreatedAt,
 		DBVersion:   s.store.DBVersion(),
 		Encoding:    objects.SnapshotEncodingGzip,
 		Generation:  gen,
-		Nonce:       nonce,
+		Nonce:       types.Hash256(frand.Entropy256()),
 		ObjectCount: snap.ObjectCount,
 		S3DVersion:  build.Version(),
 	})
@@ -434,16 +444,16 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 		return s3.Snapshot{}, fmt.Errorf("failed to upload snapshot: %w", err)
 	}
 
+	// record the object before the pin can reach the indexer
+	if err := s.store.MarkSnapshotPinning(snap.ID, obj.ID()); err != nil {
+		return s3.Snapshot{}, fmt.Errorf("failed to record snapshot object: %w", err)
+	}
+
 	if err := s.sdk.PinObject(ctx, obj); err != nil {
-		// the pin may have landed on the indexer even though the request
-		// failed, block orphan processing until the sync loop reconciles
-		s.synced.Store(false)
-		s.wakeSyncLoop()
 		return s3.Snapshot{}, fmt.Errorf("failed to pin snapshot: %w", err)
 	}
 
-	// a successful pin completes the backup, the sync loop observes the
-	// pinned object and records its ID on the snapshot
+	// the sync loop observes the pin and completes the record
 	s.wakeSyncLoop()
 	snap.SiaObjectID = obj.ID()
 	return snap, nil
@@ -470,6 +480,7 @@ func (s *Sia) processOrphansLoop(ctx context.Context) {
 	defer t.Stop()
 
 	for {
+		s.processSnapshotDeletions(ctx)
 		s.ProcessOrphans(ctx)
 		if ctx.Err() != nil {
 			return
@@ -507,6 +518,35 @@ func (s *Sia) pruneSlabsLoop(ctx context.Context) {
 			s.logger.Error("failed to prune slabs", zap.Error(err))
 		} else {
 			s.logger.Info("finished pruning orphaned slabs from Sia network", zap.Duration("elapsed", time.Since(start)))
+		}
+	}
+}
+
+// processSnapshotDeletions unpins the objects of snapshots marked for
+// deletion and removes each record once the indexer reports its object gone.
+func (s *Sia) processSnapshotDeletions(ctx context.Context) {
+	snapshots, err := s.store.SnapshotsForDeletion()
+	if err != nil {
+		s.logger.Error("failed to fetch snapshots marked for deletion", zap.Error(err))
+		return
+	}
+	for _, snap := range snapshots {
+		if ctx.Err() != nil {
+			return
+		}
+		id := snap.ObjectID
+		if err := s.sdk.DeleteObject(ctx, id); err == nil {
+			// unpinned now, a later pass or the sync loop confirms the deletion
+			s.logger.Info("unpinned snapshot object", zap.Stringer("objectID", &id))
+		} else if !isObjectNotFound(err) {
+			s.logger.Error("failed to unpin snapshot object", zap.Stringer("objectID", &id), zap.Error(err))
+		} else if time.Since(snap.Since) < time.Duration(s.snapshotConfirmDelay.Load()) {
+			// not found is not final yet, a pin still in flight may land after the reply
+			s.logger.Debug("snapshot object not found, awaiting confirmation", zap.Stringer("objectID", &id))
+		} else if _, err := s.store.DeleteSnapshotsBySiaObject(id); err != nil {
+			s.logger.Error("failed to delete snapshot", zap.Stringer("objectID", &id), zap.Error(err))
+		} else {
+			s.logger.Info("deleted snapshot", zap.Stringer("objectID", &id))
 		}
 	}
 }
@@ -682,9 +722,17 @@ func (s *Sia) syncMetadata(ctx context.Context) { //nolint:revive
 			s.syncFailed("failed to fetch object events", zap.Error(err))
 			break
 		} else if len(events) == 0 {
-			// all events are consumed, every snapshot on the network is known
-			// locally so orphan processing is safe. Only a gate that was closed
-			// leaves the orphan loop waiting on a wake
+			// stale snapshots not completed by the drained stream never got their pin
+			if n, err := s.store.ExpireStaleSnapshots(); err != nil {
+				s.syncFailed("failed to expire stale snapshots", zap.Error(err))
+				break
+			} else if n > 0 {
+				s.logger.Info("expired stale snapshots", zap.Int64("expired", n))
+			}
+
+			// every snapshot on the network is known locally so orphan
+			// processing is safe. Only a gate that was closed leaves the
+			// orphan loop waiting on a wake
 			if !s.synced.Swap(true) {
 				s.wakeOrphanLoop()
 			}
@@ -775,23 +823,23 @@ func (s *Sia) handleSnapshotObject(objectID types.Hash256, meta objects.Snapshot
 		s.logger.Warn("ignoring malformed snapshot object", zap.Stringer("objectID", &objectID), zap.Error(err))
 		return true
 	}
-	known, err := s.store.HasSnapshotObject(objectID)
-	if err != nil {
-		s.syncFailed("failed to check snapshot object", zap.Stringer("objectID", &objectID), zap.Error(err))
-		return false
-	} else if known {
-		return true
-	}
-
-	// an in-flight record shares its nonce with the object metadata its
-	// upload wrote, completing it records the object ID
-	if err := s.store.MarkSnapshotPinned(meta.Nonce, objectID); err == nil {
+	// complete the in-flight record first, the known check would skip it
+	if err := s.store.MarkSnapshotPinned(objectID); err == nil {
 		s.logger.Info("completed snapshot", zap.Stringer("objectID", &objectID))
 		return true
 	} else if !errors.Is(err, objects.ErrSnapshotNotFound) {
 		s.syncFailed("failed to complete snapshot", zap.Stringer("objectID", &objectID), zap.Error(err))
 		return false
 	}
+
+	// a known object is already pinned or marked for deletion
+	if known, err := s.store.HasSnapshotObject(objectID); err != nil {
+		s.syncFailed("failed to check snapshot object", zap.Stringer("objectID", &objectID), zap.Error(err))
+		return false
+	} else if known {
+		return true
+	}
+
 	snap, err := s.store.AdoptSnapshot(objectID, meta.CreatedAt, meta.Generation, meta.ObjectCount)
 	if err != nil {
 		s.syncFailed("failed to adopt snapshot object", zap.Stringer("objectID", &objectID), zap.Error(err))

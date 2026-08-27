@@ -42,8 +42,7 @@ func TestSnapshots(t *testing.T) {
 	}
 
 	// create a snapshot
-	s1Nonce := frand.Entropy256()
-	s1, s1Gen, err := store.CreateSnapshot(s1Nonce)
+	s1, s1Gen, err := store.CreateSnapshot()
 	if err != nil {
 		t.Fatal(err)
 	} else if s1.ID == 0 {
@@ -67,7 +66,9 @@ func TestSnapshots(t *testing.T) {
 	// an uploaded snapshot is listed once its object id is recorded
 	var siaObjectID types.Hash256
 	frand.Read(siaObjectID[:])
-	if err := store.MarkSnapshotPinned(s1Nonce, siaObjectID); err != nil {
+	if err := store.MarkSnapshotPinning(s1.ID, siaObjectID); err != nil {
+		t.Fatal(err)
+	} else if err := store.MarkSnapshotPinned(siaObjectID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -89,9 +90,9 @@ func TestSnapshots(t *testing.T) {
 
 	// setting the object id on a missing snapshot reports not found, as does
 	// completing an already completed one
-	if err := store.MarkSnapshotPinned(frand.Entropy256(), siaObjectID); !errors.Is(err, objects.ErrSnapshotNotFound) {
+	if err := store.MarkSnapshotPinned(frand.Entropy256()); !errors.Is(err, objects.ErrSnapshotNotFound) {
 		t.Fatal("unexpected", err)
-	} else if err := store.MarkSnapshotPinned(s1Nonce, siaObjectID); !errors.Is(err, objects.ErrSnapshotNotFound) {
+	} else if err := store.MarkSnapshotPinned(siaObjectID); !errors.Is(err, objects.ErrSnapshotNotFound) {
 		t.Fatal("unexpected", err)
 	}
 
@@ -120,7 +121,7 @@ func TestSnapshots(t *testing.T) {
 	}
 
 	// a later snapshot taken after the object was deleted does not capture it
-	s2, _, err := store.CreateSnapshot(frand.Entropy256())
+	s2, _, err := store.CreateSnapshot()
 	if err != nil {
 		t.Fatal(err)
 	} else if s2.ObjectCount != 0 {
@@ -134,8 +135,9 @@ func TestSnapshots(t *testing.T) {
 		t.Fatal("unexpected", len(snapshots))
 	}
 
-	// deleting the later snapshot leaves the object withheld by the earlier one
-	if err := store.DeleteIncompleteSnapshot(s2.ID); err != nil {
+	// rolling back the later snapshot leaves the object withheld by the
+	// earlier one
+	if err := store.RollbackSnapshot(s2.ID); err != nil {
 		t.Fatal(err)
 	}
 	if orphans, err := store.OrphanedObjects(100); err != nil {
@@ -198,8 +200,7 @@ func TestSnapshots(t *testing.T) {
 
 	// the generation counter is bumped past the adopted generation and its
 	// completion bump
-	snap3Nonce := frand.Entropy256()
-	_, gen, err := store.CreateSnapshot(snap3Nonce)
+	snap3, gen, err := store.CreateSnapshot()
 	if err != nil {
 		t.Fatal(err)
 	} else if gen != s1Gen+12 {
@@ -247,7 +248,9 @@ func TestSnapshots(t *testing.T) {
 	// completing the third snapshot keeps it withheld, it existed before the
 	// backup finished
 	snap3ObjID := frand.Entropy256()
-	if err := store.MarkSnapshotPinned(snap3Nonce, snap3ObjID); err != nil {
+	if err := store.MarkSnapshotPinning(snap3.ID, snap3ObjID); err != nil {
+		t.Fatal(err)
+	} else if err := store.MarkSnapshotPinned(snap3ObjID); err != nil {
 		t.Fatal(err)
 	}
 	if orphans, err := store.OrphanedObjects(100); err != nil {
@@ -277,11 +280,12 @@ func TestSnapshots(t *testing.T) {
 	// a copy made after a snapshot completes inherits the source's creation
 	// stamp, the shared id predates the snapshot and must stay withheld
 	dID := addObject("d")
-	snap4Nonce := frand.Entropy256()
 	snap4ObjID := frand.Entropy256()
-	if _, _, err := store.CreateSnapshot(snap4Nonce); err != nil {
+	if snap4, _, err := store.CreateSnapshot(); err != nil {
 		t.Fatal(err)
-	} else if err := store.MarkSnapshotPinned(snap4Nonce, snap4ObjID); err != nil {
+	} else if err := store.MarkSnapshotPinning(snap4.ID, snap4ObjID); err != nil {
+		t.Fatal(err)
+	} else if err := store.MarkSnapshotPinned(snap4ObjID); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := store.CopyObject(testAccessKeyID, bucket, "d", s3.NoVersion(), bucket, "d-copy", s3.CopyObjectOptions{}); err != nil {
@@ -332,6 +336,102 @@ func TestSnapshots(t *testing.T) {
 	} else if (orphans[0] != bID && orphans[1] != bID) || (orphans[0] != dID && orphans[1] != dID) {
 		t.Fatal("unexpected", orphans)
 	}
+
+	// a rollback deletes a snapshot whose backup was never uploaded
+	rb1, _, err := store.CreateSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RollbackSnapshot(rb1.ID); err != nil {
+		t.Fatal(err)
+	}
+	store.assertCount(0, "snapshots")
+
+	// a rollback marks a snapshot awaiting its pin for deletion
+	rb2, _, err := store.CreateSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rb2ObjID := frand.Entropy256()
+	if err := store.MarkSnapshotPinning(rb2.ID, rb2ObjID); err != nil {
+		t.Fatal(err)
+	} else if err := store.MarkSnapshotPinning(rb2.ID, rb2ObjID); !errors.Is(err, objects.ErrSnapshotNotFound) {
+		t.Fatal("unexpected", err)
+	}
+	if err := store.RollbackSnapshot(rb2.ID); err != nil {
+		t.Fatal(err)
+	}
+	if known, err := store.HasSnapshotObject(rb2ObjID); err != nil {
+		t.Fatal(err)
+	} else if !known {
+		t.Fatal("expected known object")
+	}
+	if snapshots, err := store.SnapshotsForDeletion(); err != nil {
+		t.Fatal(err)
+	} else if len(snapshots) != 1 || snapshots[0].ObjectID != rb2ObjID {
+		t.Fatal("unexpected", snapshots)
+	} else if snapshots[0].Since.IsZero() {
+		t.Fatal("expected non-zero deleting since")
+	}
+
+	// a late pin observation does not complete a snapshot marked for deletion
+	if err := store.MarkSnapshotPinned(rb2ObjID); !errors.Is(err, objects.ErrSnapshotNotFound) {
+		t.Fatal("unexpected", err)
+	}
+	if snapshots, err := store.ListSnapshots(); err != nil {
+		t.Fatal(err)
+	} else if len(snapshots) != 0 {
+		t.Fatal("unexpected", len(snapshots))
+	}
+
+	// confirming the deletion removes the record
+	if n, err := store.DeleteSnapshotsBySiaObject(rb2ObjID); err != nil {
+		t.Fatal(err)
+	} else if n != 1 {
+		t.Fatal("unexpected", n)
+	}
+
+	// startup deletes created snapshots and marks the ones awaiting a pin stale
+	if _, _, err := store.CreateSnapshot(); err != nil {
+		t.Fatal(err)
+	}
+	rb3, _, err := store.CreateSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rb3ObjID := frand.Entropy256()
+	if err := store.MarkSnapshotPinning(rb3.ID, rb3ObjID); err != nil {
+		t.Fatal(err)
+	}
+	if deleted, stale, err := store.RollbackIncompleteSnapshots(); err != nil {
+		t.Fatal(err)
+	} else if deleted != 1 {
+		t.Fatal("unexpected", deleted)
+	} else if stale != 1 {
+		t.Fatal("unexpected", stale)
+	}
+
+	// the stale snapshot is untouched until it is expired for deletion,
+	// expiring it twice marks nothing new
+	if snapshots, err := store.SnapshotsForDeletion(); err != nil {
+		t.Fatal(err)
+	} else if len(snapshots) != 0 {
+		t.Fatal("unexpected", snapshots)
+	}
+	if n, err := store.ExpireStaleSnapshots(); err != nil {
+		t.Fatal(err)
+	} else if n != 1 {
+		t.Fatal("unexpected", n)
+	} else if n, err := store.ExpireStaleSnapshots(); err != nil {
+		t.Fatal(err)
+	} else if n != 0 {
+		t.Fatal("unexpected", n)
+	}
+	if snapshots, err := store.SnapshotsForDeletion(); err != nil {
+		t.Fatal(err)
+	} else if len(snapshots) != 1 || snapshots[0].ObjectID != rb3ObjID {
+		t.Fatal("unexpected", snapshots)
+	}
 }
 
 // TestAdoptSnapshotWithholdsExistingOrphans verifies that an adopted snapshot
@@ -363,14 +463,16 @@ func TestAdoptSnapshotWithholdsExistingOrphans(t *testing.T) {
 	// model the restored database image. Its own snapshot row was incomplete
 	// when the image was made, so startup removes the row but retains the
 	// generation counter.
-	restored, restoredGen, err := store.CreateSnapshot(frand.Entropy256())
+	restored, restoredGen, err := store.CreateSnapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n, err := store.DeleteIncompleteSnapshots(); err != nil {
+	if deleted, stale, err := store.RollbackIncompleteSnapshots(); err != nil {
 		t.Fatal(err)
-	} else if n != 1 {
-		t.Fatal("unexpected", n)
+	} else if deleted != 1 {
+		t.Fatal("unexpected", deleted)
+	} else if stale != 0 {
+		t.Fatal("unexpected", stale)
 	}
 
 	// this history deletes the object before discovering the snapshots still
@@ -455,8 +557,8 @@ func TestSnapshotWithholdsObjectsChangedDuringBackup(t *testing.T) {
 	beforeID := addObject("before")
 
 	// T1: the row is inserted and the generation bumped, no backup has run yet
-	snapNonce := frand.Entropy256()
-	if _, _, err := store.CreateSnapshot(snapNonce); err != nil {
+	snap, _, err := store.CreateSnapshot()
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -480,7 +582,9 @@ func TestSnapshotWithholdsObjectsChangedDuringBackup(t *testing.T) {
 
 	// T3: the backup finished and was pinned, closing the bracket
 	snapObjID := frand.Entropy256()
-	if err := store.MarkSnapshotPinned(snapNonce, snapObjID); err != nil {
+	if err := store.MarkSnapshotPinning(snap.ID, snapObjID); err != nil {
+		t.Fatal(err)
+	} else if err := store.MarkSnapshotPinned(snapObjID); err != nil {
 		t.Fatal(err)
 	}
 

@@ -95,10 +95,14 @@ func (s *MemorySDK) SetRemainingStorage(remaining uint64) {
 	s.remainingStorage = remaining
 }
 
-// DeleteObject deletes the object with the given key.
+// DeleteObject deletes the object with the given key. Deleting an unknown
+// object reports the indexer's not found sentinel.
 func (s *MemorySDK) DeleteObject(_ context.Context, id types.Hash256) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, ok := s.objects[id]; !ok {
+		return slabs.ErrObjectNotFound
+	}
 	delete(s.objects, id)
 	return nil
 }

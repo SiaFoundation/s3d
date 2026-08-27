@@ -40,3 +40,14 @@ func (s *Sia) PinObjects(ctx context.Context) error { //nolint:revive
 func (s *Sia) DeleteOrphanedUploads() (int, error) { //nolint:revive
 	return s.deleteOrphanedUploads()
 }
+
+// ProcessSnapshotDeletions exports processSnapshotDeletions for testing.
+func (s *Sia) ProcessSnapshotDeletions(ctx context.Context) { //nolint:revive
+	s.processSnapshotDeletions(ctx)
+}
+
+// SetSnapshotConfirmDelay overrides the snapshot deletion confirmation delay
+// for testing.
+func (s *Sia) SetSnapshotConfirmDelay(d time.Duration) { //nolint:revive
+	s.snapshotConfirmDelay.Store(int64(d))
+}

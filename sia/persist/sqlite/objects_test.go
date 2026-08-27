@@ -1095,7 +1095,7 @@ func TestOrphanedObjects(t *testing.T) {
 
 	// snapshot the object while "b" still references it, so the generation it
 	// pins withholds the object once its last reference is gone
-	snap, _, err := store.CreateSnapshot(frand.Entropy256())
+	snap, _, err := store.CreateSnapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1114,7 +1114,7 @@ func TestOrphanedObjects(t *testing.T) {
 	}
 
 	// removing the snapshot raises the floor and releases the orphan
-	if err := store.DeleteIncompleteSnapshot(snap.ID); err != nil {
+	if err := store.RollbackSnapshot(snap.ID); err != nil {
 		t.Fatal(err)
 	}
 
