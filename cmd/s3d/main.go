@@ -42,6 +42,7 @@ Commands:
 	flush		Upload all pending objects to Sia immediately
 	users		Manage users
 	keys		Manage S3 access keys
+	snapshots	Manage database snapshots backed up to Sia
 `
 
 	versionUsage = `Usage: s3d version
@@ -108,6 +109,18 @@ func main() {
 	keysCreateCmd.StringVar(&keysCreateAccessKey, "access-key", "", "access key ID (auto-generated if empty)")
 	keysCreateCmd.StringVar(&keysCreateSecretKey, "secret-key", "", "secret key (auto-generated if empty)")
 
+	snapshotsCmd := flagg.New("snapshots", snapshotsUsage)
+	snapshotsCreateCmd := flagg.New("create", snapshotsCreateUsage)
+	snapshotsListCmd := flagg.New("list", snapshotsListUsage)
+	snapshotsDeleteCmd := flagg.New("delete", snapshotsDeleteUsage)
+	snapshotsRestoreCmd := flagg.New("restore", snapshotsRestoreUsage)
+
+	var snapshotsListRemote, snapshotsRestoreForce bool
+	var snapshotsRestoreOut string
+	snapshotsListCmd.BoolVar(&snapshotsListRemote, "remote", false, "list the snapshots stored on the Sia network")
+	snapshotsRestoreCmd.BoolVar(&snapshotsRestoreForce, "force", false, "overwrite an existing database")
+	snapshotsRestoreCmd.StringVar(&snapshotsRestoreOut, "out", "", "directory to write the restored database to (defaults to the data directory)")
+
 	// attempt to load the config file
 	configPath := tryLoadConfig()
 
@@ -141,6 +154,15 @@ func main() {
 					{Cmd: keysCreateCmd},
 					{Cmd: keysDeleteCmd},
 					{Cmd: keysListCmd},
+				},
+			},
+			{
+				Cmd: snapshotsCmd,
+				Sub: []flagg.Tree{
+					{Cmd: snapshotsCreateCmd},
+					{Cmd: snapshotsListCmd},
+					{Cmd: snapshotsDeleteCmd},
+					{Cmd: snapshotsRestoreCmd},
 				},
 			},
 		},
@@ -208,6 +230,24 @@ func main() {
 		return
 	case keysListCmd:
 		runKeysList(keysListCmd)
+		return
+	case snapshotsCmd:
+		cmd.Usage()
+		if len(cmd.Args()) != 0 {
+			os.Exit(1)
+		}
+		return
+	case snapshotsCreateCmd:
+		runSnapshotsCreate(ctx, snapshotsCreateCmd)
+		return
+	case snapshotsListCmd:
+		runSnapshotsList(ctx, snapshotsListCmd, snapshotsListRemote)
+		return
+	case snapshotsDeleteCmd:
+		runSnapshotsDelete(ctx, snapshotsDeleteCmd)
+		return
+	case snapshotsRestoreCmd:
+		runSnapshotsRestore(ctx, snapshotsRestoreCmd, snapshotsRestoreForce, snapshotsRestoreOut)
 		return
 	case rootCmd:
 		if len(cmd.Args()) != 0 {

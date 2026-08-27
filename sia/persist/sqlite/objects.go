@@ -993,7 +993,7 @@ func orphanDeleted(tx *txn, row deletedRow) (objects.OrphanedFile, error) {
 // data that was truly never pinned the unpin is a no-op: the orphan loop
 // treats the indexer's "object not found" as success. The orphan carries over
 // the sealed object's creation stamp so the orphan loop can tell whether a
-// snapshot's backup could still reference it.
+// snapshot could still reference it.
 func insertOrphan(tx *txn, objectID types.Hash256) error {
 	if objectID == (types.Hash256{}) {
 		return nil // skip zero-value (empty objects)

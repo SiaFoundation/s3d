@@ -11,7 +11,7 @@ import (
 )
 
 // Snapshot lifecycle states, transitions only move forward: created until
-// the backup object is uploaded, pinning until the sync loop observes the
+// the snapshot object is uploaded, pinning until the sync loop observes the
 // pin, pinned, and deleting until the indexer confirms the object is gone.
 const (
 	snapshotStateCreated int64 = iota
@@ -49,7 +49,7 @@ func (s *Store) MarkSnapshotPinning(snapshotID int64, objectID types.Hash256) er
 		if n, err := res.RowsAffected(); err != nil {
 			return err
 		} else if n == 0 {
-			return objects.ErrSnapshotNotFound
+			return s3.ErrSnapshotNotFound
 		}
 		return nil
 	})
@@ -58,14 +58,14 @@ func (s *Store) MarkSnapshotPinning(snapshotID int64, objectID types.Hash256) er
 // MarkSnapshotPinned marks the snapshot with the given Sia object ID pinned.
 // The generation counter is bumped once more and recorded as the snapshot's
 // completion generation, object rows created at or after it cannot appear in
-// the backup. Only a snapshot awaiting its pin is completed.
+// the snapshot. Only a snapshot awaiting its pin is completed.
 func (s *Store) MarkSnapshotPinned(objectID types.Hash256) error {
 	return s.transaction(func(tx *txn) error {
 		var id int64
 		err := tx.QueryRow("SELECT id FROM snapshots WHERE sia_object_id = $1 AND state = $2",
 			sqlHash256(objectID), snapshotStatePinning).Scan(&id)
 		if errors.Is(err, sql.ErrNoRows) {
-			return objects.ErrSnapshotNotFound
+			return s3.ErrSnapshotNotFound
 		} else if err != nil {
 			return err
 		}
@@ -79,13 +79,15 @@ func (s *Store) MarkSnapshotPinned(objectID types.Hash256) error {
 	})
 }
 
-// AdoptSnapshot records a snapshot for a backup object discovered on the
-// network, e.g. after restoring from a backup made by a previous database.
-// The generation counter is raised to at least the adopted generation and
-// existing orphans are raised to it even when the counter is already past it.
-// The counter is then bumped once more and recorded as the completion
-// generation. Adopting an object that already has a record returns the
-// existing snapshot.
+// AdoptSnapshot records a snapshot for an object discovered on the network,
+// e.g. after restoring from a snapshot made by a previous database.
+// The generation counter is raised to at least the adopted generation.
+// Existing orphans are raised to it even when the counter is already past it:
+// the adopted generation is from a different counter history, so it cannot be
+// ordered against locally recorded orphans and the adopted snapshot may
+// reference any of them. As in MarkSnapshotPinned the counter is then bumped
+// once more and recorded as the completion generation. Adopting an object
+// that already has a record returns the existing snapshot.
 func (s *Store) AdoptSnapshot(objectID types.Hash256, createdAt time.Time, gen, objectCount int64) (snap s3.Snapshot, err error) {
 	err = s.transaction(func(tx *txn) error {
 		// return the existing record when the object was already adopted
@@ -195,8 +197,8 @@ func (s *Store) SnapshotsForDeletion() (snapshots []objects.DeletingSnapshot, er
 	return
 }
 
-// DeleteSnapshotsBySiaObject removes snapshots whose backup object matches the
-// given Sia object ID and returns the number of snapshots removed.
+// DeleteSnapshotsBySiaObject removes snapshots whose Sia object matches the
+// given object ID and returns the number of snapshots removed.
 func (s *Store) DeleteSnapshotsBySiaObject(objectID types.Hash256) (deleted int64, err error) {
 	err = s.transaction(func(tx *txn) error {
 		res, err := tx.Exec("DELETE FROM snapshots WHERE sia_object_id = $1", sqlHash256(objectID))
@@ -209,7 +211,12 @@ func (s *Store) DeleteSnapshotsBySiaObject(objectID types.Hash256) (deleted int6
 	return
 }
 
-// ListSnapshots returns all pinned snapshots ordered by id.
+// ListSnapshots returns all pinned snapshots newest first, matching the
+// order [sia.ListRemoteSnapshots] returns. Ordering by id alone would return
+// them in the order this node learned of them, which a recovery reshuffles by
+// adopting existing snapshots into fresh rows. Snapshots restored from
+// different histories can share a creation stamp and a generation, so id
+// breaks the remaining ties and keeps the order total.
 func (s *Store) ListSnapshots() (snapshots []s3.Snapshot, err error) {
 	err = s.transaction(func(tx *txn) error {
 		snapshots = snapshots[:0] // reuse same slice if transaction retries
@@ -217,7 +224,7 @@ func (s *Store) ListSnapshots() (snapshots []s3.Snapshot, err error) {
 			SELECT id, created_at, sia_object_id, object_count
 			FROM snapshots
 			WHERE state = $1
-			ORDER BY id`, snapshotStatePinned)
+			ORDER BY created_at DESC, gen DESC, id DESC`, snapshotStatePinned)
 		if err != nil {
 			return err
 		}
