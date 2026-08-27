@@ -13,7 +13,7 @@ require (
 	go.sia.tech/coreutils v0.24.0
 	go.sia.tech/indexd v0.4.4
 	go.sia.tech/jape v0.14.1
-	go.sia.tech/siastorage v0.2.0
+	go.sia.tech/siastorage v0.2.1
 	go.uber.org/zap v1.28.0
 	golang.org/x/term v0.45.0
 	gopkg.in/ini.v1 v1.67.3
@@ -50,7 +50,7 @@ require (
 	github.com/klauspost/compress v1.19.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
 	github.com/klauspost/crc32 v1.3.0 // indirect
-	github.com/klauspost/reedsolomon v1.14.1 // indirect
+	github.com/klauspost/reedsolomon v1.14.2 // indirect
 	github.com/minio/crc64nvme v1.1.1 // indirect
 	github.com/minio/md5-simd v1.1.2 // indirect
 	github.com/oschwald/geoip2-golang v1.13.0 // indirect
