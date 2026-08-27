@@ -25,9 +25,9 @@ import (
 	"lukechampine.com/frand"
 )
 
-// downloadBackup fetches a snapshot's backup object from the SDK and returns
+// downloadSnapshot fetches a snapshot's Sia object from the SDK and returns
 // the decompressed database image.
-func downloadBackup(t *testing.T, memSDK *testutil.MemorySDK, id types.Hash256) []byte {
+func downloadSnapshot(t *testing.T, memSDK *testutil.MemorySDK, id types.Hash256) []byte {
 	t.Helper()
 	data, ok := memSDK.ObjectData(id)
 	if !ok {
@@ -58,16 +58,14 @@ func downloadMetadata(t *testing.T, memSDK *testutil.MemorySDK, id types.Hash256
 	return meta
 }
 
-// snapshotEvent builds the event the indexer emits for a live snapshot
-// object, carrying the object's metadata.
+// snapshotEvent builds the event the indexer emits for a live snapshot object,
+// carrying the object's slabs and metadata.
 func snapshotEvent(t *testing.T, memSDK *testutil.MemorySDK, id types.Hash256, at time.Time) sdk.ObjectEvent {
 	t.Helper()
-	raw, ok := memSDK.ObjectMetadata(id)
+	obj, ok := memSDK.StoredObject(id)
 	if !ok {
 		t.Fatal("snapshot object not found")
 	}
-	obj := sdk.NewEmptyObject()
-	obj.UpdateMetadata(raw)
 	return sdk.ObjectEvent{Key: id, UpdatedAt: at, Object: &obj}
 }
 
@@ -118,12 +116,12 @@ func TestCreateSnapshot(t *testing.T) {
 		t.Fatal("expected non-zero created at")
 	}
 
-	// the uploaded backup decompresses to a SQLite database
-	if db := downloadBackup(t, memSDK, snap.SiaObjectID); !bytes.HasPrefix(db, []byte("SQLite format 3\x00")) {
-		t.Fatal("unexpected backup header")
+	// the uploaded snapshot decompresses to a SQLite database
+	if db := downloadSnapshot(t, memSDK, snap.SiaObjectID); !bytes.HasPrefix(db, []byte("SQLite format 3\x00")) {
+		t.Fatal("unexpected snapshot header")
 	}
 
-	// no temporary backup files or sidecars are left behind
+	// no temporary snapshot files or sidecars are left behind
 	entries, err := os.ReadDir(filepath.Join(backend.Dir, sia.TmpDirectory))
 	if err != nil {
 		t.Fatal(err)
@@ -132,6 +130,15 @@ func TestCreateSnapshot(t *testing.T) {
 		if strings.HasPrefix(e.Name(), "snapshot-") {
 			t.Fatal("leftover temp file", e.Name())
 		}
+	}
+
+	// the backend lists the snapshot it recorded
+	if listed, err := backend.ListSnapshots(t.Context()); err != nil {
+		t.Fatal(err)
+	} else if len(listed) != 1 {
+		t.Fatal("unexpected", len(listed))
+	} else if listed[0].SiaObjectID != snap.SiaObjectID {
+		t.Fatal("mismatch", listed[0].SiaObjectID)
 	}
 
 	// a pin failure rolls the snapshot back, the staged object is never stored
@@ -167,7 +174,7 @@ func TestCreateSnapshot(t *testing.T) {
 	}
 	backend.ProcessSnapshotDeletions(t.Context())
 	if memSDK.Pinned(snap.SiaObjectID) {
-		t.Fatal("snapshot object still pinned")
+		t.Fatal("Sia object still pinned")
 	}
 	assertDeleting(t, store, 1)
 	backend.SetSnapshotConfirmDelay(0)
@@ -177,6 +184,11 @@ func TestCreateSnapshot(t *testing.T) {
 		t.Fatal(err)
 	} else if len(snapshots) != 0 {
 		t.Fatal("unexpected", len(snapshots))
+	}
+
+	// deleting a snapshot that is already gone reports not found
+	if err := backend.DeleteSnapshot(t.Context(), snap.SiaObjectID); !errors.Is(err, s3.ErrSnapshotNotFound) {
+		t.Fatal("unexpected", err)
 	}
 }
 
@@ -418,14 +430,14 @@ func TestSnapshotRecovery(t *testing.T) {
 	backendA.SyncMetadata(t.Context())
 
 	// delete the first snapshot and unpin its object, its record now only
-	// lives on inside the second snapshot's backup
+	// lives on inside the second snapshot
 	if _, err := storeA.DeleteSnapshotsBySiaObject(snap1.SiaObjectID); err != nil {
 		t.Fatal(err)
 	} else if err := memSDK.DeleteObject(t.Context(), snap1.SiaObjectID); err != nil {
 		t.Fatal(err)
 	}
 
-	// a third snapshot only exists on the network, not in the second backup
+	// a third snapshot only exists on the network, not in the second snapshot
 	snap3, err := backendA.CreateSnapshot(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -434,9 +446,9 @@ func TestSnapshotRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// restore the second snapshot's backup into a fresh directory
+	// restore the second snapshot into a fresh directory
 	dirB := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dirB, "s3d.sqlite"), downloadBackup(t, memSDK, snap2.SiaObjectID), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(dirB, "s3d.sqlite"), downloadSnapshot(t, memSDK, snap2.SiaObjectID), 0600); err != nil {
 		t.Fatal(err)
 	}
 	memSDK.SetEvents(nil)
@@ -455,8 +467,8 @@ func TestSnapshotRecovery(t *testing.T) {
 	}
 	memSDK.SetEvents(events)
 	backendB.SyncMetadata(t.Context())
-	if snapshots := assertSnapshots(storeB, snap2.SiaObjectID, snap3.SiaObjectID); snapshots[0].CreatedAt.Unix() != snap2.CreatedAt.Unix() {
-		t.Fatal("mismatch", snapshots[0].CreatedAt)
+	if snapshots := assertSnapshots(storeB, snap3.SiaObjectID, snap2.SiaObjectID); snapshots[1].CreatedAt.Unix() != snap2.CreatedAt.Unix() {
+		t.Fatal("mismatch", snapshots[1].CreatedAt)
 	}
 
 	// the generation counter continues past the adopted snapshots and their
@@ -479,8 +491,121 @@ func TestSnapshotRecovery(t *testing.T) {
 	storeC, backendC := openBackend(t, memSDK, log, t.TempDir())
 	memSDK.SetEvents(append(events, snapshotEvent(t, memSDK, snapB.SiaObjectID, eventTime.Add(5*time.Second))))
 	backendC.SyncMetadata(t.Context())
-	assertSnapshots(storeC, snap2.SiaObjectID, snap3.SiaObjectID, snapB.SiaObjectID)
+	assertSnapshots(storeC, snapB.SiaObjectID, snap3.SiaObjectID, snap2.SiaObjectID)
 	if err := backendC.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestListRemoteSnapshots(t *testing.T) {
+	memSDK := testutil.NewMemorySDK()
+	backend, _ := testutil.NewBackend(t, testutil.WithSDK(memSDK))
+
+	snap1, err := backend.CreateSnapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap2, err := backend.CreateSnapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// an ordinary object carries no snapshot tag and must be ignored
+	other, err := memSDK.AddObject(t.Context(), strings.NewReader("not a snapshot"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	at := time.Now().Truncate(time.Second)
+	events := []sdk.ObjectEvent{
+		snapshotEvent(t, memSDK, snap2.SiaObjectID, at.Add(2*time.Second)),
+		snapshotEvent(t, memSDK, snap1.SiaObjectID, at.Add(time.Second)),
+		{Key: other.ID(), UpdatedAt: at.Add(3 * time.Second), Object: &other},
+	}
+	memSDK.SetEvents(events)
+
+	// the network is enumerated newest first
+	remote, err := sia.ListRemoteSnapshots(t.Context(), memSDK)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(remote) != 2 {
+		t.Fatal("unexpected", len(remote))
+	} else if remote[0].ObjectID != snap2.SiaObjectID {
+		t.Fatal("mismatch", remote[0].ObjectID)
+	} else if remote[1].ObjectID != snap1.SiaObjectID {
+		t.Fatal("mismatch", remote[1].ObjectID)
+	} else if remote[0].Metadata.Generation <= remote[1].Metadata.Generation {
+		// completing a snapshot bumps the counter, so the absolute values
+		// depend on when the sync observed each pin. Only the order is fixed
+		t.Fatal("expected the newer snapshot to hold the higher generation", remote[0].Metadata.Generation)
+	} else if remote[0].Metadata.CreatedAt.Unix() != snap2.CreatedAt.Unix() {
+		t.Fatal("mismatch", remote[0].Metadata.CreatedAt)
+	}
+
+	// the snapshot downloads and decompresses to a database image
+	var buf bytes.Buffer
+	if err := sia.DownloadSnapshot(memSDK, remote[0], &buf); err != nil {
+		t.Fatal(err)
+	} else if !bytes.HasPrefix(buf.Bytes(), []byte("SQLite format 3\x00")) {
+		t.Fatal("unexpected snapshot header")
+	}
+
+	// a deleted snapshot drops out of the listing
+	memSDK.SetEvents(append(events, sdk.ObjectEvent{Key: snap1.SiaObjectID, UpdatedAt: at.Add(4 * time.Second), Deleted: true}))
+	if remote, err := sia.ListRemoteSnapshots(t.Context(), memSDK); err != nil {
+		t.Fatal(err)
+	} else if len(remote) != 1 {
+		t.Fatal("unexpected", len(remote))
+	} else if remote[0].ObjectID != snap2.SiaObjectID {
+		t.Fatal("mismatch", remote[0].ObjectID)
+	}
+}
+
+// TestFetchRemoteSnapshot covers the recovery shortcut: fetching a snapshot by
+// its object ID must not enumerate the account, because enumeration reads and
+// decrypts every object and so grows with how much is stored.
+func TestFetchRemoteSnapshot(t *testing.T) {
+	memSDK := testutil.NewMemorySDK()
+	backend, _ := testutil.NewBackend(t, testutil.WithSDK(memSDK))
+
+	snap, err := backend.CreateSnapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := memSDK.AddObject(t.Context(), strings.NewReader("not a snapshot"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	before := memSDK.ObjectEventCalls()
+	remote, err := sia.FetchRemoteSnapshot(t.Context(), memSDK, snap.SiaObjectID)
+	if err != nil {
+		t.Fatal(err)
+	} else if remote.ObjectID != snap.SiaObjectID {
+		t.Fatal("mismatch", remote.ObjectID)
+	} else if remote.Metadata.ObjectCount != snap.ObjectCount {
+		t.Fatal("unexpected", remote.Metadata.ObjectCount)
+	} else if calls := memSDK.ObjectEventCalls(); calls != before {
+		t.Fatal("fetching by id enumerated the account", calls-before, "times")
+	}
+
+	// the fetched snapshot is usable, not just described
+	var buf bytes.Buffer
+	if err := sia.DownloadSnapshot(memSDK, remote, &buf); err != nil {
+		t.Fatal(err)
+	} else if !bytes.HasPrefix(buf.Bytes(), []byte("SQLite format 3\x00")) {
+		t.Fatal("unexpected snapshot header")
+	}
+
+	// an object that is not a snapshot is rejected rather than restored
+	if _, err := sia.FetchRemoteSnapshot(t.Context(), memSDK, other.ID()); err == nil {
+		t.Fatal("expected an error")
+	} else if !strings.Contains(err.Error(), "not a snapshot") {
+		t.Fatal("unexpected", err)
+	}
+
+	// so is an id that does not exist
+	if _, err := sia.FetchRemoteSnapshot(t.Context(), memSDK, types.Hash256(frand.Entropy256())); err == nil {
+		t.Fatal("expected an error")
 	}
 }
