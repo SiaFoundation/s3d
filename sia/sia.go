@@ -403,14 +403,12 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 	}
 	defer removeFile(tmp)
 
-	// the nonce makes the uploaded object unique across otherwise identical backups
 	meta, err := json.Marshal(objects.SnapshotMetadata{
 		Type:        objects.SnapshotType,
 		CreatedAt:   snap.CreatedAt,
 		DBVersion:   s.store.DBVersion(),
 		Encoding:    objects.SnapshotEncodingGzip,
 		Generation:  gen,
-		Nonce:       types.Hash256(frand.Entropy256()),
 		ObjectCount: snap.ObjectCount,
 		S3DVersion:  build.Version(),
 	})

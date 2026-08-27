@@ -134,14 +134,13 @@ const SnapshotEncodingGzip = "gzip"
 // SnapshotMetadata is attached to a snapshot's Sia object. It lets recovery
 // find snapshots and refuse ones it cannot restore.
 type SnapshotMetadata struct {
-	Type        string        `json:"type"`
-	CreatedAt   time.Time     `json:"createdAt"`
-	DBVersion   int64         `json:"dbVersion"`
-	Encoding    string        `json:"encoding"`
-	Generation  int64         `json:"generation"`
-	Nonce       types.Hash256 `json:"nonce"`
-	ObjectCount int64         `json:"objectCount"`
-	S3DVersion  string        `json:"s3dVersion"`
+	Type        string    `json:"type"`
+	CreatedAt   time.Time `json:"createdAt"`
+	DBVersion   int64     `json:"dbVersion"`
+	Encoding    string    `json:"encoding"`
+	Generation  int64     `json:"generation"`
+	ObjectCount int64     `json:"objectCount"`
+	S3DVersion  string    `json:"s3dVersion"`
 }
 
 // maxSnapshotGeneration caps the generation accepted from snapshot metadata.
@@ -167,8 +166,6 @@ func (m SnapshotMetadata) Validate() error {
 		// the generation is bumped before the snapshot row is inserted, so it
 		// is never 0, and no counter ever gets near the upper cap
 		return fmt.Errorf("invalid generation %d", m.Generation)
-	case m.Nonce == (types.Hash256{}):
-		return errors.New("missing nonce")
 	case m.ObjectCount < 0:
 		return fmt.Errorf("invalid object count %d", m.ObjectCount)
 	}

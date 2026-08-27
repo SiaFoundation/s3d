@@ -120,8 +120,6 @@ func TestCreateSnapshot(t *testing.T) {
 		t.Fatal("unexpected", meta.S3DVersion)
 	} else if meta.CreatedAt.IsZero() {
 		t.Fatal("expected non-zero created at")
-	} else if meta.Nonce == (types.Hash256{}) {
-		t.Fatal("expected non-zero nonce")
 	}
 
 	// the uploaded backup decompresses to a SQLite database

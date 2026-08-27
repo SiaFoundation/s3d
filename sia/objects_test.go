@@ -1061,7 +1061,6 @@ func TestSyncMetadata(t *testing.T) {
 		DBVersion:  store.DBVersion(),
 		Encoding:   objects.SnapshotEncodingGzip,
 		Generation: 1,
-		Nonce:      frand.Entropy256(),
 	}
 
 	// record one snapshot object locally, leak another with no local record
@@ -1125,9 +1124,7 @@ func TestSyncMetadata(t *testing.T) {
 
 	// the in-flight record carries its object's ID and completes from the
 	// object's event
-	pendingMeta := snapMeta
-	pendingMeta.Nonce = frand.Entropy256()
-	pendingObj := uploadSnapshotObject(pendingMeta)
+	pendingObj := uploadSnapshotObject(snapMeta)
 	if err := store.MarkSnapshotPinning(pending.ID, pendingObj.ID()); err != nil {
 		t.Fatal(err)
 	}
