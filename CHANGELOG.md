@@ -1,3 +1,13 @@
+## 0.1.3 (2026-08-31)
+
+### Features
+
+- Support conditional operations
+
+### Fixes
+
+- Fixed an issue where uploads on a slow connection might fail with "no more hosts available"
+
 ## 0.1.2 (2026-08-12)
 
 ### Features
