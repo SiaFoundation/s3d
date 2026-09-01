@@ -10,6 +10,23 @@ import (
 	sdk "go.sia.tech/siastorage"
 )
 
+const (
+	// SnapshotType is the discriminator written to a snapshot object's metadata
+	// so recovery can identify snapshots among all account objects.
+	SnapshotType = "s3d-snapshot"
+
+	// SnapshotEncodingGzip is the encoding recorded for snapshots whose backup
+	// is gzip compressed before upload.
+	SnapshotEncodingGzip = "gzip"
+
+	// maxSnapshotGeneration caps the generation accepted from snapshot
+	// metadata. Adopting a snapshot raises the local counter to its generation
+	// and later bumps it further, so a value near the int64 limit would
+	// overflow the counter into a SQLite REAL and wedge the sync loop on the
+	// event.
+	maxSnapshotGeneration = 1 << 62 // 4.6e18
+)
+
 var (
 	// ErrObjectModified is returned by MarkObjectUploaded when the object's
 	// content MD5 no longer matches the expected value.
@@ -116,20 +133,19 @@ type OrphanedFile struct {
 	Size     int64
 }
 
+// PinningSnapshot identifies a snapshot awaiting confirmation that its backup
+// object reached the indexer.
+type PinningSnapshot struct {
+	ID       int64
+	ObjectID types.Hash256
+}
+
 // DeletingSnapshot identifies a snapshot marked for deletion and when it was
 // marked.
 type DeletingSnapshot struct {
 	ObjectID types.Hash256
 	Since    time.Time
 }
-
-// SnapshotType is the discriminator written to a snapshot object's metadata so
-// recovery can identify snapshots among all account objects.
-const SnapshotType = "s3d-snapshot"
-
-// SnapshotEncodingGzip is the encoding recorded for snapshots whose backup is
-// gzip compressed before upload.
-const SnapshotEncodingGzip = "gzip"
 
 // SnapshotMetadata is attached to a snapshot's Sia object. It lets recovery
 // find snapshots and refuse ones it cannot restore.
@@ -142,12 +158,6 @@ type SnapshotMetadata struct {
 	ObjectCount int64     `json:"objectCount"`
 	S3DVersion  string    `json:"s3dVersion"`
 }
-
-// maxSnapshotGeneration caps the generation accepted from snapshot metadata.
-// Adopting a snapshot raises the local counter to its generation and later
-// bumps it further, so a value near the int64 limit would overflow the
-// counter into a SQLite REAL and wedge the sync loop on the event.
-const maxSnapshotGeneration = 1 << 62 // 4.6e18
 
 // Validate rejects metadata no version of s3d can have written. Unknown
 // encodings and database versions pass so a snapshot from a newer s3d is still

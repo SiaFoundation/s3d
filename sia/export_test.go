@@ -48,3 +48,9 @@ func (s *Sia) ProcessSnapshotDeletions(ctx context.Context) { //nolint:revive
 func (s *Sia) SetSnapshotConfirmDelay(d time.Duration) { //nolint:revive
 	s.snapshotConfirmDelay.Store(int64(d))
 }
+
+// SetSnapshotObserveTimeout overrides how long CreateSnapshot waits for the
+// sync loop to observe the pin for testing.
+func (s *Sia) SetSnapshotObserveTimeout(d time.Duration) { //nolint:revive
+	s.snapshotObserveTimeout.Store(int64(d))
+}

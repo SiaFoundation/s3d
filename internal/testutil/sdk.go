@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"slices"
 	"sync"
+	"time"
 	"unsafe"
 
 	"github.com/SiaFoundation/s3d/s3"
@@ -40,8 +41,10 @@ type (
 		pruneSlabsCalls  int
 		remainingStorage uint64
 
-		pinErr      error // when non-nil, PinObject returns this error
-		pinAttempts int   // number of PinObject calls observed
+		pinErr       error // when non-nil, PinObject returns this error
+		pinAttempts  int   // number of PinObject calls observed
+		publishOnPin bool  // when set, PinObject appends the pinned object's event
+		objectErr    error // when non-nil, Object returns this error
 	}
 
 	uploadedObject struct {
@@ -172,6 +175,28 @@ func (s *MemorySDK) ObjectEvents(_ context.Context, cursor slabs.Cursor, limit i
 	return filtered, nil
 }
 
+// Object returns the object with the given id, mirroring the indexer's point
+// read of its committed store.
+func (s *MemorySDK) Object(_ context.Context, id types.Hash256) (sdk.Object, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.objectErr != nil {
+		return sdk.Object{}, s.objectErr
+	}
+	o, ok := s.objects[id]
+	if !ok {
+		return sdk.Object{}, fmt.Errorf("failed to get object: %w", slabs.ErrObjectNotFound)
+	}
+	return o.meta, nil
+}
+
+// SetObjectError makes Object return the given error until cleared.
+func (s *MemorySDK) SetObjectError(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.objectErr = err
+}
+
 // PruneSlabs prunes slabs not associated with an object from the indexer.
 func (s *MemorySDK) PruneSlabs(_ context.Context, opts ...api.URLQueryParameterOption) error {
 	s.mu.Lock()
@@ -194,17 +219,11 @@ func (s *MemorySDK) ObjectCount() int {
 	return len(s.objects)
 }
 
-// lookup returns the stored object for an id under the SDK's lock.
-func (s *MemorySDK) lookup(id types.Hash256) (uploadedObject, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	o, ok := s.objects[id]
-	return o, ok
-}
-
 // Pinned reports whether the object with the given id is still stored in the SDK.
 func (s *MemorySDK) Pinned(id types.Hash256) bool {
-	_, ok := s.lookup(id)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.objects[id]
 	return ok
 }
 
@@ -241,7 +260,9 @@ func (s *MemorySDK) AddObject(ctx context.Context, r io.Reader) (sdk.Object, err
 
 // ObjectData returns the uploaded data for an object.
 func (s *MemorySDK) ObjectData(id types.Hash256) ([]byte, bool) {
-	o, ok := s.lookup(id)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	o, ok := s.objects[id]
 	if !ok {
 		return nil, false
 	}
@@ -250,7 +271,9 @@ func (s *MemorySDK) ObjectData(id types.Hash256) ([]byte, bool) {
 
 // ObjectMetadata returns the metadata recorded for an uploaded object.
 func (s *MemorySDK) ObjectMetadata(id types.Hash256) (json.RawMessage, bool) {
-	o, ok := s.lookup(id)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	o, ok := s.objects[id]
 	if !ok {
 		return nil, false
 	}
@@ -299,8 +322,20 @@ func (s *MemorySDK) PinObject(_ context.Context, obj sdk.Object) error {
 	if o, ok := s.staged[obj.ID()]; ok {
 		s.objects[obj.ID()] = o
 		delete(s.staged, obj.ID())
+		if s.publishOnPin {
+			meta := o.meta
+			s.events = append(s.events, sdk.ObjectEvent{Key: obj.ID(), UpdatedAt: time.Now(), Object: &meta})
+		}
 	}
 	return nil
+}
+
+// SetPublishOnPin makes PinObject append the pinned object's event to the event
+// stream, mirroring an indexer that publishes events after the pin commits.
+func (s *MemorySDK) SetPublishOnPin(v bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.publishOnPin = v
 }
 
 // SetPinError configures the error returned by future PinObject calls. Pass

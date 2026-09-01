@@ -102,6 +102,11 @@ func (s *IndexdSDK) ObjectEvents(ctx context.Context, cursor slabs.Cursor, limit
 	return s.inner.ObjectEvents(ctx, cursor, limit)
 }
 
+// Object retrieves the object with the given ID from the indexer.
+func (s *IndexdSDK) Object(ctx context.Context, id types.Hash256) (sdk.Object, error) {
+	return s.inner.Object(ctx, id)
+}
+
 // PruneSlabs prunes slabs not associated with an object from the indexer.
 func (s *IndexdSDK) PruneSlabs(ctx context.Context, opts ...api.URLQueryParameterOption) error {
 	return s.inner.PruneSlabs(ctx, opts...)

@@ -20,6 +20,65 @@ const (
 	snapshotStateDeleting
 )
 
+// CreateSnapshot bumps the snapshot generation and records a snapshot of the
+// current uploaded object count in the created state.
+func (s *Store) CreateSnapshot() (snap s3.Snapshot, gen int64, err error) {
+	err = s.transaction(func(tx *txn) error {
+		var err error
+		if gen, err = bumpSnapshotGen(tx); err != nil {
+			return err
+		}
+		return tx.QueryRow(`
+			INSERT INTO snapshots (created_at, state, gen, object_count)
+			VALUES ($1, $2, $3, (SELECT stat_value FROM stats WHERE stat = $4))
+			RETURNING id, created_at, object_count`, sqlTime(time.Now()), snapshotStateCreated, gen, statUploadedObjects).Scan(&snap.ID, (*sqlTime)(&snap.CreatedAt), &snap.ObjectCount)
+	})
+	return
+}
+
+// MarkSnapshotPinning records the Sia object ID for the created snapshot and
+// marks it as awaiting its pin. It must be called before the pin request is
+// issued.
+func (s *Store) MarkSnapshotPinning(snapshotID int64, objectID types.Hash256) error {
+	return s.transaction(func(tx *txn) error {
+		res, err := tx.Exec("UPDATE snapshots SET state = $1, sia_object_id = $2 WHERE id = $3 AND state = $4",
+			snapshotStatePinning, sqlHash256(objectID), snapshotID, snapshotStateCreated)
+		if err != nil {
+			return err
+		}
+		if n, err := res.RowsAffected(); err != nil {
+			return err
+		} else if n == 0 {
+			return objects.ErrSnapshotNotFound
+		}
+		return nil
+	})
+}
+
+// MarkSnapshotPinned marks the snapshot with the given Sia object ID pinned.
+// The generation counter is bumped once more and recorded as the snapshot's
+// completion generation, object rows created at or after it cannot appear in
+// the backup. Only a snapshot awaiting its pin is completed.
+func (s *Store) MarkSnapshotPinned(objectID types.Hash256) error {
+	return s.transaction(func(tx *txn) error {
+		var id int64
+		err := tx.QueryRow("SELECT id FROM snapshots WHERE sia_object_id = $1 AND state = $2",
+			sqlHash256(objectID), snapshotStatePinning).Scan(&id)
+		if errors.Is(err, sql.ErrNoRows) {
+			return objects.ErrSnapshotNotFound
+		} else if err != nil {
+			return err
+		}
+		completed, err := bumpSnapshotGen(tx)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec("UPDATE snapshots SET state = $1, gen_completed = $2 WHERE id = $3",
+			snapshotStatePinned, completed, id)
+		return err
+	})
+}
+
 // AdoptSnapshot records a snapshot for a backup object discovered on the
 // network, e.g. after restoring from a backup made by a previous database.
 // The generation counter is raised to at least the adopted generation and
@@ -45,8 +104,8 @@ func (s *Store) AdoptSnapshot(objectID types.Hash256, createdAt time.Time, gen, 
 			return err
 		}
 
-		var completed int64
-		if err := tx.QueryRow("UPDATE global_settings SET snapshot_gen = snapshot_gen + 1 RETURNING snapshot_gen").Scan(&completed); err != nil {
+		completed, err := bumpSnapshotGen(tx)
+		if err != nil {
 			return err
 		}
 		return tx.QueryRow(`
@@ -57,17 +116,89 @@ func (s *Store) AdoptSnapshot(objectID types.Hash256, createdAt time.Time, gen, 
 	return
 }
 
-// CreateSnapshot bumps the snapshot generation and records a snapshot of the
-// current uploaded object count in the created state.
-func (s *Store) CreateSnapshot() (snap s3.Snapshot, gen int64, err error) {
-	err = s.transaction(func(tx *txn) error {
-		if err := tx.QueryRow("UPDATE global_settings SET snapshot_gen = snapshot_gen + 1 RETURNING snapshot_gen").Scan(&gen); err != nil {
+// RollbackSnapshot removes a snapshot whose backup was never uploaded and
+// marks a snapshot whose pin may have reached the network for deletion
+// instead.
+func (s *Store) RollbackSnapshot(snapshotID int64) error {
+	return s.transaction(func(tx *txn) error {
+		res, err := tx.Exec("DELETE FROM snapshots WHERE id = $1 AND state = $2", snapshotID, snapshotStateCreated)
+		if err != nil {
 			return err
 		}
-		return tx.QueryRow(`
-			INSERT INTO snapshots (created_at, state, gen, object_count)
-			VALUES ($1, $2, $3, (SELECT stat_value FROM stats WHERE stat = $4))
-			RETURNING id, created_at, object_count`, sqlTime(time.Now()), snapshotStateCreated, gen, statUploadedObjects).Scan(&snap.ID, (*sqlTime)(&snap.CreatedAt), &snap.ObjectCount)
+		if n, err := res.RowsAffected(); err != nil {
+			return err
+		} else if n > 0 {
+			return nil
+		}
+		_, err = tx.Exec("UPDATE snapshots SET state = $1, deleting_since = $2 WHERE id = $3 AND state IN ($4, $5)",
+			snapshotStateDeleting, sqlTime(time.Now()), snapshotID, snapshotStatePinning, snapshotStatePinned)
+		return err
+	})
+}
+
+// RollbackIncompleteSnapshots removes snapshots whose backup was never
+// uploaded and returns the number removed. Snapshots awaiting their pin are
+// left alone, the reconcile resolves them against the indexer.
+func (s *Store) RollbackIncompleteSnapshots() (deleted int64, err error) {
+	err = s.transaction(func(tx *txn) error {
+		res, err := tx.Exec("DELETE FROM snapshots WHERE state = $1", snapshotStateCreated)
+		if err != nil {
+			return err
+		}
+		deleted, err = res.RowsAffected()
+		return err
+	})
+	return
+}
+
+// PinningSnapshots returns the snapshots awaiting confirmation that their
+// backup object reached the indexer.
+func (s *Store) PinningSnapshots() (snapshots []objects.PinningSnapshot, err error) {
+	err = s.transaction(func(tx *txn) error {
+		snapshots = snapshots[:0] // reuse same slice if transaction retries
+		rows, err := tx.Query("SELECT id, sia_object_id FROM snapshots WHERE state = $1", snapshotStatePinning)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var snap objects.PinningSnapshot
+			if err := rows.Scan(&snap.ID, (*sqlHash256)(&snap.ObjectID)); err != nil {
+				return err
+			}
+			snapshots = append(snapshots, snap)
+		}
+		return rows.Err()
+	})
+	return
+}
+
+// DeleteSnapshot removes the snapshot with the given id.
+func (s *Store) DeleteSnapshot(id int64) error {
+	return s.transaction(func(tx *txn) error {
+		_, err := tx.Exec("DELETE FROM snapshots WHERE id = $1", id)
+		return err
+	})
+}
+
+// SnapshotsForDeletion returns the snapshots marked for deletion along with
+// when they were marked.
+func (s *Store) SnapshotsForDeletion() (snapshots []objects.DeletingSnapshot, err error) {
+	err = s.transaction(func(tx *txn) error {
+		snapshots = snapshots[:0] // reuse same slice if transaction retries
+		rows, err := tx.Query("SELECT sia_object_id, deleting_since FROM snapshots WHERE state = $1", snapshotStateDeleting)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var snap objects.DeletingSnapshot
+			if err := rows.Scan((*sqlHash256)(&snap.ObjectID), (*sqlTime)(&snap.Since)); err != nil {
+				return err
+			}
+			snapshots = append(snapshots, snap)
+		}
+		return rows.Err()
 	})
 	return
 }
@@ -82,16 +213,6 @@ func (s *Store) DeleteSnapshotsBySiaObject(objectID types.Hash256) (deleted int6
 		}
 		deleted, err = res.RowsAffected()
 		return err
-	})
-	return
-}
-
-// HasSnapshotObject reports whether a snapshot in any state references the
-// given Sia object.
-func (s *Store) HasSnapshotObject(objectID types.Hash256) (known bool, err error) {
-	err = s.transaction(func(tx *txn) error {
-		return tx.QueryRow("SELECT EXISTS(SELECT 1 FROM snapshots WHERE sia_object_id = $1)",
-			sqlHash256(objectID)).Scan(&known)
 	})
 	return
 }
@@ -121,124 +242,17 @@ func (s *Store) ListSnapshots() (snapshots []s3.Snapshot, err error) {
 	return
 }
 
-// ExpireStaleSnapshots marks stale snapshots still awaiting their pin for
-// deletion and returns the number marked. Call it only once the event stream
-// has drained.
-func (s *Store) ExpireStaleSnapshots() (expired int64, err error) {
+// HasSnapshotObject reports whether a snapshot in any state references the
+// given Sia object.
+func (s *Store) HasSnapshotObject(objectID types.Hash256) (known bool, err error) {
 	err = s.transaction(func(tx *txn) error {
-		res, err := tx.Exec("UPDATE snapshots SET state = $1, deleting_since = $2 WHERE state = $3 AND stale = 1",
-			snapshotStateDeleting, sqlTime(time.Now()), snapshotStatePinning)
-		if err != nil {
-			return err
-		}
-		expired, err = res.RowsAffected()
-		return err
+		return tx.QueryRow("SELECT EXISTS(SELECT 1 FROM snapshots WHERE sia_object_id = $1)",
+			sqlHash256(objectID)).Scan(&known)
 	})
 	return
 }
 
-// MarkSnapshotPinned marks the snapshot with the given Sia object ID pinned.
-// The generation counter is bumped once more and recorded as the snapshot's
-// completion generation, object rows created at or after it cannot appear in
-// the backup. Only a snapshot awaiting its pin is completed.
-func (s *Store) MarkSnapshotPinned(objectID types.Hash256) error {
-	return s.transaction(func(tx *txn) error {
-		var id int64
-		err := tx.QueryRow("SELECT id FROM snapshots WHERE sia_object_id = $1 AND state = $2",
-			sqlHash256(objectID), snapshotStatePinning).Scan(&id)
-		if errors.Is(err, sql.ErrNoRows) {
-			return objects.ErrSnapshotNotFound
-		} else if err != nil {
-			return err
-		}
-		var completed int64
-		if err := tx.QueryRow("UPDATE global_settings SET snapshot_gen = snapshot_gen + 1 RETURNING snapshot_gen").Scan(&completed); err != nil {
-			return err
-		}
-		_, err = tx.Exec("UPDATE snapshots SET state = $1, gen_completed = $2, stale = NULL WHERE id = $3",
-			snapshotStatePinned, completed, id)
-		return err
-	})
-}
-
-// MarkSnapshotPinning records the Sia object ID for the created snapshot and
-// marks it as awaiting its pin. It must be called before the pin request is
-// issued.
-func (s *Store) MarkSnapshotPinning(snapshotID int64, objectID types.Hash256) error {
-	return s.transaction(func(tx *txn) error {
-		res, err := tx.Exec("UPDATE snapshots SET state = $1, sia_object_id = $2 WHERE id = $3 AND state = $4",
-			snapshotStatePinning, sqlHash256(objectID), snapshotID, snapshotStateCreated)
-		if err != nil {
-			return err
-		}
-		if n, err := res.RowsAffected(); err != nil {
-			return err
-		} else if n == 0 {
-			return objects.ErrSnapshotNotFound
-		}
-		return nil
-	})
-}
-
-// RollbackIncompleteSnapshots removes snapshots whose backup was never
-// uploaded, marks snapshots still awaiting their pin as stale, and returns
-// the number of each.
-func (s *Store) RollbackIncompleteSnapshots() (deleted, stale int64, err error) {
-	err = s.transaction(func(tx *txn) error {
-		res, err := tx.Exec("DELETE FROM snapshots WHERE state = $1", snapshotStateCreated)
-		if err != nil {
-			return err
-		} else if deleted, err = res.RowsAffected(); err != nil {
-			return err
-		}
-		res, err = tx.Exec("UPDATE snapshots SET stale = 1 WHERE state = $1", snapshotStatePinning)
-		if err != nil {
-			return err
-		}
-		stale, err = res.RowsAffected()
-		return err
-	})
-	return
-}
-
-// RollbackSnapshot removes a snapshot whose backup was never uploaded and
-// marks a snapshot whose pin may have reached the network for deletion
-// instead.
-func (s *Store) RollbackSnapshot(snapshotID int64) error {
-	return s.transaction(func(tx *txn) error {
-		res, err := tx.Exec("DELETE FROM snapshots WHERE id = $1 AND state = $2", snapshotID, snapshotStateCreated)
-		if err != nil {
-			return err
-		}
-		if n, err := res.RowsAffected(); err != nil {
-			return err
-		} else if n > 0 {
-			return nil
-		}
-		_, err = tx.Exec("UPDATE snapshots SET state = $1, deleting_since = $2 WHERE id = $3 AND state IN ($4, $5)",
-			snapshotStateDeleting, sqlTime(time.Now()), snapshotID, snapshotStatePinning, snapshotStatePinned)
-		return err
-	})
-}
-
-// SnapshotsForDeletion returns the snapshots marked for deletion along with
-// when they were marked.
-func (s *Store) SnapshotsForDeletion() (snapshots []objects.DeletingSnapshot, err error) {
-	err = s.transaction(func(tx *txn) error {
-		snapshots = snapshots[:0] // reuse same slice if transaction retries
-		rows, err := tx.Query("SELECT sia_object_id, deleting_since FROM snapshots WHERE state = $1", snapshotStateDeleting)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var snap objects.DeletingSnapshot
-			if err := rows.Scan((*sqlHash256)(&snap.ObjectID), (*sqlTime)(&snap.Since)); err != nil {
-				return err
-			}
-			snapshots = append(snapshots, snap)
-		}
-		return rows.Err()
-	})
+func bumpSnapshotGen(tx *txn) (gen int64, err error) {
+	err = tx.QueryRow("UPDATE global_settings SET snapshot_gen = snapshot_gen + 1 RETURNING snapshot_gen").Scan(&gen)
 	return
 }

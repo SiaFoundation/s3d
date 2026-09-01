@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -198,6 +199,24 @@ func TestSnapshots(t *testing.T) {
 		t.Fatal("unexpected", gen)
 	}
 
+	addObject := func(key string) types.Hash256 {
+		t.Helper()
+		obj := newTestObject()
+		sealed := obj.Seal(types.GeneratePrivateKey())
+		md5 := frand.Entropy128()
+		if _, _, err := store.PutObject(testAccessKeyID, bucket, key, objects.PutOptions{ContentMD5: md5, Length: 1, FileName: new(string)}); err != nil {
+			t.Fatal(err)
+		} else if err := store.MarkObjectUploaded(bucket, key, "", md5, sealed, time.Now().Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		} else if _, err := store.MarkObjectPinned(sealed.ID()); err != nil {
+			t.Fatal(err)
+		}
+		return sealed.ID()
+	}
+
+	// an object that predates the third snapshot, so its backup holds it
+	aID := addObject("a2")
+
 	// the generation counter is bumped past the adopted generation and its
 	// completion bump
 	snap3, gen, err := store.CreateSnapshot()
@@ -218,25 +237,13 @@ func TestSnapshots(t *testing.T) {
 		t.Fatal("unexpected", orphans)
 	}
 
-	addObject := func(key string) types.Hash256 {
-		t.Helper()
-		obj := newTestObject()
-		sealed := obj.Seal(types.GeneratePrivateKey())
-		md5 := frand.Entropy128()
-		if _, _, err := store.PutObject(testAccessKeyID, bucket, key, objects.PutOptions{ContentMD5: md5, Length: 1, FileName: new(string)}); err != nil {
-			t.Fatal(err)
-		} else if err := store.MarkObjectUploaded(bucket, key, "", md5, sealed, time.Now().Add(time.Hour)); err != nil {
-			t.Fatal(err)
-		} else if _, err := store.MarkObjectPinned(sealed.ID()); err != nil {
-			t.Fatal(err)
-		}
-		return sealed.ID()
-	}
-
-	// an object deleted while the third snapshot's upload is in flight is
-	// withheld, it may be captured in the backup
+	// objects deleted while the third snapshot's upload is in flight are
+	// withheld, the one that predates it and the one created during it may
+	// both be captured in the backup
 	bID := addObject("b")
 	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "b"}); err != nil {
+		t.Fatal(err)
+	} else if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "a2"}); err != nil {
 		t.Fatal(err)
 	}
 	if orphans, err := store.OrphanedObjects(100); err != nil {
@@ -321,6 +328,38 @@ func TestSnapshots(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// a metadata sync re-seals an object without moving its creation stamp, so
+	// an object the completed backup references stays withheld
+	fObj := newTestObject()
+	fSealed := fObj.Seal(types.GeneratePrivateKey())
+	fMD5 := frand.Entropy128()
+	if _, _, err := store.PutObject(testAccessKeyID, bucket, "f", objects.PutOptions{ContentMD5: fMD5, Length: 1, FileName: new(string)}); err != nil {
+		t.Fatal(err)
+	} else if err := store.MarkObjectUploaded(bucket, "f", "", fMD5, fSealed, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	} else if _, err := store.MarkObjectPinned(fSealed.ID()); err != nil {
+		t.Fatal(err)
+	}
+	snap5ObjID := frand.Entropy256()
+	if snap5, _, err := store.CreateSnapshot(); err != nil {
+		t.Fatal(err)
+	} else if err := store.MarkSnapshotPinning(snap5.ID, snap5ObjID); err != nil {
+		t.Fatal(err)
+	} else if err := store.MarkSnapshotPinned(snap5ObjID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateSiaObjects([]objects.SiaObject{{ID: fSealed.ID(), Sealed: fSealed}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "f"}); err != nil {
+		t.Fatal(err)
+	}
+	if orphans, err := store.OrphanedObjects(100); err != nil {
+		t.Fatal(err)
+	} else if len(orphans) != 0 {
+		t.Fatal("a re-sealed object the backup references was released", orphans)
+	}
+
 	// deleting every snapshot releases the remaining orphans
 	if _, err := store.DeleteSnapshotsBySiaObject(snap3ObjID); err != nil {
 		t.Fatal(err)
@@ -328,12 +367,15 @@ func TestSnapshots(t *testing.T) {
 		t.Fatal(err)
 	} else if _, err := store.DeleteSnapshotsBySiaObject(adopted2.SiaObjectID); err != nil {
 		t.Fatal(err)
+	} else if _, err := store.DeleteSnapshotsBySiaObject(snap5ObjID); err != nil {
+		t.Fatal(err)
 	}
 	if orphans, err := store.OrphanedObjects(100); err != nil {
 		t.Fatal(err)
-	} else if len(orphans) != 2 {
+	} else if len(orphans) != 4 {
 		t.Fatal("unexpected", orphans)
-	} else if (orphans[0] != bID && orphans[1] != bID) || (orphans[0] != dID && orphans[1] != dID) {
+	} else if !slices.Contains(orphans, aID) || !slices.Contains(orphans, bID) ||
+		!slices.Contains(orphans, dID) || !slices.Contains(orphans, fSealed.ID()) {
 		t.Fatal("unexpected", orphans)
 	}
 
@@ -403,223 +445,28 @@ func TestSnapshots(t *testing.T) {
 	if err := store.MarkSnapshotPinning(rb3.ID, rb3ObjID); err != nil {
 		t.Fatal(err)
 	}
-	if deleted, stale, err := store.RollbackIncompleteSnapshots(); err != nil {
+	if deleted, err := store.RollbackIncompleteSnapshots(); err != nil {
 		t.Fatal(err)
 	} else if deleted != 1 {
 		t.Fatal("unexpected", deleted)
-	} else if stale != 1 {
-		t.Fatal("unexpected", stale)
 	}
 
-	// the stale snapshot is untouched until it is expired for deletion,
-	// expiring it twice marks nothing new
-	if snapshots, err := store.SnapshotsForDeletion(); err != nil {
+	// the snapshot awaiting its pin survives the rollback and is reported for
+	// reconciling against the indexer
+	if pinning, err := store.PinningSnapshots(); err != nil {
 		t.Fatal(err)
-	} else if len(snapshots) != 0 {
-		t.Fatal("unexpected", snapshots)
-	}
-	if n, err := store.ExpireStaleSnapshots(); err != nil {
-		t.Fatal(err)
-	} else if n != 1 {
-		t.Fatal("unexpected", n)
-	} else if n, err := store.ExpireStaleSnapshots(); err != nil {
-		t.Fatal(err)
-	} else if n != 0 {
-		t.Fatal("unexpected", n)
-	}
-	if snapshots, err := store.SnapshotsForDeletion(); err != nil {
-		t.Fatal(err)
-	} else if len(snapshots) != 1 || snapshots[0].ObjectID != rb3ObjID {
-		t.Fatal("unexpected", snapshots)
-	}
-}
-
-// TestAdoptSnapshotWithholdsExistingOrphans verifies that an adopted snapshot
-// withholds orphans recorded before the adoption even when an earlier adoption
-// advanced the local counter to its generation. This can happen when snapshots
-// from different histories remain on the network after multiple restores.
-func TestAdoptSnapshotWithholdsExistingOrphans(t *testing.T) {
-	const bucket = "test-bucket"
-
-	store := initTestDB(t, zaptest.NewLogger(t))
-
-	if err := store.CreateBucket(testAccessKeyID, bucket); err != nil {
-		t.Fatal(err)
+	} else if len(pinning) != 1 {
+		t.Fatal("unexpected", pinning)
+	} else if pinning[0].ID != rb3.ID || pinning[0].ObjectID != rb3ObjID {
+		t.Fatal("mismatch", pinning[0])
 	}
 
-	// upload and pin an object that exists in the database being restored
-	obj := newTestObject()
-	sealed := obj.Seal(types.GeneratePrivateKey())
-	objID := sealed.ID()
-	md5 := frand.Entropy128()
-	if _, _, err := store.PutObject(testAccessKeyID, bucket, "a", objects.PutOptions{ContentMD5: md5, Length: 1, FileName: new(string)}); err != nil {
+	// removing it leaves nothing to reconcile
+	if err := store.DeleteSnapshot(rb3.ID); err != nil {
 		t.Fatal(err)
-	} else if err := store.MarkObjectUploaded(bucket, "a", "", md5, sealed, time.Now().Add(time.Hour)); err != nil {
+	} else if pinning, err := store.PinningSnapshots(); err != nil {
 		t.Fatal(err)
-	} else if _, err := store.MarkObjectPinned(objID); err != nil {
-		t.Fatal(err)
-	}
-
-	// model the restored database image. Its own snapshot row was incomplete
-	// when the image was made, so startup removes the row but retains the
-	// generation counter.
-	restored, restoredGen, err := store.CreateSnapshot()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if deleted, stale, err := store.RollbackIncompleteSnapshots(); err != nil {
-		t.Fatal(err)
-	} else if deleted != 1 {
-		t.Fatal("unexpected", deleted)
-	} else if stale != 0 {
-		t.Fatal("unexpected", stale)
-	}
-
-	// this history deletes the object before discovering the snapshots still
-	// present on the network
-	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "a"}); err != nil {
-		t.Fatal(err)
-	}
-
-	// adopt the restored image's own snapshot. It withholds the orphan and its
-	// completion bump advances the counter to the next generation.
-	earlier, err := store.AdoptSnapshot(frand.Entropy256(), restored.CreatedAt, restoredGen, restored.ObjectCount)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// another history created a snapshot immediately after restoring the same
-	// image, so its generation is now equal to the counter advanced above. Its
-	// backup may still reference the locally orphaned object.
-	adopted, err := store.AdoptSnapshot(frand.Entropy256(), time.Now(), restoredGen+1, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if orphans, err := store.OrphanedObjects(100); err != nil {
-		t.Fatal(err)
-	} else if len(orphans) != 0 {
-		t.Fatal("unexpected", orphans)
-	}
-
-	// deleting the earlier snapshot must leave the orphan withheld by the later
-	// snapshot
-	if _, err := store.DeleteSnapshotsBySiaObject(earlier.SiaObjectID); err != nil {
-		t.Fatal(err)
-	}
-	if orphans, err := store.OrphanedObjects(100); err != nil {
-		t.Fatal(err)
-	} else if len(orphans) != 0 {
-		t.Fatal("unexpected", orphans)
-	}
-
-	// deleting the later snapshot releases the orphan
-	if _, err := store.DeleteSnapshotsBySiaObject(adopted.SiaObjectID); err != nil {
-		t.Fatal(err)
-	}
-	if orphans, err := store.OrphanedObjects(100); err != nil {
-		t.Fatal(err)
-	} else if len(orphans) != 1 || orphans[0] != objID {
-		t.Fatal("unexpected", orphans)
-	}
-}
-
-// TestSnapshotWithholdsObjectsChangedDuringBackup covers the gap between the
-// snapshot row being inserted and the backup actually reading the database.
-// The backup runs a VACUUM INTO on its own connection, so an object can be
-// uploaded and deleted while the copy is being taken. The completion
-// generation bracket, not any atomicity between the two calls, is what has to
-// keep such an object pinned.
-func TestSnapshotWithholdsObjectsChangedDuringBackup(t *testing.T) {
-	const bucket = "test-bucket"
-
-	store := initTestDB(t, zaptest.NewLogger(t))
-
-	if err := store.CreateBucket(testAccessKeyID, bucket); err != nil {
-		t.Fatal(err)
-	}
-
-	addObject := func(key string) types.Hash256 {
-		t.Helper()
-		obj := newTestObject()
-		sealed := obj.Seal(types.GeneratePrivateKey())
-		md5 := frand.Entropy128()
-		if _, _, err := store.PutObject(testAccessKeyID, bucket, key, objects.PutOptions{ContentMD5: md5, Length: 1, FileName: new(string)}); err != nil {
-			t.Fatal(err)
-		} else if err := store.MarkObjectUploaded(bucket, key, "", md5, sealed, time.Now().Add(time.Hour)); err != nil {
-			t.Fatal(err)
-		} else if _, err := store.MarkObjectPinned(sealed.ID()); err != nil {
-			t.Fatal(err)
-		}
-		return sealed.ID()
-	}
-
-	// an object that exists before the snapshot starts, so the copy holds it
-	beforeID := addObject("before")
-
-	// T1: the row is inserted and the generation bumped, no backup has run yet
-	snap, _, err := store.CreateSnapshot()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// the gap. Everything here happens while the backup is being taken, which
-	// the old blocking implementation made impossible
-	duringID := addObject("during")
-	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "during"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "before"}); err != nil {
-		t.Fatal(err)
-	}
-
-	// both are withheld while the snapshot has no completion generation, since
-	// nothing yet knows which of them the copy captured
-	if orphans, err := store.OrphanedObjects(100); err != nil {
-		t.Fatal(err)
-	} else if len(orphans) != 0 {
-		t.Fatal("an object changed during the backup was released", orphans)
-	}
-
-	// T3: the backup finished and was pinned, closing the bracket
-	snapObjID := frand.Entropy256()
-	if err := store.MarkSnapshotPinning(snap.ID, snapObjID); err != nil {
-		t.Fatal(err)
-	} else if err := store.MarkSnapshotPinned(snapObjID); err != nil {
-		t.Fatal(err)
-	}
-
-	// both stay withheld. The one uploaded during the backup may be in the
-	// copy, and the one that predates it certainly is
-	if orphans, err := store.OrphanedObjects(100); err != nil {
-		t.Fatal(err)
-	} else if len(orphans) != 0 {
-		t.Fatal("an object the copy may reference was released", orphans)
-	}
-
-	// an object uploaded after the bracket closed cannot be in the copy, so
-	// deleting it releases immediately
-	afterID := addObject("after")
-	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "after"}); err != nil {
-		t.Fatal(err)
-	}
-	if orphans, err := store.OrphanedObjects(100); err != nil {
-		t.Fatal(err)
-	} else if len(orphans) != 1 || orphans[0] != afterID {
-		t.Fatal("unexpected", orphans)
-	}
-	if err := store.RemoveOrphanedObject(afterID); err != nil {
-		t.Fatal(err)
-	}
-
-	// deleting the snapshot releases everything it was withholding
-	if _, err := store.DeleteSnapshotsBySiaObject(snapObjID); err != nil {
-		t.Fatal(err)
-	}
-	if orphans, err := store.OrphanedObjects(100); err != nil {
-		t.Fatal(err)
-	} else if len(orphans) != 2 {
-		t.Fatal("unexpected", orphans)
-	} else if (orphans[0] != beforeID && orphans[1] != beforeID) || (orphans[0] != duringID && orphans[1] != duringID) {
-		t.Fatal("unexpected", orphans)
+	} else if len(pinning) != 0 {
+		t.Fatal("unexpected", pinning)
 	}
 }

@@ -22,6 +22,7 @@ import (
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
+	"lukechampine.com/frand"
 )
 
 // downloadBackup fetches a snapshot's backup object from the SDK and returns
@@ -73,6 +74,7 @@ func snapshotEvent(t *testing.T, memSDK *testutil.MemorySDK, id types.Hash256, a
 func TestCreateSnapshot(t *testing.T) {
 	memSDK := testutil.NewMemorySDK()
 	backend, store := testutil.NewBackend(t, testutil.WithSDK(memSDK))
+	backend.SetSnapshotObserveTimeout(0)
 
 	// create a snapshot
 	snap, err := backend.CreateSnapshot(t.Context())
@@ -181,6 +183,27 @@ func TestCreateSnapshot(t *testing.T) {
 	}
 }
 
+// TestCreateSnapshotListed verifies that a snapshot is listed by the time
+// CreateSnapshot returns when the indexer publishes the pin's event.
+func TestCreateSnapshotListed(t *testing.T) {
+	memSDK := testutil.NewMemorySDK()
+	memSDK.SetPublishOnPin(true)
+	backend, store := testutil.NewBackend(t, testutil.WithSDK(memSDK))
+	backend.SetSnapshotObserveTimeout(10 * time.Second)
+
+	snap, err := backend.CreateSnapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshots, err := store.ListSnapshots(); err != nil {
+		t.Fatal(err)
+	} else if len(snapshots) != 1 {
+		t.Fatal("unexpected", len(snapshots))
+	} else if snapshots[0].ID != snap.ID {
+		t.Fatal("mismatch", snapshots[0].ID)
+	}
+}
+
 // assertDeleting fatals unless exactly want snapshots are marked for deletion
 // and returns them.
 func assertDeleting(t *testing.T, store *sqlite.Store, want int) []objects.DeletingSnapshot {
@@ -207,6 +230,7 @@ func openBackend(t *testing.T, memSDK *testutil.MemorySDK, log *zap.Logger, dir 
 	if err != nil {
 		t.Fatal(err)
 	}
+	backend.SetSnapshotObserveTimeout(0)
 	return store, backend
 }
 
@@ -225,9 +249,22 @@ func TestSnapshotStartup(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// a restart leaves the record awaiting its pin, the replayed event completes it
+	// a restart leaves the record awaiting its pin. Its event is still
+	// unpublished, so the reconcile resolves it against the indexer instead
 	storeB, backendB := openBackend(t, memSDK, log, dir)
-	memSDK.SetEvents([]sdk.ObjectEvent{snapshotEvent(t, memSDK, snap.SiaObjectID, time.Now())})
+	memSDK.SetEvents(nil)
+
+	// an unreachable indexer resolves nothing, the record must survive rather
+	// than be treated as a pin that never landed
+	memSDK.SetObjectError(errors.New("indexer unavailable"))
+	backendB.SyncMetadata(t.Context())
+	if known, err := storeB.HasSnapshotObject(snap.SiaObjectID); err != nil {
+		t.Fatal(err)
+	} else if !known {
+		t.Fatal("expected the record to survive an unreachable indexer")
+	}
+	memSDK.SetObjectError(nil)
+
 	backendB.SyncMetadata(t.Context())
 	if snapshots, err := storeB.ListSnapshots(); err != nil {
 		t.Fatal(err)
@@ -238,30 +275,40 @@ func TestSnapshotStartup(t *testing.T) {
 	} else if snapshots[0].SiaObjectID != snap.SiaObjectID {
 		t.Fatal("mismatch", snapshots[0].SiaObjectID)
 	}
-	assertDeleting(t, storeB, 0)
 
-	// create a snapshot whose pin never landed
-	snap2, err := backendB.CreateSnapshot(t.Context())
-	if err != nil {
-		t.Fatal(err)
+	// the backup is never marked for deletion and its object stays pinned
+	assertDeleting(t, storeB, 0)
+	backendB.ProcessSnapshotDeletions(t.Context())
+	if !memSDK.Pinned(snap.SiaObjectID) {
+		t.Fatal("expected snapshot object to stay pinned")
 	}
-	if err := memSDK.DeleteObject(t.Context(), snap2.SiaObjectID); err != nil {
-		t.Fatal(err)
-	}
+
 	if err := backendB.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	// after a restart the drained event stream expires the record
+	// a record left behind by an earlier process whose pin never reached the
+	// network, so the indexer never held its object
+	snap2, _, err := storeB.CreateSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lostObjID := frand.Entropy256()
+	if err := storeB.MarkSnapshotPinning(snap2.ID, lostObjID); err != nil {
+		t.Fatal(err)
+	}
+
+	// after a restart the indexer reports no such object, so the record is
+	// removed without ever entering the deletion path
 	storeC, backendC := openBackend(t, memSDK, log, dir)
 	memSDK.SetEvents(nil)
 	backendC.SyncMetadata(t.Context())
-	if deleting := assertDeleting(t, storeC, 1); deleting[0].ObjectID != snap2.SiaObjectID {
-		t.Fatal("mismatch", deleting[0].ObjectID)
-	}
-	backendC.SetSnapshotConfirmDelay(0)
-	backendC.ProcessSnapshotDeletions(t.Context())
 	assertDeleting(t, storeC, 0)
+	if known, err := storeC.HasSnapshotObject(lostObjID); err != nil {
+		t.Fatal(err)
+	} else if known {
+		t.Fatal("expected the snapshot whose pin never landed to be removed")
+	}
 	if snapshots, err := storeC.ListSnapshots(); err != nil {
 		t.Fatal(err)
 	} else if len(snapshots) != 1 {

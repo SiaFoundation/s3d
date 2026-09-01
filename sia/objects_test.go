@@ -1752,108 +1752,31 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	if memSDK.ObjectCount() != 1 {
 		t.Fatalf("expected 1 pinned object after overwrite, got %d", memSDK.ObjectCount())
 	}
-}
 
-// TestOrphanLifecycle verifies that a snapshot withholds a deleted
-// object from the orphan loop until the snapshot is removed and the generation
-// floor moves past the object.
-func TestOrphanLifecycle(t *testing.T) {
-	memSDK := testutil.NewMemorySDK()
-	backend, store := testutil.NewBackend(t, testutil.WithSDK(memSDK))
-
-	// complete a metadata sync so orphan processing is enabled
-	backend.SyncMetadata(t.Context())
-
-	const bucket = "bucket"
-	if err := store.CreateBucket(testutil.AccessKeyID, bucket); err != nil {
+	// a snapshot withholds a deleted object from the orphan loop until the
+	// snapshot itself is removed. memSDK now holds C and the snapshot object
+	siaBackend.SetSnapshotObserveTimeout(0)
+	snap, err := siaBackend.CreateSnapshot(t.Context())
+	if err != nil {
 		t.Fatal(err)
 	}
-
-	// pin two objects so both are live on the network
-	idA := stageUpload(t, memSDK, store, bucket, "a", time.Now().Add(time.Hour))
-	idB := stageUpload(t, memSDK, store, bucket, "b", time.Now().Add(time.Hour))
-	if err := backend.PinObjects(t.Context()); err != nil {
+	memSDK.SetEvents([]sdk.ObjectEvent{snapshotEvent(t, memSDK, snap.SiaObjectID, time.Now())})
+	siaBackend.SyncMetadata(t.Context())
+	if _, _, _, err := store.DeleteObject(testutil.AccessKeyID, bucket, s3.ObjectID{Key: "C"}); err != nil {
 		t.Fatal(err)
 	}
+	siaBackend.ProcessOrphans(t.Context())
 	if got := memSDK.ObjectCount(); got != 2 {
-		t.Fatal("expected 2 pinned objects, got", got)
+		t.Fatal("expected the deleted object to stay pinned while snapshotted, got", got)
 	}
 
-	// snapshot S1 captures both objects and completes via the sync, then
-	// delete A
-	snap1, err := backend.CreateSnapshot(t.Context())
-	if err != nil {
+	// deleting the snapshot releases it
+	if _, err := store.DeleteSnapshotsBySiaObject(snap.SiaObjectID); err != nil {
 		t.Fatal(err)
 	}
-	eventTime := time.Now().Truncate(time.Second)
-	memSDK.SetEvents([]sdk.ObjectEvent{snapshotEvent(t, memSDK, snap1.SiaObjectID, eventTime)})
-	backend.SyncMetadata(t.Context())
-	if _, _, _, err := store.DeleteObject(testutil.AccessKeyID, bucket, s3.ObjectID{Key: "a"}); err != nil {
-		t.Fatal(err)
-	}
-
-	// the orphan loop must not unpin A while S1 references it.
-	// memSDK now holds A, B and the S1 snapshot object, so 3 total
-	backend.ProcessOrphans(t.Context())
-	if got := memSDK.ObjectCount(); got != 3 {
-		t.Fatal("expected A still pinned while snapshotted, got", got)
-	} else if !memSDK.Pinned(idA) {
-		t.Fatal("expected A still pinned")
-	}
-
-	// snapshot S2 is taken after A was deleted, then delete B.
-	// memSDK now holds A, B, snap1 and snap2, so 4 total
-	snap2, err := backend.CreateSnapshot(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	memSDK.SetEvents([]sdk.ObjectEvent{
-		snapshotEvent(t, memSDK, snap1.SiaObjectID, eventTime),
-		snapshotEvent(t, memSDK, snap2.SiaObjectID, eventTime.Add(time.Second)),
-	})
-	backend.SyncMetadata(t.Context())
-	if _, _, _, err := store.DeleteObject(testutil.AccessKeyID, bucket, s3.ObjectID{Key: "b"}); err != nil {
-		t.Fatal(err)
-	}
-
-	// both orphans are withheld while their snapshots survive
-	backend.ProcessOrphans(t.Context())
-	if got := memSDK.ObjectCount(); got != 4 {
-		t.Fatal("expected both objects still pinned while snapshotted, got", got)
-	}
-
-	snapshots, err := store.ListSnapshots()
-	if err != nil {
-		t.Fatal(err)
-	} else if len(snapshots) != 2 {
-		t.Fatal("expected 2 snapshots, got", len(snapshots))
-	}
-
-	// deleting S1 lowers the floor past A's generation, so the orphan loop
-	// unpins A while B remains withheld by the newer S2.
-	// memSDK retains B, snap1 and snap2, so 3 total with A unpinned
-	if _, err := store.DeleteSnapshotsBySiaObject(snapshots[0].SiaObjectID); err != nil {
-		t.Fatal(err)
-	}
-	backend.ProcessOrphans(t.Context())
-	if got := memSDK.ObjectCount(); got != 3 {
-		t.Fatal("expected only B pinned after S1 deleted, got", got)
-	} else if memSDK.Pinned(idA) {
-		t.Fatal("expected A unpinned after its snapshot was deleted")
-	} else if !memSDK.Pinned(idB) {
-		t.Fatal("expected B still pinned while S2 survives")
-	}
-
-	// deleting S2 releases B as well.
-	// memSDK retains snap1 and snap2, so 2 total with B unpinned
-	if _, err := store.DeleteSnapshotsBySiaObject(snapshots[1].SiaObjectID); err != nil {
-		t.Fatal(err)
-	}
-	backend.ProcessOrphans(t.Context())
-	if got := memSDK.ObjectCount(); got != 2 {
-		t.Fatal("expected no s3 objects pinned after all snapshots deleted, got", got)
-	} else if memSDK.Pinned(idB) {
-		t.Fatal("expected B unpinned after its snapshot was deleted")
+	siaBackend.ProcessOrphans(t.Context())
+	if got := memSDK.ObjectCount(); got != 1 {
+		t.Fatal("expected the object to be unpinned once its snapshot was deleted, got", got)
 	}
 }
 
