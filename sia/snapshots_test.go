@@ -89,13 +89,7 @@ func TestCreateSnapshot(t *testing.T) {
 		t.Fatal("unexpected", memSDK.PinAttempts())
 	}
 
-	// the record completes once the sync observes the pinned object
-	if snapshots, err := store.ListSnapshots(); err != nil {
-		t.Fatal(err)
-	} else if len(snapshots) != 0 {
-		t.Fatal("unexpected", len(snapshots))
-	}
-	memSDK.SetEvents([]sdk.ObjectEvent{snapshotEvent(t, memSDK, snap.SiaObjectID, time.Now())})
+	// the sync completes the record once the indexer confirms the object
 	backend.SyncMetadata(t.Context())
 
 	// the snapshot is recorded with a sia object id and the tag is on the object

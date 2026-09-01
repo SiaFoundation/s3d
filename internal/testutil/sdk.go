@@ -34,6 +34,7 @@ type (
 		staged      map[types.Hash256]uploadedObject
 		events      []sdk.ObjectEvent
 		eventsErr   error // when set, ObjectEvents returns this error
+		objectErr   error // when set, Object returns this error
 		slabSize    int64
 		failUploads bool
 
@@ -41,10 +42,9 @@ type (
 		pruneSlabsCalls  int
 		remainingStorage uint64
 
-		pinErr       error // when non-nil, PinObject returns this error
-		pinAttempts  int   // number of PinObject calls observed
-		publishOnPin bool  // when set, PinObject appends the pinned object's event
-		objectErr    error // when non-nil, Object returns this error
+		pinErr      error // when non-nil, PinObject returns this error
+		pinAttempts int   // number of PinObject calls observed
+		pinPublish  bool  // when set, PinObject appends the pinned object's event
 	}
 
 	uploadedObject struct {
@@ -322,7 +322,7 @@ func (s *MemorySDK) PinObject(_ context.Context, obj sdk.Object) error {
 	if o, ok := s.staged[obj.ID()]; ok {
 		s.objects[obj.ID()] = o
 		delete(s.staged, obj.ID())
-		if s.publishOnPin {
+		if s.pinPublish {
 			meta := o.meta
 			s.events = append(s.events, sdk.ObjectEvent{Key: obj.ID(), UpdatedAt: time.Now(), Object: &meta})
 		}
@@ -335,7 +335,7 @@ func (s *MemorySDK) PinObject(_ context.Context, obj sdk.Object) error {
 func (s *MemorySDK) SetPublishOnPin(v bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.publishOnPin = v
+	s.pinPublish = v
 }
 
 // SetPinError configures the error returned by future PinObject calls. Pass
