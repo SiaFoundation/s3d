@@ -159,7 +159,9 @@ func TestCreateSnapshot(t *testing.T) {
 	assertDeleting(t, store, 0)
 
 	// deleting the completed snapshot keeps its record until a second pass
-	// confirms the object is gone
+	// confirms the object is gone. The delay is restored first so a background
+	// pass cannot drop the record before it is observed
+	backend.SetSnapshotConfirmDelay(time.Hour)
 	if err := store.RollbackSnapshot(snap.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -168,6 +170,7 @@ func TestCreateSnapshot(t *testing.T) {
 		t.Fatal("snapshot object still pinned")
 	}
 	assertDeleting(t, store, 1)
+	backend.SetSnapshotConfirmDelay(0)
 	backend.ProcessSnapshotDeletions(t.Context())
 	assertDeleting(t, store, 0)
 	if snapshots, err := store.ListSnapshots(); err != nil {
