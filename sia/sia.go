@@ -651,6 +651,14 @@ func (s *Sia) ListSnapshots(_ context.Context) ([]s3.Snapshot, error) {
 // that survives losing the database. The row ID is local to one database and is
 // meaningless during the recovery the feature exists for.
 func (s *Sia) DeleteSnapshot(ctx context.Context, objectID types.Hash256) error {
+	// only unpin an object a snapshot references, an arbitrary id would
+	// otherwise unpin live object data
+	if known, err := s.store.HasSnapshotObject(objectID); err != nil {
+		return fmt.Errorf("failed to look up snapshot: %w", err)
+	} else if !known {
+		return s3.ErrSnapshotNotFound
+	}
+
 	// unpin before dropping the record. A record left behind by a failed
 	// delete is reconciled by the sync loop, but an unreferenced Sia object
 	// is never collected
