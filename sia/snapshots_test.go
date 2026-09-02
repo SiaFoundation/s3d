@@ -577,6 +577,12 @@ func TestFetchRemoteSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// the background sync loop enumerates too, so stop it before counting the
+	// calls this fetch makes
+	if err := backend.Close(); err != nil {
+		t.Fatal(err)
+	}
+
 	before := memSDK.ObjectEventCalls()
 	remote, err := sia.FetchRemoteSnapshot(t.Context(), memSDK, snap.SiaObjectID)
 	if err != nil {
