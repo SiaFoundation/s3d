@@ -33,23 +33,27 @@ Commands:
 
 	snapshotsCreateUsage = `Usage: s3d snapshots create
 
-Back up the database and upload it to Sia as a pinned snapshot object.
+Flush any pending objects to Sia, then back up the database and upload it as a
+pinned snapshot object. The flush is what lets the snapshot reference every
+object, and it is why this can take a while.
 
 Reads the admin address and password from the loaded config file or
 S3D_CONFIG_FILE.`
 
 	snapshotsListUsage = `Usage: s3d snapshots list [--remote]
 
-List the snapshots recorded by the running instance.
+List the snapshots recorded by the running instance. A snapshot is listed once
+its pin is confirmed, so one just created may not appear yet.
 
 With --remote, enumerate the snapshots stored on the Sia network instead. This
-reads the app key from the local database rather than the admin API, so it works
-against a stopped daemon.`
+needs nothing but the app key, which makes it the way to find a snapshot when
+the database is lost. It reads and decrypts every object in the account, so it
+takes longer the more you have stored.`
 
 	snapshotsDeleteUsage = `Usage: s3d snapshots delete <sia object id>
 
-Unpin a snapshot's Sia object from the network and remove its record,
-releasing the orphaned objects it was withholding.
+Unpin a snapshot's Sia object from the network and remove its record, so the
+objects it was withholding can be unpinned.
 
 Snapshots are addressed by their Sia object ID, printed when a snapshot is
 created and by 'snapshots list'. It is the only identifier that survives losing
@@ -72,10 +76,10 @@ The snapshot is then downloaded, decompressed and written to the data directory.
 Refuses to overwrite an existing database unless --force is set.
 
 The app key is always read from the configured data directory, so this requires
-an instance that has already run 's3d login'. With --out the restored database is
-written to that directory instead, leaving the configured one untouched. Without
---out the configured data directory is overwritten, so the daemon must be
-stopped.`
+an instance that has already run 's3d login' and the configured database is
+opened either way. With --out the restored database is written to that directory
+instead of replacing the configured one. Without --out the configured database
+is overwritten, so the daemon must be stopped.`
 )
 
 func runSnapshotsCreate(ctx context.Context, cmd *flag.FlagSet) {

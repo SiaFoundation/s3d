@@ -103,9 +103,10 @@ paths:
         - system
       summary: List database snapshots
       description: >
-        Lists the recorded database snapshots. A snapshot prevents the
-        objects it references from being unpinned from the Sia network until
-        the snapshot is deleted.
+        Lists the recorded database snapshots. A snapshot is listed once its
+        pin is confirmed, so one that was just created may not appear yet. A
+        snapshot prevents the objects it references from being unpinned from
+        the Sia network until the snapshot is deleted.
       operationId: listSnapshots
       responses:
         "200":
@@ -125,8 +126,8 @@ paths:
       summary: Delete a database snapshot
       description: >
         Unpins the snapshot's Sia object from the network and removes its
-        record, releasing the orphaned objects it was withholding. Snapshots are
-        addressed by their Sia object ID.
+        record, so the objects it was withholding can be unpinned. Snapshots
+        are addressed by their Sia object ID.
       operationId: deleteSnapshot
       parameters:
         - name: objectID

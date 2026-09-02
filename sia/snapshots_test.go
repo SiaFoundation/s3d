@@ -190,6 +190,18 @@ func TestCreateSnapshot(t *testing.T) {
 	if err := backend.DeleteSnapshot(t.Context(), snap.SiaObjectID); !errors.Is(err, s3.ErrSnapshotNotFound) {
 		t.Fatal("unexpected", err)
 	}
+
+	// an id that belongs to an ordinary object is not a snapshot, so it is
+	// reported not found and its data is left pinned
+	other, err := memSDK.AddObject(t.Context(), strings.NewReader("not a snapshot"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.DeleteSnapshot(t.Context(), other.ID()); !errors.Is(err, s3.ErrSnapshotNotFound) {
+		t.Fatal("unexpected", err)
+	} else if !memSDK.Pinned(other.ID()) {
+		t.Fatal("deleting a snapshot unpinned an ordinary object")
+	}
 }
 
 // TestCreateSnapshotListed verifies that a snapshot is listed by the time
