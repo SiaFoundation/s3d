@@ -173,14 +173,6 @@ func (s *Store) PinningSnapshots() (snapshots []objects.PinningSnapshot, err err
 	return
 }
 
-// DeleteSnapshot removes the snapshot with the given id.
-func (s *Store) DeleteSnapshot(id int64) error {
-	return s.transaction(func(tx *txn) error {
-		_, err := tx.Exec("DELETE FROM snapshots WHERE id = $1", id)
-		return err
-	})
-}
-
 // SnapshotsForDeletion returns the snapshots marked for deletion along with
 // when they were marked.
 func (s *Store) SnapshotsForDeletion() (snapshots []objects.DeletingSnapshot, err error) {

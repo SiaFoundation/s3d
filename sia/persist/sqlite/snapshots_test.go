@@ -461,12 +461,18 @@ func TestSnapshots(t *testing.T) {
 		t.Fatal("mismatch", pinning[0])
 	}
 
-	// removing it leaves nothing to reconcile
-	if err := store.DeleteSnapshot(rb3.ID); err != nil {
+	// marking it for deletion leaves nothing to reconcile, the record still
+	// withholds orphans until the deletion pass removes it
+	if err := store.RollbackSnapshot(rb3.ID); err != nil {
 		t.Fatal(err)
 	} else if pinning, err := store.PinningSnapshots(); err != nil {
 		t.Fatal(err)
 	} else if len(pinning) != 0 {
 		t.Fatal("unexpected", pinning)
+	}
+	if snapshots, err := store.SnapshotsForDeletion(); err != nil {
+		t.Fatal(err)
+	} else if len(snapshots) != 1 || snapshots[0].ObjectID != rb3ObjID {
+		t.Fatal("unexpected", snapshots)
 	}
 }

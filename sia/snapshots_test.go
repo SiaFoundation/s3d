@@ -201,8 +201,60 @@ func TestCreateSnapshotListed(t *testing.T) {
 	}
 }
 
-// assertDeleting fatals unless exactly want snapshots are marked for deletion
-// and returns them.
+// TestReconcileLatePin verifies that a snapshot left awaiting its pin by a
+// dead process keeps withholding its orphans while the indexer reports no such
+// object, since that pin may still have been committing when the process died.
+func TestReconcileLatePin(t *testing.T) {
+	memSDK := testutil.NewMemorySDK()
+	log := zaptest.NewLogger(t)
+	store, backend := openBackend(t, memSDK, log, t.TempDir())
+
+	const bucket = "bucket"
+	if err := store.CreateUser(testutil.Owner); err != nil {
+		t.Fatal(err)
+	} else if err := store.CreateAccessKey(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey); err != nil {
+		t.Fatal(err)
+	} else if err := store.CreateBucket(testutil.AccessKeyID, bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// a record left awaiting its pin, the state a crash during PinObject leaves
+	snap, _, err := store.CreateSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	unconfirmed := frand.Entropy256()
+	if err := store.MarkSnapshotPinning(snap.ID, unconfirmed); err != nil {
+		t.Fatal(err)
+	}
+
+	// an object deleted after that snapshot started, so its backup may
+	// reference it
+	objID := stageUpload(t, memSDK, store, bucket, "a", time.Now().Add(time.Hour))
+	if err := backend.PinObjects(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := store.DeleteObject(testutil.AccessKeyID, bucket, s3.ObjectID{Key: "a"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// the reconcile marks the record for deletion, it does not remove it, so
+	// the object stays withheld until the deletion pass confirms the object
+	backend.SyncMetadata(t.Context())
+	assertDeleting(t, store, 1)
+	if orphans, err := store.OrphanedObjects(100); err != nil {
+		t.Fatal(err)
+	} else if len(orphans) != 0 {
+		t.Fatal("an object the unconfirmed backup may reference was released", orphans)
+	}
+	backend.ProcessOrphans(t.Context())
+	if !memSDK.Pinned(objID) {
+		t.Fatal("an object the unconfirmed backup may reference was unpinned")
+	}
+}
+
+// assertDeleting fatals unless the number of snapshots marked for deletion is
+// want, and returns them.
 func assertDeleting(t *testing.T, store *sqlite.Store, want int) []objects.DeletingSnapshot {
 	t.Helper()
 	snapshots, err := store.SnapshotsForDeletion()
@@ -296,10 +348,18 @@ func TestSnapshotStartup(t *testing.T) {
 	}
 
 	// after a restart the indexer reports no such object, so the record is
-	// removed without ever entering the deletion path
+	// marked for deletion rather than removed. It keeps withholding until the
+	// deletion pass confirms the object is gone
 	storeC, backendC := openBackend(t, memSDK, log, dir)
 	memSDK.SetEvents(nil)
 	backendC.SyncMetadata(t.Context())
+	if deleting := assertDeleting(t, storeC, 1); deleting[0].ObjectID != lostObjID {
+		t.Fatal("mismatch", deleting[0].ObjectID)
+	}
+
+	// the pass confirms it and drops the record
+	backendC.SetSnapshotConfirmDelay(0)
+	backendC.ProcessSnapshotDeletions(t.Context())
 	assertDeleting(t, storeC, 0)
 	if known, err := storeC.HasSnapshotObject(lostObjID); err != nil {
 		t.Fatal(err)

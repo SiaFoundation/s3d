@@ -272,7 +272,6 @@ type Store interface {
 
 	AdoptSnapshot(objectID types.Hash256, createdAt time.Time, gen, objectCount int64) (s3.Snapshot, error)
 	CreateSnapshot() (s3.Snapshot, int64, error)
-	DeleteSnapshot(id int64) error
 	DeleteSnapshotsBySiaObject(objectID types.Hash256) (int64, error)
 	HasSnapshotObject(objectID types.Hash256) (bool, error)
 	ListSnapshots() ([]s3.Snapshot, error)
@@ -512,8 +511,9 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 
 // reconcileSnapshots resolves snapshots awaiting their pin against the
 // indexer. An object the indexer holds completes its record. One it does not
-// hold never reached the network, so its record is removed unless this process
-// is still pinning it. It reports whether every snapshot was resolved.
+// hold is marked for deletion, unless this process is still pinning it, so the
+// deletion pass can confirm the object is really gone before the record stops
+// withholding orphans. It reports whether every snapshot was resolved.
 func (s *Sia) reconcileSnapshots(ctx context.Context) bool {
 	snapshots, err := s.store.PinningSnapshots()
 	if err != nil {
@@ -521,7 +521,7 @@ func (s *Sia) reconcileSnapshots(ctx context.Context) bool {
 		return false
 	}
 
-	var released bool
+	var marked bool
 	for _, snap := range snapshots {
 		if ctx.Err() != nil {
 			return false
@@ -540,8 +540,7 @@ func (s *Sia) reconcileSnapshots(ctx context.Context) bool {
 			return false
 		}
 
-		// a pin this process has not issued yet is not missing, only one from
-		// an earlier process or a finished call proves the object never landed
+		// a pin this process issued may not have reached the indexer yet
 		s.pinningMu.Lock()
 		inFlight := s.pinning[snap.ID]
 		s.pinningMu.Unlock()
@@ -549,16 +548,18 @@ func (s *Sia) reconcileSnapshots(ctx context.Context) bool {
 			continue
 		}
 
-		// the object never reached the network, so there is nothing to unpin
-		// and nothing the backup could reference
-		if err := s.store.DeleteSnapshot(snap.ID); err != nil {
-			s.syncFailed("failed to remove snapshot", zap.Int64("snapshotID", snap.ID), zap.Error(err))
+		// a pin issued by an earlier process may still have been committing
+		// when it died, so the record is marked for deletion rather than
+		// removed. It keeps withholding orphans until the deletion pass
+		// confirms the object is gone
+		if err := s.store.RollbackSnapshot(snap.ID); err != nil {
+			s.syncFailed("failed to mark snapshot for deletion", zap.Int64("snapshotID", snap.ID), zap.Error(err))
 			return false
 		}
-		s.logger.Info("removed snapshot whose pin never landed", zap.Int64("snapshotID", snap.ID), zap.Stringer("objectID", &id))
-		released = true
+		s.logger.Info("marked snapshot for deletion, the indexer does not hold its object", zap.Int64("snapshotID", snap.ID), zap.Stringer("objectID", &id))
+		marked = true
 	}
-	if released {
+	if marked {
 		s.wakeOrphanLoop()
 	}
 	return true
