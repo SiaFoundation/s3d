@@ -169,7 +169,9 @@ password; the username is ignored.
 The admin API is documented in [`openapi.yml`](openapi.yml). It exposes
 `GET /prometheus` for upload pipeline metrics in the Prometheus text exposition
 format, and `GET /stats/uploads` for the same stats as JSON, which `s3d status`
-uses for a basic overview without requiring a Prometheus stack.
+uses for a basic overview without requiring a Prometheus stack. It also manages
+database snapshots through `POST /snapshots`, `GET /snapshots` and
+`DELETE /snapshots/{objectID}`, which `s3d snapshots` wraps.
 
 ```sh
 curl -u ":change-me" http://127.0.0.1:8001/prometheus
@@ -294,6 +296,7 @@ generate one.
 | `status` | Print a basic overview of the background upload pipeline |
 | `users` | Manage S3 users (create, delete, list) |
 | `keys` | Manage S3 access keys (create, delete, list) |
+| `snapshots` | Manage database snapshots backed up to Sia (create, list, delete, restore) |
 
 ### Default Ports
 

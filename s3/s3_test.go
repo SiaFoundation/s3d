@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,7 +18,6 @@ import (
 	"github.com/SiaFoundation/s3d/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
-	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -26,16 +26,16 @@ import (
 	"go.uber.org/zap/zaptest"
 )
 
-func newAdminServer(t *testing.T) (string, *http.Client, *sqlite.Store) {
+func newAdminServer(t *testing.T) (string, *http.Client) {
 	t.Helper()
-	backend, store := testutil.NewBackend(t)
+	backend, _ := testutil.NewBackend(t)
 	server := httptest.NewServer(s3.NewAdmin(backend))
 	t.Cleanup(server.Close)
-	return server.URL, server.Client(), store
+	return server.URL, server.Client()
 }
 
 func TestPrometheus(t *testing.T) {
-	baseURL, httpClient, _ := newAdminServer(t)
+	baseURL, httpClient := newAdminServer(t)
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, baseURL+"/prometheus", nil)
 	if err != nil {
@@ -62,7 +62,7 @@ func TestPrometheus(t *testing.T) {
 }
 
 func TestUploadStats(t *testing.T) {
-	baseURL, httpClient, _ := newAdminServer(t)
+	baseURL, httpClient := newAdminServer(t)
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, baseURL+"/stats/uploads", nil)
 	if err != nil {
@@ -89,7 +89,10 @@ func TestUploadStats(t *testing.T) {
 }
 
 func TestCreateSnapshot(t *testing.T) {
-	baseURL, httpClient, store := newAdminServer(t)
+	backend, store := testutil.NewBackend(t)
+	server := httptest.NewServer(s3.NewAdmin(backend))
+	t.Cleanup(server.Close)
+	baseURL, httpClient := server.URL, server.Client()
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, baseURL+"/snapshots", nil)
 	if err != nil {
@@ -113,19 +116,66 @@ func TestCreateSnapshot(t *testing.T) {
 		t.Fatal("expected snapshot to have a sia object id")
 	}
 
+	listSnapshots := func() []s3.Snapshot {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, baseURL+"/snapshots", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		}
+		var snapshots []s3.Snapshot
+		if err := json.NewDecoder(resp.Body).Decode(&snapshots); err != nil {
+			t.Fatal(err)
+		}
+		return snapshots
+	}
+
 	// the object is recorded before the pin and the record is completed once
-	// the indexer confirms the object, so the snapshot is listed
+	// the indexer confirms the object
 	if known, err := store.HasSnapshotObject(snapshot.SiaObjectID); err != nil {
 		t.Fatal(err)
 	} else if !known {
 		t.Fatal("expected known object")
 	}
-	if snapshots, err := store.ListSnapshots(); err != nil {
+	// the reconcile may already have completed the record from the indexer,
+	// otherwise stand in for the sync loop observing the pin
+	if err := store.MarkSnapshotPinned(snapshot.SiaObjectID); err != nil && !errors.Is(err, s3.ErrSnapshotNotFound) {
 		t.Fatal(err)
-	} else if len(snapshots) != 1 {
-		t.Fatal("unexpected", len(snapshots))
+	}
+
+	// the snapshot is listed
+	snapshots := listSnapshots()
+	if len(snapshots) != 1 {
+		t.Fatalf("expected 1 snapshot, got %d", len(snapshots))
 	} else if snapshots[0].SiaObjectID != snapshot.SiaObjectID {
 		t.Fatal("mismatch", snapshots[0].SiaObjectID)
+	}
+
+	// snapshots are addressed by their Sia object ID, the only identifier that
+	// survives losing the database
+	delURL := baseURL + "/snapshots/" + snapshots[0].SiaObjectID.String()
+	delReq, err := http.NewRequestWithContext(t.Context(), http.MethodDelete, delURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delResp, err := httpClient.Do(delReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delResp.Body.Close()
+	if delResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", delResp.StatusCode)
+	}
+
+	if snapshots := listSnapshots(); len(snapshots) != 0 {
+		t.Fatalf("expected 0 snapshots after delete, got %d", len(snapshots))
 	}
 }
 

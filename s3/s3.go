@@ -12,6 +12,7 @@ import (
 
 	"github.com/SiaFoundation/s3d/s3/auth"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"go.sia.tech/core/types"
 	"go.sia.tech/jape"
 	"go.uber.org/zap"
 )
@@ -352,6 +353,18 @@ type Backend interface {
 	// CreateSnapshot backs up the database, uploads it to Sia as a tagged
 	// snapshot object, and records the object ID.
 	CreateSnapshot(ctx context.Context) (Snapshot, error)
+
+	// ListSnapshots returns the recorded database snapshots.
+	ListSnapshots(ctx context.Context) ([]Snapshot, error)
+
+	// DeleteSnapshot unpins a snapshot's Sia object from the network and
+	// removes its record, releasing the orphaned objects it was withholding.
+	//
+	// Snapshots are addressed by their Sia object ID, the only identifier that
+	// survives losing the database.
+	//
+	// - If no such snapshot exists, [ErrSnapshotNotFound] must be returned.
+	DeleteSnapshot(ctx context.Context, objectID types.Hash256) error
 }
 
 type s3 struct {
@@ -447,7 +460,8 @@ func corsMiddleware(handler http.Handler) http.Handler {
 // backend. It exposes /prometheus, which serves the background upload stats as
 // Prometheus metrics, /stats/uploads, which serves the same stats as JSON,
 // /objects/flush, which uploads all pending objects regardless of padding,
-// and /snapshots, which backs up the database and uploads it to Sia.
+// and /snapshots and /snapshots/:objectID, which create, list, and delete
+// database snapshots uploaded to Sia.
 func NewAdmin(b Backend, opts ...Option) http.Handler {
 	s3 := &s3{
 		backend: b,
@@ -458,10 +472,12 @@ func NewAdmin(b Backend, opts ...Option) http.Handler {
 	}
 
 	return jape.Mux(map[string]jape.Handler{
-		"GET /prometheus":     s3.handlePrometheus,
-		"GET /stats/uploads":  s3.handleGetUploadStats,
-		"POST /objects/flush": s3.handleFlushObjects,
-		"POST /snapshots":     s3.handleCreateSnapshot,
+		"GET /prometheus":             s3.handlePrometheus,
+		"GET /stats/uploads":          s3.handleGetUploadStats,
+		"POST /objects/flush":         s3.handleFlushObjects,
+		"POST /snapshots":             s3.handleCreateSnapshot,
+		"GET /snapshots":              s3.handleListSnapshots,
+		"DELETE /snapshots/:objectID": s3.handleDeleteSnapshot,
 	})
 }
 
