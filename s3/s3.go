@@ -113,10 +113,14 @@ type Backend interface {
 	// upload is retrieved, this can not be combined with a byte range.
 	//
 	// - If the access key does not have permission to access the object,
-	//   [ErrAccessDenied] must be returned. A 'nil' accessKeyID indicates the
-	//   anonymous user.
+	//   [ErrAccessDenied] must be returned, unless the bucket's policy grants
+	//   the action the request needs to everyone: s3:GetObjectVersion when it
+	//   names a version, s3:GetObject otherwise. A 'nil' accessKeyID indicates
+	//   the anonymous user.
 	//
-	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned, except
+	//   to an anonymous caller, which gets [ErrAccessDenied] so it cannot probe
+	//   for buckets it may not read.
 	//
 	// - If the object with the given key in the specified bucket does not exist,
 	//   [ErrNoSuchKey] must be returned.
@@ -153,9 +157,13 @@ type Backend interface {
 	// CommonPrefixes fields of the returned ObjectsListResult.
 	//
 	// - If the access key does not have permission to list objects in the bucket,
-	//   [ErrAccessDenied] must be returned.
+	//   [ErrAccessDenied] must be returned, unless the bucket's policy grants
+	//   s3:ListBucket to everyone. A 'nil' accessKeyID indicates the
+	//   anonymous user.
 	//
-	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned, except
+	//   to an anonymous caller, which gets [ErrAccessDenied] so it cannot probe
+	//   for buckets it may not read.
 	ListObjects(ctx context.Context, accessKeyID *string, bucket string, prefix Prefix, page ListObjectsPage) (*ObjectsListResult, error)
 
 	// PutObject puts an object with the given key into the specified bucket.
@@ -313,6 +321,36 @@ type Backend interface {
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
 	DeleteBucketLifecycleConfiguration(ctx context.Context, accessKeyID, bucket string) error
 
+	// PutBucketPolicy sets the policy for the specified bucket, replacing any
+	// existing policy. The policy is already validated; the backend stores it
+	// and honors [BucketPolicy.Public] on subsequent reads.
+	//
+	// - If the access key does not have permission to configure the bucket,
+	//   [ErrAccessDenied] must be returned.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	PutBucketPolicy(ctx context.Context, accessKeyID, bucket string, policy BucketPolicy) error
+
+	// GetBucketPolicy returns the policy of the specified bucket, its document
+	// exactly as supplied to PutBucketPolicy.
+	//
+	// - If the access key does not have permission to read the bucket
+	//   configuration, [ErrAccessDenied] must be returned.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	//
+	// - If the bucket has no policy, [ErrNoSuchBucketPolicy] must be returned.
+	GetBucketPolicy(ctx context.Context, accessKeyID, bucket string) (BucketPolicy, error)
+
+	// DeleteBucketPolicy removes the policy of the specified bucket, revoking
+	// any anonymous access. It is not an error if no policy exists.
+	//
+	// - If the access key does not have permission to configure the bucket,
+	//   [ErrAccessDenied] must be returned.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	DeleteBucketPolicy(ctx context.Context, accessKeyID, bucket string) error
+
 	// PutBucketVersioning sets the versioning state of the specified bucket.
 	// status is either "Enabled" or "Suspended".
 	//
@@ -336,9 +374,13 @@ type Backend interface {
 	// objects in the specified bucket.
 	//
 	// - If the access key does not have permission to list the bucket,
-	//   [ErrAccessDenied] must be returned.
+	//   [ErrAccessDenied] must be returned, unless the bucket's policy grants
+	//   s3:ListBucketVersions to everyone. A 'nil' accessKeyID indicates the
+	//   anonymous user.
 	//
-	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned, except
+	//   to an anonymous caller, which gets [ErrAccessDenied] so it cannot probe
+	//   for buckets it may not read.
 	ListObjectVersions(ctx context.Context, accessKeyID *string, bucket string, prefix Prefix, page ListObjectVersionsPage) (*ObjectVersionsListResult, error)
 
 	// UploadStats returns statistics about the background upload pipeline.

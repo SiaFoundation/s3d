@@ -549,7 +549,7 @@ func TestMultipartUpload(t *testing.T) {
 	}
 
 	// verify the completed object references the upload directory
-	obj, err := store.GetObject(testutil.AccessKeyID, bucket, object, s3.NoVersion(), nil)
+	obj, err := store.GetObject(aws.String(testutil.AccessKeyID), bucket, object, s3.NoVersion(), nil, s3.ActionGetObject)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -581,7 +581,7 @@ func TestMultipartUpload(t *testing.T) {
 	backend.PinObjects(t.Context())
 
 	// verify the object is now on Sia
-	obj, err = store.GetObject(testutil.AccessKeyID, bucket, object, s3.NoVersion(), nil)
+	obj, err = store.GetObject(aws.String(testutil.AccessKeyID), bucket, object, s3.NoVersion(), nil, s3.ActionGetObject)
 	if err != nil {
 		t.Fatal(err)
 	}

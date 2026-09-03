@@ -8,6 +8,7 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia/objects"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"go.uber.org/zap"
 	"lukechampine.com/frand"
 )
@@ -208,11 +209,11 @@ func TestExpireObjectsVersions(t *testing.T) {
 	} else if len(orphans) != 0 {
 		t.Fatalf("expected no orphans, got %+v", orphans)
 	}
-	if obj, err := store.GetObject(accessKeyID, bucket, key, s3.NoVersion(), nil); err != nil {
+	if obj, err := store.GetObject(aws.String(accessKeyID), bucket, key, s3.NoVersion(), nil, s3.ActionGetObject); err != nil {
 		t.Fatal(err)
 	} else if obj.VersionID != currentVersion {
 		t.Fatalf("expected current version %q, got %q", currentVersion, obj.VersionID)
-	} else if _, err := store.GetObject(accessKeyID, bucket, key, s3.SpecificVersion(oldVersion), nil); err != nil {
+	} else if _, err := store.GetObject(aws.String(accessKeyID), bucket, key, s3.SpecificVersion(oldVersion), nil, s3.ActionGetObject); err != nil {
 		t.Fatalf("expected old noncurrent version to remain, got %v", err)
 	}
 }

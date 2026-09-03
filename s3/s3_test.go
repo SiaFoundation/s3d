@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/v2"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -81,7 +81,7 @@ func TestUploadStats(t *testing.T) {
 	}
 
 	var stats s3.UploadStats
-	if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
+	if err := json.UnmarshalRead(resp.Body, &stats); err != nil {
 		t.Fatal(err)
 	} else if (stats != s3.UploadStats{}) {
 		t.Fatal("expected zero-value stats on an empty backend", stats)
