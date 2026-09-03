@@ -352,4 +352,10 @@ INSERT INTO object_parts (bucket_id, name, version_id, part_number, filename, co
 DROP TABLE object_parts_backup;`)
 		return err
 	},
+	func(tx *txn, _ *zap.Logger) error {
+		_, err := tx.Exec(`
+ALTER TABLE buckets ADD COLUMN policy TEXT NOT NULL DEFAULT '';
+ALTER TABLE buckets ADD COLUMN public_actions INTEGER NOT NULL DEFAULT 0;`)
+		return err
+	},
 }

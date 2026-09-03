@@ -204,7 +204,7 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 	// fetch source object metadata (the requested version, or the current
 	// version when unspecified). The source is resolved first so a bad copy
 	// source is reported as such rather than as a missing upload.
-	obj, err := s.store.GetObject(accessKeyID, srcBucket, srcObject, srcVersion, nil)
+	obj, err := s.store.GetObject(&accessKeyID, srcBucket, srcObject, srcVersion, nil, s3.ReadAction(srcVersion))
 	if err != nil {
 		return nil, err
 	}

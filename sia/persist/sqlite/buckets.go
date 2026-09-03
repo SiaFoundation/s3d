@@ -150,6 +150,103 @@ func bucketIDAndVersioning(tx *txn, accessKeyID, bucket string) (bid int64, stat
 	return bid, status, err
 }
 
+// PutBucketPolicy stores the bucket's policy, replacing any existing one.
+func (s *Store) PutBucketPolicy(accessKeyID, bucket string, policy s3.BucketPolicy) error {
+	return s.transaction(func(tx *txn) error {
+		bid, err := bucketID(tx, accessKeyID, bucket)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(`UPDATE buckets SET policy = $1, public_actions = $2 WHERE id = $3`, policy.Document, policy.Public, bid)
+		return err
+	})
+}
+
+// GetBucketPolicy returns the bucket's policy, or ErrNoSuchBucketPolicy if the
+// bucket has none.
+func (s *Store) GetBucketPolicy(accessKeyID, bucket string) (policy s3.BucketPolicy, err error) {
+	err = s.transaction(func(tx *txn) error {
+		bid, err := bucketID(tx, accessKeyID, bucket)
+		if err != nil {
+			return err
+		}
+		err = tx.QueryRow(`SELECT policy, public_actions FROM buckets WHERE id = $1`, bid).Scan(&policy.Document, &policy.Public)
+		if err != nil {
+			return err
+		} else if policy.Document == "" {
+			return s3errs.ErrNoSuchBucketPolicy
+		}
+		return nil
+	})
+	if err != nil {
+		return s3.BucketPolicy{}, err
+	}
+	return policy, nil
+}
+
+// DeleteBucketPolicy removes the bucket's policy. It is not an error if the
+// bucket has none.
+func (s *Store) DeleteBucketPolicy(accessKeyID, bucket string) error {
+	return s.transaction(func(tx *txn) error {
+		bid, err := bucketID(tx, accessKeyID, bucket)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(`UPDATE buckets SET policy = '', public_actions = 0 WHERE id = $1`, bid)
+		return err
+	})
+}
+
+// bucketRead is a bucket resolved for reading.
+type bucketRead struct {
+	id         int64
+	owner      string
+	versioning string
+}
+
+// userInfo returns the bucket's owner, which a listing reports in place of the
+// caller.
+func (b bucketRead) userInfo() *s3.UserInfo {
+	return &s3.UserInfo{ID: b.owner, DisplayName: b.owner}
+}
+
+// bucketForRead resolves a bucket for a read. The caller must own the bucket,
+// as in [bucketID], or its policy must grant action to everyone, which covers
+// signed requests from other users as well as unsigned ones. An anonymous
+// caller gets ErrAccessDenied whether or not the bucket exists, so it cannot
+// probe for private buckets.
+func bucketForRead(tx *txn, accessKeyID *string, bucket string, action s3.PolicyActions) (bucketRead, error) {
+	var b bucketRead
+	var ownerID int64
+	var granted s3.PolicyActions
+	err := tx.QueryRow(`
+		SELECT b.id, b.user_id, u.name, b.public_actions, b.versioning_status
+		FROM buckets b
+		INNER JOIN users u ON u.id = b.user_id
+		WHERE b.name = $1`, bucket).Scan(&b.id, &ownerID, &b.owner, &granted, &b.versioning)
+	if errors.Is(err, sql.ErrNoRows) {
+		if accessKeyID == nil {
+			return bucketRead{}, s3errs.ErrAccessDenied
+		}
+		return bucketRead{}, s3errs.ErrNoSuchBucket
+	} else if err != nil {
+		return bucketRead{}, err
+	}
+
+	if accessKeyID != nil {
+		uid, err := userIDForAccessKey(tx, *accessKeyID)
+		if err != nil {
+			return bucketRead{}, err
+		} else if ownerID == uid {
+			return b, nil
+		}
+	}
+	if !granted.Allows(action) {
+		return bucketRead{}, s3errs.ErrAccessDenied
+	}
+	return b, nil
+}
+
 // bucketID returns the ID of the bucket with the given name if the user
 // associated with the given access key owns it. Returns ErrNoSuchBucket if
 // the bucket does not exist, or ErrAccessDenied if it exists but is owned by

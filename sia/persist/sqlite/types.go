@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"strings"
 	"time"

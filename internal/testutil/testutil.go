@@ -65,25 +65,72 @@ type DeleteConditions struct {
 // ChangeAccessKey creates a copy of the tester that uses the provided keypair
 // to access the S3 API.
 func (t *S3Tester) ChangeAccessKey(tb testing.TB, accessKeyID, secretKey string) *S3Tester {
-	client := service.NewFromConfig(t.cfg, func(o *service.Options) {
+	return t.withCredentials(aws.NewCredentialsCache(&credentials.StaticCredentialsProvider{
+		Value: aws.Credentials{
+			AccessKeyID:     accessKeyID,
+			SecretAccessKey: secretKey,
+		},
+	}))
+}
+
+// withCredentials returns a copy of the tester whose client signs with creds.
+func (t *S3Tester) withCredentials(creds aws.CredentialsProvider) *S3Tester {
+	c := *t
+	c.client = service.NewFromConfig(t.cfg, func(o *service.Options) {
 		*o = t.client.Options()
-		o.Credentials = aws.NewCredentialsCache(&credentials.StaticCredentialsProvider{
-			Value: aws.Credentials{
-				AccessKeyID:     accessKeyID,
-				SecretAccessKey: secretKey,
-			},
-		})
+		o.Credentials = creds
 	})
-	return &S3Tester{
-		cfg:     t.cfg,
-		backend: t.backend,
-		client:  client,
-	}
+	return &c
 }
 
 // Client returns the tester's S3 client.
 func (t *S3Tester) Client() *service.Client {
 	return t.client
+}
+
+// Anonymous returns a copy of the tester whose client sends unsigned requests,
+// so the server handles every call through it as anonymous.
+func (t *S3Tester) Anonymous() *S3Tester {
+	return t.withCredentials(aws.AnonymousCredentials{})
+}
+
+// PutBucketPolicy sets the policy of a bucket.
+func (t *S3Tester) PutBucketPolicy(ctx context.Context, bucket, policy string) error {
+	_, err := t.client.PutBucketPolicy(ctx, &service.PutBucketPolicyInput{
+		Bucket: aws.String(bucket),
+		Policy: aws.String(policy),
+	})
+	return err
+}
+
+// GetBucketPolicy returns the policy document of a bucket.
+func (t *S3Tester) GetBucketPolicy(ctx context.Context, bucket string) (string, error) {
+	resp, err := t.client.GetBucketPolicy(ctx, &service.GetBucketPolicyInput{
+		Bucket: aws.String(bucket),
+	})
+	if err != nil {
+		return "", err
+	}
+	return aws.ToString(resp.Policy), nil
+}
+
+// DeleteBucketPolicy removes the policy of a bucket.
+func (t *S3Tester) DeleteBucketPolicy(ctx context.Context, bucket string) error {
+	_, err := t.client.DeleteBucketPolicy(ctx, &service.DeleteBucketPolicyInput{
+		Bucket: aws.String(bucket),
+	})
+	return err
+}
+
+// GetBucketPolicyStatus reports whether a bucket's policy makes it public.
+func (t *S3Tester) GetBucketPolicyStatus(ctx context.Context, bucket string) (bool, error) {
+	resp, err := t.client.GetBucketPolicyStatus(ctx, &service.GetBucketPolicyStatusInput{
+		Bucket: aws.String(bucket),
+	})
+	if err != nil {
+		return false, err
+	}
+	return aws.ToBool(resp.PolicyStatus.IsPublic), nil
 }
 
 // AddObject adds an object to the S3 backend.
@@ -106,10 +153,19 @@ func (t *S3Tester) BucketLocation(ctx context.Context, bucket string) (string, e
 	return string(resp.LocationConstraint), nil
 }
 
+// copySource builds the x-amz-copy-source value, optionally pinned to a version.
+func copySource(bucket, object string, versionID *string) *string {
+	source := fmt.Sprintf("%s/%s", bucket, url.QueryEscape(object))
+	if versionID != nil {
+		source += "?versionId=" + url.QueryEscape(*versionID)
+	}
+	return aws.String(source)
+}
+
 // CopyObject is a convenience wrapper around the AWS SDK's CopyObject API.
 func (t *S3Tester) CopyObject(ctx context.Context, srcBucket, srcObject, dstBucket, dstObject string, dir types.MetadataDirective, meta map[string]string) ([]byte, error) {
 	resp, err := t.client.CopyObject(ctx, &service.CopyObjectInput{
-		CopySource:        aws.String(fmt.Sprintf("%s/%s", srcBucket, url.QueryEscape(srcObject))),
+		CopySource:        copySource(srcBucket, srcObject, nil),
 		Bucket:            aws.String(dstBucket),
 		Key:               aws.String(dstObject),
 		MetadataDirective: dir,
@@ -126,7 +182,7 @@ func (t *S3Tester) CopyObject(ctx context.Context, srcBucket, srcObject, dstBuck
 // the object the copy replaces.
 func (t *S3Tester) ConditionalCopyObject(ctx context.Context, srcBucket, srcObject, dstBucket, dstObject string, src, dst Preconditions) error {
 	_, err := t.client.CopyObject(ctx, &service.CopyObjectInput{
-		CopySource:                  aws.String(fmt.Sprintf("%s/%s", srcBucket, url.QueryEscape(srcObject))),
+		CopySource:                  copySource(srcBucket, srcObject, nil),
 		Bucket:                      aws.String(dstBucket),
 		Key:                         aws.String(dstObject),
 		CopySourceIfMatch:           src.IfMatch,
@@ -453,8 +509,10 @@ func (t *S3Tester) UploadPart(ctx context.Context, bucket, object, uploadID stri
 
 // UploadPartCopyOptions are the options for an UploadPartCopy request.
 type UploadPartCopyOptions struct {
-	PartNumber          int32
-	Range               *s3.ObjectRange
+	PartNumber int32
+	Range      *s3.ObjectRange
+	// SourceVersionID selects a specific version of the copy source.
+	SourceVersionID     *string
 	SourcePreconditions Preconditions
 }
 
@@ -466,7 +524,7 @@ func (t *S3Tester) UploadPartCopy(ctx context.Context, srcBucket, srcObject, dst
 		copySourceRange = aws.String(fmt.Sprintf("bytes=%d-%d", rnge.Start, rnge.Start+rnge.Length-1))
 	}
 	input := &service.UploadPartCopyInput{
-		CopySource:                  aws.String(fmt.Sprintf("%s/%s", srcBucket, url.QueryEscape(srcObject))),
+		CopySource:                  copySource(srcBucket, srcObject, opts.SourceVersionID),
 		Bucket:                      aws.String(dstBucket),
 		Key:                         aws.String(dstObject),
 		UploadId:                    aws.String(uploadID),
@@ -612,12 +670,8 @@ func (t *S3Tester) DeleteObjectVersion(ctx context.Context, bucket, object strin
 // CopyObjectVersion copies a source object onto the destination key, optionally
 // addressing a specific source version when srcVersionID is non-nil.
 func (t *S3Tester) CopyObjectVersion(ctx context.Context, srcBucket, srcObject string, srcVersionID *string, dstBucket, dstObject string) (*service.CopyObjectOutput, error) {
-	source := fmt.Sprintf("%s/%s", srcBucket, url.QueryEscape(srcObject))
-	if srcVersionID != nil {
-		source += "?versionId=" + url.QueryEscape(*srcVersionID)
-	}
 	return t.client.CopyObject(ctx, &service.CopyObjectInput{
-		CopySource: aws.String(source),
+		CopySource: copySource(srcBucket, srcObject, srcVersionID),
 		Bucket:     aws.String(dstBucket),
 		Key:        aws.String(dstObject),
 	})

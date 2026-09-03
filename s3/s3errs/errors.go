@@ -103,7 +103,7 @@ var (
 	ErrMalformedACLError                              = Error{"MalformedACLError", "Provided ACL is not well-formed or fails schema validation.", http.StatusBadRequest}
 	ErrMalformedPOSTRequest                           = Error{"MalformedPOSTRequest", "POST body is not well-formed multipart/form-data.", http.StatusBadRequest}
 	ErrMalformedXML                                   = Error{"MalformedXML", "Provided XML is not well-formed or fails schema validation.", http.StatusBadRequest}
-	ErrMalformedPolicy                                = Error{"MalformedPolicy", "Your policy contains a principal that is not valid.", http.StatusBadRequest}
+	ErrMalformedPolicy                                = Error{"MalformedPolicy", "The policy document is not valid.", http.StatusBadRequest}
 	ErrMaxMessageLengthExceeded                       = Error{"MaxMessageLengthExceeded", "Request was too large.", http.StatusBadRequest}
 	ErrMaxPostPreDataLengthExceededError              = Error{"MaxPostPreDataLengthExceededError", "POST fields preceding the file were too large.", http.StatusBadRequest}
 	ErrMetadataTooLarge                               = Error{"MetadataTooLarge", "Metadata headers exceed the maximum allowed size.", http.StatusBadRequest}
@@ -138,6 +138,7 @@ var (
 	ErrOwnershipControlsNotFoundError                 = Error{"OwnershipControlsNotFoundError", "Bucket ownership controls were not found.", http.StatusNotFound}
 	ErrPermanentRedirect                              = Error{"PermanentRedirect", "Use the specified endpoint; send future requests to that endpoint.", http.StatusMovedPermanently}
 	ErrPermanentRedirectControlError                  = Error{"PermanentRedirectControlError", "Operation must be addressed using the specified endpoint; redirect future requests accordingly.", http.StatusMovedPermanently}
+	ErrPolicyTooLarge                                 = Error{"PolicyTooLarge", "The policy exceeds the maximum allowed document size.", http.StatusBadRequest}
 	ErrPreconditionFailed                             = Error{"PreconditionFailed", "At least one specified precondition did not hold.", http.StatusPreconditionFailed}
 	ErrRedirect                                       = Error{"Redirect", "Temporary redirect while DNS is being updated.", http.StatusTemporaryRedirect}
 	ErrRequestHeaderSectionTooLarge                   = Error{"RequestHeaderSectionTooLarge", "Request header and query parameters exceed the maximum allowed size.", http.StatusBadRequest}
