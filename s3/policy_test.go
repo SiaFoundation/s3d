@@ -39,6 +39,19 @@ func TestParseBucketPolicy(t *testing.T) {
 			want: ActionGetObject,
 		},
 		{
+			// AWS treats the service prefix and action name as case insensitive
+			name: "action in a different case",
+			policy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*",
+				"Action":"S3:GetObject","Resource":"arn:aws:s3:::bucket/*"}]}`,
+			want: ActionGetObject,
+		},
+		{
+			name: "action in lower case",
+			policy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*",
+				"Action":"s3:listbucket","Resource":"arn:aws:s3:::bucket"}]}`,
+			want: ActionListBucket,
+		},
+		{
 			name: "principal as AWS object",
 			policy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow",
 				"Principal":{"AWS":"*"},"Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/*"}]}`,
@@ -233,6 +246,12 @@ func TestParseBucketPolicy(t *testing.T) {
 		{
 			name: "unknown effect",
 			policy: `{"Version":"2012-10-17","Statement":[{"Effect":"Maybe","Principal":"*",
+				"Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/*"}]}`,
+			err: s3errs.ErrMalformedPolicy,
+		},
+		{
+			name: "missing principal",
+			policy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow",
 				"Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/*"}]}`,
 			err: s3errs.ErrMalformedPolicy,
 		},

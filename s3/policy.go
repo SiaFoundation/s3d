@@ -68,11 +68,15 @@ func (a PolicyActions) Allows(want PolicyActions) bool {
 	return want != 0 && a&want == want
 }
 
+// supportedPolicyActions is keyed by lowercase name: AWS treats the service
+// prefix and the action name as case insensitive.
+//
+// https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_action.html
 var supportedPolicyActions = map[string]PolicyActions{
-	"s3:GetObject":          ActionGetObject,
-	"s3:GetObjectVersion":   ActionGetObjectVersion,
-	"s3:ListBucket":         ActionListBucket,
-	"s3:ListBucketVersions": ActionListBucketVersions,
+	"s3:getobject":          ActionGetObject,
+	"s3:getobjectversion":   ActionGetObjectVersion,
+	"s3:listbucket":         ActionListBucket,
+	"s3:listbucketversions": ActionListBucketVersions,
 }
 
 // BucketPolicy is a bucket policy accepted by [parseBucketPolicy].
@@ -123,11 +127,11 @@ func (p *policyStatements) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 //
 // nolint:tagliatelle
 type policyStatement struct {
-	Sid       string          `json:"Sid"`
-	Effect    string          `json:"Effect"`
-	Principal policyPrincipal `json:"Principal"`
-	Action    policyStrings   `json:"Action"`
-	Resource  policyStrings   `json:"Resource"`
+	Sid       string           `json:"Sid"`
+	Effect    string           `json:"Effect"`
+	Principal *policyPrincipal `json:"Principal"`
+	Action    policyStrings    `json:"Action"`
+	Resource  policyStrings    `json:"Resource"`
 
 	NotPrincipal jsontext.Value `json:"NotPrincipal"`
 	NotAction    jsontext.Value `json:"NotAction"`
@@ -219,7 +223,10 @@ func parseBucketPolicy(bucket string, body io.Reader) (BucketPolicy, error) {
 			return BucketPolicy{}, s3errs.ErrNotImplemented
 		case stmt.Effect != policyEffectAllow:
 			return BucketPolicy{}, s3errs.ErrMalformedPolicy
-		case !bool(stmt.Principal):
+		case stmt.Principal == nil:
+			// a resource policy must say who it grants to
+			return BucketPolicy{}, s3errs.ErrMalformedPolicy
+		case !bool(*stmt.Principal):
 			// a bucket has one owner and s3d has no other accounts or roles, so
 			// "everyone" is the only principal that can mean anything
 			return BucketPolicy{}, s3errs.ErrNotImplemented
@@ -247,7 +254,7 @@ func parseBucketPolicy(bucket string, body io.Reader) (BucketPolicy, error) {
 		}
 
 		for _, action := range stmt.Action {
-			a, ok := supportedPolicyActions[action]
+			a, ok := supportedPolicyActions[strings.ToLower(action)]
 			if !ok {
 				return BucketPolicy{}, s3errs.ErrNotImplemented
 			}

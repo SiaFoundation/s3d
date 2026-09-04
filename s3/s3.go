@@ -32,7 +32,9 @@ type Backend interface {
 	//
 	// - If the source bucket does not exist, [ErrNoSuchBucket] must be returned.
 	//
-	// - If the source object does not exist, [ErrNoSuchKey] must be returned.
+	// - If the source object does not exist, [ErrNoSuchKey] must be returned,
+	//   or [ErrAccessDenied] when the caller reaches the source bucket through a
+	//   policy that does not grant s3:ListBucket.
 	//
 	// - If the destination bucket does not exist, [ErrNoSuchBucket] must be returned.
 	//
@@ -123,7 +125,10 @@ type Backend interface {
 	//   for buckets it may not read.
 	//
 	// - If the object with the given key in the specified bucket does not exist,
-	//   [ErrNoSuchKey] must be returned.
+	//   [ErrNoSuchKey] must be returned. A caller reaching the bucket through a
+	//   policy that does not grant s3:ListBucket gets [ErrAccessDenied] instead,
+	//   for a missing key, a missing version, or a current version that is a
+	//   delete marker, so it cannot enumerate the bucket by probing keys.
 	//
 	// - If the requested range is not satisfiable, [ErrInvalidRange] must be
 	//   returned. You can use the 'Range' method on 'rnge' for that.
@@ -244,7 +249,9 @@ type Backend interface {
 	// - If either the source or destination bucket does not exist,
 	// [ErrNoSuchBucket] must be returned.
 	//
-	// - If the source object does not exist, [ErrNoSuchKey] must be returned.
+	// - If the source object does not exist, [ErrNoSuchKey] must be returned,
+	//   or [ErrAccessDenied] when the caller reaches the source bucket through a
+	//   policy that does not grant s3:ListBucket.
 	//
 	// - srcVersion selects the source version: an unspecified request copies the
 	//   current version ([ErrNoSuchKey] if it is a delete marker), a specified

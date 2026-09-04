@@ -170,6 +170,13 @@ func checkWritePreconditions(tx *txn, bid int64, name string, p s3.ObjectPrecond
 	return p.CheckWrite(&attrs)
 }
 
+// hidesDeleteMarker reports whether a resolved object must be hidden from the
+// caller. A delete marker proves the key once existed, so a caller that may not
+// list the bucket must not be able to tell it apart from a key that never did.
+func hidesDeleteMarker(mayList bool, obj objects.Object, version s3.VersionRequest) bool {
+	return !mayList && obj.IsDeleteMarker && !version.Specified
+}
+
 // GetObject retrieves an object. An unspecified version returns the current
 // version (ErrNoSuchKey if the key has no versions); a specified version returns
 // that version (ErrNoSuchVersion if absent). The result may be a delete marker.
@@ -179,18 +186,25 @@ func checkWritePreconditions(tx *txn, bid int64, name string, p s3.ObjectPrecond
 // version internally stays authorized by what the original request asked for.
 func (s *Store) GetObject(accessKeyID *string, bucket, name string, version s3.VersionRequest, partNumber *int32, action s3.PolicyActions) (*objects.Object, error) {
 	var obj objects.Object
+	var mayList bool
 	if err := s.transaction(func(tx *txn) error {
 		b, err := bucketForRead(tx, accessKeyID, bucket, action)
 		if err != nil {
 			return err
 		}
+		mayList = b.mayList
 		if err := getObject(tx, &obj, b.id, name, version, partNumber); err != nil {
 			return err
+		}
+		if hidesDeleteMarker(mayList, obj, version) {
+			return s3errs.ErrAccessDenied
 		}
 		obj.Versioned = b.versioning != ""
 		return nil
 	}); errors.Is(err, sql.ErrNoRows) {
-		if version.Specified {
+		if !mayList {
+			return nil, s3errs.ErrAccessDenied
+		} else if version.Specified {
 			return nil, s3errs.ErrNoSuchVersion
 		}
 		return nil, s3errs.ErrNoSuchKey
@@ -644,6 +658,7 @@ func (s *Store) UpdateSiaObjects(siaObjects []objects.SiaObject) (updated int64,
 func (s *Store) CopyObject(accessKeyID, srcBucket, srcName string, srcVersion s3.VersionRequest, dstBucket, dstName string, opts s3.CopyObjectOptions) (_ *s3.CopyObjectResult, orphan objects.OrphanedFile, err error) {
 	var obj objects.Object
 	var versionID, srcVersionWire string
+	var srcMayList bool
 	err = s.transaction(func(tx *txn) error {
 		obj = objects.Object{} // reset per transaction attempt
 		versionID, srcVersionWire, orphan = "", "", objects.OrphanedFile{}
@@ -659,18 +674,22 @@ func (s *Store) CopyObject(accessKeyID, srcBucket, srcName string, srcVersion s3
 		// the source is only read, so a policy granting that read is enough,
 		// matching UploadPartCopy
 		srcBid, srcStatus := dstBid, dstStatus
+		srcMayList = true // a same-bucket copy is made by the bucket's owner
 		if srcBucket != dstBucket {
 			src, err := bucketForRead(tx, &accessKeyID, srcBucket, s3.ReadAction(srcVersion))
 			if err != nil {
 				return err
 			}
-			srcBid, srcStatus = src.id, src.versioning
+			srcBid, srcStatus, srcMayList = src.id, src.versioning, src.mayList
 		}
 
 		// copy the requested source version, or the current version when
 		// unspecified
 		if err := getObject(tx, &obj, srcBid, srcName, srcVersion, nil); err != nil {
 			return err
+		}
+		if hidesDeleteMarker(srcMayList, obj, srcVersion) {
+			return s3errs.ErrAccessDenied
 		}
 		if err := opts.SourcePreconditions.CheckCopySource(obj.Attrs(), srcVersion); err != nil {
 			return err
@@ -735,7 +754,9 @@ func (s *Store) CopyObject(accessKeyID, srcBucket, srcName string, srcVersion s3
 	if errors.Is(err, sql.ErrNoRows) {
 		// a missing source maps to ErrNoSuchVersion when a specific version was
 		// requested, otherwise ErrNoSuchKey.
-		if srcVersion.Specified {
+		if !srcMayList {
+			return nil, objects.OrphanedFile{}, s3errs.ErrAccessDenied
+		} else if srcVersion.Specified {
 			return nil, objects.OrphanedFile{}, s3errs.ErrNoSuchVersion
 		}
 		return nil, objects.OrphanedFile{}, s3errs.ErrNoSuchKey
