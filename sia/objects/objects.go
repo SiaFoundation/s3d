@@ -2,11 +2,29 @@ package objects
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
 	"go.sia.tech/core/types"
 	sdk "go.sia.tech/siastorage"
+)
+
+const (
+	// SnapshotType is the discriminator written to a snapshot object's metadata
+	// so recovery can identify snapshots among all account objects.
+	SnapshotType = "s3d-snapshot"
+
+	// SnapshotEncodingGzip is the encoding recorded for snapshots whose backup
+	// is gzip compressed before upload.
+	SnapshotEncodingGzip = "gzip"
+
+	// maxSnapshotGeneration caps the generation accepted from snapshot
+	// metadata. Adopting a snapshot raises the local counter to its generation
+	// and later bumps it further, so a value near the int64 limit would
+	// overflow the counter into a SQLite REAL and wedge the sync loop on the
+	// event.
+	maxSnapshotGeneration = 1 << 62 // 4.6e18
 )
 
 var (
@@ -17,6 +35,10 @@ var (
 	// ErrObjectNotFound is returned by MarkObjectUploaded when the pending
 	// object does not exist.
 	ErrObjectNotFound = errors.New("object not found")
+
+	// ErrSnapshotNotFound is returned by snapshot operations when no snapshot
+	// matches the addressed id and expected state.
+	ErrSnapshotNotFound = errors.New("snapshot not found")
 )
 
 // Object represents a stored object with its metadata.
@@ -109,4 +131,53 @@ type UnpinnedObject struct {
 type OrphanedFile struct {
 	Filename string
 	Size     int64
+}
+
+// PinningSnapshot identifies a snapshot awaiting confirmation that its backup
+// object reached the indexer.
+type PinningSnapshot struct {
+	ID       int64
+	ObjectID types.Hash256
+}
+
+// DeletingSnapshot identifies a snapshot marked for deletion and when it was
+// marked.
+type DeletingSnapshot struct {
+	ObjectID types.Hash256
+	Since    time.Time
+}
+
+// SnapshotMetadata is attached to a snapshot's Sia object. It lets recovery
+// find snapshots and refuse ones it cannot restore.
+type SnapshotMetadata struct {
+	Type        string    `json:"type"`
+	CreatedAt   time.Time `json:"createdAt"`
+	DBVersion   int64     `json:"dbVersion"`
+	Encoding    string    `json:"encoding"`
+	Generation  int64     `json:"generation"`
+	ObjectCount int64     `json:"objectCount"`
+	S3DVersion  string    `json:"s3dVersion"`
+}
+
+// Validate rejects metadata no version of s3d can have written. Unknown
+// encodings and database versions pass so a snapshot from a newer s3d is still
+// recognized. S3DVersion is unchecked, it is empty in unstamped builds.
+func (m SnapshotMetadata) Validate() error {
+	switch {
+	case m.Type != SnapshotType:
+		return fmt.Errorf("unexpected type %q", m.Type)
+	case m.CreatedAt.IsZero():
+		return errors.New("missing creation time")
+	case m.Encoding == "":
+		return errors.New("missing encoding")
+	case m.DBVersion <= 0:
+		return fmt.Errorf("invalid database version %d", m.DBVersion)
+	case m.Generation <= 0 || m.Generation > maxSnapshotGeneration:
+		// the generation is bumped before the snapshot row is inserted, so it
+		// is never 0, and no counter ever gets near the upper cap
+		return fmt.Errorf("invalid generation %d", m.Generation)
+	case m.ObjectCount < 0:
+		return fmt.Errorf("invalid object count %d", m.ObjectCount)
+	}
+	return nil
 }

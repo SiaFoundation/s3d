@@ -9,8 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/http/httptrace"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -19,23 +17,25 @@ import (
 	"github.com/SiaFoundation/s3d/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	service "github.com/aws/aws-sdk-go-v2/service/s3"
+	"go.sia.tech/core/types"
 	"go.uber.org/zap/zaptest"
 )
 
-func newAdminServer(t *testing.T) (string, *http.Client) {
+func newAdminServer(t *testing.T) (string, *http.Client, *sqlite.Store) {
 	t.Helper()
-	backend, _ := testutil.NewBackend(t)
+	backend, store := testutil.NewBackend(t)
 	server := httptest.NewServer(s3.NewAdmin(backend))
 	t.Cleanup(server.Close)
-	return server.URL, server.Client()
+	return server.URL, server.Client(), store
 }
 
 func TestPrometheus(t *testing.T) {
-	baseURL, httpClient := newAdminServer(t)
+	baseURL, httpClient, _ := newAdminServer(t)
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, baseURL+"/prometheus", nil)
 	if err != nil {
@@ -62,7 +62,7 @@ func TestPrometheus(t *testing.T) {
 }
 
 func TestUploadStats(t *testing.T) {
-	baseURL, httpClient := newAdminServer(t)
+	baseURL, httpClient, _ := newAdminServer(t)
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, baseURL+"/stats/uploads", nil)
 	if err != nil {
@@ -88,15 +88,10 @@ func TestUploadStats(t *testing.T) {
 	}
 }
 
-func TestBackupSQLite3(t *testing.T) {
-	baseURL, httpClient := newAdminServer(t)
+func TestCreateSnapshot(t *testing.T) {
+	baseURL, httpClient, store := newAdminServer(t)
 
-	dest := filepath.Join(t.TempDir(), "backup.sqlite")
-	body, err := json.Marshal(s3.BackupSQLite3Request{Path: dest})
-	if err != nil {
-		t.Fatal(err)
-	}
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, baseURL+"/system/sqlite3/backup", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, baseURL+"/snapshots", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,8 +103,29 @@ func TestBackupSQLite3(t *testing.T) {
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
-	} else if _, err := os.Stat(dest); err != nil {
-		t.Fatalf("expected backup file at %q: %v", dest, err)
+	}
+
+	// the response carries the recorded snapshot
+	var snapshot s3.Snapshot
+	if err := json.NewDecoder(resp.Body).Decode(&snapshot); err != nil {
+		t.Fatal(err)
+	} else if snapshot.SiaObjectID == (types.Hash256{}) {
+		t.Fatal("expected snapshot to have a sia object id")
+	}
+
+	// the object is recorded before the pin and the record is completed once
+	// the indexer confirms the object, so the snapshot is listed
+	if known, err := store.HasSnapshotObject(snapshot.SiaObjectID); err != nil {
+		t.Fatal(err)
+	} else if !known {
+		t.Fatal("expected known object")
+	}
+	if snapshots, err := store.ListSnapshots(); err != nil {
+		t.Fatal(err)
+	} else if len(snapshots) != 1 {
+		t.Fatal("unexpected", len(snapshots))
+	} else if snapshots[0].SiaObjectID != snapshot.SiaObjectID {
+		t.Fatal("mismatch", snapshots[0].SiaObjectID)
 	}
 }
 

@@ -352,4 +352,30 @@ INSERT INTO object_parts (bucket_id, name, version_id, part_number, filename, co
 DROP TABLE object_parts_backup;`)
 		return err
 	},
+	func(tx *txn, _ *zap.Logger) error {
+		_, err := tx.Exec(`
+CREATE TABLE snapshots (
+    id INTEGER PRIMARY KEY,
+    created_at INTEGER NOT NULL,
+    object_count INTEGER NOT NULL, -- uploaded objects captured by the backup
+
+    sia_object_id BLOB, -- backup object on the network, set before the pin is issued
+
+    gen INTEGER NOT NULL, -- generation the snapshot started at
+    gen_completed INTEGER, -- generation it completed at, NULL until pinned
+
+    state INTEGER NOT NULL, -- lifecycle state, values defined in snapshots.go
+    deleting_since INTEGER -- when the state became deleting
+);
+CREATE UNIQUE INDEX snapshots_sia_object_id_idx ON snapshots(sia_object_id) WHERE sia_object_id IS NOT NULL;
+CREATE INDEX snapshots_gen_idx ON snapshots(gen, gen_completed);
+ALTER TABLE global_settings ADD COLUMN snapshot_gen INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE orphaned_objects ADD COLUMN orphaned_at_gen INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE orphaned_objects ADD COLUMN created_at_gen INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX orphaned_objects_gen_idx ON orphaned_objects(orphaned_at_gen);
+
+ALTER TABLE sia_objects ADD COLUMN created_at_gen INTEGER NOT NULL DEFAULT 0;`)
+		return err
+	},
 }
