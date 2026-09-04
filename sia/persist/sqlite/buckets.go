@@ -202,6 +202,7 @@ type bucketRead struct {
 	id         int64
 	owner      string
 	versioning string
+	mayList    bool
 }
 
 // userInfo returns the bucket's owner, which a listing reports in place of the
@@ -238,12 +239,14 @@ func bucketForRead(tx *txn, accessKeyID *string, bucket string, action s3.Policy
 		if err != nil {
 			return bucketRead{}, err
 		} else if ownerID == uid {
+			b.mayList = true // the owner may always list
 			return b, nil
 		}
 	}
 	if !granted.Allows(action) {
 		return bucketRead{}, s3errs.ErrAccessDenied
 	}
+	b.mayList = granted.Allows(s3.ActionListBucket)
 	return b, nil
 }
 

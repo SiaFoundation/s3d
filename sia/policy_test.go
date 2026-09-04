@@ -191,12 +191,12 @@ func TestBucketPolicyPublicReadScope(t *testing.T) {
 				},
 			},
 			{
-				name: "a missing key is still reported as missing",
+				name: "a missing key is hidden, not reported as missing",
 				do: func() error {
 					_, err := c.client.GetObjectVersion(t.Context(), bucket, "missing", nil)
 					return err
 				},
-				err: &s3errs.ErrNoSuchKey,
+				err: &s3errs.ErrAccessDenied,
 			},
 			{
 				// s3:GetObject does not cover addressing a specific version
@@ -661,4 +661,85 @@ func TestBucketPolicyCopySourceGrants(t *testing.T) {
 	if _, err := other.CopyObjectVersion(t.Context(), public, object, aws.String(oldVersion), own, "copy-old"); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestBucketPolicyMissingKeyVisibility checks that a missing key is reported as
+// missing only to a caller allowed to list the bucket. Without s3:ListBucket,
+// S3 returns AccessDenied so the caller cannot probe for keys.
+func TestBucketPolicyMissingKeyVisibility(t *testing.T) {
+	const bucket = "bucket"
+
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair("other", otherAccessKeyID, otherSecretKey))
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// the owner may always list, so it still sees a plain 404
+	_, err := s3Tester.GetObjectVersion(t.Context(), bucket, "missing", nil)
+	testutil.AssertS3Error(t, s3errs.ErrNoSuchKey, err)
+
+	// read but no list: existence is hidden
+	if err := s3Tester.PutBucketPolicy(t.Context(), bucket, publicReadPolicy(bucket)); err != nil {
+		t.Fatal(err)
+	}
+	forEachPublicCaller(t, s3Tester, func(t *testing.T, c publicCaller) {
+		_, err := c.client.GetObjectVersion(t.Context(), bucket, "missing", nil)
+		testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+	})
+
+	// read and list: the key is reported missing
+	if err := s3Tester.PutBucketPolicy(t.Context(), bucket, readAndListPolicy(bucket)); err != nil {
+		t.Fatal(err)
+	}
+	forEachPublicCaller(t, s3Tester, func(t *testing.T, c publicCaller) {
+		_, err := c.client.GetObjectVersion(t.Context(), bucket, "missing", nil)
+		testutil.AssertS3Error(t, s3errs.ErrNoSuchKey, err)
+	})
+}
+
+// TestBucketPolicyDeleteMarkerHidden checks that a delete-marked key is
+// indistinguishable from one that never existed for a caller that may not list
+// the bucket. Otherwise the 404 and its delete-marker headers reveal that the
+// key was once there.
+func TestBucketPolicyDeleteMarkerHidden(t *testing.T) {
+	const (
+		bucket = "bucket"
+		object = "key"
+	)
+
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair("other", otherAccessKeyID, otherSecretKey))
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	} else if err := s3Tester.PutBucketVersioning(t.Context(), bucket, types.BucketVersioningStatusEnabled); err != nil {
+		t.Fatal(err)
+	} else if _, err := s3Tester.PutObjectVersion(t.Context(), bucket, object, []byte("value")); err != nil {
+		t.Fatal(err)
+	} else if err := s3Tester.DeleteObject(t.Context(), bucket, object); err != nil {
+		t.Fatal(err)
+	}
+
+	// read but no list: the delete marker looks exactly like an absent key
+	if err := s3Tester.PutBucketPolicy(t.Context(), bucket, publicReadPolicy(bucket)); err != nil {
+		t.Fatal(err)
+	}
+	forEachPublicCaller(t, s3Tester, func(t *testing.T, c publicCaller) {
+		_, err := c.client.GetObjectVersion(t.Context(), bucket, object, nil)
+		testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+
+		_, err = c.client.GetObjectVersion(t.Context(), bucket, "never-existed", nil)
+		testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+
+		// nor can a copy be used to tell them apart
+		_, err = c.client.CopyObjectVersion(t.Context(), bucket, object, nil, bucket, "copy")
+		testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+	})
+
+	// with s3:ListBucket the delete marker is reported as such
+	if err := s3Tester.PutBucketPolicy(t.Context(), bucket, readAndListPolicy(bucket)); err != nil {
+		t.Fatal(err)
+	}
+	forEachPublicCaller(t, s3Tester, func(t *testing.T, c publicCaller) {
+		_, err := c.client.GetObjectVersion(t.Context(), bucket, object, nil)
+		testutil.AssertS3StatusCode(t, s3errs.ErrNoSuchKey, err)
+	})
 }
