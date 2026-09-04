@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"slices"
 	"strconv"
@@ -32,6 +33,46 @@ func (s mockKeyStore) LoadSecret(_ context.Context, id string) (SecretAccessKey,
 		return nil, s3errs.ErrInvalidAccessKeyId
 	}
 	return slices.Clone(v), nil
+}
+
+// The following constants are taken from the AWS SigV4 documentation examples.
+const (
+	exampleAccessKey = "AKIAIOSFODNN7EXAMPLE"
+	exampleSecret    = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+	exampleHost      = "examplebucket.s3.amazonaws.com"
+	exampleRegion    = "us-east-1"
+	exampleScope     = "20130524/us-east-1/s3/aws4_request"
+)
+
+var exampleTime = time.Date(2013, 5, 24, 0, 0, 0, 0, time.UTC)
+
+// exampleHeaders returns the headers a signed example request carries.
+func exampleHeaders() http.Header {
+	return http.Header{
+		"host":                 {exampleHost},
+		"x-amz-date":           {exampleTime.Format(layoutISO8601)},
+		"x-amz-content-sha256": {ContentUnsignedPayload},
+	}
+}
+
+// signedRequest builds an example request signed with the Authorization header.
+// scope and signedHeaderList are used verbatim so tests can send malformed
+// values.
+func signedRequest(method, region, scope, signedHeaderList string, signed http.Header) *http.Request {
+	req := httptest.NewRequest(method, "https://"+exampleHost+"/test.txt", nil)
+	for name, values := range signed {
+		if !strings.EqualFold(name, "host") { // Go serves "host" out of Request.Host
+			req.Header[http.CanonicalHeaderKey(name)] = values
+		}
+	}
+	canonical := canonicalRequest(signed, ContentUnsignedPayload, "", "/test.txt", method)
+	toSign := canonicalStringToSign(canonical, exampleTime, scope)
+	signature := getSignature(signingKey(SecretAccessKey(exampleSecret), exampleTime, region), toSign)
+	req.Header.Set(HeaderAuthorization, AuthorizationAWS4HMACSHA256+
+		" Credential="+exampleAccessKey+"/"+scope+
+		",SignedHeaders="+signedHeaderList+
+		",Signature="+signature)
+	return req
 }
 
 func TestParseAuthHeader(t *testing.T) {
@@ -82,42 +123,205 @@ func TestDateValidation(t *testing.T) {
 	store := mockKeyStore{}
 
 	// Case 1: date not set
-	_, err := verifyV4SignedRequest(req, store, "", now)
+	_, err := verifyV4SignedRequest(req, nil, store, "", now)
 	if !errors.Is(err, s3errs.ErrMissingAuthenticationToken) {
 		t.Fatalf("expected ErrMissingAuthenticationToken, got %v", err)
 	}
 
 	// Case 2: credential date is in the past
 	header.Set(HeaderXAMZDate, now.Add(-24*time.Hour).Format(layoutISO8601))
-	_, err = verifyV4SignedRequest(req, store, "", now)
+	_, err = verifyV4SignedRequest(req, nil, store, "", now)
 	if !errors.Is(err, s3errs.ErrAuthorizationHeaderMalformed) {
 		t.Fatalf("expected ErrAuthorizationHeaderMalformed, got %v", err)
 	}
 
 	// Case 3: credential date is in the future
 	header.Set(HeaderXAMZDate, now.Add(24*time.Hour).Format(layoutISO8601))
-	_, err = verifyV4SignedRequest(req, store, "", now)
+	_, err = verifyV4SignedRequest(req, nil, store, "", now)
 	if !errors.Is(err, s3errs.ErrAuthorizationHeaderMalformed) {
 		t.Fatalf("expected ErrAuthorizationHeaderMalformed, got %v", err)
 	}
 
 	// Case 4: date is skewed too far in the past
 	header.Set(HeaderXAMZDate, now.Format(layoutISO8601))
-	_, err = verifyV4SignedRequest(req, store, "", now.Add(6*time.Minute))
+	_, err = verifyV4SignedRequest(req, nil, store, "", now.Add(6*time.Minute))
 	if !errors.Is(err, s3errs.ErrRequestTimeTooSkewed) {
 		t.Fatalf("expected ErrAuthorizationHeaderMalformed, got %v", err)
 	}
 
 	// Case 5: date is skewed too far in the future
-	_, err = verifyV4SignedRequest(req, store, "", now.Add(-6*time.Minute))
+	_, err = verifyV4SignedRequest(req, nil, store, "", now.Add(-6*time.Minute))
 	if !errors.Is(err, s3errs.ErrRequestTimeTooSkewed) {
 		t.Fatalf("expected ErrAuthorizationHeaderMalformed, got %v", err)
 	}
 
 	// Case 6: date is valid but we don't have the access key
-	_, err = verifyV4SignedRequest(req, store, "", now)
+	_, err = verifyV4SignedRequest(req, nil, store, "", now)
 	if !errors.Is(err, s3errs.ErrInvalidAccessKeyId) {
 		t.Fatal(err)
+	}
+}
+
+// TestCanonicalQueryString checks what canonicalQueryString adds on top of
+// url.Values.Encode.
+func TestCanonicalQueryString(t *testing.T) {
+	tests := []struct {
+		name  string
+		query url.Values
+		want  string
+	}{
+		{
+			name:  "sorted by name then value",
+			query: url.Values{"b": {"2"}, "a": {"z", "x"}},
+			want:  "a=x&a=z&b=2",
+		},
+		{
+			name:  "space is percent encoded",
+			query: url.Values{"k": {"a b"}},
+			want:  "k=a%20b",
+		},
+		{
+			name:  "plus is escaped",
+			query: url.Values{"k": {"a+b"}},
+			want:  "k=a%2Bb",
+		},
+		{
+			// AWS sorts after encoding, so '{' sorts before 'a' as "%7B"
+			name:  "names sorted after encoding",
+			query: url.Values{"{": {"1"}, "a": {"2"}},
+			want:  "%7B=1&a=2",
+		},
+		{
+			name:  "values sorted after encoding",
+			query: url.Values{"k": {"{", "a"}},
+			want:  "k=%7B&k=a",
+		},
+		{
+			// the name is compared before its value, so encoded pairs must not
+			// be sorted as whole strings
+			name:  "name compared before value",
+			query: url.Values{"a b": {"1"}, "a": {"2"}},
+			want:  "a=2&a%20b=1",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := canonicalQueryString(tc.query); got != tc.want {
+				t.Fatalf("expected %q, got %q", tc.want, got)
+			}
+		})
+	}
+}
+
+// TestHandleAuthV4 checks the validation of a request signed with the
+// Authorization header and the handling of an anonymous request.
+func TestHandleAuthV4(t *testing.T) {
+	const headerList = "host;x-amz-content-sha256;x-amz-date"
+	store := mockKeyStore{exampleAccessKey: SecretAccessKey(exampleSecret)}
+
+	t.Run("valid", func(t *testing.T) {
+		req := signedRequest(http.MethodPut, exampleRegion, exampleScope, headerList, exampleHeaders())
+		accessKeyID, err := HandleAuth(req, store, exampleRegion, exampleTime)
+		if err != nil {
+			t.Fatal(err)
+		} else if accessKeyID == nil {
+			t.Fatal("expected access key ID, got anonymous")
+		} else if *accessKeyID != exampleAccessKey {
+			t.Fatalf("expected access key ID %q, got %q", exampleAccessKey, *accessKeyID)
+		}
+	})
+
+	t.Run("mixed-case signed headers", func(t *testing.T) {
+		req := signedRequest(http.MethodPut, exampleRegion, exampleScope, "host;X-Amz-Content-Sha256;X-Amz-Date", exampleHeaders())
+		if _, err := HandleAuth(req, store, exampleRegion, exampleTime); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("malformed credential scope", func(t *testing.T) {
+		for _, scope := range []string{
+			"20130524/us-east-1/not-s3/aws4_request",
+			"20130524/us-east-1/s3/not-aws4_request",
+			"20130524//s3/aws4_request",
+		} {
+			req := signedRequest(http.MethodPut, exampleRegion, scope, headerList, exampleHeaders())
+			if _, err := HandleAuth(req, store, exampleRegion, exampleTime); !errors.Is(err, s3errs.ErrAuthorizationHeaderMalformed) {
+				t.Fatalf("%s: expected ErrAuthorizationHeaderMalformed, got %v", scope, err)
+			}
+		}
+	})
+
+	t.Run("region", func(t *testing.T) {
+		const scope = "20130524/eu-west-1/s3/aws4_request"
+		// an empty region allows any region
+		req := signedRequest(http.MethodPut, "eu-west-1", scope, headerList, exampleHeaders())
+		if _, err := HandleAuth(req, store, "", exampleTime); err != nil {
+			t.Fatal("any region:", err)
+		}
+		req = signedRequest(http.MethodPut, "eu-west-1", scope, headerList, exampleHeaders())
+		if _, err := HandleAuth(req, store, exampleRegion, exampleTime); !errors.Is(err, s3errs.ErrAuthorizationHeaderMalformed) {
+			t.Fatalf("expected ErrAuthorizationHeaderMalformed, got %v", err)
+		}
+	})
+
+	t.Run("unsigned x-amz header", func(t *testing.T) {
+		req := signedRequest(http.MethodPut, exampleRegion, exampleScope, headerList, exampleHeaders())
+		req.Header.Set("X-Amz-Copy-Source", "bucket/secret.txt")
+		if _, err := HandleAuth(req, store, exampleRegion, exampleTime); !errors.Is(err, s3errs.ErrAccessDeniedUnsignedHeaders) {
+			t.Fatalf("expected ErrAccessDeniedUnsignedHeaders, got %v", err)
+		}
+	})
+
+	t.Run("unsigned x-amz-content-sha256 exempt", func(t *testing.T) {
+		signed := exampleHeaders()
+		delete(signed, "x-amz-content-sha256")
+		req := signedRequest(http.MethodPut, exampleRegion, exampleScope, canonicalSignedHeaders(signed), signed)
+		req.Header.Set(HeaderXAMZContentSHA256, ContentUnsignedPayload)
+		if _, err := HandleAuth(req, store, exampleRegion, exampleTime); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("anonymous", func(t *testing.T) {
+		// the query string is normalized and validated for the handlers
+		req := httptest.NewRequest(http.MethodGet, "https://host/bucket/key?versionId=v;1", nil)
+		accessKeyID, err := HandleAuth(req, store, exampleRegion, exampleTime)
+		if err != nil {
+			t.Fatal(err)
+		} else if accessKeyID != nil {
+			t.Fatalf("expected anonymous request, got access key ID %q", *accessKeyID)
+		} else if got := req.URL.Query().Get("versionId"); got != "v;1" {
+			t.Fatalf("expected versionId %q, got %q", "v;1", got)
+		}
+
+		req = httptest.NewRequest(http.MethodGet, "https://host/bucket/key?prefix=%zz", nil)
+		if _, err := HandleAuth(req, store, exampleRegion, exampleTime); !errors.Is(err, s3errs.ErrInvalidURI) {
+			t.Fatalf("expected ErrInvalidURI, got %v", err)
+		}
+	})
+}
+
+// TestHandleAuthV4PayloadClearsSigningKey checks that handleAuthV4Payload
+// clears the signing key even after handing it to the chunk verifier.
+func TestHandleAuthV4PayloadClearsSigningKey(t *testing.T) {
+	const payloadHash = ContentStreamingAWS4HMACSHA256PayloadTrailer
+	req := httptest.NewRequest(http.MethodPut, "https://host/bucket/key", strings.NewReader("0\r\n\r\n"))
+	req.Header.Set(HeaderXAMZContentSHA256, payloadHash)
+	req.Header.Set(HeaderXAMZDecodedContentLength, "0")
+	req.Header.Set(HeaderXAMZTrailer, "x-amz-checksum-sha256")
+
+	key := bytes.Repeat([]byte{0xAB}, sha256.Size)
+	result := &v4SignResult{
+		AccessKeyID: exampleAccessKey,
+		SigningKey:  key,
+		Scope:       exampleScope,
+		Timestamp:   exampleTime.Format(layoutISO8601),
+		SeedSig:     strings.Repeat("0", 64),
+	}
+	if err := handleAuthV4Payload(req, payloadHash, result); err != nil {
+		t.Fatal(err)
+	} else if !bytes.Equal(key, make([]byte, len(key))) {
+		t.Fatalf("expected zeroed signing key, got %x", key)
 	}
 }
 
@@ -328,7 +532,7 @@ func TestHandleAuthV4Streaming(t *testing.T) {
 		}
 
 		req := &http.Request{Header: header, Body: io.NopCloser(bytes.NewReader(c.body))}
-		err := handleAuthV4Streaming(req, c.result)
+		err := handleAuthV4Streaming(req, c.contentSha, c.result)
 		if c.wantSetupErr != nil {
 			if !errors.Is(err, c.wantSetupErr) {
 				t.Fatal(c.name, "setup:", err)
@@ -425,8 +629,10 @@ func TestStreamingSignEndToEnd(t *testing.T) {
 	gotKey, err := HandleAuth(req, store, region, now)
 	if err != nil {
 		t.Fatal(err)
-	} else if gotKey != accessKey {
-		t.Fatal("access key mismatch:", gotKey)
+	} else if gotKey == nil {
+		t.Fatal("expected access key ID, got anonymous")
+	} else if *gotKey != accessKey {
+		t.Fatal("access key ID mismatch:", *gotKey)
 	}
 
 	got, err := io.ReadAll(req.Body)
