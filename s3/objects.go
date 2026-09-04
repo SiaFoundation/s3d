@@ -492,7 +492,7 @@ func (s *s3) listObjectsV1(w http.ResponseWriter, r *http.Request, accessKeyID *
 		return err
 	}
 
-	page := ListObjectsPage{MaxKeys: maxKeys}
+	page := ListObjectsPage{MaxKeys: maxKeys, FetchOwner: aws.Bool(true)}
 	if _, hasMarker := q["marker"]; hasMarker {
 		marker := q.Get("marker")
 		page.Marker = &marker

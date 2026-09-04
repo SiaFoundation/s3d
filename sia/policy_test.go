@@ -588,6 +588,14 @@ func TestBucketPolicyListingReportsBucketOwner(t *testing.T) {
 	}
 
 	forEachPublicCaller(t, s3Tester, func(t *testing.T, c publicCaller) {
+		v1, err := c.client.ListObjects(t.Context(), bucket, nil, nil, s3.ListObjectsPage{})
+		if err != nil {
+			t.Fatal(err)
+		} else if len(v1.Contents) != 1 {
+			t.Fatalf("unexpected v1 listing: %v", v1.Contents)
+		}
+		assertOwner(t, v1.Contents[0].Owner)
+
 		listed, err := c.client.ListObjectsV2(t.Context(), bucket, nil, nil, s3.ListObjectsPage{FetchOwner: aws.Bool(true)})
 		if err != nil {
 			t.Fatal(err)
