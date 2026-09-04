@@ -487,7 +487,8 @@ func (s s3) authMiddleware(handler auth.AuthenticatedHandler) http.Handler {
 
 			akid, err := auth.HandleAuth(req, s.backend, region, time.Now())
 			if err != nil {
-				s.logger.Debug("authentication failed", zap.Error(err))
+				s.logger.Debug("authentication failed", zap.Error(err),
+					zap.String("accessKeyID", auth.AccessKeyIDFromRequest(req)))
 				writeErrorResponse(w, req, err)
 				return
 			}
@@ -599,8 +600,10 @@ func (s *s3) routeBase(w http.ResponseWriter, r *http.Request, accessKeyID *stri
 	} else if r.Method == "GET" {
 		err = s.listBuckets(w, r, accessKeyID)
 	} else {
-		http.NotFound(w, r)
-		return
+		// AWS dispatches on the method before authenticating the service root,
+		// answering 405 with "Allow: GET" even to an unsigned request
+		w.Header().Set("Allow", http.MethodGet)
+		err = s3errs.ErrMethodNotAllowed
 	}
 	if err != nil {
 		// only consider 5xx errors as "real" errors when logging. Other errors

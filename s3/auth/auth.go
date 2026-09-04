@@ -144,6 +144,18 @@ func handleAuthV4a(_ *http.Request) (string, error) {
 	return "", s3errs.ErrNotImplemented // Signature Version 4A is not implemented
 }
 
+// AccessKeyIDFromRequest returns the access key ID from the request's
+// Authorization header. It only parses, never verifies, so the result is
+// suitable for logging a failed authentication and nothing else. It returns an
+// empty string if the header is absent or malformed.
+func AccessKeyIDFromRequest(req *http.Request) string {
+	header, err := parseAuthHeader(req.Header)
+	if err != nil {
+		return ""
+	}
+	return header.Credential.AccessKeyID
+}
+
 // Sha256HashFromRequest extracts the SHA256 hash of the payload from the
 // request if available. This hash should then be used to verify the integrity
 // of the payload.
