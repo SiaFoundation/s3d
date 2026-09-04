@@ -8,6 +8,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"net/http"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -105,18 +106,52 @@ func canonicalHeaders(signedHeaders http.Header) string {
 //	<CanonicalHeaders>\n
 //	<SignedHeaders>\n
 //	<HashedPayload>
-func canonicalRequest(extractedSignedHeaders http.Header, payload, queryStr, urlPath, method string) string {
-	rawQuery := strings.ReplaceAll(queryStr, "+", "%20")
+func canonicalRequest(extractedSignedHeaders http.Header, payload, canonicalQuery, urlPath, method string) string {
 	encodedPath := urlEncode(urlPath)
 	canonicalRequest := strings.Join([]string{
 		method,
 		encodedPath,
-		rawQuery,
+		canonicalQuery,
 		canonicalHeaders(extractedSignedHeaders),
 		canonicalSignedHeaders(extractedSignedHeaders),
 		payload,
 	}, "\n")
 	return canonicalRequest
+}
+
+// queryEncode percent-encodes a query string name or value. url.QueryEscape
+// follows the same rules apart from encoding a space as '+' rather than "%20".
+func queryEncode(s string) string {
+	return strings.ReplaceAll(url.QueryEscape(s), "+", "%20")
+}
+
+// canonicalQueryString generates the canonical query string i.e an
+// '&'-separated list of percent-encoded "name=value" pairs sorted by name, then
+// value. The sort happens after encoding, so url.Values.Encode can't be used:
+// it sorts the names before encoding them and never sorts the values of a
+// repeated name.
+func canonicalQueryString(query url.Values) string {
+	var names []string
+	vals := make(url.Values, len(query))
+	for name, values := range query {
+		encoded := make([]string, len(values))
+		for i, value := range values {
+			encoded[i] = queryEncode(value)
+		}
+		sort.Strings(encoded)
+		name = queryEncode(name)
+		names = append(names, name)
+		vals[name] = encoded
+	}
+	sort.Strings(names)
+
+	var pairs []string
+	for _, name := range names {
+		for _, value := range vals[name] {
+			pairs = append(pairs, name+"="+value)
+		}
+	}
+	return strings.Join(pairs, "&")
 }
 
 // canonicalSignedHeaders generate a string i.e alphabetically sorted,
@@ -187,7 +222,62 @@ type v4SignResult struct {
 	SeedSig     string
 }
 
-func verifyV4SignedRequest(req *http.Request, store KeyStore, region string, now time.Time) (*v4SignResult, error) {
+// v4Signature is the signature of a request and the signed inputs, taken from
+// either the Authorization header or the presigned query parameters.
+type v4Signature struct {
+	Credential    credentialHeader
+	Date          time.Time
+	SignedHeaders []string // lowercase header names
+	PayloadHash   string
+	Query         url.Values // excludes X-Amz-Signature for presigned requests
+	Signature     string
+}
+
+// verify checks that req is signed for region with all of its x-amz-* headers
+// and that the signature matches. malformed is the error for a wrong region or
+// signed headers list since it depends on where the signature was taken from.
+// The caller must clear the SigningKey of the result.
+func (s v4Signature) verify(req *http.Request, store KeyStore, region string, malformed error) (*v4SignResult, error) {
+	// an empty region allows any region
+	if region != "" && s.Credential.Scope.Region != region {
+		return nil, malformed
+	}
+
+	secretKey, err := store.LoadSecret(req.Context(), s.Credential.AccessKeyID)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(secretKey)
+
+	signedHeaders, err := extractSignedHeaders(req, s.SignedHeaders)
+	if err != nil {
+		return nil, malformed
+	} else if err := assertSignedAMZHeaders(req.Header, s.SignedHeaders); err != nil {
+		return nil, err
+	}
+
+	canonical := canonicalRequest(signedHeaders, s.PayloadHash, canonicalQueryString(s.Query), req.URL.Path, req.Method)
+	scope := s.Credential.Scope.Canonical()
+	toSign := canonicalStringToSign(canonical, s.Date, scope)
+	signingKey := signingKey(secretKey, s.Date, s.Credential.Scope.Region)
+
+	// compare signature in constant time to avoid timing attacks
+	expectedSignature := getSignature(signingKey, toSign)
+	if subtle.ConstantTimeCompare([]byte(expectedSignature), []byte(s.Signature)) != 1 {
+		clear(signingKey)
+		return nil, s3errs.ErrSignatureDoesNotMatch
+	}
+	return &v4SignResult{
+		AccessKeyID: s.Credential.AccessKeyID,
+		SigningKey:  signingKey,
+		Scope:       scope,
+		Timestamp:   s.Date.Format(layoutISO8601),
+		SeedSig:     s.Signature,
+	}, nil
+}
+
+// verifyV4SignedRequest verifies a request signed with the Authorization header.
+func verifyV4SignedRequest(req *http.Request, query url.Values, store KeyStore, region string, now time.Time) (*v4SignResult, error) {
 	// for the simple signature, we expect the full payload hash to be provided
 	// in the header
 	payloadHash := req.Header.Get(HeaderXAMZContentSHA256)
@@ -202,7 +292,6 @@ func verifyV4SignedRequest(req *http.Request, store KeyStore, region string, now
 	}
 
 	// parse and validate date header
-	const maxClockSkew = 5 * time.Minute
 	date, err := parseDateHeader(req.Header)
 	if err != nil {
 		return nil, err
@@ -212,45 +301,13 @@ func verifyV4SignedRequest(req *http.Request, store KeyStore, region string, now
 		return nil, s3errs.ErrRequestTimeTooSkewed
 	}
 
-	secretKey, err := store.LoadSecret(req.Context(), header.Credential.AccessKeyID)
-	if err != nil {
-		return nil, err
+	sig := v4Signature{
+		Credential:    header.Credential,
+		Date:          date,
+		SignedHeaders: header.SignedHeaders,
+		PayloadHash:   payloadHash,
+		Query:         query,
+		Signature:     header.Signature,
 	}
-	defer clear(secretKey)
-
-	signedHeaders, err := extractSignedHeaders(req, header.SignedHeaders)
-	if err != nil {
-		return nil, err
-	}
-
-	// create the canonical request to sign
-	if err := req.ParseForm(); err != nil {
-		return nil, err
-	}
-	canonicalRequest := canonicalRequest(signedHeaders, payloadHash, req.Form.Encode(), req.URL.Path, req.Method)
-
-	// combine it with the canonical scope to create the string to sign
-	scope := header.Credential.Scope.Canonical()
-	toSign := canonicalStringToSign(canonicalRequest, date, scope)
-
-	// derive the signing key from the secret key using the date and region
-	if region == "" {
-		// use region from request if not provided which is equivalent to
-		// allowing any region
-		region = header.Credential.Scope.Region
-	}
-	signingKey := signingKey(secretKey, date, region)
-
-	// compare signature in constant time to avoid timing attacks
-	expectedSignature := getSignature(signingKey, toSign)
-	if subtle.ConstantTimeCompare([]byte(expectedSignature), []byte(header.Signature)) != 1 {
-		return nil, s3errs.ErrSignatureDoesNotMatch
-	}
-	return &v4SignResult{
-		AccessKeyID: header.Credential.AccessKeyID,
-		SigningKey:  signingKey,
-		Scope:       scope,
-		Timestamp:   date.Format(layoutISO8601),
-		SeedSig:     header.Signature,
-	}, nil
+	return sig.verify(req, store, region, s3errs.ErrAuthorizationHeaderMalformed)
 }

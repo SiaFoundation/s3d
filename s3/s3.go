@@ -471,7 +471,7 @@ func NewAdmin(b Backend, opts ...Option) http.Handler {
 // the access key ID of the authenticated user.
 // - If authentication fails, an error response is sent and the wrapped handler
 // is not called.
-// - If the request is not signed, the wrapped handler is called with an empty
+// - If the request is not signed, the wrapped handler is called with a nil
 // access key ID, indicating an anonymous request.
 func (s s3) authMiddleware(handler auth.AuthenticatedHandler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -480,18 +480,12 @@ func (s s3) authMiddleware(handler auth.AuthenticatedHandler) http.Handler {
 			zap.String(auth.HeaderXAMZContentSHA256, req.Header.Get(auth.HeaderXAMZContentSHA256)),
 			zap.String(auth.HeaderXAMZDate, req.Header.Get(auth.HeaderXAMZDate)))
 
-		var accessKeyID *string
-		if req.Header.Get(auth.HeaderAuthorization) != "" {
-			// NOTE: If 'region' is empty here, all regions are allowed.
-			region := s.region
-
-			akid, err := auth.HandleAuth(req, s.backend, region, time.Now())
-			if err != nil {
-				s.logger.Debug("authentication failed", zap.Error(err))
-				writeErrorResponse(w, req, err)
-				return
-			}
-			accessKeyID = &akid
+		// NOTE: If 'region' is empty here, all regions are allowed.
+		accessKeyID, err := auth.HandleAuth(req, s.backend, s.region, time.Now())
+		if err != nil {
+			s.logger.Debug("authentication failed", zap.Error(err))
+			writeErrorResponse(w, req, err)
+			return
 		}
 
 		handler.ServeHTTP(w, req, accessKeyID)
