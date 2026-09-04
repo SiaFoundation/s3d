@@ -62,6 +62,10 @@ func writeErrorResponse(w http.ResponseWriter, r *http.Request, err error) {
 	if w.Header().Get("x-amz-delete-marker") != "" {
 		keep = []string{"X-Amz-Delete-Marker", "X-Amz-Version-Id", "Last-Modified", "Allow"}
 	}
+	if s3Err.HTTPStatus == http.StatusMethodNotAllowed {
+		// a 405 has to say which methods are accepted
+		keep = append(keep, "Allow")
+	}
 
 	// clear any headers that may have been set before the error was detected
 	// (e.g. conditional GET sets ETag and metadata before checking If-Match)
