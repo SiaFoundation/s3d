@@ -209,6 +209,55 @@ AWS Signature V4 exclusively. SigV4A is not implemented. Supported
 
 Bucket lifecycle configuration supports prefix-based `AbortIncompleteMultipartUpload` rules and current-object `Expiration` rules.
 
+Bucket policies are supported only to grant read access to everyone.
+`PutBucketPolicy` accepts `Allow` statements whose principal is `*` and whose
+actions are drawn from this set:
+
+| Action | Resource | Grants |
+|--------|----------|--------|
+| `s3:GetObject` | `arn:aws:s3:::<bucket>/*` | `GetObject`, `HeadObject` |
+| `s3:GetObjectVersion` | `arn:aws:s3:::<bucket>/*` | `GetObject`, `HeadObject` for a specific `versionId` |
+| `s3:ListBucket` | `arn:aws:s3:::<bucket>` | `ListObjects` v1 and v2 |
+| `s3:ListBucketVersions` | `arn:aws:s3:::<bucket>` | `ListObjectVersions` |
+
+Each action is granted on its own, so a policy that allows listing does not also
+allow reading. An action paired with the wrong resource grants nothing, as in
+S3. A policy granting everything looks like this:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": ["s3:GetObject", "s3:GetObjectVersion"],
+      "Resource": "arn:aws:s3:::<bucket>/*"
+    },
+    {
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": ["s3:ListBucket", "s3:ListBucketVersions"],
+      "Resource": "arn:aws:s3:::<bucket>"
+    }
+  ]
+}
+```
+
+A `*` principal covers every caller, so the grant applies to signed requests
+from other users as well as to unsigned ones. Nothing beyond those four actions
+follows from it: writes, deletes, `HeadBucket` and the bucket's own
+configuration all still require the owner's credentials, only the owner can
+read, change or remove the policy, and the bucket does not appear in anyone
+else's `ListBuckets`. A listing reports the bucket's owner, which is not
+necessarily the caller.
+
+Any policy s3d cannot honor exactly is rejected rather than partially applied,
+so an accepted policy never grants more access than it describes: `Deny`
+statements, `Condition` blocks, named principals, other actions, resources
+scoped to a key prefix, and unrecognised members of any kind are all refused.
+ACLs remain unimplemented, as does `PublicAccessBlock`.
+
 Conditional requests are supported. `GetObject` and `HeadObject` honor
 `If-Match`, `If-None-Match`, `If-Modified-Since` and `If-Unmodified-Since`, and
 the copy source of `CopyObject` and `UploadPartCopy` honors the matching
@@ -224,53 +273,59 @@ delete with nothing to delete is a no-op, as an unconditional one is.
 
 ### Operations
 
-| Operation | Status |
-|-----------|--------|
-| **Buckets** | |
-| CreateBucket | ✓ |
-| DeleteBucket | ✓ |
-| HeadBucket | ✓ |
-| ListBuckets | ✓ |
-| GetBucketLocation | ✓ |
-| GetBucketVersioning | ✗ |
-| PutBucketVersioning | ✗ |
-| GetBucketAcl | ✗ |
-| PutBucketAcl | ✗ |
-| GetBucketPolicy | ✗ |
-| PutBucketPolicy | ✗ |
-| GetBucketLifecycle | ✓ |
-| PutBucketLifecycle | ✓ |
-| DeleteBucketLifecycle | ✓ |
-| GetBucketCors | ✗ |
-| PutBucketCors | ✗ |
-| GetBucketTagging | ✗ |
-| PutBucketTagging | ✗ |
-| GetBucketEncryption | ✗ |
-| PutBucketEncryption | ✗ |
-| **Objects** | |
-| PutObject | ✓ |
-| GetObject | ✓ |
-| HeadObject | ✓ |
-| DeleteObject | ✓ |
-| DeleteObjects | ✓ |
-| CopyObject | ✓ |
-| ListObjects (v1) | ✓ |
-| ListObjects (v2) | ✓ |
-| GetObjectAcl | ✗ |
-| PutObjectAcl | ✗ |
-| GetObjectTagging | ✗ |
-| PutObjectTagging | ✗ |
-| GetObjectLock | ✗ |
-| PutObjectLock | ✗ |
-| SelectObjectContent | ✗ |
-| **Multipart** | |
-| CreateMultipartUpload | ✓ |
-| UploadPart | ✓ |
-| UploadPartCopy | ✓ |
-| CompleteMultipartUpload | ✓ |
-| AbortMultipartUpload | ✓ |
-| ListParts | ✓ |
-| ListMultipartUploads | ✓ |
+✓ fully supported, ◐ supported with the limitations listed, ✗ not implemented.
+
+| Operation | Status | Limitations |
+|-----------|--------|-------------|
+| **Buckets** | | |
+| CreateBucket | ✓ | |
+| DeleteBucket | ✓ | |
+| HeadBucket | ◐ | Requires credentials; `s3:ListBucket` does not expose it anonymously |
+| ListBuckets | ✓ | |
+| GetBucketLocation | ✓ | |
+| GetBucketVersioning | ✓ | |
+| PutBucketVersioning | ◐ | `MfaDelete` is rejected; `Enabled` and `Suspended` are supported |
+| GetBucketAcl | ✗ | |
+| PutBucketAcl | ✗ | |
+| GetBucketPolicy | ✓ | |
+| PutBucketPolicy | ◐ | `Allow` only, principal `*` only, and only the four read actions listed above |
+| DeleteBucketPolicy | ✓ | |
+| GetBucketPolicyStatus | ✓ | |
+| GetBucketLifecycle | ✓ | |
+| PutBucketLifecycle | ◐ | Prefix-based `AbortIncompleteMultipartUpload` and current-object `Expiration` rules only |
+| DeleteBucketLifecycle | ✓ | |
+| GetBucketCors | ✗ | |
+| PutBucketCors | ✗ | |
+| GetBucketTagging | ✗ | |
+| PutBucketTagging | ✗ | |
+| GetBucketEncryption | ✗ | |
+| PutBucketEncryption | ✗ | |
+| PublicAccessBlock | ✗ | |
+| **Objects** | | |
+| PutObject | ✓ | |
+| GetObject | ✓ | |
+| HeadObject | ✓ | |
+| DeleteObject | ✓ | |
+| DeleteObjects | ✓ | |
+| CopyObject | ✓ | |
+| ListObjects (v1) | ✓ | |
+| ListObjects (v2) | ✓ | |
+| ListObjectVersions | ✓ | |
+| GetObjectAcl | ✗ | |
+| PutObjectAcl | ✗ | |
+| GetObjectTagging | ✗ | |
+| PutObjectTagging | ✗ | |
+| GetObjectLock | ✗ | |
+| PutObjectLock | ✗ | |
+| SelectObjectContent | ✗ | |
+| **Multipart** | | |
+| CreateMultipartUpload | ✓ | |
+| UploadPart | ✓ | |
+| UploadPartCopy | ✓ | |
+| CompleteMultipartUpload | ✓ | |
+| AbortMultipartUpload | ✓ | |
+| ListParts | ✓ | |
+| ListMultipartUploads | ✓ | |
 
 ## Configuration
 

@@ -22,8 +22,6 @@ var unsupportedBucketSubresources = map[string]struct{}{
 	"notification":        {},
 	"object-lock":         {},
 	"ownershipControls":   {},
-	"policy":              {},
-	"policyStatus":        {},
 	"publicAccessBlock":   {},
 	"replication":         {},
 	"requestPayment":      {},
@@ -34,11 +32,6 @@ var unsupportedBucketSubresources = map[string]struct{}{
 // routeBucket handles URLs that contain only a bucket path segment, not an
 // object path segment.
 func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket string) error {
-	validatedKey, err := assertAuth(accessKeyID)
-	if err != nil {
-		return err
-	}
-
 	q := r.URL.Query()
 	for param := range q {
 		if _, ok := unsupportedBucketSubresources[param]; ok {
@@ -46,20 +39,34 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *st
 		}
 	}
 
-	if _, ok := q["lifecycle"]; ok {
-		return s.routeBucketLifecycle(w, r, validatedKey, bucket)
+	// the subresources read or configure the bucket itself; each asserts
+	// ownership for itself
+	switch {
+	case q.Has("lifecycle"):
+		return s.routeBucketLifecycle(w, r, accessKeyID, bucket)
+	case q.Has("policy"):
+		return s.routeBucketPolicy(w, r, accessKeyID, bucket)
+	case q.Has("policyStatus"):
+		return s.routeBucketPolicyStatus(w, r, accessKeyID, bucket)
+	case q.Has("location"):
+		return s.bucketLocation(w, r, accessKeyID, bucket)
 	}
 
-	switch r.Method {
-	case http.MethodGet:
-		// nolint:gocritic
-		if _, ok := q["location"]; ok {
-			return s.bucketLocation(w, r, validatedKey, bucket)
-		} else if q.Get("list-type") == "2" {
+	// routes with optional authentication. The backend rejects an anonymous
+	// listing unless the bucket's policy grants s3:ListBucket.
+	if r.Method == http.MethodGet {
+		if q.Get("list-type") == "2" {
 			return s.listObjectsV2(w, r, accessKeyID, bucket)
-		} else {
-			return s.listObjectsV1(w, r, accessKeyID, bucket)
 		}
+		return s.listObjectsV1(w, r, accessKeyID, bucket)
+	}
+
+	// routes with mandatory authentication
+	validatedKey, err := assertAuth(accessKeyID)
+	if err != nil {
+		return err
+	}
+	switch r.Method {
 	case http.MethodPut:
 		return s.createBucket(w, r, validatedKey, bucket)
 	case http.MethodDelete:
@@ -67,12 +74,10 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *st
 	case http.MethodHead:
 		return s.headBucket(w, r, validatedKey, bucket)
 	case http.MethodPost:
-		// nolint:gocritic
-		if _, ok := q["delete"]; ok {
-			return s.deleteObjects(w, r, *accessKeyID, bucket)
-		} else {
+		if !q.Has("delete") {
 			return s3errs.ErrNotImplemented // createObjectBrowserUpload is not implemented
 		}
+		return s.deleteObjects(w, r, validatedKey, bucket)
 	default:
 		return s3errs.ErrMethodNotAllowed
 	}
@@ -81,10 +86,16 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *st
 // bucketLocation handles GET Bucket location requests.
 //
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketLocation.html
-func (s *s3) bucketLocation(w http.ResponseWriter, r *http.Request, accessKeyID, bucket string) error {
+func (s *s3) bucketLocation(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket string) error {
+	validatedKey, err := assertAuth(accessKeyID)
+	if err != nil {
+		return err
+	} else if r.Method != http.MethodGet {
+		return s3errs.ErrMethodNotAllowed
+	}
 	s.logger.Debug("getting bucket location", zap.String("bucket", bucket))
 
-	if err := s.backend.HeadBucket(r.Context(), accessKeyID, bucket); err != nil {
+	if err := s.backend.HeadBucket(r.Context(), validatedKey, bucket); err != nil {
 		return err
 	}
 
@@ -111,11 +122,8 @@ func (s *s3) createBucket(w http.ResponseWriter, r *http.Request, accessKeyID, b
 		return err
 	}
 
-	q := r.URL.Query()
-	if _, hasACL := q["acl"]; hasACL {
+	if r.URL.Query().Has("acl") {
 		return s3errs.ErrNotImplemented // ACLs are not implemented
-	} else if _, hasPolicy := q["policy"]; hasPolicy {
-		return s3errs.ErrNotImplemented // Bucket policies are not implemented
 	}
 
 	if err := s.backend.CreateBucket(r.Context(), accessKeyID, bucket); err != nil {

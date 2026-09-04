@@ -22,6 +22,8 @@ CREATE TABLE buckets (
     name TEXT NOT NULL UNIQUE,
     user_id INTEGER NOT NULL,
     versioning_status TEXT NOT NULL DEFAULT '' CHECK (versioning_status IN ('', 'Enabled', 'Suspended')),
+    policy TEXT NOT NULL DEFAULT '',
+    public_actions INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
 CREATE INDEX buckets_user_id_idx ON buckets(user_id);

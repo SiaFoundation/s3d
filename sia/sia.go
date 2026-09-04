@@ -185,16 +185,19 @@ type Store interface {
 	CreateBucket(accessKeyID, bucket string) error
 	DeleteBucket(accessKeyID, bucket string) error
 	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (string, bool, objects.OrphanedFile, error)
-	GetObject(accessKeyID, bucket, object string, version s3.VersionRequest, partNumber *int32) (*objects.Object, error)
+	GetObject(accessKeyID *string, bucket, object string, version s3.VersionRequest, partNumber *int32, action s3.PolicyActions) (*objects.Object, error)
 	DiskUsage() (uint64, error)
 	HeadBucket(accessKeyID, bucket string) error
 	GetBucketVersioning(accessKeyID, bucket string) (string, error)
 	PutBucketVersioning(accessKeyID, bucket, status string) error
+	GetBucketPolicy(accessKeyID, bucket string) (s3.BucketPolicy, error)
+	PutBucketPolicy(accessKeyID, bucket string, policy s3.BucketPolicy) error
+	DeleteBucketPolicy(accessKeyID, bucket string) error
 	ObjectsCursor() (slabs.Cursor, error)
 	SetObjectsCursor(cursor slabs.Cursor) error
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
-	ListObjects(accessKeyID, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error)
-	ListObjectVersions(accessKeyID, bucket string, prefix s3.Prefix, page s3.ListObjectVersionsPage) (*s3.ObjectVersionsListResult, error)
+	ListObjects(accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error)
+	ListObjectVersions(accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectVersionsPage) (*s3.ObjectVersionsListResult, error)
 	ObjectPartsByName(bucket, name, versionID string) ([]objects.Part, error)
 	ObjectsForUpload() ([]objects.ObjectForUpload, error)
 	OrphanedObjects(limit int) ([]types.Hash256, error)

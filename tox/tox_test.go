@@ -156,7 +156,7 @@ func TestS3(t *testing.T) {
 	t.Run("test_s3", func(t *testing.T) {
 		runTox(t, confPath, testsDir,
 			"s3tests/functional/test_s3.py",
-			"-m", "not s3d_not_implemented and not s3d_not_supported and not bucket_logging and not encryption and not sse_s3 and not bucket_encryption and not lifecycle_transition and not tagging and not bucket_policy and not object_ownership and not checksum and not cloud_transition and not cloud_restore and not iam_user and not iam_account",
+			"-m", "not s3d_not_implemented and not s3d_not_supported and not bucket_logging and not encryption and not sse_s3 and not bucket_encryption and not lifecycle_transition and not tagging and not object_ownership and not checksum and not cloud_transition and not cloud_restore and not iam_user and not iam_account",
 			// the lifecycle exclusions drop tests for unimplemented features:
 			// tag and object-size filters, noncurrent-version and delete-marker
 			// actions, and transitions. lifecycle_expiration_versioned is one of

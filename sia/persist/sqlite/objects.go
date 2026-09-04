@@ -170,23 +170,41 @@ func checkWritePreconditions(tx *txn, bid int64, name string, p s3.ObjectPrecond
 	return p.CheckWrite(&attrs)
 }
 
+// hidesDeleteMarker reports whether a resolved object must be hidden from the
+// caller. A delete marker proves the key once existed, so a caller that may not
+// list the bucket must not be able to tell it apart from a key that never did.
+func hidesDeleteMarker(mayList bool, obj objects.Object, version s3.VersionRequest) bool {
+	return !mayList && obj.IsDeleteMarker && !version.Specified
+}
+
 // GetObject retrieves an object. An unspecified version returns the current
 // version (ErrNoSuchKey if the key has no versions); a specified version returns
 // that version (ErrNoSuchVersion if absent). The result may be a delete marker.
-func (s *Store) GetObject(accessKeyID, bucket, name string, version s3.VersionRequest, partNumber *int32) (*objects.Object, error) {
+//
+// A nil accessKeyID is an anonymous read, which only succeeds when the bucket's
+// policy grants action. The caller picks action so that a read resolving a
+// version internally stays authorized by what the original request asked for.
+func (s *Store) GetObject(accessKeyID *string, bucket, name string, version s3.VersionRequest, partNumber *int32, action s3.PolicyActions) (*objects.Object, error) {
 	var obj objects.Object
+	var mayList bool
 	if err := s.transaction(func(tx *txn) error {
-		bid, status, err := bucketIDAndVersioning(tx, accessKeyID, bucket)
+		b, err := bucketForRead(tx, accessKeyID, bucket, action)
 		if err != nil {
 			return err
 		}
-		if err := getObject(tx, &obj, bid, name, version, partNumber); err != nil {
+		mayList = b.mayList
+		if err := getObject(tx, &obj, b.id, name, version, partNumber); err != nil {
 			return err
 		}
-		obj.Versioned = status != ""
+		if hidesDeleteMarker(mayList, obj, version) {
+			return s3errs.ErrAccessDenied
+		}
+		obj.Versioned = b.versioning != ""
 		return nil
 	}); errors.Is(err, sql.ErrNoRows) {
-		if version.Specified {
+		if !mayList {
+			return nil, s3errs.ErrAccessDenied
+		} else if version.Specified {
 			return nil, s3errs.ErrNoSuchVersion
 		}
 		return nil, s3errs.ErrNoSuchKey
@@ -640,19 +658,38 @@ func (s *Store) UpdateSiaObjects(siaObjects []objects.SiaObject) (updated int64,
 func (s *Store) CopyObject(accessKeyID, srcBucket, srcName string, srcVersion s3.VersionRequest, dstBucket, dstName string, opts s3.CopyObjectOptions) (_ *s3.CopyObjectResult, orphan objects.OrphanedFile, err error) {
 	var obj objects.Object
 	var versionID, srcVersionWire string
+	var srcMayList bool
 	err = s.transaction(func(tx *txn) error {
 		obj = objects.Object{} // reset per transaction attempt
 		versionID, srcVersionWire, orphan = "", "", objects.OrphanedFile{}
 
-		srcBid, srcStatus, err := bucketIDAndVersioning(tx, accessKeyID, srcBucket)
+		// the destination is written, so it must be owned by the caller. It is
+		// resolved first so the same-bucket shortcut below can never inherit a
+		// bucket the caller only has read access to.
+		dstBid, dstStatus, err := bucketIDAndVersioning(tx, accessKeyID, dstBucket)
 		if err != nil {
 			return err
+		}
+
+		// the source is only read, so a policy granting that read is enough,
+		// matching UploadPartCopy
+		srcBid, srcStatus := dstBid, dstStatus
+		srcMayList = true // a same-bucket copy is made by the bucket's owner
+		if srcBucket != dstBucket {
+			src, err := bucketForRead(tx, &accessKeyID, srcBucket, s3.ReadAction(srcVersion))
+			if err != nil {
+				return err
+			}
+			srcBid, srcStatus, srcMayList = src.id, src.versioning, src.mayList
 		}
 
 		// copy the requested source version, or the current version when
 		// unspecified
 		if err := getObject(tx, &obj, srcBid, srcName, srcVersion, nil); err != nil {
 			return err
+		}
+		if hidesDeleteMarker(srcMayList, obj, srcVersion) {
+			return s3errs.ErrAccessDenied
 		}
 		if err := opts.SourcePreconditions.CheckCopySource(obj.Attrs(), srcVersion); err != nil {
 			return err
@@ -668,15 +705,6 @@ func (s *Store) CopyObject(accessKeyID, srcBucket, srcName string, srcVersion s3
 			maps.Copy(obj.Meta, opts.Meta)
 		}
 
-		// a same-bucket copy shares the source's id and versioning status, so
-		// only resolve the destination separately when the buckets differ.
-		dstBid, dstStatus := srcBid, srcStatus
-		if dstBucket != srcBucket {
-			dstBid, dstStatus, err = bucketIDAndVersioning(tx, accessKeyID, dstBucket)
-			if err != nil {
-				return err
-			}
-		}
 		if err := checkWritePreconditions(tx, dstBid, dstName, opts.DestinationPreconditions); err != nil {
 			return err
 		}
@@ -726,7 +754,9 @@ func (s *Store) CopyObject(accessKeyID, srcBucket, srcName string, srcVersion s3
 	if errors.Is(err, sql.ErrNoRows) {
 		// a missing source maps to ErrNoSuchVersion when a specific version was
 		// requested, otherwise ErrNoSuchKey.
-		if srcVersion.Specified {
+		if !srcMayList {
+			return nil, objects.OrphanedFile{}, s3errs.ErrAccessDenied
+		} else if srcVersion.Specified {
 			return nil, objects.OrphanedFile{}, s3errs.ErrNoSuchVersion
 		}
 		return nil, objects.OrphanedFile{}, s3errs.ErrNoSuchKey
@@ -1107,11 +1137,8 @@ WHERE o.bucket_id = ?
 
 // ListObjects lists objects in the specified bucket, filtered by prefix and
 // pagination settings.
-func (s *Store) ListObjects(accessKeyID, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (result *s3.ObjectsListResult, err error) {
+func (s *Store) ListObjects(accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (result *s3.ObjectsListResult, err error) {
 	result = s3.NewObjectsListResult(page.MaxKeys)
-	if page.MaxKeys == 0 {
-		return result, nil
-	}
 
 	// adjust marker if it falls inside a common prefix
 	var marker string
@@ -1126,9 +1153,15 @@ func (s *Store) ListObjects(accessKeyID, bucket string, prefix s3.Prefix, page s
 	err = s.transaction(func(tx *txn) error {
 		*result = *s3.NewObjectsListResult(page.MaxKeys) // reset per transaction attempt
 
-		bid, err := bucketID(tx, accessKeyID, bucket)
+		b, err := bucketForRead(tx, accessKeyID, bucket, s3.ActionListBucket)
 		if err != nil {
 			return fmt.Errorf("failed to get bucket ID: %w", err)
+		}
+		bid := b.id
+
+		// a caller that asked for no keys still has to be allowed to list
+		if page.MaxKeys == 0 {
+			return nil
 		}
 
 		innerMarker := marker
@@ -1146,7 +1179,12 @@ func (s *Store) ListObjects(accessKeyID, bucket string, prefix s3.Prefix, page s
 		if !result.IsTruncated {
 			result.NextMarker = ""
 		}
-
+		if page.FetchOwner != nil && *page.FetchOwner {
+			owner := b.userInfo()
+			for i := range result.Contents {
+				result.Contents[i].Owner = owner
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -1281,19 +1319,22 @@ func listVersionPage(tx *txn, bid int64, prefix s3.Prefix, m versionMarker, limi
 // objects in the bucket, ordered by key ascending then by version creation
 // order descending (newest first), applying prefix, delimiter and the
 // (key-marker, version-id-marker) cursor.
-func (s *Store) ListObjectVersions(accessKeyID, bucket string, prefix s3.Prefix, page s3.ListObjectVersionsPage) (*s3.ObjectVersionsListResult, error) {
+func (s *Store) ListObjectVersions(accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectVersionsPage) (*s3.ObjectVersionsListResult, error) {
 	result := s3.NewObjectVersionsListResult(page.MaxKeys)
-	if page.MaxKeys == 0 {
-		return result, nil
-	}
 
 	const maxRowsPerQuery = 100
 	err := s.transaction(func(tx *txn) error {
 		*result = *s3.NewObjectVersionsListResult(page.MaxKeys) // reset per attempt
 
-		bid, err := bucketID(tx, accessKeyID, bucket)
+		b, err := bucketForRead(tx, accessKeyID, bucket, s3.ActionListBucketVersions)
 		if err != nil {
 			return err
+		}
+		bid := b.id
+
+		// a caller that asked for no keys still has to be allowed to list
+		if page.MaxKeys == 0 {
+			return nil
 		}
 
 		m, err := resolveVersionCursor(tx, bid, prefix, page)
@@ -1314,6 +1355,12 @@ func (s *Store) ListObjectVersions(accessKeyID, bucket string, prefix s3.Prefix,
 
 		if !result.IsTruncated {
 			result.NextKeyMarker, result.NextVersionIDMarker = "", ""
+		}
+		if page.FetchOwner != nil && *page.FetchOwner {
+			owner := b.userInfo()
+			for k := range result.Versions {
+				result.Versions[k].Owner = owner
+			}
 		}
 		return nil
 	})

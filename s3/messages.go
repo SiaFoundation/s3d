@@ -509,6 +509,16 @@ type (
 
 // Types related to bucket versioning routes
 type (
+	// PolicyStatus is the response to GetBucketPolicyStatus.
+	//
+	// https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketPolicyStatus.html
+	PolicyStatus struct {
+		XMLName xml.Name `xml:"PolicyStatus"`
+		Xmlns   string   `xml:"xmlns,attr,omitempty"`
+		// IsPublic is true when the policy grants anonymous callers access.
+		IsPublic bool `xml:"IsPublic"`
+	}
+
 	// VersioningConfiguration is the S3 bucket versioning configuration
 	// document used by PutBucketVersioning and GetBucketVersioning.
 	//

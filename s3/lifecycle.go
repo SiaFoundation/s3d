@@ -278,14 +278,18 @@ func (f *LifecycleFilter) validate() error {
 }
 
 // routeBucketLifecycle dispatches the ?lifecycle bucket subresource.
-func (s *s3) routeBucketLifecycle(w http.ResponseWriter, r *http.Request, accessKeyID, bucket string) error {
+func (s *s3) routeBucketLifecycle(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket string) error {
+	validatedKey, err := assertAuth(accessKeyID)
+	if err != nil {
+		return err
+	}
 	switch r.Method {
 	case http.MethodPut:
-		return s.putBucketLifecycle(w, r, accessKeyID, bucket)
+		return s.putBucketLifecycle(w, r, validatedKey, bucket)
 	case http.MethodGet:
-		return s.getBucketLifecycle(w, r, accessKeyID, bucket)
+		return s.getBucketLifecycle(w, r, validatedKey, bucket)
 	case http.MethodDelete:
-		return s.deleteBucketLifecycle(w, r, accessKeyID, bucket)
+		return s.deleteBucketLifecycle(w, r, validatedKey, bucket)
 	default:
 		return s3errs.ErrMethodNotAllowed
 	}
