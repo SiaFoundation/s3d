@@ -85,6 +85,28 @@ func TestHandleAuthV4Presigned(t *testing.T) {
 			want:   s3errs.ErrAuthorizationQueryParametersError,
 		},
 		{
+			// a non-positive expiry leaves an empty validity window, so the
+			// request is expired whenever it arrives
+			name:   "zero expiry",
+			now:    exampleTime,
+			mutate: setQuery(QueryXAMZExpires, str("0")),
+			want:   s3errs.ErrAccessDeniedExpired,
+		},
+		{
+			name:   "negative expiry",
+			now:    exampleTime,
+			mutate: setQuery(QueryXAMZExpires, str("-1000")),
+			want:   s3errs.ErrAccessDeniedExpired,
+		},
+		{
+			// converting this to a Duration overflows into a positive one of
+			// roughly 292 years, so it must not be treated as a validity window
+			name:   "negative expiry overflowing a duration",
+			now:    exampleTime,
+			mutate: setQuery(QueryXAMZExpires, str("-9223372037")),
+			want:   s3errs.ErrAccessDeniedExpired,
+		},
+		{
 			name:   "missing parameter",
 			now:    exampleTime,
 			mutate: setQuery(QueryXAMZCredential, nil),
