@@ -60,10 +60,16 @@ func parsePresignedAuth(query url.Values) (*parsedPresignedAuth, error) {
 	if err != nil || !sameDay(date, credential.Scope.Date) {
 		return nil, s3errs.ErrAuthorizationQueryParametersError
 	}
+	// only the upper bound is a parameter error. A non-positive expiry is in
+	// range, it just leaves an empty validity window, which S3 reports as an
+	// expired request. max() keeps the conversion to a Duration from
+	// overflowing, which would otherwise turn a large negative expiry into a
+	// positive one and defeat maxPresignedExpiry.
 	expiresSeconds, err := strconv.ParseInt(query.Get(QueryXAMZExpires), 10, 64)
-	if err != nil || expiresSeconds < 1 || expiresSeconds > int64(maxPresignedExpiry/time.Second) {
+	if err != nil || expiresSeconds > int64(maxPresignedExpiry/time.Second) {
 		return nil, s3errs.ErrAuthorizationQueryParametersError
 	}
+	expires := time.Duration(max(expiresSeconds, 0)) * time.Second
 
 	signedHeaders := parseSignedHeaders(query.Get(QueryXAMZSignedHeaders))
 	if slices.Contains(signedHeaders, "") {
@@ -80,7 +86,7 @@ func parsePresignedAuth(query url.Values) (*parsedPresignedAuth, error) {
 		SignedHeaders: signedHeaders,
 		Signature:     signature,
 		Date:          date,
-		Expires:       time.Duration(expiresSeconds) * time.Second,
+		Expires:       expires,
 	}, nil
 }
 
@@ -94,7 +100,8 @@ func handleAuthV4Presigned(req *http.Request, query url.Values, store KeyStore, 
 
 	if params.Date.After(now.Add(maxClockSkew)) {
 		return nil, s3errs.ErrRequestTimeTooSkewed
-	} else if now.After(params.Date.Add(params.Expires)) {
+	} else if params.Expires <= 0 || now.After(params.Date.Add(params.Expires)) {
+		// an empty validity window can't contain now
 		return nil, s3errs.ErrAccessDeniedExpired
 	}
 
