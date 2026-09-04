@@ -71,37 +71,50 @@ func parseAuthHeader(header http.Header) (*parsedAuthHeader, error) {
 	}
 
 	// extract components
-	credential := strings.TrimPrefix(values[0], "Credential=")
+	credential, ok := parseCredential(strings.TrimPrefix(values[0], "Credential="))
+	if !ok {
+		return nil, s3errs.ErrAuthorizationHeaderMalformed
+	}
 	signedHeaders := strings.TrimPrefix(values[1], "SignedHeaders=")
 	signature := strings.TrimPrefix(values[2], "Signature=")
 
-	credentialParts := strings.Split(credential, "/")
-	if len(credentialParts) != 5 {
-		return nil, s3errs.ErrAuthorizationHeaderMalformed
-	}
-
-	accessKeyID := credentialParts[0]
-	date, err := time.Parse(yyyymmdd, credentialParts[1])
-	if err != nil {
-		return nil, s3errs.ErrAuthorizationHeaderMalformed
-	}
-	region := credentialParts[2]
-	service := credentialParts[3]
-	request := credentialParts[4]
-
 	return &parsedAuthHeader{
-		Credential: credentialHeader{
-			AccessKeyID: accessKeyID,
-			Scope: signScope{
-				Date:    date,
-				Region:  region,
-				Service: service,
-				Request: request,
-			},
-		},
-		SignedHeaders: strings.Split(signedHeaders, ";"),
+		Credential:    credential,
+		SignedHeaders: parseSignedHeaders(signedHeaders),
 		Signature:     signature,
 	}, nil
+}
+
+// parseCredential parses a credential of the form
+// "<access key ID>/<yyyymmdd>/<region>/s3/aws4_request".
+func parseCredential(credential string) (_ credentialHeader, ok bool) {
+	parts := strings.Split(credential, "/")
+	if len(parts) != 5 || parts[0] == "" || parts[2] == "" ||
+		parts[3] != "s3" || parts[4] != "aws4_request" {
+		return credentialHeader{}, false
+	}
+	date, err := time.Parse(yyyymmdd, parts[1])
+	if err != nil {
+		return credentialHeader{}, false
+	}
+	return credentialHeader{
+		AccessKeyID: parts[0],
+		Scope: signScope{
+			Date:    date,
+			Region:  parts[2],
+			Service: parts[3],
+			Request: parts[4],
+		},
+	}, true
+}
+
+// parseSignedHeaders splits a ';'-separated list into lowercase header names.
+func parseSignedHeaders(list string) []string {
+	headers := strings.Split(list, ";")
+	for i, header := range headers {
+		headers[i] = strings.ToLower(header)
+	}
+	return headers
 }
 
 func parseDateHeader(header http.Header) (time.Time, error) {
@@ -124,9 +137,8 @@ func parseDateHeader(header http.Header) (time.Time, error) {
 // Authorization header from the http.Request headers.
 func extractSignedHeaders(req *http.Request, signedHeaders []string) (http.Header, error) {
 	reqHeaders := req.Header
-	reqQueries := req.Form
 	// find whether "host" is part of list of signed headers.
-	// if not return ErrUnsignedHeaders. "host" is mandatory.
+	// if not return ErrAuthorizationHeaderMalformed. "host" is mandatory.
 	if !slices.Contains(signedHeaders, "host") {
 		return nil, s3errs.ErrAuthorizationHeaderMalformed
 	}
@@ -136,10 +148,6 @@ func extractSignedHeaders(req *http.Request, signedHeaders []string) (http.Heade
 		// its always necessary that the list of signed headers containing host
 		// in it.
 		val, ok := reqHeaders[http.CanonicalHeaderKey(header)]
-		if !ok {
-			// try to set headers from Query String
-			val, ok = reqQueries[header]
-		}
 		if ok {
 			extractedSignedHeaders[http.CanonicalHeaderKey(header)] = val
 			continue
@@ -179,4 +187,20 @@ func extractSignedHeaders(req *http.Request, signedHeaders []string) (http.Heade
 		}
 	}
 	return extractedSignedHeaders, nil
+}
+
+// assertSignedAMZHeaders rejects unsigned "x-amz-*" headers like S3 does, e.g.
+// an unsigned x-amz-copy-source would turn a presigned PutObject into a
+// CopyObject. x-amz-content-sha256 is exempt: the Authorization header signs
+// its value as the payload hash and a presigned request ignores it unless
+// signed.
+func assertSignedAMZHeaders(reqHeaders http.Header, signedHeaders []string) error {
+	contentSHA256 := strings.ToLower(HeaderXAMZContentSHA256)
+	for name := range reqHeaders {
+		name = strings.ToLower(name)
+		if strings.HasPrefix(name, "x-amz-") && name != contentSHA256 && !slices.Contains(signedHeaders, name) {
+			return s3errs.ErrAccessDeniedUnsignedHeaders
+		}
+	}
+	return nil
 }

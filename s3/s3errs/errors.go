@@ -168,3 +168,11 @@ var (
 	ErrUserKeyMustBeSpecified                         = Error{"UserKeyMustBeSpecified", "Bucket POST must contain the specified form field (check field order).", http.StatusBadRequest}
 	ErrInvalidTag                                     = Error{"InvalidTag", "Tag input is invalid (e.g., duplicates, too long, or system tags).", http.StatusBadRequest}
 )
+
+// The following errors reuse a code from the list above with a more specific
+// description, as S3 does.
+var (
+	ErrAccessDeniedExpired         = Error{"AccessDenied", "Request has expired.", http.StatusForbidden}
+	ErrAccessDeniedUnsignedHeaders = Error{"AccessDenied", "There were headers present in the request which were not signed.", http.StatusForbidden}
+	ErrInvalidArgumentMultipleAuth = Error{"InvalidArgument", "Only one auth mechanism allowed; only the X-Amz-Algorithm query parameter, Signature query string parameter or the Authorization header should be specified.", http.StatusBadRequest}
+)
