@@ -157,6 +157,8 @@ CREATE TABLE snapshots (
 );
 
 CREATE INDEX snapshots_gen_idx ON snapshots(gen, gen_completed);
+-- serves the completed half of the orphan guard, which probes by completion
+CREATE INDEX snapshots_gen_completed_idx ON snapshots(gen_completed, gen);
 
 -- one record per backup object
 CREATE UNIQUE INDEX snapshots_sia_object_id_idx ON snapshots(sia_object_id) WHERE sia_object_id IS NOT NULL;

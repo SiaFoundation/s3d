@@ -827,12 +827,17 @@ func (s *Store) AllFilenames() (filenames []string, err error) {
 func (s *Store) OrphanedObjects(limit int) (ids []types.Hash256, err error) {
 	err = s.transaction(func(tx *txn) error {
 		ids = ids[:0] // reuse same slice if transaction retries
+		// the two conditions are kept in separate terms so each can use its
+		// own index, folding them into one OR makes the planner walk every
+		// snapshot for every row scanned
 		rows, err := tx.Query(`
 			SELECT sia_object_id FROM orphaned_objects
 			WHERE NOT EXISTS (
 				SELECT 1 FROM snapshots
-				WHERE gen <= orphaned_at_gen
-				  AND (gen_completed IS NULL OR created_at_gen < gen_completed))
+				WHERE gen_completed IS NULL AND gen <= orphaned_at_gen)
+			  AND NOT EXISTS (
+				SELECT 1 FROM snapshots
+				WHERE gen_completed > created_at_gen AND gen <= orphaned_at_gen)
 			LIMIT $1`, limit)
 		if err != nil {
 			return err
