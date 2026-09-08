@@ -32,7 +32,9 @@ const (
 	// expired and the object will need to be re-uploaded.
 	pinDeadline = 24 * time.Hour
 
-	numUploadThreads = 8
+	// DefaultUploadThreads is the default number of object groups uploaded
+	// to Sia concurrently by the background upload loop.
+	DefaultUploadThreads = 1
 )
 
 // PackedUpload defines the interface for a packed upload.
@@ -245,11 +247,11 @@ func (s *Sia) uploadObjects(ctx context.Context, flush bool) error { //nolint:re
 	}
 
 	var wg sync.WaitGroup
-	uploadsCh := make(chan uploadGroup, numUploadThreads)
+	uploadsCh := make(chan uploadGroup, s.uploadThreads)
 
 	// start upload workers
-	errs := make([]error, numUploadThreads)
-	for i := range numUploadThreads {
+	errs := make([]error, s.uploadThreads)
+	for i := range s.uploadThreads {
 		wg.Go(func() {
 			for g := range uploadsCh {
 				s.logger.Info("uploading object group",

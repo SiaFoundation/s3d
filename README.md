@@ -400,6 +400,9 @@ log:
     level: info # log level (debug, info, warn, error)
     format: json # log format (human, json)
     path: /var/log/s3d/s3d.log # log file path (defaults to <directory>/s3d.log)
+sia:
+  diskUsageLimit: 10737418240 # max bytes buffered on disk pending upload (0 disables the limit, default 10 GiB)
+  uploadThreads: 1 # object groups uploaded to Sia concurrently by the background upload loop (default 1)
 s3:
   hostBases: # bases for virtual-hosted-style addressing ("localhost" is always included)
     - s3.example.com
