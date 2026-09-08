@@ -11,11 +11,10 @@ import (
 	"go.uber.org/zap/zaptest"
 )
 
-// TestServiceRootMethods tests that requests to the service root which are not
-// ListBuckets are answered the way AWS answers them: 405 with "Allow: GET",
-// dispatched on the method before authentication. Clients probe the root before
-// logging in -- Cyberduck sends an unsigned HEAD / -- and treat anything else,
-// including a 403, as a failed connection.
+// TestServiceRootMethods tests that an unsigned request to the service root
+// that is not ListBuckets gets 405 with "Allow: GET", as AWS does. Clients
+// probe the root before logging in -- Cyberduck sends an unsigned HEAD / -- and
+// treat anything else, including a 403, as a failed connection.
 func TestServiceRootMethods(t *testing.T) {
 	backend, _ := testutil.NewBackend(t)
 	handler := s3.New(backend, s3.WithLogger(zaptest.NewLogger(t)))
@@ -41,6 +40,30 @@ func TestServiceRootMethods(t *testing.T) {
 				if body := rec.Body.String(); !strings.Contains(body, "MethodNotAllowed") {
 					t.Errorf("body = %q, want it to contain MethodNotAllowed", body)
 				}
+			}
+		})
+	}
+}
+
+// TestServiceRootAuthenticatesFirst checks that only an unsigned root request
+// gets the 405 above: a request that presents credentials is authenticated
+// first, so a bad signature fails as such rather than being answered by method.
+func TestServiceRootAuthenticatesFirst(t *testing.T) {
+	backend, _ := testutil.NewBackend(t)
+	handler := s3.New(backend, s3.WithLogger(zaptest.NewLogger(t)))
+
+	for _, header := range []string{"AWS4-HMAC-SHA256 garbage", "Bogus xyz"} {
+		t.Run(header, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodHead, "http://localhost/", nil)
+			req.Header.Set("Authorization", header)
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code == http.StatusMethodNotAllowed {
+				t.Fatal("expected authentication to reject the request, got 405")
+			} else if rec.Code < 400 || rec.Code > 499 {
+				t.Fatalf("expected a client error, got %d", rec.Code)
 			}
 		})
 	}

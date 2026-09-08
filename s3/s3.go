@@ -643,8 +643,8 @@ func (s *s3) routeBase(w http.ResponseWriter, r *http.Request, accessKeyID *stri
 	} else if r.Method == "GET" {
 		err = s.listBuckets(w, r, accessKeyID)
 	} else {
-		// AWS dispatches on the method before authenticating the service root,
-		// answering 405 with "Allow: GET" even to an unsigned request
+		// an unsigned request arrives here as anonymous, and clients probing the
+		// root expect 405 with "Allow: GET" rather than a 403
 		w.Header().Set("Allow", http.MethodGet)
 		err = s3errs.ErrMethodNotAllowed
 	}
