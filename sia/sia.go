@@ -411,17 +411,15 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 		s.wakeOrphanLoop()
 	}()
 
-	removeFile := func(path string) {
-		if rErr := os.Remove(path); rErr != nil && !errors.Is(rErr, os.ErrNotExist) {
-			s.logger.Warn("failed to remove snapshot backup file", zap.String("path", path), zap.Error(rErr))
-		}
-	}
-
 	tmp := filepath.Join(s.directory, TmpDirectory, fmt.Sprintf("snapshot-%x.tmp", frand.Bytes(8)))
 	if err := s.store.Backup(ctx, tmp); err != nil {
 		return s3.Snapshot{}, fmt.Errorf("failed to create backup: %w", err)
 	}
-	defer removeFile(tmp)
+	defer func() {
+		if rErr := os.Remove(tmp); rErr != nil && !errors.Is(rErr, os.ErrNotExist) {
+			s.logger.Warn("failed to remove snapshot backup file", zap.String("path", tmp), zap.Error(rErr))
+		}
+	}()
 
 	meta, err := json.Marshal(objects.SnapshotMetadata{
 		Type:        objects.SnapshotType,
@@ -800,17 +798,14 @@ func (s *Sia) syncMetadataLoop(ctx context.Context) {
 	t := time.NewTicker(syncMetadataInterval)
 	defer t.Stop()
 
-	// sync once on startup
-	s.syncMetadata(ctx)
-
 	for {
+		s.syncMetadata(ctx)
+
 		select {
 		case <-ctx.Done():
 			return
 		case <-s.syncWake:
-			s.syncMetadata(ctx)
 		case <-t.C:
-			s.syncMetadata(ctx)
 		}
 	}
 }
