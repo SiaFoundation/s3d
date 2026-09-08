@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"flag"
 	"fmt"
 	"net/http"
@@ -64,7 +64,7 @@ func fetchUploadStats(ctx context.Context, addr, password string) (s3.UploadStat
 	}
 
 	var stats s3.UploadStats
-	if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
+	if err := json.UnmarshalRead(resp.Body, &stats); err != nil {
 		return s3.UploadStats{}, fmt.Errorf("failed to decode response: %w", err)
 	}
 	return stats, nil

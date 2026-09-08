@@ -10,7 +10,7 @@ const redacted = "REDACTED"
 
 // secretQueryParams are the presigned-URL query parameters that carry secret
 // data and must be redacted before logging.
-var secretQueryParams = []string{"X-Amz-Signature", "X-Amz-Security-Token"}
+var secretQueryParams = []string{QueryXAMZSignature, QueryXAMZSecurityToken}
 
 // RedactURL returns u as a string with secret presigned-URL query parameters
 // redacted for logging. It is safe to call with a nil URL.

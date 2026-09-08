@@ -26,20 +26,18 @@ import (
 const emptySha256Hex = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 type chunkSigVerifier struct {
-	mac        hash.Hash
-	signingKey []byte
-	scope      string
-	timestamp  string
-	prevSig    string
+	mac       hash.Hash // copies the signing key
+	scope     string
+	timestamp string
+	prevSig   string
 }
 
 func newChunkSigVerifier(r *v4SignResult) *chunkSigVerifier {
 	return &chunkSigVerifier{
-		mac:        hmac.New(sha256.New, r.SigningKey),
-		signingKey: r.SigningKey,
-		scope:      r.Scope,
-		timestamp:  r.Timestamp,
-		prevSig:    r.SeedSig,
+		mac:       hmac.New(sha256.New, r.SigningKey),
+		scope:     r.Scope,
+		timestamp: r.Timestamp,
+		prevSig:   r.SeedSig,
 	}
 }
 
@@ -95,7 +93,9 @@ func (v *chunkSigVerifier) verifyTrailer(canonicalTrailer, declaredSig string) e
 	return nil
 }
 
-func handleAuthV4Streaming(req *http.Request, result *v4SignResult) error {
+// handleAuthV4Streaming wraps the request body to strip the aws-chunked framing
+// and verify chunk and trailer signatures.
+func handleAuthV4Streaming(req *http.Request, payloadHash string, result *v4SignResult) error {
 	// parse x-amz-decoded-content-length
 	sizeStr, ok := req.Header["X-Amz-Decoded-Content-Length"]
 	if !ok || len(sizeStr) == 0 || sizeStr[0] == "" {
@@ -106,12 +106,10 @@ func handleAuthV4Streaming(req *http.Request, result *v4SignResult) error {
 		return s3errs.ErrInvalidArgument
 	}
 
-	sha256Hdr := req.Header.Get(HeaderXAMZContentSHA256)
-
 	// x-amz-trailer is only sent with the *-TRAILER variants
 	var expectedHeaders map[string]struct{}
-	if sha256Hdr == ContentStreamingUnsignedPayloadTrailer ||
-		sha256Hdr == ContentStreamingAWS4HMACSHA256PayloadTrailer {
+	if payloadHash == ContentStreamingUnsignedPayloadTrailer ||
+		payloadHash == ContentStreamingAWS4HMACSHA256PayloadTrailer {
 		xAmzTrailer := req.Header.Get(HeaderXAMZTrailer)
 		if xAmzTrailer == "" {
 			return s3errs.ErrInvalidArgument
@@ -123,21 +121,12 @@ func handleAuthV4Streaming(req *http.Request, result *v4SignResult) error {
 	}
 
 	var verifier *chunkSigVerifier
-	if sha256Hdr == ContentStreamingAWS4HMACSHA256Payload ||
-		sha256Hdr == ContentStreamingAWS4HMACSHA256PayloadTrailer {
+	if payloadHash == ContentStreamingAWS4HMACSHA256Payload ||
+		payloadHash == ContentStreamingAWS4HMACSHA256PayloadTrailer {
 		verifier = newChunkSigVerifier(result)
 	}
 
-	switch sha256Hdr {
-	case ContentStreamingUnsignedPayloadTrailer,
-		ContentStreamingAWS4HMACSHA256Payload,
-		ContentStreamingAWS4HMACSHA256PayloadTrailer:
-		req.Body = newChunkedPayloadTrailerReader(req.Body, expectedHeaders, verifier)
-	default:
-		// should not reach here
-		return s3errs.ErrInternalError
-	}
-
+	req.Body = newChunkedPayloadTrailerReader(req.Body, expectedHeaders, verifier)
 	req.ContentLength = size
 	return nil
 }
@@ -202,11 +191,8 @@ func newChunkedPayloadTrailerReader(r io.ReadCloser, expectedHeaders map[string]
 	return rdr
 }
 
-// Close clears any derived signing key and closes the underlying reader.
+// Close closes the underlying reader.
 func (r *chunkedPayloadTrailerReader) Close() error {
-	if r.verifier != nil {
-		clear(r.verifier.signingKey)
-	}
 	return r.r.Close()
 }
 

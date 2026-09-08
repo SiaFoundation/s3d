@@ -10,6 +10,7 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"lukechampine.com/frand"
 )
 
@@ -83,7 +84,7 @@ func TestPinLoopRetriesOnFailure(t *testing.T) {
 
 	// the object is still uploaded (sia_object_id set) - failure didn't
 	// demote it, just delayed the retry
-	obj, err := store.GetObject(testutil.AccessKeyID, bucket, name, s3.NoVersion(), nil)
+	obj, err := store.GetObject(aws.String(testutil.AccessKeyID), bucket, name, s3.NoVersion(), nil, s3.ActionGetObject)
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.SiaObject == nil {
@@ -124,7 +125,7 @@ func TestPinLoopDemotesExpiredUploads(t *testing.T) {
 	}
 
 	// the object should be back in the upload queue with sia_object_id cleared
-	obj, err := store.GetObject(testutil.AccessKeyID, bucket, name, s3.NoVersion(), nil)
+	obj, err := store.GetObject(aws.String(testutil.AccessKeyID), bucket, name, s3.NoVersion(), nil, s3.ActionGetObject)
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.SiaObject != nil {
@@ -190,7 +191,7 @@ func TestPinLoopPinsCopyAfterSourceDeleted(t *testing.T) {
 	}
 
 	// dst's on-disk file should have been released and its filename cleared
-	dst, err := store.GetObject(testutil.AccessKeyID, bucket, dstName, s3.NoVersion(), nil)
+	dst, err := store.GetObject(aws.String(testutil.AccessKeyID), bucket, dstName, s3.NoVersion(), nil, s3.ActionGetObject)
 	if err != nil {
 		t.Fatal(err)
 	} else if dst.SiaObject == nil {

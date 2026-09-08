@@ -51,3 +51,23 @@ func TestSuspendedDeletePreconditionAgainstCurrentVersion(t *testing.T) {
 		t.Fatalf("expected a null delete marker, got versionID=%q isDeleteMarker=%v", versionID, isDeleteMarker)
 	}
 }
+
+// TestBucketForReadRejectsNoAction checks that a read naming no action is
+// denied. Every action set contains the empty one, so treating it as satisfied
+// would authorize any caller against any bucket.
+func TestBucketForReadRejectsNoAction(t *testing.T) {
+	const bucket = "test-bucket"
+	store := initTestDB(t, zaptest.NewLogger(t))
+	if err := store.CreateBucket(testAccessKeyID, bucket); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.PutObject(testAccessKeyID, bucket, "key", objects.PutOptions{ContentMD5: frand.Entropy128()}); err != nil {
+		t.Fatal(err)
+	}
+
+	// the bucket has no policy, so an anonymous read must be denied whatever
+	// action it names
+	if _, err := store.GetObject(nil, bucket, "key", s3.NoVersion(), nil, 0); !errors.Is(err, s3errs.ErrAccessDenied) {
+		t.Fatalf("expected %v, got %v", s3errs.ErrAccessDenied, err)
+	}
+}

@@ -311,11 +311,11 @@ func (s *Sia) HeadObject(ctx context.Context, accessKeyID *string, bucket, objec
 }
 
 func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, object string, version s3.VersionRequest, requestedRange *s3.ObjectRangeRequest, partNumber *int32, head bool) (*s3.Object, error) {
-	if accessKeyID == nil {
-		return nil, s3errs.ErrAccessDenied
-	}
+	// decided once so the retry below stays authorized as the read the client
+	// asked for, not as a versioned one
+	action := s3.ReadAction(version)
 
-	obj, err := s.store.GetObject(*accessKeyID, bucket, object, version, partNumber)
+	obj, err := s.store.GetObject(accessKeyID, bucket, object, version, partNumber, action)
 	if err != nil {
 		return nil, err
 	}
@@ -370,7 +370,7 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 			// the upload loop moved the file to Sia between our GetObject
 			// and file open, re-fetch the same version to get the updated
 			// metadata and retry
-			obj, err = s.store.GetObject(*accessKeyID, bucket, object, s3.SpecificVersion(obj.VersionID), partNumber)
+			obj, err = s.store.GetObject(accessKeyID, bucket, object, s3.SpecificVersion(obj.VersionID), partNumber, action)
 			if err != nil {
 				return nil, err
 			} else if obj.FileName != nil {
@@ -408,25 +408,10 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 // contents of the bucket and sort the results into the Contents and
 // CommonPrefixes fields of the returned ObjectsListResult.
 func (s *Sia) ListObjects(ctx context.Context, accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error) {
-	if accessKeyID == nil {
-		// anonymous access is not supported yet
-		return nil, s3errs.ErrAccessDenied
-	}
-
-	result, err := s.store.ListObjects(*accessKeyID, bucket, prefix, page)
+	// the store rejects an anonymous list unless the policy grants s3:ListBucket
+	result, err := s.store.ListObjects(accessKeyID, bucket, prefix, page)
 	if err != nil {
 		return nil, err
-	}
-
-	// populate owner info if requested
-	if page.FetchOwner != nil && *page.FetchOwner {
-		owner, err := s.UserInfo(ctx, *accessKeyID)
-		if err != nil {
-			return nil, err
-		}
-		for i := range result.Contents {
-			result.Contents[i].Owner = owner
-		}
 	}
 	return result, nil
 }
@@ -435,26 +420,13 @@ func (s *Sia) ListObjects(ctx context.Context, accessKeyID *string, bucket strin
 // objects in the specified bucket for the user identified by the given access
 // key.
 func (s *Sia) ListObjectVersions(ctx context.Context, accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectVersionsPage) (*s3.ObjectVersionsListResult, error) {
-	if accessKeyID == nil {
-		// anonymous access is not supported yet
-		return nil, s3errs.ErrAccessDenied
-	}
-
-	result, err := s.store.ListObjectVersions(*accessKeyID, bucket, prefix, page)
+	// the store rejects an anonymous list unless the policy grants
+	// s3:ListBucketVersions
+	result, err := s.store.ListObjectVersions(accessKeyID, bucket, prefix, page)
 	if err != nil {
 		return nil, err
 	}
 
-	// populate owner info if requested
-	if page.FetchOwner != nil && *page.FetchOwner {
-		owner, err := s.UserInfo(ctx, *accessKeyID)
-		if err != nil {
-			return nil, err
-		}
-		for i := range result.Versions {
-			result.Versions[i].Owner = owner
-		}
-	}
 	return result, nil
 }
 
@@ -465,7 +437,7 @@ func (s *Sia) checkWritePreconditions(accessKeyID, bucket, object string, p s3.O
 	if !p.HasWritePreconditions() {
 		return nil
 	}
-	obj, err := s.store.GetObject(accessKeyID, bucket, object, s3.NoVersion(), nil)
+	obj, err := s.store.GetObject(&accessKeyID, bucket, object, s3.NoVersion(), nil, s3.ActionGetObject)
 	if errors.Is(err, s3errs.ErrNoSuchKey) {
 		return p.CheckWrite(nil)
 	} else if err != nil {

@@ -30,6 +30,21 @@ func (s *Sia) ListBuckets(ctx context.Context, accessKeyID string) ([]s3.BucketI
 	return s.store.ListBuckets(accessKeyID)
 }
 
+// PutBucketPolicy sets the policy of the bucket, replacing any existing one.
+func (s *Sia) PutBucketPolicy(ctx context.Context, accessKeyID, bucket string, policy s3.BucketPolicy) error {
+	return s.store.PutBucketPolicy(accessKeyID, bucket, policy)
+}
+
+// GetBucketPolicy returns the policy of the bucket.
+func (s *Sia) GetBucketPolicy(ctx context.Context, accessKeyID, bucket string) (s3.BucketPolicy, error) {
+	return s.store.GetBucketPolicy(accessKeyID, bucket)
+}
+
+// DeleteBucketPolicy removes the policy of the bucket.
+func (s *Sia) DeleteBucketPolicy(ctx context.Context, accessKeyID, bucket string) error {
+	return s.store.DeleteBucketPolicy(accessKeyID, bucket)
+}
+
 // PutBucketVersioning sets the versioning state of the bucket.
 func (s *Sia) PutBucketVersioning(ctx context.Context, accessKeyID, bucket, status string) error {
 	return s.store.PutBucketVersioning(accessKeyID, bucket, status)

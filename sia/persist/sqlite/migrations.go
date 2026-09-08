@@ -354,6 +354,12 @@ DROP TABLE object_parts_backup;`)
 	},
 	func(tx *txn, _ *zap.Logger) error {
 		_, err := tx.Exec(`
+ALTER TABLE buckets ADD COLUMN policy TEXT NOT NULL DEFAULT '';
+ALTER TABLE buckets ADD COLUMN public_actions INTEGER NOT NULL DEFAULT 0;`)
+		return err
+	},
+	func(tx *txn, _ *zap.Logger) error {
+		_, err := tx.Exec(`
 CREATE TABLE snapshots (
     id INTEGER PRIMARY KEY,
     created_at INTEGER NOT NULL,
