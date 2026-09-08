@@ -76,6 +76,7 @@ var cfg = Config{
 	},
 	Sia: Sia{
 		DiskUsageLimit: 10 * (1 << 30), // 10 GiB
+		UploadThreads:  sia.DefaultUploadThreads,
 	},
 	S3: S3{},
 }
@@ -299,7 +300,10 @@ func main() {
 		checkFatalError("failed to create SDK client", err)
 	}
 
-	backend, err := sia.New(ctx, sia.NewSDK(sdkClient), store, cfg.Directory, sia.WithDiskUsageLimit(cfg.Sia.DiskUsageLimit), sia.WithLogger(log.Named("backend")))
+	backend, err := sia.New(ctx, sia.NewSDK(sdkClient), store, cfg.Directory,
+		sia.WithDiskUsageLimit(cfg.Sia.DiskUsageLimit),
+		sia.WithUploadThreads(cfg.Sia.UploadThreads),
+		sia.WithLogger(log.Named("backend")))
 	if err != nil {
 		checkFatalError("failed to create Sia backend", err)
 	}

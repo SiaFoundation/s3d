@@ -49,6 +49,9 @@ type (
 	// Sia contains the configuration for the Sia backend.
 	Sia struct {
 		DiskUsageLimit uint64 `yaml:"diskUsageLimit"`
+		// UploadThreads is the number of object groups uploaded to Sia
+		// concurrently by the background upload loop.
+		UploadThreads int `yaml:"uploadThreads"`
 	}
 
 	// Config contains the configuration for S3d.
