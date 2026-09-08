@@ -507,6 +507,36 @@ type (
 	}
 )
 
+// Types related to bucket encryption routes
+type (
+	// ServerSideEncryptionConfiguration is the S3 bucket default encryption
+	// configuration document.
+	//
+	// https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketEncryption.html
+	ServerSideEncryptionConfiguration struct {
+		XMLName xml.Name `xml:"ServerSideEncryptionConfiguration"`
+		// Xmlns is omitempty because the configuration is also marshaled for
+		// persistence, where the namespace attribute is left out.
+		Xmlns string                     `xml:"xmlns,attr,omitempty"`
+		Rules []ServerSideEncryptionRule `xml:"Rule"`
+	}
+
+	// ServerSideEncryptionRule is a single default encryption rule.
+	ServerSideEncryptionRule struct {
+		ApplyServerSideEncryptionByDefault *ApplyServerSideEncryptionByDefault `xml:"ApplyServerSideEncryptionByDefault,omitempty"`
+		// BucketKeyEnabled is an S3 bucket key optimization for SSE-KMS. It is
+		// parsed so it can be rejected rather than silently dropped.
+		BucketKeyEnabled *bool `xml:"BucketKeyEnabled,omitempty"`
+	}
+
+	// ApplyServerSideEncryptionByDefault names the algorithm applied to objects
+	// written without explicit encryption headers.
+	ApplyServerSideEncryptionByDefault struct {
+		SSEAlgorithm   string  `xml:"SSEAlgorithm"`
+		KMSMasterKeyID *string `xml:"KMSMasterKeyID,omitempty"`
+	}
+)
+
 // Types related to bucket versioning routes
 type (
 	// PolicyStatus is the response to GetBucketPolicyStatus.

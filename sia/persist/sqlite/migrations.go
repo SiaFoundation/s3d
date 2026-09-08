@@ -358,4 +358,12 @@ ALTER TABLE buckets ADD COLUMN policy TEXT NOT NULL DEFAULT '';
 ALTER TABLE buckets ADD COLUMN public_actions INTEGER NOT NULL DEFAULT 0;`)
 		return err
 	},
+	func(tx *txn, _ *zap.Logger) error {
+		_, err := tx.Exec(`CREATE TABLE bucket_encryption_configurations (
+    bucket_id INTEGER PRIMARY KEY,
+    configuration TEXT NOT NULL,
+    FOREIGN KEY (bucket_id) REFERENCES buckets(id) ON DELETE CASCADE
+)`)
+		return err
+	},
 }

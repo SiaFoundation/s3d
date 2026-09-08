@@ -14,7 +14,6 @@ var unsupportedBucketSubresources = map[string]struct{}{
 	"accelerate":          {},
 	"analytics":           {},
 	"cors":                {},
-	"encryption":          {},
 	"intelligent-tiering": {},
 	"inventory":           {},
 	"logging":             {},
@@ -42,6 +41,8 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *st
 	// the subresources read or configure the bucket itself; each asserts
 	// ownership for itself
 	switch {
+	case q.Has("encryption"):
+		return s.routeBucketEncryption(w, r, accessKeyID, bucket)
 	case q.Has("lifecycle"):
 		return s.routeBucketLifecycle(w, r, accessKeyID, bucket)
 	case q.Has("policy"):

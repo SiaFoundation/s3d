@@ -358,6 +358,38 @@ type Backend interface {
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
 	DeleteBucketPolicy(ctx context.Context, accessKeyID, bucket string) error
 
+	// PutBucketEncryptionConfiguration sets the default encryption
+	// configuration for the specified bucket, replacing any existing
+	// configuration.
+	//
+	// - If the access key does not have permission to configure the bucket,
+	//   [ErrAccessDenied] must be returned.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	PutBucketEncryptionConfiguration(ctx context.Context, accessKeyID, bucket string, config ServerSideEncryptionConfiguration) error
+
+	// GetBucketEncryptionConfiguration returns the default encryption
+	// configuration for the specified bucket.
+	//
+	// - If the access key does not have permission to read the bucket
+	//   configuration, [ErrAccessDenied] must be returned.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	//
+	// - If the bucket has no encryption configuration,
+	//   [ErrServerSideEncryptionConfigurationNotFoundError] must be returned.
+	GetBucketEncryptionConfiguration(ctx context.Context, accessKeyID, bucket string) (ServerSideEncryptionConfiguration, error)
+
+	// DeleteBucketEncryptionConfiguration removes the default encryption
+	// configuration for the specified bucket. It is not an error if no
+	// configuration exists.
+	//
+	// - If the access key does not have permission to configure the bucket,
+	//   [ErrAccessDenied] must be returned.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	DeleteBucketEncryptionConfiguration(ctx context.Context, accessKeyID, bucket string) error
+
 	// PutBucketVersioning sets the versioning state of the specified bucket.
 	// status is either "Enabled" or "Suspended".
 	//

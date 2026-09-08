@@ -199,7 +199,7 @@ func (s *s3) routeObject(w http.ResponseWriter, r *http.Request, accessKeyID *st
 }
 
 func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, accessKeyID, dstBucket, dstObject string, meta map[string]string) error {
-	source := meta["X-Amz-Copy-Source"]
+	source := r.Header.Get("X-Amz-Copy-Source")
 	log := s.logger.With(zap.String("dstBucket", dstBucket),
 		zap.String("dstObject", dstObject),
 		zap.String("source", source),
@@ -240,6 +240,7 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, accessKeyID, dst
 		w.Header().Set("x-amz-copy-source-version-id", result.SourceVersionID)
 	}
 
+	setSSEResponseHeader(w)
 	etag := FormatETag(result.ContentMD5[:], int(result.PartsCount))
 	w.Header().Set("ETag", etag)
 	return writeXMLResponse(w, http.StatusOK, ObjectCopyResult{
@@ -328,6 +329,10 @@ func (s *s3) serveObject(w http.ResponseWriter, r *http.Request, accessKeyID *st
 		log.Debug("head object")
 	} else {
 		log.Debug("get object")
+	}
+
+	if err := validateSSEReadHeaders(r.Header); err != nil {
+		return err
 	}
 
 	partNumber, err := parsePartNumber(r.URL.Query().Get("partNumber"))
@@ -739,13 +744,18 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID strin
 		return s3errs.ErrKeyTooLongError
 	}
 
+	// validated here rather than in copyObject so a copy is covered as well
+	if err := validateSSEWriteHeaders(r.Header); err != nil {
+		return err
+	}
+
 	// extract metadata headers
 	meta, err := metadataHeaders(r.Header, MetadataSizeLimit)
 	if err != nil {
 		return err
 	}
 
-	if _, ok := meta["X-Amz-Copy-Source"]; ok {
+	if _, ok := r.Header["X-Amz-Copy-Source"]; ok {
 		return s.copyObject(w, r, accessKeyID, bucket, object, meta)
 	}
 
@@ -785,6 +795,7 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID strin
 	if res.VersionID != "" {
 		w.Header().Set("x-amz-version-id", res.VersionID)
 	}
+	setSSEResponseHeader(w)
 	w.Header().Set("ETag", FormatETag(res.ContentMD5[:], 0))
 	return nil
 }
@@ -846,17 +857,37 @@ func parseSource(source string) (bucket, object string, version VersionRequest, 
 	return srcBucket, srcObject, version, nil
 }
 
+// prefixes of the header families stored with an object
+const (
+	checksumPrefix = "X-Amz-Checksum-"
+	metaPrefix     = "X-Amz-Meta-"
+)
+
+// headers stored with an object that carry no identifying prefix
+var objectMetadataHeaders = map[string]struct{}{
+	"Cache-Control":       {},
+	"Content-Disposition": {},
+	"Content-Encoding":    {},
+	"Content-Type":        {},
+	"Expires":             {},
+}
+
+// isObjectMetadataHeader reports whether the canonically formatted header name
+// belongs with the object rather than with the request that carried it.
+func isObjectMetadataHeader(name string) bool {
+	if strings.HasPrefix(name, metaPrefix) || strings.HasPrefix(name, checksumPrefix) {
+		return true
+	}
+	_, ok := objectMetadataHeaders[name]
+	return ok
+}
+
 // metadataHeaders extracts S3 metadata headers from the given HTTP headers.
 func metadataHeaders(headers map[string][]string, sizeLimit int) (map[string]string, error) {
 	meta := make(map[string]string)
 	for hk, hv := range headers {
 		hk = textproto.CanonicalMIMEHeaderKey(hk)
-		if strings.HasPrefix(hk, "X-Amz-") ||
-			hk == "Content-Type" ||
-			hk == "Content-Disposition" ||
-			hk == "Content-Encoding" ||
-			hk == "Cache-Control" ||
-			hk == "Expires" {
+		if isObjectMetadataHeader(hk) {
 			meta[hk] = hv[0]
 		}
 	}
@@ -1270,16 +1301,20 @@ func (s *s3) setLifecycleExpirationHeader(ctx context.Context, w http.ResponseWr
 // writeGetOrHeadObjectHeaders contains shared logic for constructing headers for
 // a HEAD and a GET request for a /bucket/object URL.
 func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Request) error {
-	const (
-		checksumPrefix = "X-Amz-Checksum-"
-		metaPrefix     = "X-Amz-Meta-"
-	)
-
 	for mk, mv := range obj.Metadata {
+		// stored keys are not guaranteed to be canonically formatted
+		mk = textproto.CanonicalMIMEHeaderKey(mk)
+
 		// ranged responses should not include checksum headers, this prevents
 		// clients from checking the checksum of a partial object against the
 		// full object checksum
 		if obj.Range != nil && strings.HasPrefix(mk, checksumPrefix) {
+			continue
+		}
+
+		// older versions stored request headers as metadata, including
+		// customer encryption keys, so serve only the object's own
+		if !isObjectMetadataHeader(mk) {
 			continue
 		}
 
@@ -1290,6 +1325,8 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 			w.Header().Set(mk, mv)
 		}
 	}
+
+	setSSEResponseHeader(w)
 
 	// a part read is a ranged GET, so it reports the whole object's ETag
 	var partsCount int
