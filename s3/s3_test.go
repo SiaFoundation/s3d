@@ -107,7 +107,7 @@ func TestCreateSnapshot(t *testing.T) {
 
 	// the response carries the recorded snapshot
 	var snapshot s3.Snapshot
-	if err := json.NewDecoder(resp.Body).Decode(&snapshot); err != nil {
+	if err := json.UnmarshalRead(resp.Body, &snapshot); err != nil {
 		t.Fatal(err)
 	} else if snapshot.SiaObjectID == (types.Hash256{}) {
 		t.Fatal("expected snapshot to have a sia object id")
