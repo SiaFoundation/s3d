@@ -62,11 +62,20 @@ func (s *Store) DeleteBucket(accessKeyID, bucket string) error {
 	})
 }
 
-// HeadBucket verifies that the bucket exists and is owned by the user
-// associated with the given access key.
-func (s *Store) HeadBucket(accessKeyID, bucket string) error {
+// AssertBucketOwner verifies that the given access key owns the bucket. It also
+// gates bucket configuration, which a policy never opens up.
+func (s *Store) AssertBucketOwner(accessKeyID, bucket string) error {
 	return s.transaction(func(tx *txn) error {
 		_, err := bucketID(tx, accessKeyID, bucket)
+		return err
+	})
+}
+
+// HeadBucket verifies that the caller may read the bucket. S3 authorizes it
+// with s3:ListBucket, which a policy may grant to everyone.
+func (s *Store) HeadBucket(accessKeyID *string, bucket string) error {
+	return s.transaction(func(tx *txn) error {
+		_, err := bucketForRead(tx, accessKeyID, bucket, s3.ActionListBucket)
 		return err
 	})
 }

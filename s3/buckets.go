@@ -53,12 +53,16 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *st
 	}
 
 	// routes with optional authentication. The backend rejects an anonymous
-	// listing unless the bucket's policy grants s3:ListBucket.
-	if r.Method == http.MethodGet {
+	// caller unless the bucket's policy grants s3:ListBucket, which covers
+	// listing and HeadBucket.
+	switch r.Method {
+	case http.MethodGet:
 		if q.Get("list-type") == "2" {
 			return s.listObjectsV2(w, r, accessKeyID, bucket)
 		}
 		return s.listObjectsV1(w, r, accessKeyID, bucket)
+	case http.MethodHead:
+		return s.headBucket(w, r, accessKeyID, bucket)
 	}
 
 	// routes with mandatory authentication
@@ -71,8 +75,6 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *st
 		return s.createBucket(w, r, validatedKey, bucket)
 	case http.MethodDelete:
 		return s.deleteBucket(w, r, validatedKey, bucket)
-	case http.MethodHead:
-		return s.headBucket(w, r, validatedKey, bucket)
 	case http.MethodPost:
 		if !q.Has("delete") {
 			return s3errs.ErrNotImplemented // createObjectBrowserUpload is not implemented
@@ -95,7 +97,9 @@ func (s *s3) bucketLocation(w http.ResponseWriter, r *http.Request, accessKeyID 
 	}
 	s.logger.Debug("getting bucket location", zap.String("bucket", bucket))
 
-	if err := s.backend.HeadBucket(r.Context(), validatedKey, bucket); err != nil {
+	// the location is bucket configuration, so it stays owner-only even when a
+	// policy makes the bucket's contents public
+	if err := s.backend.AssertBucketOwner(r.Context(), validatedKey, bucket); err != nil {
 		return err
 	}
 
@@ -147,7 +151,7 @@ func (s *s3) deleteBucket(w http.ResponseWriter, r *http.Request, accessKeyID, b
 // headBucket handles HEAD Bucket requests.
 //
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadBucket.html
-func (s *s3) headBucket(w http.ResponseWriter, r *http.Request, accessKeyID, bucket string) error {
+func (s *s3) headBucket(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket string) error {
 	s.logger.Debug("heading bucket", zap.String("bucket", bucket))
 	return s.backend.HeadBucket(r.Context(), accessKeyID, bucket)
 }

@@ -217,7 +217,7 @@ actions are drawn from this set:
 |--------|----------|--------|
 | `s3:GetObject` | `arn:aws:s3:::<bucket>/*` | `GetObject`, `HeadObject` |
 | `s3:GetObjectVersion` | `arn:aws:s3:::<bucket>/*` | `GetObject`, `HeadObject` for a specific `versionId` |
-| `s3:ListBucket` | `arn:aws:s3:::<bucket>` | `ListObjects` v1 and v2 |
+| `s3:ListBucket` | `arn:aws:s3:::<bucket>` | `ListObjects` v1 and v2, `HeadBucket` |
 | `s3:ListBucketVersions` | `arn:aws:s3:::<bucket>` | `ListObjectVersions` |
 
 Each action is granted on its own, so a policy that allows listing does not also
@@ -246,11 +246,10 @@ S3. A policy granting everything looks like this:
 
 A `*` principal covers every caller, so the grant applies to signed requests
 from other users as well as to unsigned ones. Nothing beyond those four actions
-follows from it: writes, deletes, `HeadBucket` and the bucket's own
-configuration all still require the owner's credentials, only the owner can
-read, change or remove the policy, and the bucket does not appear in anyone
-else's `ListBuckets`. A listing reports the bucket's owner, which is not
-necessarily the caller.
+follows from it: writes, deletes, and the bucket's own configuration all still
+require the owner's credentials, only the owner can read, change or remove the
+policy, and the bucket does not appear in anyone else's `ListBuckets`. A
+listing reports the bucket's owner, which is not necessarily the caller.
 
 Any policy s3d cannot honor exactly is rejected rather than partially applied,
 so an accepted policy never grants more access than it describes: `Deny`
@@ -280,7 +279,7 @@ delete with nothing to delete is a no-op, as an unconditional one is.
 | **Buckets** | | |
 | CreateBucket | ✓ | |
 | DeleteBucket | ✓ | |
-| HeadBucket | ◐ | Requires credentials; `s3:ListBucket` does not expose it anonymously |
+| HeadBucket | ✓ | |
 | ListBuckets | ✓ | |
 | GetBucketLocation | ✓ | |
 | GetBucketVersioning | ✓ | |

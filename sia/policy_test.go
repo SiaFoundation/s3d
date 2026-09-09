@@ -171,6 +171,10 @@ func TestBucketPolicyPublicReadScope(t *testing.T) {
 	}
 
 	forEachPublicCaller(t, s3Tester, func(t *testing.T, c publicCaller) {
+		// a HEAD response carries no body, so only its status is checkable.
+		// s3:ListBucket also authorizes HeadBucket, and is not granted here.
+		testutil.AssertS3StatusCode(t, s3errs.ErrAccessDenied, c.client.HeadBucket(t.Context(), bucket))
+
 		tests := []struct {
 			name string
 			do   func() error
@@ -399,6 +403,11 @@ func TestBucketPolicyPublicListAndVersions(t *testing.T) {
 	}
 
 	// ListObjects v1 and v2
+	// s3:ListBucket also authorizes HeadBucket
+	if err := anon.HeadBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
 	v1, err := anon.ListObjects(t.Context(), bucket, nil, nil, s3.ListObjectsPage{})
 	if err != nil {
 		t.Fatal(err)
@@ -750,4 +759,35 @@ func TestBucketPolicyDeleteMarkerHidden(t *testing.T) {
 		_, err := c.client.GetObjectVersion(t.Context(), bucket, object, nil)
 		testutil.AssertS3StatusCode(t, s3errs.ErrNoSuchKey, err)
 	})
+}
+
+// TestBucketPolicyKeepsConfigurationPrivate checks that a public bucket's own
+// configuration stays owner-only.
+func TestBucketPolicyKeepsConfigurationPrivate(t *testing.T) {
+	const bucket = "bucket"
+
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair("other", otherAccessKeyID, otherSecretKey))
+	other := s3Tester.ChangeAccessKey(t, otherAccessKeyID, otherSecretKey)
+
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	} else if err := s3Tester.PutBucketPolicy(t.Context(), bucket, readAndListPolicy(bucket)); err != nil {
+		t.Fatal(err)
+	}
+
+	// the owner can still read it
+	if _, err := s3Tester.BucketLocation(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// s3:ListBucket lets the other user head and list the bucket, but not read
+	// its configuration
+	if err := other.HeadBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+	_, err := other.BucketLocation(t.Context(), bucket)
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+
+	_, err = other.GetBucketVersioning(t.Context(), bucket)
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
 }
