@@ -187,7 +187,8 @@ type Store interface {
 	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (string, bool, objects.OrphanedFile, error)
 	GetObject(accessKeyID *string, bucket, object string, version s3.VersionRequest, partNumber *int32, action s3.PolicyActions) (*objects.Object, error)
 	DiskUsage() (uint64, error)
-	HeadBucket(accessKeyID, bucket string) error
+	HeadBucket(accessKeyID *string, bucket string) error
+	AssertBucketOwner(accessKeyID, bucket string) error
 	GetBucketVersioning(accessKeyID, bucket string) (string, error)
 	PutBucketVersioning(accessKeyID, bucket, status string) error
 	GetBucketPolicy(accessKeyID, bucket string) (s3.BucketPolicy, error)

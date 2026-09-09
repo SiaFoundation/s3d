@@ -261,7 +261,8 @@ func (s *Sia) DeleteObject(ctx context.Context, accessKeyID, bucket string, obje
 // DeleteObjects deletes multiple objects from the specified bucket for the
 // user identified by the given access key.
 func (s *Sia) DeleteObjects(ctx context.Context, accessKeyID, bucket string, objects []s3.ObjectID) (*s3.ObjectsDeleteResult, error) {
-	if err := s.store.HeadBucket(accessKeyID, bucket); err != nil {
+	// an inaccessible bucket fails the whole request rather than every key
+	if err := s.store.AssertBucketOwner(accessKeyID, bucket); err != nil {
 		return nil, err
 	}
 
@@ -450,7 +451,7 @@ func (s *Sia) checkWritePreconditions(accessKeyID, bucket, object string, p s3.O
 // PutObject puts an object with the given key into the specified bucket.
 func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object string, r io.Reader, opts s3.PutObjectOptions) (_ *s3.PutObjectResult, err error) {
 	// fail fast if the bucket is inaccessible before streaming the body to disk
-	if err := s.store.HeadBucket(accessKeyID, bucket); err != nil {
+	if err := s.store.AssertBucketOwner(accessKeyID, bucket); err != nil {
 		return nil, err
 	}
 

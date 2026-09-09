@@ -140,13 +140,26 @@ type Backend interface {
 	GetObject(ctx context.Context, accessKeyID *string, bucket, object string, version VersionRequest, rnge *ObjectRangeRequest, partNumber *int32) (*Object, error)
 
 	// HeadBucket checks if the bucket with the given name exists and is
-	// accessible for the user identified by the given access key.
+	// readable by the given access key.
 	//
-	// - If the access key does not have permission to access the bucket,
-	//   [ErrAccessDenied] must be returned.
+	// - If the access key does not have permission to read the bucket,
+	//   [ErrAccessDenied] must be returned, unless the bucket's policy grants
+	//   s3:ListBucket to everyone. A 'nil' accessKeyID indicates the anonymous
+	//   user.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned, except
+	//   to an anonymous caller, which gets [ErrAccessDenied] so it cannot probe
+	//   for buckets it may not read.
+	HeadBucket(ctx context.Context, accessKeyID *string, name string) error
+
+	// AssertBucketOwner checks that the given access key owns the bucket. It
+	// gates the bucket's own configuration, which a policy never opens up.
+	//
+	// - If the bucket is owned by another user, [ErrAccessDenied] must be
+	//   returned.
 	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
-	HeadBucket(ctx context.Context, accessKeyID, name string) error
+	AssertBucketOwner(ctx context.Context, accessKeyID, bucket string) error
 
 	// HeadObject is like GetObject but only retrieves the metadata of the
 	// object and returns an empty body.

@@ -18,9 +18,9 @@ func (s *Sia) DeleteBucket(ctx context.Context, accessKeyID, name string) error 
 	return s.store.DeleteBucket(accessKeyID, name)
 }
 
-// HeadBucket checks if the bucket with the given name exists and is
-// accessible for the user identified by the given access key.
-func (s *Sia) HeadBucket(ctx context.Context, accessKeyID, name string) error {
+// HeadBucket checks that the bucket exists and is readable by the given access
+// key, which is nil for an anonymous caller.
+func (s *Sia) HeadBucket(ctx context.Context, accessKeyID *string, name string) error {
 	return s.store.HeadBucket(accessKeyID, name)
 }
 
@@ -28,6 +28,11 @@ func (s *Sia) HeadBucket(ctx context.Context, accessKeyID, name string) error {
 // given access key.
 func (s *Sia) ListBuckets(ctx context.Context, accessKeyID string) ([]s3.BucketInfo, error) {
 	return s.store.ListBuckets(accessKeyID)
+}
+
+// AssertBucketOwner checks that the given access key owns the bucket.
+func (s *Sia) AssertBucketOwner(ctx context.Context, accessKeyID, bucket string) error {
+	return s.store.AssertBucketOwner(accessKeyID, bucket)
 }
 
 // PutBucketPolicy sets the policy of the bucket, replacing any existing one.
