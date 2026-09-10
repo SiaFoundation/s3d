@@ -34,7 +34,7 @@ const (
 
 	// DefaultUploadThreads is the default number of object groups uploaded
 	// to Sia concurrently by the background upload loop.
-	DefaultUploadThreads = 1
+	DefaultUploadThreads = 4
 )
 
 // PackedUpload defines the interface for a packed upload.
