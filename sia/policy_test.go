@@ -767,7 +767,6 @@ func TestBucketPolicyKeepsConfigurationPrivate(t *testing.T) {
 	const bucket = "bucket"
 
 	s3Tester := testutil.NewTester(t, testutil.WithKeyPair("other", otherAccessKeyID, otherSecretKey))
-	other := s3Tester.ChangeAccessKey(t, otherAccessKeyID, otherSecretKey)
 
 	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 		t.Fatal(err)
@@ -780,14 +779,16 @@ func TestBucketPolicyKeepsConfigurationPrivate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// s3:ListBucket lets the other user head and list the bucket, but not read
-	// its configuration
-	if err := other.HeadBucket(t.Context(), bucket); err != nil {
-		t.Fatal(err)
-	}
-	_, err := other.BucketLocation(t.Context(), bucket)
-	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+	forEachPublicCaller(t, s3Tester, func(t *testing.T, c publicCaller) {
+		// s3:ListBucket lets the caller head the bucket, but not read its
+		// configuration
+		if err := c.client.HeadBucket(t.Context(), bucket); err != nil {
+			t.Fatal(err)
+		}
+		_, err := c.client.BucketLocation(t.Context(), bucket)
+		testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
 
-	_, err = other.GetBucketVersioning(t.Context(), bucket)
-	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+		_, err = c.client.GetBucketVersioning(t.Context(), bucket)
+		testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+	})
 }
