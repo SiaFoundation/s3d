@@ -127,6 +127,12 @@ func (s *s3) createBucket(w http.ResponseWriter, r *http.Request, accessKeyID, b
 		return s3errs.ErrNotImplemented // ACLs are not implemented
 	}
 
+	// the ?object-lock subresource is already refused above, so the header form
+	// is refused here to keep both spellings of the request consistent
+	if r.Header.Get("X-Amz-Bucket-Object-Lock-Enabled") != "" {
+		return s3errs.ErrNotImplemented // Object Lock is not implemented
+	}
+
 	if err := s.backend.CreateBucket(r.Context(), accessKeyID, bucket); err != nil {
 		return err
 	}
