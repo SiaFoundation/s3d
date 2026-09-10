@@ -161,7 +161,7 @@ CREATE TABLE snapshots (
 -- serves the orphan guard, both halves probe by completion generation
 CREATE INDEX snapshots_gen_completed_idx ON snapshots(gen_completed, gen);
 
--- one record per backup object
+-- one record per snapshot object
 CREATE UNIQUE INDEX snapshots_sia_object_id_idx ON snapshots(sia_object_id) WHERE sia_object_id IS NOT NULL;
 
 CREATE TABLE bucket_lifecycle_configurations (
