@@ -163,4 +163,22 @@ func TestCreateBucketObjectLock(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+
+	// an explicit false asks for a bucket without Object Lock, which is what
+	// s3d creates anyway. the SDK sends the header as the literal "false", so
+	// refusing every non empty value would fail a request s3d can satisfy
+	if _, err := c.CreateBucket(t.Context(), &service.CreateBucketInput{
+		Bucket:                     aws.String("disabled"),
+		ObjectLockEnabledForBucket: aws.Bool(false),
+	}); err != nil {
+		t.Fatal(err)
+	} else if err := s3Tester.HeadBucket(t.Context(), "disabled"); err != nil {
+		t.Fatal(err)
+	}
+
+	// a value that is neither true nor false is malformed
+	_, err = c.CreateBucket(t.Context(), &service.CreateBucketInput{
+		Bucket: aws.String("malformed"),
+	}, withHeaders(map[string]string{"x-amz-bucket-object-lock-enabled": "maybe"}))
+	testutil.AssertS3Error(t, s3errs.ErrInvalidArgument, err)
 }

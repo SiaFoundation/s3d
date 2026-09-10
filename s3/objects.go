@@ -1313,7 +1313,7 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 		}
 
 		// older versions stored request headers as metadata, including
-		// customer encryption keys, so serve only the object's own
+		// customer encryption keys, so serve only the object's own metadata
 		if !isObjectMetadataHeader(mk) {
 			continue
 		}

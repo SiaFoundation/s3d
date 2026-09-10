@@ -3,6 +3,7 @@ package s3
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"go.uber.org/zap"
@@ -127,10 +128,17 @@ func (s *s3) createBucket(w http.ResponseWriter, r *http.Request, accessKeyID, b
 		return s3errs.ErrNotImplemented // ACLs are not implemented
 	}
 
-	// the ?object-lock subresource is already refused above, so the header form
-	// is refused here to keep both spellings of the request consistent
-	if r.Header.Get("X-Amz-Bucket-Object-Lock-Enabled") != "" {
-		return s3errs.ErrNotImplemented // Object Lock is not implemented
+	// the ?object-lock subresource is already refused above, so a request to
+	// enable Object Lock through the header is refused here to keep both
+	// spellings of the request consistent. An explicit false asks for a bucket
+	// without Object Lock, which is the only kind s3d creates.
+	if v := r.Header.Get("X-Amz-Bucket-Object-Lock-Enabled"); v != "" {
+		enabled, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("invalid X-Amz-Bucket-Object-Lock-Enabled value %q: %w", v, s3errs.ErrInvalidArgument)
+		} else if enabled {
+			return s3errs.ErrNotImplemented // Object Lock is not implemented
+		}
 	}
 
 	if err := s.backend.CreateBucket(r.Context(), accessKeyID, bucket); err != nil {
