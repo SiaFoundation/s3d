@@ -158,8 +158,7 @@ CREATE TABLE snapshots (
     deleting_since INTEGER -- when the state became deleting
 );
 
-CREATE INDEX snapshots_gen_idx ON snapshots(gen, gen_completed);
--- serves the completed half of the orphan guard, which probes by completion
+-- serves the orphan guard, both halves probe by completion generation
 CREATE INDEX snapshots_gen_completed_idx ON snapshots(gen_completed, gen);
 
 -- one record per backup object
