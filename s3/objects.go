@@ -138,7 +138,19 @@ type PutObjectOptions struct {
 	ContentLength int64
 	ContentMD5    *[16]byte
 	ContentSHA256 *[32]byte
+	Checksum      *RequestChecksum
 	Preconditions ObjectPreconditions
+}
+
+// RequestChecksum is an additional checksum a client asked to have validated,
+// taken from an X-Amz-Checksum-* request header. The backend validates it the
+// same way it validates ContentMD5 and returns ErrBadDigest on a mismatch.
+type RequestChecksum struct {
+	// Algorithm is the header suffix, canonically formatted, such as "Crc32".
+	Algorithm string
+
+	// Sum is the expected checksum, decoded from the header's base64.
+	Sum []byte
 }
 
 // CopyObjectOptions contains options for a CopyObject operation.
@@ -770,10 +782,17 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID strin
 		return err
 	}
 
+	// extract the checksum from an "X-Amz-Checksum-*" header if present
+	checksum, err := requestChecksum(r.Header)
+	if err != nil {
+		return err
+	}
+
 	res, err := s.backend.PutObject(r.Context(), accessKeyID, bucket, object, r.Body, PutObjectOptions{
 		ContentLength: r.ContentLength,
 		ContentMD5:    contentMD5,
 		ContentSHA256: contentSHA256,
+		Checksum:      checksum,
 		Meta:          meta,
 		Preconditions: requestPreconditions(r.Header),
 	})
@@ -787,6 +806,55 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID strin
 	}
 	w.Header().Set("ETag", FormatETag(res.ContentMD5[:], 0))
 	return nil
+}
+
+// prefixes of the header families stored with an object
+const (
+	checksumPrefix = "X-Amz-Checksum-"
+	metaPrefix     = "X-Amz-Meta-"
+)
+
+// checksumAlgorithms are the X-Amz-Checksum-* suffixes the backend can
+// compute. Any other algorithm is left alone rather than refused, so a client
+// sending one still works.
+var checksumAlgorithms = map[string]struct{}{
+	"Crc32":     {},
+	"Crc32c":    {},
+	"Crc64nvme": {},
+	"Sha1":      {},
+	"Sha256":    {},
+}
+
+// requestChecksum extracts the checksum a client asked to have validated, or
+// nil when the request carries no checksum header the backend can compute.
+// Streaming trailers carry their checksum after the body instead and are
+// validated in the auth layer.
+func requestChecksum(headers http.Header) (*RequestChecksum, error) {
+	var found *RequestChecksum
+
+	for name := range headers {
+		name = textproto.CanonicalMIMEHeaderKey(name)
+		suffix, ok := strings.CutPrefix(name, checksumPrefix)
+		if !ok {
+			continue
+		} else if _, known := checksumAlgorithms[suffix]; !known {
+			continue
+		}
+
+		// AWS refuses a request naming more than one checksum rather than
+		// guessing which one the client meant
+		if found != nil {
+			return nil, s3errs.ErrInvalidRequest
+		}
+
+		sum, err := base64.StdEncoding.DecodeString(headers.Get(name))
+		if err != nil {
+			return nil, s3errs.ErrInvalidDigest
+		}
+		found = &RequestChecksum{Algorithm: suffix, Sum: sum}
+	}
+
+	return found, nil
 }
 
 // FormatETag formats the given hash as an S3 ETag string.
@@ -1270,11 +1338,6 @@ func (s *s3) setLifecycleExpirationHeader(ctx context.Context, w http.ResponseWr
 // writeGetOrHeadObjectHeaders contains shared logic for constructing headers for
 // a HEAD and a GET request for a /bucket/object URL.
 func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Request) error {
-	const (
-		checksumPrefix = "X-Amz-Checksum-"
-		metaPrefix     = "X-Amz-Meta-"
-	)
-
 	for mk, mv := range obj.Metadata {
 		// ranged responses should not include checksum headers, this prevents
 		// clients from checking the checksum of a partial object against the
