@@ -6,39 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
-
-	"github.com/mattn/go-sqlite3"
+	"time"
 )
 
-// sqlConn returns a dedicated connection from db.
-func sqlConn(ctx context.Context, db *sql.DB) (*sql.Conn, error) {
-	if err := db.PingContext(ctx); err != nil {
-		return nil, fmt.Errorf("failed to ping database: %w", err)
-	}
-
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create connection: %w", err)
-	}
-	return conn, nil
-}
-
-// withSQLiteConn exposes conn's underlying SQLite connection for the duration
-// of fn.
-func withSQLiteConn(conn *sql.Conn, fn func(*sqlite3.SQLiteConn) error) error {
-	return conn.Raw(func(driverConn any) error {
-		c, ok := driverConn.(*sqlite3.SQLiteConn)
-		if !ok {
-			return errors.New("connection is not a SQLiteConn")
-		}
-		return fn(c)
-	})
-}
-
-// Backup creates a backup of the open database at destPath using the SQLite
-// backup API. The backup runs over the store's own connection, so writes to
-// the database are blocked for the duration of the backup but the snapshot is
-// always consistent.
+// Backup writes a consistent, compacted copy of the database to destPath
+// using VACUUM INTO on a dedicated readonly connection, so the store keeps
+// serving reads and writes while the backup runs. The copy is verified with
+// an integrity check before it is moved to destPath.
 func (s *Store) Backup(ctx context.Context, destPath string) (err error) {
 	// prevent overwriting the destination file
 	if destPath == "" {
@@ -49,67 +23,41 @@ func (s *Store) Backup(ctx context.Context, destPath string) (err error) {
 		return fmt.Errorf("failed to stat destination file: %w", err)
 	}
 
-	// create the destination database
-	dest, err := sql.Open("sqlite3", sqliteFilepath(destPath))
+	// a dedicated readonly connection leaves the store's connection free, a
+	// reader never blocks the writer in WAL mode
+	src, err := sql.Open("sqlite3", fmt.Sprintf("file:%s?mode=ro&_busy_timeout=%d", s.path, time.Minute.Milliseconds()))
 	if err != nil {
-		return fmt.Errorf("failed to open destination database: %w", err)
+		return fmt.Errorf("failed to open source database: %w", err)
 	}
+	defer src.Close()
+
+	// vacuum into a temporary file so destPath only ever holds a verified copy
+	tmpPath := destPath + ".tmp"
 	defer func() {
-		// errors are ignored
-		dest.Close()
 		if err != nil {
-			// remove the destination file(s) if an error occurred during backup
-			_ = os.Remove(destPath)
-			_ = os.Remove(destPath + "-wal")
-			_ = os.Remove(destPath + "-shm")
+			_ = os.Remove(tmpPath)
 		}
 	}()
-
-	// initialize the source conn
-	srcConn, err := sqlConn(ctx, s.db)
-	if err != nil {
-		return fmt.Errorf("failed to create source connection: %w", err)
+	if _, err := src.ExecContext(ctx, "VACUUM INTO ?", tmpPath); err != nil {
+		return fmt.Errorf("failed to vacuum into backup: %w", err)
 	}
-	defer srcConn.Close()
 
-	// initialize the destination conn
-	destConn, err := sqlConn(ctx, dest)
+	// verify the copy before moving it into place
+	backup, err := sql.Open("sqlite3", "file:"+tmpPath+"?mode=ro")
 	if err != nil {
-		return fmt.Errorf("failed to create destination connection: %w", err)
+		return fmt.Errorf("failed to open backup: %w", err)
 	}
-	defer destConn.Close()
+	var result string
+	err = backup.QueryRowContext(ctx, "PRAGMA integrity_check").Scan(&result)
+	backup.Close()
+	if err != nil {
+		return fmt.Errorf("failed to check backup integrity: %w", err)
+	} else if result != "ok" {
+		return fmt.Errorf("backup failed integrity check: %s", result)
+	}
 
-	return withSQLiteConn(destConn, func(dc *sqlite3.SQLiteConn) error {
-		return withSQLiteConn(srcConn, func(sc *sqlite3.SQLiteConn) (err error) {
-			// start the backup
-			backup, err := dc.Backup("main", sc, "main")
-			if err != nil {
-				return fmt.Errorf("failed to create backup: %w", err)
-			}
-			// ensure the backup is closed, surfacing the error only if the
-			// backup itself otherwise succeeded
-			defer func() {
-				if ferr := backup.Finish(); ferr != nil && err == nil {
-					err = fmt.Errorf("failed to finish backup: %w", ferr)
-				}
-			}()
-
-			for step := 1; ; step++ {
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				default:
-				}
-
-				// copy a batch of pages per step rather than the whole
-				// database at once so we can honor context cancellation
-				if done, err := backup.Step(100); err != nil {
-					return fmt.Errorf("backup step %d failed: %w", step, err)
-				} else if done {
-					break
-				}
-			}
-			return nil
-		})
-	})
+	if err := os.Rename(tmpPath, destPath); err != nil {
+		return fmt.Errorf("failed to move backup into place: %w", err)
+	}
+	return nil
 }

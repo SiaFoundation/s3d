@@ -1093,7 +1093,15 @@ func TestOrphanedObjects(t *testing.T) {
 		t.Fatalf("expected no orphans with remaining reference, got %d", len(orphans))
 	}
 
-	// delete second object - last reference gone, should be orphaned
+	// snapshot the object while "b" still references it, so the generation it
+	// pins withholds the object once its last reference is gone
+	snap, _, err := store.CreateSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// delete the last reference, orphaning the object at the snapshot's
+	// generation so the snapshot withholds it from unpinning
 	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "b"}); err != nil {
 		t.Fatal(err)
 	}
@@ -1101,8 +1109,20 @@ func TestOrphanedObjects(t *testing.T) {
 	orphans, err = store.OrphanedObjects(100)
 	if err != nil {
 		t.Fatal(err)
+	} else if len(orphans) != 0 {
+		t.Fatalf("expected snapshotted orphan to be withheld, got %d", len(orphans))
+	}
+
+	// removing the snapshot raises the floor and releases the orphan
+	if err := store.RollbackSnapshot(snap.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	orphans, err = store.OrphanedObjects(100)
+	if err != nil {
+		t.Fatal(err)
 	} else if len(orphans) != 1 || orphans[0] != objID {
-		t.Fatalf("expected orphan %v, got %v", objID, orphans)
+		t.Fatalf("expected orphan %v after snapshot deleted, got %v", objID, orphans)
 	}
 
 	// remove orphan
@@ -1291,7 +1311,8 @@ func TestSiaObjectSlabGC(t *testing.T) {
 
 	// deleting the first object keeps the shared slab and its sectors
 	if err := store.transaction(func(tx *txn) error {
-		return deleteSiaObject(tx, sealed1.ID())
+		_, err := deleteSiaObject(tx, sealed1.ID())
+		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1313,7 +1334,8 @@ func TestSiaObjectSlabGC(t *testing.T) {
 
 	// deleting the second object empties the tables
 	if err := store.transaction(func(tx *txn) error {
-		return deleteSiaObject(tx, sealed2.ID())
+		_, err := deleteSiaObject(tx, sealed2.ID())
+		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -2582,4 +2604,63 @@ func newTestObject() sdk.Object {
 	f := v.FieldByName("slabs")
 	reflect.NewAt(f.Type(), unsafe.Pointer(f.UnsafeAddr())).Elem().Set(reflect.ValueOf(ss))
 	return obj
+}
+
+func BenchmarkOrphanedObjects(b *testing.B) {
+	const (
+		numOrphans   = 1_000_000
+		numSnapshots = 100
+		batchSize    = 100
+	)
+
+	start := time.Now()
+	store := initTestDB(b, zap.NewNop())
+
+	err := store.transaction(func(tx *txn) error {
+		for i := 1; i <= numSnapshots; i++ {
+			// snapshot i starts at generation 2*i and completes at 2*i+1
+			_, err := tx.Exec(`
+				INSERT INTO snapshots (created_at, object_count, sia_object_id, gen, gen_completed, state)
+				VALUES ($1, 0, $2, $3, $4, $5)
+			`, sqlTime(time.Now()), sqlHash256(frand.Entropy256()), 2*i, 2*i+1, snapshotStatePinned)
+			if err != nil {
+				return err
+			}
+		}
+		// created just before the newest snapshot completed and orphaned after
+		// it, so every orphan is withheld by the newest snapshot alone and the
+		// subquery walks past all the older ones before it matches
+		for range numOrphans {
+			_, err := tx.Exec(`
+				INSERT INTO orphaned_objects (sia_object_id, orphaned_at_gen, created_at_gen)
+				VALUES ($1, $2, $3)
+			`, sqlHash256(frand.Entropy256()), 2*numSnapshots+2, 2*numSnapshots)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	// optimize database for benchmarking
+	_, err1 := store.db.Exec(`VACUUM;`)
+	_, err2 := store.db.Exec(`ANALYZE;`)
+	if err1 != nil || err2 != nil {
+		b.Fatal("failed to optimize database for benchmarking")
+	}
+
+	b.Logf("setup took %s, starting benchmarks...", time.Since(start))
+
+	// nothing is eligible, so the limit never cuts the scan short
+	for b.Loop() {
+		orphans, err := store.OrphanedObjects(batchSize)
+		if err != nil {
+			b.Fatal(err)
+		} else if len(orphans) != 0 {
+			b.Fatalf("expected every orphan to be withheld, got %d", len(orphans))
+		}
+	}
 }

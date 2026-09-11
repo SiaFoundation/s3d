@@ -75,6 +75,12 @@ func (s *IndexdSDK) OptimalDataSize() (int64, error) {
 	return pu.OptimalDataSize(), nil
 }
 
+// Upload uploads the object's data to Sia, appending slab metadata to obj. The
+// caller must call PinObject afterwards to persist the object.
+func (s *IndexdSDK) Upload(ctx context.Context, obj *sdk.Object, r io.Reader) error {
+	return s.inner.Upload(ctx, obj, r, s.ulOpts...)
+}
+
 // UploadPacked creates a new packed upload.
 func (s *IndexdSDK) UploadPacked() (PackedUpload, error) {
 	return s.inner.UploadPacked(s.ulOpts...)
@@ -94,6 +100,11 @@ func (s *IndexdSDK) DeleteObject(ctx context.Context, id types.Hash256) error {
 // given cursor, up to the given limit.
 func (s *IndexdSDK) ObjectEvents(ctx context.Context, cursor slabs.Cursor, limit int) ([]sdk.ObjectEvent, error) {
 	return s.inner.ObjectEvents(ctx, cursor, limit)
+}
+
+// Object retrieves the object with the given ID from the indexer.
+func (s *IndexdSDK) Object(ctx context.Context, id types.Hash256) (sdk.Object, error) {
+	return s.inner.Object(ctx, id)
 }
 
 // PruneSlabs prunes slabs not associated with an object from the indexer.

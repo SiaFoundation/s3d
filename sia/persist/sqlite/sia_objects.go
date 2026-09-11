@@ -1,6 +1,8 @@
 package sqlite
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 
 	"go.sia.tech/core/types"
@@ -13,7 +15,9 @@ import (
 // refreshed: since the id is a digest of the object's slab slices, a matching
 // id implies identical slices and slabs, so only the object's scalar fields
 // and the sectors' host keys (which the digests do not cover) can actually
-// change. Slabs shared with other objects are reused and keep their version.
+// change. The creation generation is stamped on insert and kept on conflict so
+// the id never looks younger than its oldest reference. Slabs shared with other
+// objects are reused and keep their version.
 func upsertSiaObject(tx *txn, sealed sdk.SealedObject) error {
 	id := sealed.ID()
 
@@ -23,8 +27,8 @@ func upsertSiaObject(tx *txn, sealed sdk.SealedObject) error {
 	}
 
 	if _, err := tx.Exec(`
-		INSERT INTO sia_objects (id, encrypted_data_key, data_signature, encrypted_metadata_key, encrypted_metadata, metadata_signature, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO sia_objects (id, encrypted_data_key, data_signature, encrypted_metadata_key, encrypted_metadata, metadata_signature, created_at, updated_at, created_at_gen)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, (SELECT snapshot_gen FROM global_settings))
 		ON CONFLICT (id) DO UPDATE SET
 			encrypted_data_key = excluded.encrypted_data_key,
 			data_signature = excluded.data_signature,
@@ -161,9 +165,11 @@ func siaObject(tx *txn, id types.Hash256) (sdk.SealedObject, error) {
 }
 
 // deleteSiaObject removes the sealed object with the given id along with its
-// slab slices. Slabs no longer referenced by any slice are removed together
-// with their sectors; slabs shared with other objects are kept.
-func deleteSiaObject(tx *txn, id types.Hash256) error {
+// slab slices and returns the generation it was created at. Slabs no longer
+// referenced by any slice are removed together with their sectors. Slabs
+// shared with other objects are kept. A missing row reports generation 0,
+// withholding the id from the orphan loop until every snapshot is gone.
+func deleteSiaObject(tx *txn, id types.Hash256) (createdAtGen int64, _ error) {
 	// remove slabs referenced only by this object; their slices (which all
 	// belong to this object) and their sectors are removed by the cascades
 	if _, err := tx.Exec(`
@@ -174,11 +180,14 @@ func deleteSiaObject(tx *txn, id types.Hash256) error {
 			WHERE sl.slab_id = sia_slabs.id AND sl.sia_object_id <> $1
 		)
 	`, sqlHash256(id)); err != nil {
-		return fmt.Errorf("failed to delete slabs: %w", err)
+		return 0, fmt.Errorf("failed to delete slabs: %w", err)
 	}
 	// remove the object; its remaining slices (of shared slabs) cascade
-	if _, err := tx.Exec(`DELETE FROM sia_objects WHERE id = $1`, sqlHash256(id)); err != nil {
-		return fmt.Errorf("failed to delete sia object: %w", err)
+	err := tx.QueryRow(`DELETE FROM sia_objects WHERE id = $1 RETURNING created_at_gen`, sqlHash256(id)).Scan(&createdAtGen)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	} else if err != nil {
+		return 0, fmt.Errorf("failed to delete sia object: %w", err)
 	}
-	return nil
+	return createdAtGen, nil
 }

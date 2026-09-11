@@ -18,14 +18,20 @@ import (
 type (
 	// A Store is a persistent store that uses a SQL database as its backend.
 	Store struct {
-		db  *sql.DB
-		log *zap.Logger
+		db   *sql.DB
+		path string
+		log  *zap.Logger
 	}
 )
 
 // Close closes the underlying database.
 func (s *Store) Close() error {
 	return s.db.Close()
+}
+
+// DBVersion returns the current database schema version.
+func (s *Store) DBVersion() int64 {
+	return getDBVersion(s.db)
 }
 
 // transaction executes a function within a database transaction. If the
@@ -119,8 +125,9 @@ func OpenDatabase(fp string, log *zap.Logger) (*Store, error) {
 	db.SetMaxOpenConns(1)
 
 	store := &Store{
-		db:  db,
-		log: log,
+		db:   db,
+		path: fp,
+		log:  log,
 	}
 	if err := store.init(int64(len(migrations) + 1)); err != nil {
 		return nil, err
