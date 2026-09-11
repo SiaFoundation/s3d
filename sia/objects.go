@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5"
+	"crypto/sha1"
 	"crypto/sha256"
 	"errors"
 	"fmt"
 	"hash"
+	"hash/crc32"
 	"io"
 	"io/fs"
 	"os"
@@ -18,6 +20,7 @@ import (
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/minio/crc64nvme"
 	"go.uber.org/zap"
 )
 
@@ -482,6 +485,15 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 		r = io.TeeReader(r, sha256Hash)
 	}
 
+	var checksumHash hash.Hash
+	if opts.Checksum != nil {
+		checksumHash = newChecksumHasher(opts.Checksum.Algorithm)
+		if checksumHash == nil {
+			return nil, s3errs.ErrInvalidRequest
+		}
+		r = io.TeeReader(r, checksumHash)
+	}
+
 	// handle empty object case
 	var fileName *string
 	var size int64
@@ -524,6 +536,8 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 		return nil, s3errs.ErrBadDigest
 	} else if opts.ContentMD5 != nil && contentMD5 != *opts.ContentMD5 {
 		return nil, s3errs.ErrBadDigest
+	} else if checksumHash != nil && !bytes.Equal(checksumHash.Sum(nil), opts.Checksum.Sum) {
+		return nil, s3errs.ErrBadDigest
 	}
 
 	// store the object in the database
@@ -543,4 +557,24 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 		ContentMD5: contentMD5,
 		VersionID:  versionID,
 	}, nil
+}
+
+// newChecksumHasher returns the hash an X-Amz-Checksum-* algorithm names, or
+// nil when it is one this backend cannot compute.
+func newChecksumHasher(algorithm string) hash.Hash {
+	switch algorithm {
+	case "Crc32":
+		return crc32.NewIEEE()
+	case "Crc32c":
+		return crc32.New(crc32.MakeTable(crc32.Castagnoli))
+	case "Crc64nvme":
+		// MinIO's implementation of the NVME polynomial, which the standard
+		// library does not have
+		return crc64nvme.New()
+	case "Sha1":
+		return sha1.New()
+	case "Sha256":
+		return sha256.New()
+	}
+	return nil
 }
