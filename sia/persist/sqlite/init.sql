@@ -146,6 +146,12 @@ CREATE TABLE bucket_lifecycle_configurations (
     FOREIGN KEY (bucket_id) REFERENCES buckets(id) ON DELETE CASCADE
 );
 
+CREATE TABLE bucket_encryption_configurations (
+    bucket_id INTEGER PRIMARY KEY,
+    configuration TEXT NOT NULL,
+    FOREIGN KEY (bucket_id) REFERENCES buckets(id) ON DELETE CASCADE
+);
+
 CREATE TABLE stats (
     stat TEXT PRIMARY KEY NOT NULL,
     stat_value INTEGER NOT NULL CHECK (stat_value >= 0)

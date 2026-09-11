@@ -7,6 +7,7 @@ import (
 	"github.com/SiaFoundation/s3d/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	service "github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
@@ -136,4 +137,48 @@ func TestBuckets(t *testing.T) {
 	t.Run("PathStyle", func(t *testing.T) {
 		run(t, true)
 	})
+}
+
+// TestCreateBucketObjectLock checks that the header form of a request for
+// Object Lock is refused, since the ?object-lock subresource already is. A
+// bucket that silently ignored it would report success to a client that then
+// believes its objects are protected.
+func TestCreateBucketObjectLock(t *testing.T) {
+	s3Tester := testutil.NewTester(t)
+	c := s3Tester.Client()
+
+	_, err := c.CreateBucket(t.Context(), &service.CreateBucketInput{
+		Bucket:                     aws.String("locked"),
+		ObjectLockEnabledForBucket: aws.Bool(true),
+	})
+	testutil.AssertS3Error(t, s3errs.ErrNotImplemented, err)
+
+	// the bucket must not have been created by the refused request
+	err = s3Tester.HeadBucket(t.Context(), "locked")
+	testutil.AssertS3StatusCode(t, s3errs.ErrNoSuchBucket, err)
+
+	// without the header the same request succeeds
+	if _, err := c.CreateBucket(t.Context(), &service.CreateBucketInput{
+		Bucket: aws.String("unlocked"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// an explicit false asks for a bucket without Object Lock, which is what
+	// s3d creates anyway. the SDK sends the header as the literal "false", so
+	// refusing every non empty value would fail a request s3d can satisfy
+	if _, err := c.CreateBucket(t.Context(), &service.CreateBucketInput{
+		Bucket:                     aws.String("disabled"),
+		ObjectLockEnabledForBucket: aws.Bool(false),
+	}); err != nil {
+		t.Fatal(err)
+	} else if err := s3Tester.HeadBucket(t.Context(), "disabled"); err != nil {
+		t.Fatal(err)
+	}
+
+	// a value that is neither true nor false is malformed
+	_, err = c.CreateBucket(t.Context(), &service.CreateBucketInput{
+		Bucket: aws.String("malformed"),
+	}, withHeaders(map[string]string{"x-amz-bucket-object-lock-enabled": "maybe"}))
+	testutil.AssertS3Error(t, s3errs.ErrInvalidArgument, err)
 }

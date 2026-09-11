@@ -608,6 +608,43 @@ func (t *S3Tester) DeleteBucketLifecycle(ctx context.Context, bucket string) err
 	return err
 }
 
+// SSECustomerHeaders are the customer provided key headers a client sends to
+// request SSE-C, for tests that inject them as raw headers.
+var SSECustomerHeaders = map[string]string{
+	"x-amz-server-side-encryption-customer-algorithm": "AES256",
+	"x-amz-server-side-encryption-customer-key":       "pO3upElrwuEXSoFwCfnZPdSsmt/xWeFa0N9KgDijwVs=",
+	"x-amz-server-side-encryption-customer-key-md5":   "DWygnHRtgiJ77HCm+1rvHw==",
+}
+
+// PutBucketEncryption is a convenience wrapper around the AWS SDK's
+// PutBucketEncryption API.
+func (t *S3Tester) PutBucketEncryption(ctx context.Context, bucket string, rules []types.ServerSideEncryptionRule) error {
+	_, err := t.client.PutBucketEncryption(ctx, &service.PutBucketEncryptionInput{
+		Bucket: aws.String(bucket),
+		ServerSideEncryptionConfiguration: &types.ServerSideEncryptionConfiguration{
+			Rules: rules,
+		},
+	})
+	return err
+}
+
+// GetBucketEncryption is a convenience wrapper around the AWS SDK's
+// GetBucketEncryption API.
+func (t *S3Tester) GetBucketEncryption(ctx context.Context, bucket string) (*service.GetBucketEncryptionOutput, error) {
+	return t.client.GetBucketEncryption(ctx, &service.GetBucketEncryptionInput{
+		Bucket: aws.String(bucket),
+	})
+}
+
+// DeleteBucketEncryption is a convenience wrapper around the AWS SDK's
+// DeleteBucketEncryption API.
+func (t *S3Tester) DeleteBucketEncryption(ctx context.Context, bucket string) error {
+	_, err := t.client.DeleteBucketEncryption(ctx, &service.DeleteBucketEncryptionInput{
+		Bucket: aws.String(bucket),
+	})
+	return err
+}
+
 // PutBucketVersioning sets the versioning status of a bucket.
 func (t *S3Tester) PutBucketVersioning(ctx context.Context, bucket string, status types.BucketVersioningStatus) error {
 	_, err := t.client.PutBucketVersioning(ctx, &service.PutBucketVersioningInput{

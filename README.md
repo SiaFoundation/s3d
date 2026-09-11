@@ -257,6 +257,10 @@ statements, `Condition` blocks, named principals, other actions, resources
 scoped to a key prefix, and unrecognised members of any kind are all refused.
 ACLs remain unimplemented, as does `PublicAccessBlock`.
 
+Every object is encrypted before upload, so object responses always report
+`x-amz-server-side-encryption: AES256`. Bucket encryption configuration accepts
+only `AES256`. Customer provided keys and KMS are rejected rather than ignored.
+
 Conditional requests are supported. `GetObject` and `HeadObject` honor
 `If-Match`, `If-None-Match`, `If-Modified-Since` and `If-Unmodified-Since`, and
 the copy source of `CopyObject` and `UploadPartCopy` honors the matching
@@ -297,8 +301,9 @@ delete with nothing to delete is a no-op, as an unconditional one is.
 | PutBucketCors | ✗ | |
 | GetBucketTagging | ✗ | |
 | PutBucketTagging | ✗ | |
-| GetBucketEncryption | ✗ | |
-| PutBucketEncryption | ✗ | |
+| GetBucketEncryption | ✓ | |
+| PutBucketEncryption | ◐ | Only `AES256` is accepted, and KMS and bucket keys are rejected |
+| DeleteBucketEncryption | ✓ | |
 | PublicAccessBlock | ✗ | |
 | **Objects** | | |
 | PutObject | ✓ | |

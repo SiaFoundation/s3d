@@ -3,6 +3,7 @@ package s3
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -70,5 +71,65 @@ func TestValidateBucketName(t *testing.T) {
 				t.Fatalf("name %q: expected no error, got %v", tc.name, err)
 			}
 		})
+	}
+}
+
+// TestMetadataHeadersKeepsOnlyObjectMetadata guards the allowlist. Request
+// plumbing must never reach stored metadata, because everything stored is
+// echoed back on every read, and for the encryption headers that would mean
+// handing a client's own key to whoever reads the object next.
+func TestMetadataHeadersKeepsOnlyObjectMetadata(t *testing.T) {
+	kept := map[string]string{
+		"X-Amz-Meta-Colour":    "blue",
+		"X-Amz-Checksum-Crc32": "NhCmhg==",
+		"Content-Type":         "text/plain",
+		"Content-Disposition":  "inline",
+		"Content-Encoding":     "gzip",
+		"Cache-Control":        "no-cache",
+		"Expires":              "Thu, 01 Jan 2026 00:00:00 GMT",
+	}
+	dropped := []string{
+		// request signing
+		"X-Amz-Content-Sha256",
+		"X-Amz-Date",
+		"X-Amz-Decoded-Content-Length",
+		"X-Amz-Sdk-Checksum-Algorithm",
+		"X-Amz-Trailer",
+		// request routing
+		"X-Amz-Copy-Source",
+		"X-Amz-Metadata-Directive",
+		// encryption, including a name no constant declares
+		"X-Amz-Server-Side-Encryption",
+		"X-Amz-Server-Side-Encryption-Aws-Kms-Key-Id",
+		"X-Amz-Server-Side-Encryption-Customer-Key",
+		"X-Amz-Server-Side-Encryption-Customer-Key-Md5",
+		"X-Amz-Copy-Source-Server-Side-Encryption-Customer-Key",
+		"X-Amz-Server-Side-Encryption-Not-Yet-Invented",
+	}
+
+	h := http.Header{}
+	for k, v := range kept {
+		h.Set(k, v)
+	}
+	for _, k := range dropped {
+		h.Set(k, "value")
+	}
+
+	meta, err := metadataHeaders(h, MetadataSizeLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for k, want := range kept {
+		if meta[k] != want {
+			t.Fatal("mismatch", k, meta[k])
+		}
+	}
+	for _, k := range dropped {
+		if got, ok := meta[k]; ok {
+			t.Fatal("stored", k, got)
+		}
+	}
+	if len(meta) != len(kept) {
+		t.Fatal("unexpected", len(meta))
 	}
 }

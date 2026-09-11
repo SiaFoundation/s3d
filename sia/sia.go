@@ -221,6 +221,10 @@ type Store interface {
 	MultipartParts(accessKeyID, bucket, name string, uploadID s3.UploadID) ([]objects.Part, error)
 	UploadStats() (s3.UploadStats, error)
 
+	PutBucketEncryptionConfiguration(accessKeyID, bucket, config string) error
+	GetBucketEncryptionConfiguration(accessKeyID, bucket string) (string, error)
+	DeleteBucketEncryptionConfiguration(accessKeyID, bucket string) error
+
 	PutBucketLifecycleConfiguration(accessKeyID, bucket, config string) error
 	GetBucketLifecycleConfiguration(accessKeyID, bucket string) (string, error)
 	DeleteBucketLifecycleConfiguration(accessKeyID, bucket string) error

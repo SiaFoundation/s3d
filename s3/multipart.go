@@ -250,6 +250,10 @@ func (s *s3) createMultipartUpload(w http.ResponseWriter, r *http.Request, acces
 		return s3errs.ErrKeyTooLongError
 	}
 
+	if err := validateSSEWriteHeaders(r.Header); err != nil {
+		return err
+	}
+
 	// extract metadata headers
 	meta, err := metadataHeaders(r.Header, MetadataSizeLimit)
 	if err != nil {
@@ -263,6 +267,7 @@ func (s *s3) createMultipartUpload(w http.ResponseWriter, r *http.Request, acces
 		return err
 	}
 
+	setSSEResponseHeader(w)
 	return writeXMLResponse(w, http.StatusOK, InitiateMultipartUploadResponse{
 		Xmlns:    "http://s3.amazonaws.com/doc/2006-03-01/",
 		Bucket:   bucket,
@@ -369,6 +374,7 @@ func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, accessKeyID, dstBu
 		return err
 	}
 
+	setSSEResponseHeader(w)
 	etag := FormatETag(result.ContentMD5[:], 0)
 	w.Header().Set("ETag", etag)
 	if result.SourceVersionID != "" {
@@ -388,6 +394,11 @@ func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, accessKeyID, 
 		zap.String("partNumber", r.URL.Query().Get("partNumber")),
 	)
 	log.Debug("upload multipart part")
+
+	// validated here rather than in copyPart so a part copy is covered as well
+	if err := validateSSEWriteHeaders(r.Header); err != nil {
+		return err
+	}
 
 	// parse part number
 	partNumber, err := parsePartNumber(r.URL.Query().Get("partNumber"))
@@ -434,6 +445,7 @@ func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, accessKeyID, 
 		return err
 	}
 
+	setSSEResponseHeader(w)
 	w.Header().Set("ETag", FormatETag(res.ContentMD5[:], 0))
 	return nil
 }
@@ -543,6 +555,7 @@ func (s *s3) completeMultipartUpload(w http.ResponseWriter, r *http.Request, acc
 	if res.VersionID != "" {
 		w.Header().Set("x-amz-version-id", res.VersionID)
 	}
+	setSSEResponseHeader(w)
 	return writeXMLResponse(w, http.StatusOK, CompleteMultipartUploadResponse{
 		Xmlns:    "http://s3.amazonaws.com/doc/2006-03-01/",
 		Location: location,
