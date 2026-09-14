@@ -408,12 +408,15 @@ func TestSnapshots(t *testing.T) {
 	} else if !known {
 		t.Fatal("expected known object")
 	}
-	if snapshots, err := store.SnapshotsForDeletion(); err != nil {
+	// it is reported for deletion once it has been marked long enough
+	if ids, err := store.SnapshotsForDeletion(time.Now().Add(-time.Hour)); err != nil {
 		t.Fatal(err)
-	} else if len(snapshots) != 1 || snapshots[0].ObjectID != rb2ObjID {
-		t.Fatal("unexpected", snapshots)
-	} else if snapshots[0].Since.IsZero() {
-		t.Fatal("expected non-zero deleting since")
+	} else if len(ids) != 0 {
+		t.Fatal("unexpected", ids)
+	} else if ids, err := store.SnapshotsForDeletion(time.Now()); err != nil {
+		t.Fatal(err)
+	} else if len(ids) != 1 || ids[0] != rb2ObjID {
+		t.Fatal("unexpected", ids)
 	}
 
 	// a late pin observation does not complete a snapshot marked for deletion
@@ -433,7 +436,7 @@ func TestSnapshots(t *testing.T) {
 		t.Fatal("unexpected", n)
 	}
 
-	// startup deletes created snapshots and marks the ones awaiting a pin stale
+	// startup deletes created snapshots and leaves the ones awaiting a pin
 	if _, _, err := store.CreateSnapshot(); err != nil {
 		t.Fatal(err)
 	}
@@ -451,28 +454,35 @@ func TestSnapshots(t *testing.T) {
 		t.Fatal("unexpected", deleted)
 	}
 
-	// the snapshot awaiting its pin survives the rollback and is reported for
-	// reconciling against the indexer
-	if pinning, err := store.PinningSnapshots(); err != nil {
+	// the snapshot awaiting its pin survives the rollback. It is not listed
+	// and is reported for deletion once it has been stuck long enough
+	if known, err := store.HasSnapshotObject(rb3ObjID); err != nil {
 		t.Fatal(err)
-	} else if len(pinning) != 1 {
-		t.Fatal("unexpected", pinning)
-	} else if pinning[0].ID != rb3.ID || pinning[0].ObjectID != rb3ObjID {
-		t.Fatal("mismatch", pinning[0])
+	} else if !known {
+		t.Fatal("expected known object")
+	}
+	if snapshots, err := store.ListSnapshots(); err != nil {
+		t.Fatal(err)
+	} else if len(snapshots) != 0 {
+		t.Fatal("unexpected", len(snapshots))
+	}
+	if ids, err := store.SnapshotsForDeletion(time.Now().Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	} else if len(ids) != 0 {
+		t.Fatal("unexpected", ids)
+	} else if ids, err := store.SnapshotsForDeletion(time.Now()); err != nil {
+		t.Fatal(err)
+	} else if len(ids) != 1 || ids[0] != rb3ObjID {
+		t.Fatal("unexpected", ids)
 	}
 
-	// marking it for deletion leaves nothing to reconcile, the record still
-	// withholds orphans until the deletion pass removes it
+	// marking it for deletion keeps it reported for deletion
 	if err := store.RollbackSnapshot(rb3.ID); err != nil {
 		t.Fatal(err)
-	} else if pinning, err := store.PinningSnapshots(); err != nil {
-		t.Fatal(err)
-	} else if len(pinning) != 0 {
-		t.Fatal("unexpected", pinning)
 	}
-	if snapshots, err := store.SnapshotsForDeletion(); err != nil {
+	if ids, err := store.SnapshotsForDeletion(time.Now()); err != nil {
 		t.Fatal(err)
-	} else if len(snapshots) != 1 || snapshots[0].ObjectID != rb3ObjID {
-		t.Fatal("unexpected", snapshots)
+	} else if len(ids) != 1 || ids[0] != rb3ObjID {
+		t.Fatal("unexpected", ids)
 	}
 }

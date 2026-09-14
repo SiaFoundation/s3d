@@ -2620,8 +2620,8 @@ func BenchmarkOrphanedObjects(b *testing.B) {
 		for i := 1; i <= numSnapshots; i++ {
 			// snapshot i starts at generation 2*i and completes at 2*i+1
 			_, err := tx.Exec(`
-				INSERT INTO snapshots (created_at, object_count, sia_object_id, gen, gen_completed, state)
-				VALUES ($1, 0, $2, $3, $4, $5)
+				INSERT INTO snapshots (created_at, object_count, sia_object_id, gen, gen_completed, state, state_since)
+				VALUES ($1, 0, $2, $3, $4, $5, $1)
 			`, sqlTime(time.Now()), sqlHash256(frand.Entropy256()), 2*i, 2*i+1, snapshotStatePinned)
 			if err != nil {
 				return err

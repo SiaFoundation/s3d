@@ -133,20 +133,6 @@ type OrphanedFile struct {
 	Size     int64
 }
 
-// PinningSnapshot identifies a snapshot awaiting confirmation that its backup
-// object reached the indexer.
-type PinningSnapshot struct {
-	ID       int64
-	ObjectID types.Hash256
-}
-
-// DeletingSnapshot identifies a snapshot marked for deletion and when it was
-// marked.
-type DeletingSnapshot struct {
-	ObjectID types.Hash256
-	Since    time.Time
-}
-
 // SnapshotMetadata is attached to a snapshot's Sia object. It lets recovery
 // find snapshots and refuse ones it cannot restore.
 type SnapshotMetadata struct {

@@ -11,8 +11,9 @@ import (
 )
 
 // Snapshot lifecycle states, transitions only move forward: created until
-// the backup object is uploaded, pinning until the sync loop observes the
-// pin, pinned, and deleting until the indexer confirms the object is gone.
+// the backup object is uploaded, pinning until the pin request succeeds,
+// pinned, and deleting until the indexer confirms the object is gone. Every
+// transition stamps state_since.
 const (
 	snapshotStateCreated int64 = iota
 	snapshotStatePinning
@@ -29,8 +30,8 @@ func (s *Store) CreateSnapshot() (snap s3.Snapshot, gen int64, err error) {
 			return err
 		}
 		return tx.QueryRow(`
-			INSERT INTO snapshots (created_at, state, gen, object_count)
-			VALUES ($1, $2, $3, (SELECT stat_value FROM stats WHERE stat = $4))
+			INSERT INTO snapshots (created_at, state, state_since, gen, object_count)
+			VALUES ($1, $2, $1, $3, (SELECT stat_value FROM stats WHERE stat = $4))
 			RETURNING id, created_at, object_count`, sqlTime(time.Now()), snapshotStateCreated, gen, statUploadedObjects).Scan(&snap.ID, (*sqlTime)(&snap.CreatedAt), &snap.ObjectCount)
 	})
 	return
@@ -41,8 +42,8 @@ func (s *Store) CreateSnapshot() (snap s3.Snapshot, gen int64, err error) {
 // issued.
 func (s *Store) MarkSnapshotPinning(snapshotID int64, objectID types.Hash256) error {
 	return s.transaction(func(tx *txn) error {
-		res, err := tx.Exec("UPDATE snapshots SET state = $1, sia_object_id = $2 WHERE id = $3 AND state = $4",
-			snapshotStatePinning, sqlHash256(objectID), snapshotID, snapshotStateCreated)
+		res, err := tx.Exec("UPDATE snapshots SET state = $1, sia_object_id = $2, state_since = $3 WHERE id = $4 AND state = $5",
+			snapshotStatePinning, sqlHash256(objectID), sqlTime(time.Now()), snapshotID, snapshotStateCreated)
 		if err != nil {
 			return err
 		}
@@ -73,8 +74,8 @@ func (s *Store) MarkSnapshotPinned(objectID types.Hash256) error {
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec("UPDATE snapshots SET state = $1, gen_completed = $2 WHERE id = $3",
-			snapshotStatePinned, completed, id)
+		_, err = tx.Exec("UPDATE snapshots SET state = $1, gen_completed = $2, state_since = $3 WHERE id = $4",
+			snapshotStatePinned, completed, sqlTime(time.Now()), id)
 		return err
 	})
 }
@@ -109,9 +110,9 @@ func (s *Store) AdoptSnapshot(objectID types.Hash256, createdAt time.Time, gen, 
 			return err
 		}
 		return tx.QueryRow(`
-			INSERT INTO snapshots (created_at, state, gen, object_count, sia_object_id, gen_completed)
-			VALUES ($1, $2, $3, $4, $5, $6)
-			RETURNING id, created_at, object_count, sia_object_id`, sqlTime(createdAt), snapshotStatePinned, gen, objectCount, sqlHash256(objectID), completed).Scan(&snap.ID, (*sqlTime)(&snap.CreatedAt), &snap.ObjectCount, (*sqlHash256)(&snap.SiaObjectID))
+			INSERT INTO snapshots (created_at, state, state_since, gen, object_count, sia_object_id, gen_completed)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
+			RETURNING id, created_at, object_count, sia_object_id`, sqlTime(createdAt), snapshotStatePinned, sqlTime(time.Now()), gen, objectCount, sqlHash256(objectID), completed).Scan(&snap.ID, (*sqlTime)(&snap.CreatedAt), &snap.ObjectCount, (*sqlHash256)(&snap.SiaObjectID))
 	})
 	return
 }
@@ -130,7 +131,7 @@ func (s *Store) RollbackSnapshot(snapshotID int64) error {
 		} else if n > 0 {
 			return nil
 		}
-		_, err = tx.Exec("UPDATE snapshots SET state = $1, deleting_since = $2 WHERE id = $3 AND state IN ($4, $5)",
+		_, err = tx.Exec("UPDATE snapshots SET state = $1, state_since = $2 WHERE id = $3 AND state IN ($4, $5)",
 			snapshotStateDeleting, sqlTime(time.Now()), snapshotID, snapshotStatePinning, snapshotStatePinned)
 		return err
 	})
@@ -138,7 +139,7 @@ func (s *Store) RollbackSnapshot(snapshotID int64) error {
 
 // RollbackIncompleteSnapshots removes snapshots whose backup was never
 // uploaded and returns the number removed. Snapshots awaiting their pin are
-// left alone, the reconcile resolves them against the indexer.
+// left alone, the sync loop completes them or the deletion pass reaps them.
 func (s *Store) RollbackIncompleteSnapshots() (deleted int64, err error) {
 	err = s.transaction(func(tx *txn) error {
 		res, err := tx.Exec("DELETE FROM snapshots WHERE state = $1", snapshotStateCreated)
@@ -151,44 +152,24 @@ func (s *Store) RollbackIncompleteSnapshots() (deleted int64, err error) {
 	return
 }
 
-// PinningSnapshots returns the snapshots awaiting confirmation that their
-// backup object reached the indexer.
-func (s *Store) PinningSnapshots() (snapshots []objects.PinningSnapshot, err error) {
+// SnapshotsForDeletion returns the Sia object IDs of snapshots marked for
+// deletion and of snapshots still awaiting their pin, if they entered that
+// state at or before the given time.
+func (s *Store) SnapshotsForDeletion(before time.Time) (ids []types.Hash256, err error) {
 	err = s.transaction(func(tx *txn) error {
-		snapshots = snapshots[:0] // reuse same slice if transaction retries
-		rows, err := tx.Query("SELECT id, sia_object_id FROM snapshots WHERE state = $1", snapshotStatePinning)
+		ids = ids[:0] // reuse same slice if transaction retries
+		rows, err := tx.Query("SELECT sia_object_id FROM snapshots WHERE state IN ($1, $2) AND state_since <= $3",
+			snapshotStatePinning, snapshotStateDeleting, sqlTime(before))
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var snap objects.PinningSnapshot
-			if err := rows.Scan(&snap.ID, (*sqlHash256)(&snap.ObjectID)); err != nil {
+			var id types.Hash256
+			if err := rows.Scan((*sqlHash256)(&id)); err != nil {
 				return err
 			}
-			snapshots = append(snapshots, snap)
-		}
-		return rows.Err()
-	})
-	return
-}
-
-// SnapshotsForDeletion returns the snapshots marked for deletion along with
-// when they were marked.
-func (s *Store) SnapshotsForDeletion() (snapshots []objects.DeletingSnapshot, err error) {
-	err = s.transaction(func(tx *txn) error {
-		snapshots = snapshots[:0] // reuse same slice if transaction retries
-		rows, err := tx.Query("SELECT sia_object_id, deleting_since FROM snapshots WHERE state = $1", snapshotStateDeleting)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var snap objects.DeletingSnapshot
-			if err := rows.Scan((*sqlHash256)(&snap.ObjectID), (*sqlTime)(&snap.Since)); err != nil {
-				return err
-			}
-			snapshots = append(snapshots, snap)
+			ids = append(ids, id)
 		}
 		return rows.Err()
 	})

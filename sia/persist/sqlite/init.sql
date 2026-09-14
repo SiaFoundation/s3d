@@ -37,7 +37,7 @@ CREATE TABLE sia_objects (
     metadata_signature BLOB NOT NULL,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
-    created_at_gen INTEGER NOT NULL DEFAULT 0 -- snapshot generation the id was first referenced at, kept on upsert
+    created_at_gen INTEGER NOT NULL -- snapshot generation the id was first referenced at, kept on upsert
 );
 
 CREATE TABLE sia_slabs (
@@ -139,8 +139,8 @@ CREATE TABLE object_parts (
 
 CREATE TABLE orphaned_objects (
     sia_object_id BLOB PRIMARY KEY,
-    orphaned_at_gen INTEGER NOT NULL DEFAULT 0,
-    created_at_gen INTEGER NOT NULL DEFAULT 0 -- creation stamp carried over from the sia object
+    orphaned_at_gen INTEGER NOT NULL,
+    created_at_gen INTEGER NOT NULL -- creation stamp carried over from the sia object
 );
 CREATE INDEX orphaned_objects_gen_idx ON orphaned_objects(orphaned_at_gen);
 
@@ -155,7 +155,7 @@ CREATE TABLE snapshots (
     gen_completed INTEGER, -- generation it completed at, NULL until pinned
 
     state INTEGER NOT NULL, -- lifecycle state, values defined in snapshots.go
-    deleting_since INTEGER -- when the state became deleting
+    state_since INTEGER NOT NULL -- when the current state was entered
 );
 
 -- serves the orphan guard, both halves probe by completion generation

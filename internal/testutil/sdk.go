@@ -11,7 +11,6 @@ import (
 	"reflect"
 	"slices"
 	"sync"
-	"time"
 	"unsafe"
 
 	"github.com/SiaFoundation/s3d/s3"
@@ -34,7 +33,6 @@ type (
 		staged      map[types.Hash256]uploadedObject
 		events      []sdk.ObjectEvent
 		eventsErr   error // when set, ObjectEvents returns this error
-		objectErr   error // when set, Object returns this error
 		slabSize    int64
 		failUploads bool
 
@@ -44,7 +42,6 @@ type (
 
 		pinErr      error // when non-nil, PinObject returns this error
 		pinAttempts int   // number of PinObject calls observed
-		pinPublish  bool  // when set, PinObject appends the pinned object's event
 	}
 
 	uploadedObject struct {
@@ -175,28 +172,6 @@ func (s *MemorySDK) ObjectEvents(_ context.Context, cursor slabs.Cursor, limit i
 	return filtered, nil
 }
 
-// Object returns the object with the given id, mirroring the indexer's point
-// read of its committed store.
-func (s *MemorySDK) Object(_ context.Context, id types.Hash256) (sdk.Object, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.objectErr != nil {
-		return sdk.Object{}, s.objectErr
-	}
-	o, ok := s.objects[id]
-	if !ok {
-		return sdk.Object{}, fmt.Errorf("failed to get object: %w", slabs.ErrObjectNotFound)
-	}
-	return o.meta, nil
-}
-
-// SetObjectError makes Object return the given error until cleared.
-func (s *MemorySDK) SetObjectError(err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.objectErr = err
-}
-
 // PruneSlabs prunes slabs not associated with an object from the indexer.
 func (s *MemorySDK) PruneSlabs(_ context.Context, opts ...api.URLQueryParameterOption) error {
 	s.mu.Lock()
@@ -322,20 +297,8 @@ func (s *MemorySDK) PinObject(_ context.Context, obj sdk.Object) error {
 	if o, ok := s.staged[obj.ID()]; ok {
 		s.objects[obj.ID()] = o
 		delete(s.staged, obj.ID())
-		if s.pinPublish {
-			meta := o.meta
-			s.events = append(s.events, sdk.ObjectEvent{Key: obj.ID(), UpdatedAt: time.Now(), Object: &meta})
-		}
 	}
 	return nil
-}
-
-// SetPublishOnPin makes PinObject append the pinned object's event to the event
-// stream, mirroring an indexer that publishes events after the pin commits.
-func (s *MemorySDK) SetPublishOnPin(v bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.pinPublish = v
 }
 
 // SetPinError configures the error returned by future PinObject calls. Pass

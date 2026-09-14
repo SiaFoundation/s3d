@@ -8,6 +8,9 @@ import (
 // PruneSlabsInterval exports pruneSlabsInterval for testing.
 const PruneSlabsInterval = pruneSlabsInterval
 
+// SnapshotConfirmDelay exports snapshotConfirmDelay for testing.
+const SnapshotConfirmDelay = snapshotConfirmDelay
+
 // SetDiskUsageTimeout overrides the disk usage timeout for testing.
 func (s *Sia) SetDiskUsageTimeout(d time.Duration) { //nolint:revive
 	s.diskUsageTimeout = d
@@ -39,18 +42,6 @@ func (s *Sia) DeleteOrphanedUploads() (int, error) { //nolint:revive
 }
 
 // ProcessSnapshotDeletions exports processSnapshotDeletions for testing.
-func (s *Sia) ProcessSnapshotDeletions(ctx context.Context) { //nolint:revive
-	s.processSnapshotDeletions(ctx)
-}
-
-// SetSnapshotConfirmDelay overrides the snapshot deletion confirmation delay
-// for testing.
-func (s *Sia) SetSnapshotConfirmDelay(d time.Duration) { //nolint:revive
-	s.snapshotConfirmDelay.Store(int64(d))
-}
-
-// SetSnapshotObserveTimeout overrides how long CreateSnapshot waits for the
-// sync loop to observe the pin for testing.
-func (s *Sia) SetSnapshotObserveTimeout(d time.Duration) { //nolint:revive
-	s.snapshotObserveTimeout.Store(int64(d))
+func (s *Sia) ProcessSnapshotDeletions(ctx context.Context, now time.Time) { //nolint:revive
+	s.processSnapshotDeletions(ctx, now)
 }

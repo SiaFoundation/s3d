@@ -1755,13 +1755,10 @@ func TestDeleteObjectUnpin(t *testing.T) {
 
 	// a snapshot withholds a deleted object from the orphan loop until the
 	// snapshot itself is removed. memSDK now holds C and the snapshot object
-	siaBackend.SetSnapshotObserveTimeout(0)
 	snap, err := siaBackend.CreateSnapshot(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	memSDK.SetEvents([]sdk.ObjectEvent{snapshotEvent(t, memSDK, snap.SiaObjectID, time.Now())})
-	siaBackend.SyncMetadata(t.Context())
 	if _, _, _, err := store.DeleteObject(testutil.AccessKeyID, bucket, s3.ObjectID{Key: "C"}); err != nil {
 		t.Fatal(err)
 	}

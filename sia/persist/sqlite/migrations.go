@@ -371,17 +371,65 @@ CREATE TABLE snapshots (
     gen_completed INTEGER, -- generation it completed at, NULL until pinned
 
     state INTEGER NOT NULL, -- lifecycle state, values defined in snapshots.go
-    deleting_since INTEGER -- when the state became deleting
+    state_since INTEGER NOT NULL -- when the current state was entered
 );
 CREATE UNIQUE INDEX snapshots_sia_object_id_idx ON snapshots(sia_object_id) WHERE sia_object_id IS NOT NULL;
 CREATE INDEX snapshots_gen_completed_idx ON snapshots(gen_completed, gen);
 ALTER TABLE global_settings ADD COLUMN snapshot_gen INTEGER NOT NULL DEFAULT 0;
 
-ALTER TABLE orphaned_objects ADD COLUMN orphaned_at_gen INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE orphaned_objects ADD COLUMN created_at_gen INTEGER NOT NULL DEFAULT 0;
+-- the generation columns carry no default, so the tables are rebuilt with
+-- existing rows stamped at generation 0, before the first snapshot
+CREATE TABLE orphaned_objects_new (
+    sia_object_id BLOB PRIMARY KEY,
+    orphaned_at_gen INTEGER NOT NULL,
+    created_at_gen INTEGER NOT NULL
+);
+INSERT INTO orphaned_objects_new (sia_object_id, orphaned_at_gen, created_at_gen)
+    SELECT sia_object_id, 0, 0 FROM orphaned_objects;
+DROP TABLE orphaned_objects;
+ALTER TABLE orphaned_objects_new RENAME TO orphaned_objects;
 CREATE INDEX orphaned_objects_gen_idx ON orphaned_objects(orphaned_at_gen);
 
-ALTER TABLE sia_objects ADD COLUMN created_at_gen INTEGER NOT NULL DEFAULT 0;`)
+-- dropping sia_objects cascades into sia_slab_slices despite deferred foreign
+-- keys, so the slices are backed up and dropped first. The deferred violations
+-- from objects.sia_object_id only clear once the rows are inserted back into
+-- the renamed table
+CREATE TABLE sia_slab_slices_backup AS SELECT sia_object_id, slice_index, slab_id, offset, length FROM sia_slab_slices;
+DROP TABLE sia_slab_slices;
+
+CREATE TABLE sia_objects_backup AS
+    SELECT id, encrypted_data_key, data_signature, encrypted_metadata_key, encrypted_metadata, metadata_signature, created_at, updated_at FROM sia_objects;
+CREATE TABLE sia_objects_new (
+    id BLOB PRIMARY KEY,
+    encrypted_data_key BLOB NOT NULL,
+    data_signature BLOB NOT NULL,
+    encrypted_metadata_key BLOB,
+    encrypted_metadata BLOB,
+    metadata_signature BLOB NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    created_at_gen INTEGER NOT NULL
+);
+DROP TABLE sia_objects;
+ALTER TABLE sia_objects_new RENAME TO sia_objects;
+INSERT INTO sia_objects (id, encrypted_data_key, data_signature, encrypted_metadata_key, encrypted_metadata, metadata_signature, created_at, updated_at, created_at_gen)
+    SELECT id, encrypted_data_key, data_signature, encrypted_metadata_key, encrypted_metadata, metadata_signature, created_at, updated_at, 0 FROM sia_objects_backup;
+DROP TABLE sia_objects_backup;
+
+CREATE TABLE sia_slab_slices (
+    sia_object_id BLOB NOT NULL,
+    slice_index INTEGER NOT NULL,
+    slab_id BLOB NOT NULL,
+    offset INTEGER NOT NULL,
+    length INTEGER NOT NULL,
+    FOREIGN KEY (sia_object_id) REFERENCES sia_objects(id) ON DELETE CASCADE,
+    FOREIGN KEY (slab_id) REFERENCES sia_slabs(id) ON DELETE CASCADE,
+    PRIMARY KEY (sia_object_id, slice_index)
+) WITHOUT ROWID;
+INSERT INTO sia_slab_slices (sia_object_id, slice_index, slab_id, offset, length)
+    SELECT sia_object_id, slice_index, slab_id, offset, length FROM sia_slab_slices_backup;
+DROP TABLE sia_slab_slices_backup;
+CREATE INDEX sia_slab_slices_slab_id_idx ON sia_slab_slices(slab_id);`)
 		return err
 	},
 }
