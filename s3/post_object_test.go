@@ -19,6 +19,7 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	service "github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
@@ -53,6 +54,11 @@ type postUpload struct {
 
 	// omitFile leaves out the file part entirely
 	omitFile bool
+
+	// signHeader also signs the request with an Authorization header, and
+	// chunked sends it without a Content-Length
+	signHeader bool
+	chunked    bool
 
 	file     []byte
 	filename string
@@ -169,6 +175,16 @@ func (u *postUpload) post(t testing.TB, tester *testutil.S3Tester) (*http.Respon
 		t.Fatal(err)
 	}
 	req.Header.Set("Content-Type", contentType)
+	if u.chunked {
+		req.ContentLength = -1
+	}
+	if u.signHeader {
+		creds := aws.Credentials{AccessKeyID: u.accessKey, SecretAccessKey: u.secretKey}
+		req.Header.Set("X-Amz-Content-Sha256", "UNSIGNED-PAYLOAD")
+		if err := v4.NewSigner().SignHTTP(t.Context(), creds, req, "UNSIGNED-PAYLOAD", "s3", u.region, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	client := http.Client{
 		CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -305,8 +321,7 @@ func TestPostObjectResponses(t *testing.T) {
 	resp, body = upload.post(t, tester)
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("unexpected status %d: %s", resp.StatusCode, body)
-	}
-	if _, err := tester.HeadObject(t.Context(), bucket, "uploads/holiday.txt", nil); err != nil {
+	} else if _, err := tester.HeadObject(t.Context(), bucket, "uploads/holiday.txt", nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -433,6 +448,21 @@ func TestPostObjectRejections(t *testing.T) {
 	upload = newPostUpload(bucket, "rejected")
 	upload.conditions = []any{[]any{"content-length-range", 1024, 4096}}
 	assertRejected(upload, s3errs.ErrEntityTooSmall)
+
+	// a content-md5 that does not match the file
+	upload = newPostUpload(bucket, "rejected")
+	upload.fields = [][2]string{{"content-md5", base64.StdEncoding.EncodeToString(make([]byte, 16))}}
+	assertRejected(upload, s3errs.ErrBadDigest)
+
+	// a form that is also signed with an Authorization header
+	upload = newPostUpload(bucket, "rejected")
+	upload.signHeader = true
+	assertRejected(upload, s3errs.ErrInvalidArgumentMultipleAuth)
+
+	// a form sent without a Content-Length
+	upload = newPostUpload(bucket, "rejected")
+	upload.chunked = true
+	assertRejected(upload, s3errs.ErrMissingContentLength)
 
 	// a POST that is not multipart form data at all
 	endpoint := *tester.Client().Options().BaseEndpoint
