@@ -52,11 +52,9 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *st
 		return s.bucketLocation(w, r, accessKeyID, bucket)
 	}
 
-	// POST Object authenticates itself, because a form upload carries its
-	// credential, policy and signature as fields of the body rather than as
-	// headers, so the router resolved no key for it
+	// POST Object authenticates through its form fields
 	if r.Method == http.MethodPost && !q.Has("delete") {
-		return s.postObject(w, r, bucket)
+		return s.postObject(w, r, accessKeyID, bucket)
 	}
 
 	// routes with optional authentication. The backend rejects an anonymous
