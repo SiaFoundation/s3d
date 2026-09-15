@@ -527,25 +527,13 @@ func (s *s3) completeMultipartUpload(w http.ResponseWriter, r *http.Request, acc
 		return err
 	}
 
-	protocol := "http"
-	if r.TLS != nil {
-		protocol = "https"
-	}
-
-	var location string
-	if _, ok := s.bucketFromHost(r.Host); ok {
-		location = fmt.Sprintf("%s://%s/%s", protocol, r.Host, object)
-	} else {
-		location = fmt.Sprintf("%s://%s/%s/%s", protocol, r.Host, bucket, object)
-	}
-
 	w.Header().Set("ETag", res.ETag)
 	if res.VersionID != "" {
 		w.Header().Set("x-amz-version-id", res.VersionID)
 	}
 	return writeXMLResponse(w, http.StatusOK, CompleteMultipartUploadResponse{
 		Xmlns:    "http://s3.amazonaws.com/doc/2006-03-01/",
-		Location: location,
+		Location: s.objectLocation(r, bucket, object),
 		Bucket:   bucket,
 		Key:      object,
 		ETag:     res.ETag,

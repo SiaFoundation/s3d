@@ -52,6 +52,13 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *st
 		return s.bucketLocation(w, r, accessKeyID, bucket)
 	}
 
+	// POST Object authenticates itself, because a form upload carries its
+	// credential, policy and signature as fields of the body rather than as
+	// headers, so the router resolved no key for it
+	if r.Method == http.MethodPost && !q.Has("delete") {
+		return s.postObject(w, r, bucket)
+	}
+
 	// routes with optional authentication. The backend rejects an anonymous
 	// caller unless the bucket's policy grants s3:ListBucket, which covers
 	// listing and HeadBucket.
@@ -76,9 +83,6 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *st
 	case http.MethodDelete:
 		return s.deleteBucket(w, r, validatedKey, bucket)
 	case http.MethodPost:
-		if !q.Has("delete") {
-			return s3errs.ErrNotImplemented // createObjectBrowserUpload is not implemented
-		}
 		return s.deleteObjects(w, r, validatedKey, bucket)
 	default:
 		return s3errs.ErrMethodNotAllowed
