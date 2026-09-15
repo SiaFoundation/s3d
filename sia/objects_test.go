@@ -1583,19 +1583,6 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	}
 }
 
-// countingReader counts the bytes read through it, so a test can assert how
-// much of a body the backend consumed.
-type countingReader struct {
-	r io.Reader
-	n int64
-}
-
-func (c *countingReader) Read(p []byte) (int, error) {
-	n, err := c.r.Read(p)
-	c.n += int64(n)
-	return n, err
-}
-
 func TestPutObjectUndeclaredLength(t *testing.T) {
 	backend, _ := testutil.NewBackend(t)
 
@@ -1625,16 +1612,16 @@ func TestPutObjectUndeclaredLength(t *testing.T) {
 
 	// an object above the bound is refused, and the read stops at the bound
 	// rather than draining the body first
-	body := &countingReader{r: bytes.NewReader(frand.Bytes(1 << 20))}
+	data = frand.Bytes(1 << 20)
+	body := bytes.NewReader(data)
 	_, err = backend.PutObject(t.Context(), testutil.AccessKeyID, bucket, "above", body, s3.PutObjectOptions{
 		ContentLength:    -1,
 		MaxContentLength: 128,
 	})
 	if !errors.Is(err, s3errs.ErrEntityTooLarge) {
 		t.Fatalf("expected ErrEntityTooLarge, got %v", err)
-	}
-	if body.n > 129 {
-		t.Fatalf("expected the read to stop at the bound, consumed %d bytes", body.n)
+	} else if consumed := len(data) - body.Len(); consumed > 129 {
+		t.Fatalf("expected the read to stop at the bound, consumed %d bytes", consumed)
 	}
 
 	// an empty body is stored the same way a declared empty object is

@@ -24,6 +24,7 @@ import (
 const (
 	postFieldAlgorithm  = "x-amz-algorithm"
 	postFieldBucket     = "bucket"
+	postFieldContentMD5 = "content-md5"
 	postFieldCredential = "x-amz-credential"
 	postFieldDate       = "x-amz-date"
 	postFieldFile       = "file"
@@ -40,10 +41,6 @@ const (
 )
 
 const (
-	// maxPostPolicySize is the largest accepted policy document, which S3
-	// documents as 20 KB.
-	maxPostPolicySize = 20 * 1024
-
 	// maxPostFieldBytes bounds the fields preceding the file, so a form cannot
 	// buffer an arbitrary amount before the upload starts.
 	maxPostFieldBytes = 64 * 1024
@@ -111,6 +108,16 @@ func parsePostForm(r *http.Request) (postForm, *multipart.Part, error) {
 			return postForm{}, nil, s3errs.ErrMalformedPOSTRequest
 		}
 
+		for name, values := range part.Header {
+			buffered += len(name)
+			for _, value := range values {
+				buffered += len(value)
+			}
+		}
+		if buffered > maxPostFieldBytes {
+			return postForm{}, nil, s3errs.ErrMaxPostPreDataLengthExceededError
+		}
+
 		name := strings.ToLower(part.FormName())
 		if name == postFieldFile {
 			form.filename = part.FileName()
@@ -153,7 +160,7 @@ type postMatch struct {
 //
 // https://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-HTTPPOSTConstructPolicy.html
 func parsePostPolicy(encoded string) (postPolicy, error) {
-	if len(encoded) > maxPostPolicySize {
+	if len(encoded) > maxPolicySize {
 		return postPolicy{}, s3errs.ErrPolicyTooLarge
 	}
 	decoded, err := base64.StdEncoding.DecodeString(encoded)
@@ -205,7 +212,8 @@ func (p *postPolicy) addCondition(condition json.RawMessage) error {
 		return s3errs.ErrMalformedPolicy
 	}
 
-	switch strings.ToLower(operator) {
+	operator = strings.ToLower(operator)
+	switch operator {
 	case "eq", "starts-with":
 		var field, value string
 		if err := json.Unmarshal(elements[1], &field); err != nil {
@@ -306,17 +314,23 @@ func (b *postBody) Read(p []byte) (int, error) {
 	b.read += int64(n)
 	if errors.Is(err, io.EOF) && b.read < b.min {
 		return n, s3errs.ErrEntityTooSmall
+	} else if errors.Is(err, io.ErrUnexpectedEOF) {
+		return n, s3errs.ErrMalformedPOSTRequest
 	}
 	return n, err
 }
 
-// postObject handles POST Object requests, the browser form upload. It
-// authenticates itself rather than taking a key from the router, because the
-// credential, the policy and the signature over it are fields of the body
-// rather than headers.
+// postObject handles POST Object requests, the browser form upload, which
+// authenticates through its form fields.
 //
 // https://docs.aws.amazon.com/AmazonS3/latest/API/RESTObjectPOST.html
-func (s *s3) postObject(w http.ResponseWriter, r *http.Request, bucket string) error {
+func (s *s3) postObject(w http.ResponseWriter, r *http.Request, headerKeyID *string, bucket string) error {
+	if headerKeyID != nil {
+		return s3errs.ErrInvalidArgumentMultipleAuth
+	} else if r.ContentLength < 0 {
+		return s3errs.ErrMissingContentLength
+	}
+
 	form, file, err := parsePostForm(r)
 	if err != nil {
 		return err
@@ -362,11 +376,8 @@ func (s *s3) postObject(w http.ResponseWriter, r *http.Request, bucket string) e
 	// condition bounds it further, so the backend has a size to reserve against
 	// its disk limit
 	maxSize := r.ContentLength
-	if maxSize < 0 || (policy.maxSize >= 0 && policy.maxSize < maxSize) {
+	if policy.maxSize >= 0 && policy.maxSize < maxSize {
 		maxSize = policy.maxSize
-	}
-	if maxSize < 0 {
-		return s3errs.ErrMissingContentLength
 	}
 
 	meta, err := form.metadata()
@@ -374,12 +385,22 @@ func (s *s3) postObject(w http.ResponseWriter, r *http.Request, bucket string) e
 		return err
 	}
 
+	var contentMD5 *[16]byte
+	if encoded, ok := form.fields[postFieldContentMD5]; ok {
+		contentMD5 = new([16]byte)
+		if n, err := base64.StdEncoding.Decode(contentMD5[:], []byte(encoded)); err != nil || n != len(contentMD5) {
+			return s3errs.ErrInvalidDigest
+		}
+	}
+
 	// the redirect is resolved before the upload, so nothing that can fail is
 	// left to run after the object has been stored
 	var redirect *url.URL
 	if target := form.redirect(); target != "" {
 		// S3 ignores a redirect it cannot use rather than failing the upload
-		redirect, _ = url.Parse(target)
+		if u, err := url.Parse(target); err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" {
+			redirect = u
+		}
 	}
 
 	log := s.logger.With(zap.String("bucket", bucket), zap.String("object", object))
@@ -391,6 +412,7 @@ func (s *s3) postObject(w http.ResponseWriter, r *http.Request, bucket string) e
 	}, PutObjectOptions{
 		ContentLength:    -1,
 		MaxContentLength: maxSize,
+		ContentMD5:       contentMD5,
 		Meta:             meta,
 	})
 	if err != nil {

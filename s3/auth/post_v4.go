@@ -10,12 +10,6 @@ import (
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 )
 
-// maxPostPolicySignatureAge is the maximum allowed age of a SigV4 POST policy
-// signature, measured from the submitted x-amz-date.
-//
-// https://docs.aws.amazon.com/AmazonS3/latest/developerguide/bucket-policy-s3-sigv4-conditions.html
-const maxPostPolicySignatureAge = 7 * 24 * time.Hour
-
 // PostPolicyAuth carries the authentication form fields of a POST Object
 // request. Policy is the base64 document exactly as it was submitted, since
 // that is the string the signature covers.
@@ -65,7 +59,7 @@ func (p PostPolicyAuth) Verify(ctx context.Context, store KeyStore, region strin
 		return "", s3errs.ErrAccessDenied
 	} else if date.After(now.Add(maxClockSkew)) {
 		return "", s3errs.ErrRequestTimeTooSkewed
-	} else if now.After(date.Add(maxPostPolicySignatureAge)) {
+	} else if now.After(date.Add(maxPresignedExpiry)) {
 		return "", s3errs.ErrAccessDeniedExpired
 	}
 
