@@ -446,7 +446,7 @@ func TestHandleAuthV4Streaming(t *testing.T) {
 		{
 			name:        "payload-trailer",
 			contentSha:  ContentStreamingAWS4HMACSHA256PayloadTrailer,
-			xAmzTrailer: xAmzChecksumCrc32C,
+			xAmzTrailer: "X-Amz-Checksum-Crc32c",
 			result:      result,
 			body:        slices.Concat(chunks, []byte(crcTrailerBlock)),
 			wantBody:    payload,
@@ -461,7 +461,7 @@ func TestHandleAuthV4Streaming(t *testing.T) {
 		{
 			name:        "tampered trailer signature",
 			contentSha:  ContentStreamingAWS4HMACSHA256PayloadTrailer,
-			xAmzTrailer: xAmzChecksumCrc32C,
+			xAmzTrailer: "X-Amz-Checksum-Crc32c",
 			result:      result,
 			body:        slices.Concat(chunks, []byte(tamperedTrailer)),
 			wantReadErr: s3errs.ErrInvalidSignature,
@@ -483,7 +483,7 @@ func TestHandleAuthV4Streaming(t *testing.T) {
 		{
 			name:        "missing trailer signature",
 			contentSha:  ContentStreamingAWS4HMACSHA256PayloadTrailer,
-			xAmzTrailer: xAmzChecksumCrc32C,
+			xAmzTrailer: "X-Amz-Checksum-Crc32c",
 			result:      result,
 			body:        slices.Concat(chunks, []byte("x-amz-checksum-crc32c:"+crcB64+"\r\n\r\n")),
 			wantReadErr: s3errs.ErrInvalidSignature,
@@ -491,7 +491,7 @@ func TestHandleAuthV4Streaming(t *testing.T) {
 		{
 			name:        "two declared trailers",
 			contentSha:  ContentStreamingAWS4HMACSHA256PayloadTrailer,
-			xAmzTrailer: xAmzChecksumCrc32C + "," + xAmzChecksumSha256,
+			xAmzTrailer: "X-Amz-Checksum-Crc32c" + "," + "X-Amz-Checksum-Sha256",
 			result:      result,
 			body:        slices.Concat(chunks, []byte(multiTrailerBlock)),
 			wantBody:    payload,
@@ -499,16 +499,32 @@ func TestHandleAuthV4Streaming(t *testing.T) {
 		{
 			name:        "unsigned trailer variant",
 			contentSha:  ContentStreamingUnsignedPayloadTrailer,
-			xAmzTrailer: xAmzChecksumSha256,
+			xAmzTrailer: "X-Amz-Checksum-Sha256",
 			body:        slices.Concat(unsigned, unsignedTrailer),
 			wantBody:    payload,
 		},
 		{
 			name:        "spurious trailer signature on unsigned variant",
 			contentSha:  ContentStreamingUnsignedPayloadTrailer,
-			xAmzTrailer: xAmzChecksumSha256,
+			xAmzTrailer: "X-Amz-Checksum-Sha256",
 			body:        slices.Concat(unsigned, unsignedSpurious),
 			wantReadErr: s3errs.ErrInvalidArgument,
+		},
+		{
+			name:          "body longer than decoded content length",
+			contentSha:    ContentStreamingAWS4HMACSHA256Payload,
+			decodedLength: strconv.Itoa(len(payload) - 8),
+			result:        result,
+			body:          slices.Concat(chunks, []byte("\r\n")),
+			wantReadErr:   s3errs.ErrIncompleteBody,
+		},
+		{
+			name:          "payload declared as empty",
+			contentSha:    ContentStreamingAWS4HMACSHA256Payload,
+			decodedLength: "0",
+			result:        result,
+			body:          slices.Concat(chunks, []byte("\r\n")),
+			wantReadErr:   s3errs.ErrIncompleteBody,
 		},
 		{
 			name:          "negative decoded content length",

@@ -2,14 +2,11 @@ package s3
 
 import (
 	"context"
-	"crypto/sha1"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/xml"
 	"fmt"
 	"hash"
-	"hash/crc32"
 	"io"
 	"net/http"
 	"net/textproto"
@@ -21,7 +18,6 @@ import (
 	"github.com/SiaFoundation/s3d/s3/auth"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/minio/crc64nvme"
 	"go.uber.org/zap"
 )
 
@@ -161,10 +157,7 @@ type RequestChecksum struct {
 // NewHash returns a hash for the checksum's algorithm, or nil when the backend
 // cannot compute it.
 func (c RequestChecksum) NewHash() hash.Hash {
-	if newHash, ok := checksumAlgorithms[c.Algorithm]; ok {
-		return newHash()
-	}
-	return nil
+	return auth.NewChecksumHash(c.Algorithm)
 }
 
 // CopyObjectOptions contains options for a CopyObject operation.
@@ -824,22 +817,9 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID strin
 
 // prefixes of the header families stored with an object
 const (
-	checksumPrefix = "X-Amz-Checksum-"
+	checksumPrefix = auth.HeaderXAMZChecksumPrefix
 	metaPrefix     = "X-Amz-Meta-"
 )
-
-// checksumAlgorithms maps each X-Amz-Checksum-* suffix the backend can compute
-// to its hash constructor. Any other algorithm is left alone rather than
-// refused, so a client sending one still works.
-var checksumAlgorithms = map[string]func() hash.Hash{
-	"Crc32":  func() hash.Hash { return crc32.NewIEEE() },
-	"Crc32c": func() hash.Hash { return crc32.New(crc32.MakeTable(crc32.Castagnoli)) },
-	// MinIO's implementation of the NVME polynomial, which the standard
-	// library does not have
-	"Crc64nvme": func() hash.Hash { return crc64nvme.New() },
-	"Sha1":      sha1.New,
-	"Sha256":    sha256.New,
-}
 
 // requestChecksum extracts the checksum a client asked to have validated, or
 // nil when the request carries no checksum header the backend can compute.
@@ -854,8 +834,10 @@ func requestChecksum(headers http.Header) (*RequestChecksum, error) {
 		if !ok {
 			continue
 		}
-		newHash, known := checksumAlgorithms[suffix]
-		if !known {
+		// an algorithm the backend cannot compute is left alone rather than
+		// refused, so a client sending one still works
+		newHash := auth.NewChecksumHash(suffix)
+		if newHash == nil {
 			continue
 		}
 
@@ -868,7 +850,7 @@ func requestChecksum(headers http.Header) (*RequestChecksum, error) {
 		// AWS answers a malformed value with InvalidRequest and reserves
 		// InvalidDigest for Content-MD5
 		sum, err := base64.StdEncoding.DecodeString(headers.Get(name))
-		if err != nil || len(sum) != newHash().Size() {
+		if err != nil || len(sum) != newHash.Size() {
 			return nil, s3errs.ErrInvalidRequest
 		}
 		found = &RequestChecksum{Algorithm: suffix, Sum: sum}
