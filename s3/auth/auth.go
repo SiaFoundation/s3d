@@ -59,13 +59,9 @@ const (
 // and now.
 const maxClockSkew = 5 * time.Minute
 
-// The following constants define the supported checksum header names.
-const (
-	xAmzChecksumCrc32  = "X-Amz-Checksum-Crc32"
-	xAmzChecksumCrc32C = "X-Amz-Checksum-Crc32C"
-	xAmzChecksumSha1   = "X-Amz-Checksum-Sha1"
-	xAmzChecksumSha256 = "X-Amz-Checksum-Sha256"
-)
+// HeaderXAMZChecksumPrefix prefixes the X-Amz-Checksum-* headers, whose suffix
+// names the checksum algorithm.
+const HeaderXAMZChecksumPrefix = "X-Amz-Checksum-"
 
 // The following constants define the supported "Authorization" header values
 const (

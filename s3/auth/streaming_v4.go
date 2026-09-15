@@ -3,7 +3,6 @@ package auth
 import (
 	"bufio"
 	"crypto/hmac"
-	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
@@ -11,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"hash"
-	"hash/crc32"
 	"io"
 	"net/http"
 	"sort"
@@ -126,7 +124,7 @@ func handleAuthV4Streaming(req *http.Request, payloadHash string, result *v4Sign
 		verifier = newChunkSigVerifier(result)
 	}
 
-	req.Body = newChunkedPayloadTrailerReader(req.Body, expectedHeaders, verifier)
+	req.Body = newChunkedPayloadTrailerReader(req.Body, size, expectedHeaders, verifier)
 	req.ContentLength = size
 	return nil
 }
@@ -138,13 +136,13 @@ type chunkedPayloadTrailerReader struct {
 	br              *bufio.Reader
 	r               io.Closer // io.Closer to avoid reading from it rather than br
 	chunkRemain     int64
+	payloadRemain   int64
 	done            bool
 	expectedHeaders map[string]struct{}
 
-	crc32Hasher  hash.Hash32
-	crc32CHasher hash.Hash32
-	sha1Hasher   hash.Hash
-	sha256Hasher hash.Hash
+	// hashers computes the checksum for each declared X-Amz-Checksum-* trailer
+	// the backend can verify, keyed by canonical header name
+	hashers map[string]hash.Hash
 
 	verifier   *chunkSigVerifier
 	chunkSig   string
@@ -153,35 +151,24 @@ type chunkedPayloadTrailerReader struct {
 }
 
 // newChunkedPayloadTrailerReader wraps r. r should be the raw HTTP message body
-// with Content-Encoding: aws-chunked.
-func newChunkedPayloadTrailerReader(r io.ReadCloser, expectedHeaders map[string]struct{}, verifier *chunkSigVerifier) *chunkedPayloadTrailerReader {
-	var crc32Hasher hash.Hash32
-	if _, exists := expectedHeaders[xAmzChecksumCrc32]; exists {
-		crc32Hasher = crc32.New(crc32.MakeTable(crc32.IEEE))
-	}
-	var crc32CHasher hash.Hash32
-	if _, exists := expectedHeaders[xAmzChecksumCrc32C]; exists {
-		crc32CHasher = crc32.New(crc32.MakeTable(crc32.Castagnoli))
-	}
-	var sha1Hasher hash.Hash
-	if _, exists := expectedHeaders[xAmzChecksumSha1]; exists {
-		sha1Hasher = sha1.New()
-	}
-	var sha256Hasher hash.Hash
-	if _, exists := expectedHeaders[xAmzChecksumSha256]; exists {
-		sha256Hasher = sha256.New()
+// with Content-Encoding: aws-chunked. size is the declared payload length.
+func newChunkedPayloadTrailerReader(r io.ReadCloser, size int64, expectedHeaders map[string]struct{}, verifier *chunkSigVerifier) *chunkedPayloadTrailerReader {
+	hashers := make(map[string]hash.Hash)
+	for name := range expectedHeaders {
+		if suffix, ok := strings.CutPrefix(name, HeaderXAMZChecksumPrefix); ok {
+			if h := NewChecksumHash(suffix); h != nil {
+				hashers[name] = h
+			}
+		}
 	}
 
 	rdr := &chunkedPayloadTrailerReader{
 		r:               r,
 		br:              bufio.NewReader(r),
 		chunkRemain:     0,
+		payloadRemain:   size,
 		expectedHeaders: expectedHeaders,
-
-		crc32Hasher:  crc32Hasher,
-		crc32CHasher: crc32CHasher,
-		sha1Hasher:   sha1Hasher,
-		sha256Hasher: sha256Hasher,
+		hashers:         hashers,
 
 		verifier: verifier,
 	}
@@ -196,10 +183,17 @@ func (r *chunkedPayloadTrailerReader) Close() error {
 	return r.r.Close()
 }
 
-// Read streams only the payload bytes. Once the payload is exhausted,
-// Read returns io.EOF and trailers will have been parsed and verified.
+// Read streams only the payload bytes. The read that delivers the last of them
+// also consumes and verifies the terminating chunk and its trailers.
 func (r *chunkedPayloadTrailerReader) Read(p []byte) (int, error) {
 	if r.done {
+		return 0, io.EOF
+	}
+
+	if r.payloadRemain == 0 {
+		if err := r.readTerminatingChunk(); err != nil {
+			return 0, err
+		}
 		return 0, io.EOF
 	}
 
@@ -217,21 +211,9 @@ func (r *chunkedPayloadTrailerReader) Read(p []byte) (int, error) {
 			return 0, err
 		}
 		if size == 0 {
-			if r.verifier != nil {
-				if err := r.verifier.verifyChunk(sig, sha256.Sum256(nil)); err != nil {
-					return 0, err
-				}
-			}
-			parsed, err := r.assertTrailerHeaders(r.expectedHeaders)
-			if err != nil {
+			if err := r.verifyTerminatingChunk(sig); err != nil {
 				return 0, err
 			}
-			if r.verifier != nil && r.expectedHeaders != nil {
-				if err := r.verifyTrailerSignature(parsed); err != nil {
-					return 0, err
-				}
-			}
-			r.done = true
 			return 0, io.EOF
 		}
 		r.chunkRemain = size
@@ -241,17 +223,16 @@ func (r *chunkedPayloadTrailerReader) Read(p []byte) (int, error) {
 		}
 	}
 
-	// read up to min(len(p), chunkRemain)
+	// read up to min(len(p), chunkRemain, payloadRemain)
 	nwant := int64(len(p))
 	if nwant == 0 {
 		return 0, nil
 	}
-	if nwant > r.chunkRemain {
-		nwant = r.chunkRemain
-	}
+	nwant = min(nwant, r.chunkRemain, r.payloadRemain)
 
 	n, err := io.ReadFull(r.br, p[:nwant])
 	r.chunkRemain -= int64(n)
+	r.payloadRemain -= int64(n)
 	if err != nil {
 		if errors.Is(err, io.EOF) {
 			return n, io.ErrUnexpectedEOF
@@ -282,7 +263,57 @@ func (r *chunkedPayloadTrailerReader) Read(p []byte) (int, error) {
 			}
 		}
 	}
+
+	if r.payloadRemain == 0 {
+		if err := r.readTerminatingChunk(); err != nil {
+			return n, err
+		}
+		return n, io.EOF
+	}
 	return n, nil
+}
+
+// readTerminatingChunk reads and verifies the zero-length chunk that ends the
+// payload and the trailers that follow it.
+func (r *chunkedPayloadTrailerReader) readTerminatingChunk() error {
+	if r.chunkRemain != 0 {
+		return s3errs.ErrIncompleteBody
+	}
+	line, err := readCRLFLine(r.br)
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			return io.ErrUnexpectedEOF
+		}
+		return err
+	}
+	size, sig, err := parseChunkHeader(line)
+	if err != nil {
+		return err
+	} else if size != 0 {
+		return s3errs.ErrIncompleteBody
+	}
+	return r.verifyTerminatingChunk(sig)
+}
+
+// verifyTerminatingChunk verifies the zero-length chunk that ends the payload
+// and the trailers that follow it.
+func (r *chunkedPayloadTrailerReader) verifyTerminatingChunk(sig string) error {
+	if r.verifier != nil {
+		if err := r.verifier.verifyChunk(sig, sha256.Sum256(nil)); err != nil {
+			return err
+		}
+	}
+	parsed, err := r.assertTrailerHeaders(r.expectedHeaders)
+	if err != nil {
+		return err
+	}
+	if r.verifier != nil && r.expectedHeaders != nil {
+		if err := r.verifyTrailerSignature(parsed); err != nil {
+			return err
+		}
+	}
+	r.done = true
+	return nil
 }
 
 // assertTrailerHeaders reads and asserts trailer headers from br match
@@ -352,27 +383,12 @@ func (r *chunkedPayloadTrailerReader) assertTrailerHeaders(expectedHeaders map[s
 	for expected := range expectedHeaders {
 		h, ok := parsedHeaders[expected]
 		if !ok {
-			return nil, fmt.Errorf("missing expected trailer header: %q", expected)
+			return nil, s3errs.ErrInvalidArgument
 		}
 
 		// verify checksum headers
-		if expected == xAmzChecksumCrc32 {
-			if chksum := base64.StdEncoding.EncodeToString(r.crc32Hasher.Sum(nil)); h[0] != chksum {
-				return nil, s3errs.ErrBadDigest
-			}
-		}
-		if expected == xAmzChecksumCrc32C {
-			if chksum := base64.StdEncoding.EncodeToString(r.crc32CHasher.Sum(nil)); h[0] != chksum {
-				return nil, s3errs.ErrBadDigest
-			}
-		}
-		if expected == xAmzChecksumSha1 {
-			if chksum := base64.StdEncoding.EncodeToString(r.sha1Hasher.Sum(nil)); h[0] != chksum {
-				return nil, s3errs.ErrBadDigest
-			}
-		}
-		if expected == xAmzChecksumSha256 {
-			if chksum := base64.StdEncoding.EncodeToString(r.sha256Hasher.Sum(nil)); h[0] != chksum {
+		if hasher, ok := r.hashers[expected]; ok {
+			if chksum := base64.StdEncoding.EncodeToString(hasher.Sum(nil)); h[0] != chksum {
 				return nil, s3errs.ErrBadDigest
 			}
 		}
@@ -406,17 +422,8 @@ func (r *chunkedPayloadTrailerReader) verifyTrailerSignature(parsedHeaders http.
 // updateHashers updates all active trailer-checksum hashers with data so
 // they can be compared against the declared trailer values later.
 func (r *chunkedPayloadTrailerReader) updateHashers(data []byte) {
-	if r.crc32Hasher != nil {
-		_, _ = r.crc32Hasher.Write(data)
-	}
-	if r.crc32CHasher != nil {
-		_, _ = r.crc32CHasher.Write(data)
-	}
-	if r.sha1Hasher != nil {
-		_, _ = r.sha1Hasher.Write(data)
-	}
-	if r.sha256Hasher != nil {
-		_, _ = r.sha256Hasher.Write(data)
+	for _, hasher := range r.hashers {
+		_, _ = hasher.Write(data)
 	}
 }
 
