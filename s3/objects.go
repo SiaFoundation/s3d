@@ -145,8 +145,18 @@ type PutObjectResult struct {
 // set, the backend needs to validate the data against the provided checksums
 // and return an error if they don't match.
 type PutObjectOptions struct {
-	Meta          map[string]string
+	Meta map[string]string
+
+	// ContentLength is the exact number of bytes to read from the object data.
+	// It is negative when the length is not declared ahead of the read, which
+	// is the case for a POST form upload, and the data is then read to EOF.
 	ContentLength int64
+
+	// MaxContentLength is the largest object the caller will send when
+	// ContentLength is negative, and is what the backend reserves before it
+	// reads the data.
+	MaxContentLength int64
+
 	ContentMD5    *[16]byte
 	ContentSHA256 *[32]byte
 	Checksum      *RequestChecksum
@@ -901,6 +911,19 @@ func declaresTrailingChecksum(headers http.Header) bool {
 		}
 	}
 	return false
+}
+
+// objectLocation returns the URL an object was addressed by, which a response
+// that reports where it stored something has to carry.
+func (s *s3) objectLocation(r *http.Request, bucket, object string) string {
+	protocol := "http"
+	if r.TLS != nil {
+		protocol = "https"
+	}
+	if _, ok := s.bucketFromHost(r.Host); ok {
+		return fmt.Sprintf("%s://%s/%s", protocol, r.Host, object)
+	}
+	return fmt.Sprintf("%s://%s/%s/%s", protocol, r.Host, bucket, object)
 }
 
 // FormatETag formats the given hash as an S3 ETag string.
