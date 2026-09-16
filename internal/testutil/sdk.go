@@ -40,8 +40,9 @@ type (
 		pruneSlabsCalls  int
 		remainingStorage uint64
 
-		pinErr      error // when non-nil, PinObject returns this error
-		pinAttempts int   // number of PinObject calls observed
+		pinErr      error                // when non-nil, PinObject returns this error
+		pinAttempts int                  // number of PinObject calls observed
+		pinHook     func(obj sdk.Object) // when non-nil, PinObject runs this after a successful pin
 	}
 
 	uploadedObject struct {
@@ -289,16 +290,31 @@ func (s *MemorySDK) UploadPacked() (sia.PackedUpload, error) {
 // PinObject pins the given object, storing a staged upload.
 func (s *MemorySDK) PinObject(_ context.Context, obj sdk.Object) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.pinAttempts++
-	if s.pinErr != nil {
-		return s.pinErr
+	if err := s.pinErr; err != nil {
+		s.mu.Unlock()
+		return err
 	}
 	if o, ok := s.staged[obj.ID()]; ok {
 		s.objects[obj.ID()] = o
 		delete(s.staged, obj.ID())
 	}
+	hook := s.pinHook
+	s.mu.Unlock()
+
+	// the hook runs unlocked so it can call back into the SDK
+	if hook != nil {
+		hook(obj)
+	}
 	return nil
+}
+
+// SetPinHook configures a callback PinObject runs after every successful pin.
+// Pass nil to remove it.
+func (s *MemorySDK) SetPinHook(fn func(obj sdk.Object)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pinHook = fn
 }
 
 // SetPinError configures the error returned by future PinObject calls. Pass

@@ -177,6 +177,35 @@ func TestCreateSnapshot(t *testing.T) {
 	}
 }
 
+// TestCreateSnapshotSyncRace verifies that CreateSnapshot succeeds when the
+// sync loop completes the snapshot before CreateSnapshot marks it pinned
+// itself, instead of rolling back the completed snapshot.
+func TestCreateSnapshotSyncRace(t *testing.T) {
+	memSDK := testutil.NewMemorySDK()
+	backend, store := testutil.NewBackend(t, testutil.WithSDK(memSDK))
+
+	// the sync loop observes the pin before CreateSnapshot resumes
+	memSDK.SetPinHook(func(obj sdk.Object) {
+		memSDK.SetEvents([]sdk.ObjectEvent{snapshotEvent(t, memSDK, obj.ID(), time.Now())})
+		backend.SyncMetadata(t.Context())
+	})
+
+	snap, err := backend.CreateSnapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// the completed snapshot is listed and not marked for deletion
+	if snapshots, err := store.ListSnapshots(); err != nil {
+		t.Fatal(err)
+	} else if len(snapshots) != 1 {
+		t.Fatal("unexpected", len(snapshots))
+	} else if snapshots[0].SiaObjectID != snap.SiaObjectID {
+		t.Fatal("mismatch", snapshots[0].SiaObjectID)
+	}
+	assertDeleting(t, store, 0)
+}
+
 // TestStuckPinningSnapshot verifies that a snapshot left awaiting its pin by a
 // dead process keeps withholding its orphans until the deletion pass confirms
 // the indexer does not hold its object, since that pin may still have been

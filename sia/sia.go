@@ -455,7 +455,8 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 	if err := s.sdk.PinObject(ctx, obj); err != nil {
 		return s3.Snapshot{}, fmt.Errorf("failed to pin snapshot: %w", err)
 	}
-	if err := s.store.MarkSnapshotPinned(obj.ID()); err != nil {
+	// the sync loop may have observed the pin and completed the snapshot already
+	if err := s.store.MarkSnapshotPinned(obj.ID()); err != nil && !errors.Is(err, objects.ErrSnapshotNotFound) {
 		return s3.Snapshot{}, fmt.Errorf("failed to mark snapshot pinned: %w", err)
 	}
 	snap.SiaObjectID = obj.ID()
