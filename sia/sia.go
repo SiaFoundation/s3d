@@ -499,21 +499,15 @@ func (s *Sia) processOrphansLoop(ctx context.Context) {
 	}
 }
 
-// pruneSlabsLoop periodically unpins slabs that are no longer referenced by an
-// object. Deleting an object already unpins the slabs it was the last reference
-// to, so this only catches slabs left behind by an upload that never pinned its
-// object.
+// pruneSlabsLoop unpins slabs that are no longer referenced by an object at
+// startup and then once per interval. Deleting an object already unpins the
+// slabs it was the last reference to, so this only catches slabs left behind by
+// an upload that never pinned its object.
 func (s *Sia) pruneSlabsLoop(ctx context.Context) {
 	t := time.NewTicker(pruneSlabsInterval)
 	defer t.Stop()
 
 	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-		}
-
 		s.logger.Info("pruning orphaned slabs")
 		start := time.Now()
 		// slabs are pinned before their object, so anything newer than
@@ -522,6 +516,12 @@ func (s *Sia) pruneSlabsLoop(ctx context.Context) {
 			s.logger.Error("failed to prune slabs", zap.Error(err))
 		} else {
 			s.logger.Info("finished pruning orphaned slabs from Sia network", zap.Duration("elapsed", time.Since(start)))
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
 		}
 	}
 }
