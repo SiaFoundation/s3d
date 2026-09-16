@@ -422,9 +422,6 @@ type Backend interface {
 	// DeleteSnapshot unpins a snapshot's Sia object from the network and
 	// removes its record, releasing the orphaned objects it was withholding.
 	//
-	// Snapshots are addressed by their Sia object ID, the only identifier that
-	// survives losing the database.
-	//
 	// - If no such snapshot exists, [ErrSnapshotNotFound] must be returned.
 	DeleteSnapshot(ctx context.Context, objectID types.Hash256) error
 }

@@ -1,6 +1,7 @@
 package sia
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
 	"fmt"
@@ -15,11 +16,7 @@ import (
 )
 
 // remoteSnapshotBatchSize is the number of object events fetched per request
-// while enumerating the account. Recovery has to read every object in the
-// account to find the snapshot tag, since that tag is inside client encrypted
-// metadata the indexer cannot filter on, so this bounds the number of round
-// trips. It is the indexer's maximum accepted limit: a larger value is rejected
-// with a 400 rather than clamped.
+// while enumerating the account. It is the indexer's maximum accepted limit.
 const remoteSnapshotBatchSize = api.MaxLimit
 
 // RemoteSnapshot is a snapshot stored on the Sia network.
@@ -31,8 +28,7 @@ type RemoteSnapshot struct {
 }
 
 // ListRemoteSnapshots enumerates every object in the account and returns those
-// tagged as valid snapshots, newest first. It needs only the app key, so
-// it is the recovery path when the local database is gone.
+// tagged as valid snapshots, newest first. It needs only the app key.
 func ListRemoteSnapshots(ctx context.Context, sdk SDK) ([]RemoteSnapshot, error) {
 	found := make(map[types.Hash256]RemoteSnapshot)
 
@@ -75,19 +71,18 @@ func ListRemoteSnapshots(ctx context.Context, sdk SDK) ([]RemoteSnapshot, error)
 		snapshots = append(snapshots, snap)
 	}
 	sort.Slice(snapshots, func(i, j int) bool {
-		if snapshots[i].Metadata.CreatedAt.Equal(snapshots[j].Metadata.CreatedAt) {
+		if !snapshots[i].Metadata.CreatedAt.Equal(snapshots[j].Metadata.CreatedAt) {
+			return snapshots[i].Metadata.CreatedAt.After(snapshots[j].Metadata.CreatedAt)
+		} else if snapshots[i].Metadata.Generation != snapshots[j].Metadata.Generation {
 			return snapshots[i].Metadata.Generation > snapshots[j].Metadata.Generation
 		}
-		return snapshots[i].Metadata.CreatedAt.After(snapshots[j].Metadata.CreatedAt)
+		return bytes.Compare(snapshots[i].ObjectID[:], snapshots[j].ObjectID[:]) < 0
 	})
 	return snapshots, nil
 }
 
 // FetchRemoteSnapshot retrieves a single snapshot by its Sia object ID without
-// enumerating the account. Enumeration has to read and decrypt every object to
-// find the snapshot tag, so its cost grows with the account; this does not. The
-// object ID is returned when a snapshot is created, which makes it the token to
-// keep for recovery.
+// enumerating the account.
 func FetchRemoteSnapshot(ctx context.Context, sdk SDK, objectID types.Hash256) (RemoteSnapshot, error) {
 	obj, err := sdk.Object(ctx, objectID)
 	if err != nil {

@@ -69,7 +69,7 @@ paths:
         - system
       summary: Upload a database snapshot to Sia
       description: >
-        Flushes any pending objects to the Sia network, then backs up the SQLite metadata database and uploads it to the Sia network as a tagged, pinned object so it can be recovered later. The request may block while pending objects upload, and the resulting snapshot references every object flushed before the snapshot was taken. Objects that a snapshot references are not unpinned until the snapshot is deleted. The backup does not block database reads or writes.
+        Flushes any pending objects to the Sia network, then backs up the SQLite metadata database and uploads it as a tagged, pinned object so it can be recovered later. The request blocks while pending objects upload. Objects that a snapshot references are not unpinned until the snapshot is deleted. The backup does not block database reads or writes.
 
       operationId: createSnapshot
       responses:
@@ -113,9 +113,7 @@ paths:
         - name: objectID
           in: path
           required: true
-          description: >
-            The Sia object ID of the snapshot to delete. This is the only identifier that survives losing the database, so it is how snapshots are addressed.
-
+          description: The Sia object ID of the snapshot to delete.
           schema:
             type: string
       responses:

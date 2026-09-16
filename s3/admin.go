@@ -16,10 +16,7 @@ var ErrSnapshotNotFound = errors.New("snapshot not found")
 // Snapshot describes a database snapshot uploaded to Sia. It is returned by the
 // [POST] /snapshots endpoint.
 type Snapshot struct {
-	// ID is the local database row, needed because a snapshot row is inserted
-	// before its Sia object exists. It is deliberately not serialized:
-	// snapshots are addressed by their Sia object ID, and a row ID is
-	// meaningless outside the one database that issued it.
+	// ID is the local database row.
 	ID          int64         `json:"-"`
 	CreatedAt   time.Time     `json:"createdAt"`
 	SiaObjectID types.Hash256 `json:"siaObjectID"`
@@ -125,9 +122,8 @@ func (s *s3) handleListSnapshots(jc jape.Context) {
 	jc.Encode(snapshots)
 }
 
-// handleDeleteSnapshot unpins a snapshot's Sia object and removes its
-// record, releasing the orphaned objects it was withholding. Snapshots are
-// addressed by their Sia object ID.
+// handleDeleteSnapshot unpins a snapshot's Sia object and removes its record,
+// releasing the orphaned objects it was withholding.
 func (s *s3) handleDeleteSnapshot(jc jape.Context) {
 	var objectID types.Hash256
 	if jc.DecodeParam("objectID", &objectID) != nil {
