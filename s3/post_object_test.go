@@ -41,6 +41,9 @@ type postUpload struct {
 	// fields are sent and named by an exact condition
 	fields [][2]string
 
+	// conditionOverrides replace the exact condition value for a field
+	conditionOverrides map[string]string
+
 	// unsigned fields are sent without being named by any condition
 	unsigned [][2]string
 
@@ -113,7 +116,11 @@ func (u *postUpload) build(t testing.TB) (*bytes.Buffer, string) {
 
 	conditions := append([]any{map[string]string{"bucket": u.bucket}}, u.conditions...)
 	for _, field := range fields {
-		conditions = append(conditions, map[string]string{field[0]: field[1]})
+		value := field[1]
+		if override, ok := u.conditionOverrides[strings.ToLower(field[0])]; ok {
+			value = override
+		}
+		conditions = append(conditions, map[string]string{field[0]: value})
 	}
 
 	document, err := json.Marshal(map[string]any{
@@ -315,14 +322,37 @@ func TestPostObjectResponses(t *testing.T) {
 		}
 	}
 
-	// the filename the client gave the file replaces the key variable
+	// the deprecated redirect field is accepted when named by the policy, but
+	// no longer controls the response
+	upload = newPostUpload(bucket, "legacy-redirect")
+	upload.fields = [][2]string{{"redirect", "https://example.com/legacy"}}
+	resp, body = upload.post(t, tester)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("unexpected status %d: %s", resp.StatusCode, body)
+	} else if resp.Header.Get("Location") != "" {
+		t.Fatalf("unexpected redirect %q", resp.Header.Get("Location"))
+	}
+
+	// the filename the client gave the file replaces the key variable before
+	// the policy is checked
 	upload = newPostUpload(bucket, "uploads/${filename}")
 	upload.filename = "holiday.txt"
+	upload.conditionOverrides = map[string]string{"key": "uploads/holiday.txt"}
 	resp, body = upload.post(t, tester)
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("unexpected status %d: %s", resp.StatusCode, body)
 	} else if _, err := tester.HeadObject(t.Context(), bucket, "uploads/holiday.txt", nil); err != nil {
 		t.Fatal(err)
+	}
+
+	// a Content-Type starts-with condition applies to each comma-separated
+	// value
+	upload = newPostUpload(bucket, "content-type-list")
+	upload.conditions = []any{[]any{"starts-with", "$Content-Type", "image/"}}
+	upload.unsigned = [][2]string{{"Content-Type", "image/png, image/jpeg"}}
+	resp, body = upload.post(t, tester)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("unexpected status %d: %s", resp.StatusCode, body)
 	}
 
 	// a file inside the content-length-range bounds is accepted
@@ -413,6 +443,13 @@ func TestPostObjectRejections(t *testing.T) {
 	// a condition the form does not satisfy
 	upload = newPostUpload(bucket, "rejected")
 	upload.conditions = []any{[]any{"starts-with", "$key", "approved/"}}
+	assertRejected(upload, s3errs.ErrInvalidPolicyDocument)
+
+	// every entry in a comma-separated Content-Type has to satisfy its
+	// starts-with condition
+	upload = newPostUpload(bucket, "rejected")
+	upload.conditions = []any{[]any{"starts-with", "$Content-Type", "image/"}}
+	upload.unsigned = [][2]string{{"Content-Type", "image/png, text/plain"}}
 	assertRejected(upload, s3errs.ErrInvalidPolicyDocument)
 
 	// a bucket field that disagrees with the URL

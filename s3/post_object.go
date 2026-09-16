@@ -34,10 +34,6 @@ const (
 	postFieldSignature  = "x-amz-signature"
 	postFieldStatus     = "success_action_status"
 	postFieldToken      = "x-amz-security-token"
-
-	// postFieldRedirectLegacy is the name S3 accepted for the redirect before
-	// postFieldRedirect replaced it.
-	postFieldRedirectLegacy = "redirect"
 )
 
 const (
@@ -78,12 +74,12 @@ func (f postForm) metadata() (map[string]string, error) {
 	return metadataHeaders(headers, MetadataSizeLimit)
 }
 
-// redirect returns the URL the form wants a successful upload to redirect to.
-func (f postForm) redirect() string {
-	if target := f.get(postFieldRedirect); target != "" {
-		return target
+// expandFilename replaces the filename variable in form fields before policy
+// validation, matching S3's POST policy evaluation.
+func (f postForm) expandFilename() {
+	for name, value := range f.fields {
+		f.fields[name] = strings.ReplaceAll(value, postFilenameVariable, f.filename)
 	}
-	return f.get(postFieldRedirectLegacy)
 }
 
 // parsePostForm reads the fields preceding the file and returns them with the
@@ -154,6 +150,21 @@ type postMatch struct {
 	field      string
 	value      string
 	startsWith bool
+}
+
+func (m postMatch) check(value string) bool {
+	if !m.startsWith {
+		return value == m.value
+	}
+	if m.field != "content-type" {
+		return strings.HasPrefix(value, m.value)
+	}
+	for _, part := range strings.Split(value, ",") {
+		if !strings.HasPrefix(strings.TrimSpace(part), m.value) {
+			return false
+		}
+	}
+	return true
 }
 
 // parsePostPolicy decodes the base64 policy document a form submitted.
@@ -276,10 +287,7 @@ func (p postPolicy) check(form postForm, now time.Time) error {
 	for _, match := range p.matches {
 		// a field the form left out is matched as empty, so a condition that
 		// demands a particular value fails while one that demands nothing holds
-		value := form.fields[match.field]
-		if match.startsWith && !strings.HasPrefix(value, match.value) {
-			return s3errs.ErrInvalidPolicyDocument
-		} else if !match.startsWith && value != match.value {
+		if !match.check(form.fields[match.field]) {
 			return s3errs.ErrInvalidPolicyDocument
 		}
 		named[match.field] = struct{}{}
@@ -359,13 +367,12 @@ func (s *s3) postObject(w http.ResponseWriter, r *http.Request, headerKeyID *str
 		return s3errs.ErrInvalidPolicyDocument
 	}
 	form.fields[postFieldBucket] = bucket
+	form.expandFilename()
 	if err := policy.check(form, time.Now()); err != nil {
 		return err
 	}
 
-	// the conditions are checked against the key as it was submitted, so the
-	// filename is only substituted once they hold
-	object := strings.ReplaceAll(form.get(postFieldKey), postFilenameVariable, form.filename)
+	object := form.get(postFieldKey)
 	if object == "" {
 		return s3errs.ErrUserKeyMustBeSpecified
 	} else if len(object) > KeySizeLimit {
@@ -396,7 +403,7 @@ func (s *s3) postObject(w http.ResponseWriter, r *http.Request, headerKeyID *str
 	// the redirect is resolved before the upload, so nothing that can fail is
 	// left to run after the object has been stored
 	var redirect *url.URL
-	if target := form.redirect(); target != "" {
+	if target := form.get(postFieldRedirect); target != "" {
 		// S3 ignores a redirect it cannot use rather than failing the upload
 		if u, err := url.Parse(target); err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" {
 			redirect = u
