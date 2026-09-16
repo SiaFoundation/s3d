@@ -391,9 +391,6 @@ func (s *Sia) Close() error {
 // snapshot object, pins it, and marks the record pinned. On failure the
 // snapshot is rolled back.
 func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
-	// flush pending objects to Sia first so every object captured by the
-	// snapshot has been uploaded and pinned, rather than living only on local
-	// disk where the snapshot cannot reference it
 	if err := s.FlushObjects(ctx); err != nil {
 		return s3.Snapshot{}, fmt.Errorf("failed to flush objects before snapshot: %w", err)
 	}
@@ -427,8 +424,6 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 		}
 	}()
 
-	// log the duration with the image size so a slow backup can be related to
-	// the database it came from
 	backupDuration := time.Since(backupStart)
 	var imageSize int64
 	if info, sErr := os.Stat(tmp); sErr != nil {
@@ -547,22 +542,15 @@ func (s *Sia) ListSnapshots(_ context.Context) ([]s3.Snapshot, error) {
 
 // DeleteSnapshot unpins a snapshot's Sia object from the network and removes
 // its record, releasing the orphaned objects it was withholding.
-//
-// Snapshots are addressed by their Sia object ID, which is the only identifier
-// that survives losing the database. The row ID is local to one database and is
-// meaningless during the recovery the feature exists for.
 func (s *Sia) DeleteSnapshot(ctx context.Context, objectID types.Hash256) error {
-	// only unpin an object a snapshot references, an arbitrary id would
-	// otherwise unpin live object data
+	// an arbitrary id would unpin live object data
 	if known, err := s.store.HasSnapshotObject(objectID); err != nil {
 		return fmt.Errorf("failed to look up snapshot: %w", err)
 	} else if !known {
 		return s3.ErrSnapshotNotFound
 	}
 
-	// unpin before dropping the record. A record left behind by a failed
-	// delete is reconciled by the sync loop, but an unreferenced Sia object
-	// is never collected
+	// an unreferenced Sia object is never collected
 	if err := s.sdk.DeleteObject(ctx, objectID); err != nil && !isObjectNotFound(err) {
 		return fmt.Errorf("failed to unpin snapshot object: %w", err)
 	}

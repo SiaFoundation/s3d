@@ -80,14 +80,11 @@ func (s *Store) MarkSnapshotPinned(objectID types.Hash256) error {
 }
 
 // AdoptSnapshot records a snapshot for an object discovered on the network,
-// e.g. after restoring from a snapshot made by a previous database.
-// The generation counter is raised to at least the adopted generation.
-// Existing orphans are raised to it even when the counter is already past it:
-// the adopted generation is from a different counter history, so it cannot be
-// ordered against locally recorded orphans and the adopted snapshot may
-// reference any of them. As in MarkSnapshotPinned the counter is then bumped
-// once more and recorded as the completion generation. Adopting an object
-// that already has a record returns the existing snapshot.
+// e.g. after restoring from a snapshot made by a previous database. The
+// generation counter is raised to at least the adopted generation and existing
+// orphans are raised to it even when the counter is already past it. The
+// counter is then bumped once more and recorded as the completion generation.
+// Adopting an object that already has a record returns the existing snapshot.
 func (s *Store) AdoptSnapshot(objectID types.Hash256, createdAt time.Time, gen, objectCount int64) (snap s3.Snapshot, err error) {
 	err = s.transaction(func(tx *txn) error {
 		// return the existing record when the object was already adopted
@@ -191,12 +188,7 @@ func (s *Store) DeleteSnapshotsBySiaObject(objectID types.Hash256) (deleted int6
 	return
 }
 
-// ListSnapshots returns all pinned snapshots newest first, matching the
-// order [sia.ListRemoteSnapshots] returns. Ordering by id alone would return
-// them in the order this node learned of them, which a recovery reshuffles by
-// adopting existing snapshots into fresh rows. Snapshots restored from
-// different histories can share a creation stamp and a generation, so id
-// breaks the remaining ties and keeps the order total.
+// ListSnapshots returns all pinned snapshots, newest first.
 func (s *Store) ListSnapshots() (snapshots []s3.Snapshot, err error) {
 	err = s.transaction(func(tx *txn) error {
 		snapshots = snapshots[:0] // reuse same slice if transaction retries

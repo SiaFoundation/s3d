@@ -34,8 +34,7 @@ Commands:
 	snapshotsCreateUsage = `Usage: s3d snapshots create
 
 Flush any pending objects to Sia, then back up the database and upload it as a
-pinned snapshot object. The flush is what lets the snapshot reference every
-object, and it is why this can take a while.
+pinned snapshot object. The flush can take a while.
 
 Reads the admin address and password from the loaded config file or
 S3D_CONFIG_FILE.`
@@ -75,11 +74,10 @@ keeping it somewhere safe makes recovery much faster.
 The snapshot is then downloaded, decompressed and written to the data directory.
 Refuses to overwrite an existing database unless --force is set.
 
-The app key is always read from the configured data directory, so this requires
-an instance that has already run 's3d login' and the configured database is
-opened either way. With --out the restored database is written to that directory
-instead of replacing the configured one. Without --out the configured database
-is overwritten, so the daemon must be stopped.`
+The app key is read from the configured data directory, so this requires an
+instance that has already run 's3d login'. With --out the restored database is
+written to that directory instead of replacing the configured one. Without --out
+the configured database is overwritten, so the daemon must be stopped.`
 )
 
 func runSnapshotsCreate(ctx context.Context, cmd *flag.FlagSet) {
@@ -186,10 +184,6 @@ func runSnapshotsRestore(ctx context.Context, cmd *flag.FlagSet, force bool, out
 
 	sdkClient := openSDK()
 
-	// an explicit object ID is fetched directly. Enumerating reads and decrypts
-	// every object in the account to find the snapshot tag, so it costs more the
-	// more you have stored, while a direct fetch is one request. The ID is
-	// printed when a snapshot is created, which makes it worth keeping
 	var snap sia.RemoteSnapshot
 	if target == latestSnapshot {
 		fmt.Println("Enumerating snapshots on the Sia network. This may take a while...")
@@ -241,9 +235,7 @@ func runSnapshotsRestore(ctx context.Context, cmd *flag.FlagSet, force bool, out
 	fmt.Println("Start s3d to reconcile the restored database with the network.")
 }
 
-// restoreDir returns the directory a restore writes its database to. An empty
-// out keeps the configured data directory, which the app key is always read
-// from.
+// restoreDir returns the directory a restore writes its database to.
 func restoreDir(dataDir, out string) string {
 	if out == "" {
 		return dataDir
@@ -251,11 +243,11 @@ func restoreDir(dataDir, out string) string {
 	return out
 }
 
-// selectSnapshot picks the snapshot matching target, which is either "latest"
-// or a Sia object ID, and reports whether this build can read its database.
 // latestSnapshot selects the newest snapshot rather than a specific object ID.
 const latestSnapshot = "latest"
 
+// selectSnapshot picks the snapshot matching target, which is either
+// latestSnapshot or a Sia object ID.
 func selectSnapshot(snapshots []sia.RemoteSnapshot, target string) (sia.RemoteSnapshot, error) {
 	if len(snapshots) == 0 {
 		return sia.RemoteSnapshot{}, errors.New("no snapshots found on the network")
@@ -284,9 +276,7 @@ func selectSnapshot(snapshots []sia.RemoteSnapshot, target string) (sia.RemoteSn
 }
 
 // openSDK builds an SDK client from the app key stored in the local database.
-// The database is closed before returning, since a restore replaces the
-// database file and an open connection to it blocks the replacement on
-// Windows.
+// The database is closed before returning.
 func openSDK() *sia.IndexdSDK {
 	store, err := openStore(zap.NewNop())
 	checkFatalError("failed to open database", err)
