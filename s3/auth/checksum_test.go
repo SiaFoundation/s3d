@@ -15,8 +15,10 @@ func TestNewChecksumHash(t *testing.T) {
 		"Crc32":     "y/Q5Jg==",     // 0xcbf43926, the ISO HDLC check value
 		"Crc32c":    "4waSgw==",     // 0xe3069283, the Castagnoli check value
 		"Crc64nvme": "rosUhgp5mIg=", // 0xae8b14860a799888, the NVME check value
+		"Md5":       "JfnnlDI7RTiF9RgfG2JNCw==",
 		"Sha1":      "98O8HYCOBHMq32eZZczDTKeuNEE=",
 		"Sha256":    "FeKw08M4keuw8e9gnsQZQgwg4yDOlMZfvIwzEkSOsiU=",
+		"Sha512":    "2eZ2LdHI6vbWGzxhkvxAjU1tXxF20MKRabwk5xw/J0rSf81YEbMT1oH35V7ALXPUmclUVba1u1A6z1dPuo/+hQ==",
 	}
 
 	for algorithm, want := range tests {
