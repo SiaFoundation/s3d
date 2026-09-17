@@ -858,6 +858,7 @@ var objectMetadataHeaders = map[string]struct{}{
 	"Cache-Control":                   {},
 	"Content-Disposition":             {},
 	"Content-Encoding":                {},
+	"Content-Language":                {},
 	"Content-Type":                    {},
 	"Expires":                         {},
 	"X-Amz-Checksum-Crc32":            {},

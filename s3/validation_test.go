@@ -84,6 +84,7 @@ func TestMetadataHeaders(t *testing.T) {
 		"Content-Type":         "text/plain",
 		"Content-Disposition":  "inline",
 		"Content-Encoding":     "gzip",
+		"Content-Language":     "en-GB",
 		"Cache-Control":        "no-cache",
 		"Expires":              "Thu, 01 Jan 2026 00:00:00 GMT",
 	}
