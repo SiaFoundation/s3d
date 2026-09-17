@@ -89,6 +89,8 @@ func main() {
 	rootCmd.Usage = flagg.SimpleUsage(rootCmd, rootUsage)
 	rootCmd.StringVar(&cfg.ApiAddress, "api.s3", cfg.ApiAddress, "address to serve S3 API on")
 	rootCmd.StringVar(&cfg.ApiHttpsAddress, "api.s3.https", cfg.ApiHttpsAddress, "address to serve the S3 API on over HTTPS using a self-signed certificate (disabled if empty)")
+	rootCmd.BoolVar(&cfg.Log.File.Enabled, "log.file.enabled", cfg.Log.File.Enabled, "enable file logging")
+	rootCmd.BoolVar(&cfg.Log.StdOut.EnableANSI, "log.stdout.enableANSI", cfg.Log.StdOut.EnableANSI, "enable ANSI color codes")
 	versionCmd := flagg.New("version", versionUsage)
 	configCmd := flagg.New("config", configUsage)
 	loginCmd := flagg.New("login", loginUsage)
