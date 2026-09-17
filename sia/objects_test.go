@@ -1582,3 +1582,63 @@ func TestDeleteObjectUnpin(t *testing.T) {
 		t.Fatalf("expected 1 pinned object after overwrite, got %d", memSDK.ObjectCount())
 	}
 }
+
+func TestPutObjectUndeclaredLength(t *testing.T) {
+	backend, _ := testutil.NewBackend(t)
+
+	bucket := "foo"
+	if err := backend.CreateBucket(t.Context(), testutil.AccessKeyID, bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// an object below the bound is stored whole
+	data := frand.Bytes(100)
+	hash := md5.Sum(data)
+	res, err := backend.PutObject(t.Context(), testutil.AccessKeyID, bucket, "within", bytes.NewReader(data), s3.PutObjectOptions{
+		ContentLength:    -1,
+		MaxContentLength: 128,
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if res.ContentMD5 != hash {
+		t.Fatalf("hash mismatch: expected %x, got %x", hash, res.ContentMD5)
+	}
+	obj, err := backend.HeadObject(t.Context(), aws.String(testutil.AccessKeyID), bucket, "within", s3.NoVersion(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if obj.Size != int64(len(data)) {
+		t.Fatalf("size mismatch: expected %d, got %d", len(data), obj.Size)
+	}
+
+	// an object above the bound is refused, and the read stops at the bound
+	// rather than draining the body first
+	data = frand.Bytes(1 << 20)
+	body := bytes.NewReader(data)
+	_, err = backend.PutObject(t.Context(), testutil.AccessKeyID, bucket, "above", body, s3.PutObjectOptions{
+		ContentLength:    -1,
+		MaxContentLength: 128,
+	})
+	if !errors.Is(err, s3errs.ErrEntityTooLarge) {
+		t.Fatalf("expected ErrEntityTooLarge, got %v", err)
+	} else if consumed := len(data) - body.Len(); consumed > 129 {
+		t.Fatalf("expected the read to stop at the bound, consumed %d bytes", consumed)
+	}
+
+	// an empty body is stored the same way a declared empty object is
+	emptyMD5 := md5.Sum(nil)
+	res, err = backend.PutObject(t.Context(), testutil.AccessKeyID, bucket, "empty", bytes.NewReader(nil), s3.PutObjectOptions{
+		ContentLength:    -1,
+		MaxContentLength: 128,
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if res.ContentMD5 != emptyMD5 {
+		t.Fatalf("empty hash mismatch: expected %x, got %x", emptyMD5, res.ContentMD5)
+	}
+	obj, err = backend.HeadObject(t.Context(), aws.String(testutil.AccessKeyID), bucket, "empty", s3.NoVersion(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if obj.Size != 0 {
+		t.Fatalf("expected an empty object, got %d bytes", obj.Size)
+	}
+}

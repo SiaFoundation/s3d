@@ -13,7 +13,8 @@ import (
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 )
 
-// maxPresignedExpiry is the maximum lifetime of a presigned URL.
+// maxPresignedExpiry is the maximum lifetime of a presigned URL and the
+// maximum age of a POST policy signature.
 const maxPresignedExpiry = 7 * 24 * time.Hour
 
 // parsedPresignedAuth represents the structured form of the presigned

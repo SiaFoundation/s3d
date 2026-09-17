@@ -195,8 +195,11 @@ type Backend interface {
 	//   versions are retained; otherwise (unversioned or suspended) the null
 	//   version is overwritten in place.
 	//
-	// - If the bytes read from 'r' do not match 'contentLength',
-	//   [ErrIncompleteBody] must be returned.
+	// - If opts.ContentLength is negative the length is not known ahead of the
+	//   read, so 'r' is read to EOF and opts.MaxContentLength bounds it.
+	//   [ErrEntityTooLarge] must be returned if 'r' holds more than the bound.
+	//   Otherwise the bytes read from 'r' must match opts.ContentLength and
+	//   [ErrIncompleteBody] must be returned if they do not.
 	//
 	// - If ContentMD5 is set in opts, and the MD5 checksum of the data read
 	//   from 'r' does not match, [ErrBadDigest] must be returned.
