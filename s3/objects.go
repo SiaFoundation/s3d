@@ -863,8 +863,10 @@ var objectMetadataHeaders = map[string]struct{}{
 	"X-Amz-Checksum-Crc32":            {},
 	"X-Amz-Checksum-Crc32c":           {},
 	"X-Amz-Checksum-Crc64nvme":        {},
+	"X-Amz-Checksum-Md5":              {},
 	"X-Amz-Checksum-Sha1":             {},
 	"X-Amz-Checksum-Sha256":           {},
+	"X-Amz-Checksum-Sha512":           {},
 	"X-Amz-Website-Redirect-Location": {},
 }
 
