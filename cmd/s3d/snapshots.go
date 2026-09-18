@@ -212,24 +212,34 @@ func runSnapshotsRestore(ctx context.Context, cmd *flag.FlagSet, force bool, out
 	checkFatalError("failed to create temporary file", err)
 	defer os.Remove(tmp.Name())
 
+	// checkFatalError exits the process without running the deferred removal
+	// above, so the fatal paths below go through this instead
+	checkFatalRestoreError := func(msg string, err error) {
+		if err == nil {
+			return
+		}
+		os.Remove(tmp.Name())
+		checkFatalError(msg, err)
+	}
+
 	fmt.Println("Downloading snapshot", snap.ObjectID)
 	if err := sia.DownloadSnapshot(sdkClient, snap, tmp); err != nil {
 		tmp.Close()
-		checkFatalError("failed to download snapshot", err)
+		checkFatalRestoreError("failed to download snapshot", err)
 	} else if err := tmp.Sync(); err != nil {
 		tmp.Close()
-		checkFatalError("failed to sync snapshot", err)
+		checkFatalRestoreError("failed to sync snapshot", err)
 	} else if err := tmp.Close(); err != nil {
-		checkFatalError("failed to close snapshot", err)
+		checkFatalRestoreError("failed to close snapshot", err)
 	}
 
 	// the write ahead log and shared memory belong to the replaced database
 	for _, sidecar := range []string{dbPath + "-wal", dbPath + "-shm"} {
 		if err := os.Remove(sidecar); err != nil && !errors.Is(err, os.ErrNotExist) {
-			checkFatalError("failed to remove stale sidecar", err)
+			checkFatalRestoreError("failed to remove stale sidecar", err)
 		}
 	}
-	checkFatalError("failed to write database", os.Rename(tmp.Name(), dbPath))
+	checkFatalRestoreError("failed to write database", os.Rename(tmp.Name(), dbPath))
 
 	fmt.Printf("Restored %d objects from the snapshot taken at %s.\n", snap.Metadata.ObjectCount, snap.Metadata.CreatedAt.Format(time.RFC3339))
 	fmt.Println("Start s3d to reconcile the restored database with the network.")
