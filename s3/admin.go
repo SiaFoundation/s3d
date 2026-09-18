@@ -1,22 +1,20 @@
 package s3
 
 import (
-	"errors"
-	"fmt"
-	"net/http"
-	"os"
-	"path/filepath"
+	"time"
 
 	"github.com/SiaFoundation/s3d/internal/prometheus"
+	"go.sia.tech/core/types"
 	"go.sia.tech/jape"
 )
 
-// BackupSQLite3Request is the request body for the [POST] /system/sqlite3/backup
-// endpoint.
-type BackupSQLite3Request struct {
-	// Path is the absolute filesystem path where the backup file will be
-	// written. It must not already exist.
-	Path string `json:"path"`
+// Snapshot describes a database backup uploaded to Sia. It is returned by the
+// [POST] /snapshots endpoint.
+type Snapshot struct {
+	ID          int64         `json:"id"`
+	CreatedAt   time.Time     `json:"createdAt"`
+	SiaObjectID types.Hash256 `json:"siaObjectID"`
+	ObjectCount int64         `json:"objectCount"`
 }
 
 // UploadStats contains statistics about the background upload pipeline.
@@ -99,25 +97,12 @@ func (s *s3) handleFlushObjects(jc jape.Context) {
 	jc.Check("failed to flush objects", s.backend.FlushObjects(jc.Request.Context()))
 }
 
-// handleBackupSQLite3 creates a backup of the SQLite3 database at the path
-// provided in the request body. The backup is a consistent snapshot even if
-// the database is being written to concurrently.
-func (s *s3) handleBackupSQLite3(jc jape.Context) {
-	var req BackupSQLite3Request
-	if jc.Decode(&req) != nil {
-		return
-	} else if req.Path == "" {
-		jc.Error(fmt.Errorf("path must not be empty"), http.StatusBadRequest)
-		return
-	} else if !filepath.IsAbs(req.Path) {
-		jc.Error(fmt.Errorf("path must be absolute: %q", req.Path), http.StatusBadRequest)
-		return
-	} else if _, err := os.Stat(req.Path); err == nil {
-		jc.Error(fmt.Errorf("destination already exists: %q", req.Path), http.StatusBadRequest)
-		return
-	} else if !errors.Is(err, os.ErrNotExist) {
-		jc.Error(fmt.Errorf("failed to stat destination: %w", err), http.StatusBadRequest)
+// handleCreateSnapshot backs up the database, uploads it to Sia as a tagged
+// snapshot object, and records the object ID.
+func (s *s3) handleCreateSnapshot(jc jape.Context) {
+	snapshot, err := s.backend.CreateSnapshot(jc.Request.Context())
+	if jc.Check("failed to create snapshot", err) != nil {
 		return
 	}
-	jc.Check("failed to backup database", s.backend.BackupSQLite3(jc.Request.Context(), req.Path))
+	jc.Encode(snapshot)
 }
