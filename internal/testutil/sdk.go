@@ -43,6 +43,8 @@ type (
 		pinErr      error                // when non-nil, PinObject returns this error
 		pinAttempts int                  // number of PinObject calls observed
 		pinHook     func(obj sdk.Object) // when non-nil, PinObject runs this after a successful pin
+
+		objectEventCalls int // number of ObjectEvents calls observed
 	}
 
 	uploadedObject struct {
@@ -145,6 +147,7 @@ func (s *MemorySDK) ObjectEvents(_ context.Context, cursor slabs.Cursor, limit i
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	s.objectEventCalls++
 	if s.eventsErr != nil {
 		return nil, s.eventsErr
 	}
@@ -170,6 +173,18 @@ func (s *MemorySDK) ObjectEvents(_ context.Context, cursor slabs.Cursor, limit i
 		}
 	}
 	return filtered, nil
+}
+
+// Object returns the object with the given id. An unknown id reports the
+// indexer's not found sentinel.
+func (s *MemorySDK) Object(_ context.Context, id types.Hash256) (sdk.Object, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	o, ok := s.objects[id]
+	if !ok {
+		return sdk.Object{}, fmt.Errorf("failed to get object: %w", slabs.ErrObjectNotFound)
+	}
+	return o.meta, nil
 }
 
 // PruneSlabs prunes slabs not associated with an object from the indexer.
@@ -253,6 +268,22 @@ func (s *MemorySDK) ObjectMetadata(id types.Hash256) (json.RawMessage, bool) {
 		return nil, false
 	}
 	return o.meta.Metadata(), true
+}
+
+// ObjectEventCalls returns how many times the event stream was enumerated.
+func (s *MemorySDK) ObjectEventCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.objectEventCalls
+}
+
+// StoredObject returns the stored object for an id, carrying the slabs and
+// metadata a real object event would.
+func (s *MemorySDK) StoredObject(id types.Hash256) (sdk.Object, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	o, ok := s.objects[id]
+	return o.meta, ok
 }
 
 // SetSlabSize overrides the slab size for testing.
