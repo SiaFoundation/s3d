@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"crypto/md5"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"reflect"
 	"strings"
@@ -432,6 +434,42 @@ func TestPutObject(t *testing.T) {
 		} else if !reflect.DeepEqual(obj.Metadata, metadata) {
 			t.Fatal("metadata mismatch", obj.Metadata)
 		}
+
+		// upload with a checksum the client computed itself
+		crc32Checksum := func(b []byte) string {
+			var sum [4]byte
+			binary.BigEndian.PutUint32(sum[:], crc32.ChecksumIEEE(b))
+			return base64.StdEncoding.EncodeToString(sum[:])
+		}
+		checksummed := "checksummed"
+		if _, err := s3Tester.Client().PutObject(t.Context(), &service.PutObjectInput{
+			Bucket:        aws.String(bucket),
+			Key:           aws.String(checksummed),
+			Body:          bytes.NewReader(data),
+			ChecksumCRC32: aws.String(crc32Checksum(data)),
+		}); err != nil {
+			t.Fatal(err)
+		}
+
+		// the checksum is stored with the object and served back
+		head, err := s3Tester.Client().HeadObject(t.Context(), &service.HeadObjectInput{
+			Bucket: aws.String(bucket),
+			Key:    aws.String(checksummed),
+		})
+		if err != nil {
+			t.Fatal(err)
+		} else if got := aws.ToString(head.ChecksumCRC32); got != crc32Checksum(data) {
+			t.Fatalf("checksum mismatch: expected %s, got %s", crc32Checksum(data), got)
+		}
+
+		// upload with a checksum that does not match the body
+		_, err = s3Tester.Client().PutObject(t.Context(), &service.PutObjectInput{
+			Bucket:        aws.String(bucket),
+			Key:           aws.String("bad-checksum"),
+			Body:          bytes.NewReader(data),
+			ChecksumCRC32: aws.String(crc32Checksum(frand.Bytes(100))),
+		})
+		testutil.AssertS3Error(t, s3errs.ErrBadDigest, err)
 
 		// upload with a key that is too large
 		_, err = s3Tester.PutObject(t.Context(), bucket, hex.EncodeToString(frand.Bytes(s3.KeySizeLimit)), bytes.NewReader(data), nil)

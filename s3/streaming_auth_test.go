@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/SiaFoundation/s3d/internal/testutil"
+	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	service "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -192,4 +193,93 @@ func TestStreamingAuthE2E(t *testing.T) {
 			t.Fatalf("payload mismatch: got %d bytes, want %d", len(got), len(payload))
 		}
 	})
+}
+
+// trailerRewritingClient corrupts the value of a trailer header on its way out
+// so a test can send a checksum that does not match the payload. The unsigned
+// trailer variant carries no trailer signature, so rewriting the value leaves
+// the rest of the request valid.
+type trailerRewritingClient struct {
+	base    http.RoundTripper
+	header  string
+	rewrote bool
+}
+
+func (c *trailerRewritingClient) Do(req *http.Request) (*http.Response, error) {
+	if req.Body == nil {
+		return c.base.RoundTrip(req)
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		return nil, err
+	} else if err := req.Body.Close(); err != nil {
+		return nil, err
+	}
+
+	// flip the first character of the base64 value, preserving its length
+	if i := bytes.Index(body, []byte(c.header+":")); i >= 0 {
+		v := i + len(c.header) + 1
+		if body[v] == 'A' {
+			body[v] = 'B'
+		} else {
+			body[v] = 'A'
+		}
+		c.rewrote = true
+	}
+
+	req.Body = io.NopCloser(bytes.NewReader(body))
+	req.ContentLength = int64(len(body))
+	return c.base.RoundTrip(req)
+}
+
+// TestStreamingTrailerChecksumMismatch asserts a checksum sent as a streaming
+// trailer is rejected when it does not match the payload, for every algorithm
+// the backend can compute.
+func TestStreamingTrailerChecksumMismatch(t *testing.T) {
+	tests := []struct {
+		algorithm types.ChecksumAlgorithm
+		header    string
+	}{
+		{types.ChecksumAlgorithmCrc32, "x-amz-checksum-crc32"},
+		{types.ChecksumAlgorithmCrc32c, "x-amz-checksum-crc32c"},
+		{types.ChecksumAlgorithmCrc64nvme, "x-amz-checksum-crc64nvme"},
+		{types.ChecksumAlgorithmSha1, "x-amz-checksum-sha1"},
+		{types.ChecksumAlgorithmSha256, "x-amz-checksum-sha256"},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.algorithm), func(t *testing.T) {
+			payload := frand.Bytes(200 * 1024) // > 64 KiB so the body spans multiple chunks
+
+			// aws-sdk-go-v2 gates trailing checksums on HTTPS, so use a TLS
+			// httptest server.
+			rt := &trailerRewritingClient{header: tt.header}
+			s3Tester := testutil.NewTester(t,
+				testutil.WithTLS(),
+				testutil.WithServiceOptions(func(o *service.Options) {
+					inner, ok := o.HTTPClient.(*http.Client)
+					if !ok {
+						t.Fatal("HTTPClient is not *http.Client")
+					}
+					rt.base = inner.Transport
+					o.HTTPClient = rt
+				}),
+			)
+			if err := s3Tester.CreateBucket(t.Context(), "bucket"); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := s3Tester.Client().PutObject(t.Context(), &service.PutObjectInput{
+				Bucket:            aws.String("bucket"),
+				Key:               aws.String("obj"),
+				Body:              readerOnly{bytes.NewReader(payload)},
+				ContentLength:     aws.Int64(int64(len(payload))),
+				ChecksumAlgorithm: tt.algorithm,
+			})
+			if !rt.rewrote {
+				t.Fatalf("client did not send a %s trailer", tt.header)
+			}
+			testutil.AssertS3Error(t, s3errs.ErrBadDigest, err)
+		})
+	}
 }

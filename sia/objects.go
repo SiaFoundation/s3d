@@ -482,6 +482,15 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 		r = io.TeeReader(r, sha256Hash)
 	}
 
+	var checksumHash hash.Hash
+	if opts.Checksum != nil {
+		checksumHash = opts.Checksum.NewHash()
+		if checksumHash == nil {
+			return nil, s3errs.ErrInvalidRequest
+		}
+		r = io.TeeReader(r, checksumHash)
+	}
+
 	// handle empty object case
 	var fileName *string
 	var size int64
@@ -523,6 +532,8 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	if opts.ContentSHA256 != nil && !bytes.Equal(sha256Hash.Sum(nil), opts.ContentSHA256[:]) {
 		return nil, s3errs.ErrBadDigest
 	} else if opts.ContentMD5 != nil && contentMD5 != *opts.ContentMD5 {
+		return nil, s3errs.ErrBadDigest
+	} else if checksumHash != nil && !bytes.Equal(checksumHash.Sum(nil), opts.Checksum.Sum) {
 		return nil, s3errs.ErrBadDigest
 	}
 
