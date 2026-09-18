@@ -2,18 +2,13 @@ openapi: "3.0.0"
 info:
   title: s3d Admin API
   description: >
-    s3d serves an admin API on a separate HTTP address for monitoring the
-    background upload pipeline. It is always enabled and defaults to
-    127.0.0.1:8001. Requests are authenticated via HTTP Basic authentication
-    using the configured admin password; the username is ignored.
-  version: 0.1.1
+    s3d serves an admin API on a separate HTTP address for monitoring the background upload pipeline. It is always enabled and defaults to 127.0.0.1:8001. Requests are authenticated via HTTP Basic authentication using the configured admin password; the username is ignored.
 
+  version: 0.1.4
 servers:
   - url: http://127.0.0.1:8001
-
 security:
   - basicAuth: []
-
 tags:
   - name: metrics
     description: Background upload pipeline statistics for monitoring.
@@ -21,7 +16,6 @@ tags:
     description: Background upload pipeline control.
   - name: system
     description: System administration endpoints.
-
 paths:
   /prometheus:
     get:
@@ -29,12 +23,8 @@ paths:
         - metrics
       summary: Get upload metrics in Prometheus exposition format
       description: >
-        Returns metrics about the background upload pipeline in the Prometheus
-        text-based exposition format. The exposed series are
-        s3d_upload_pending_objects, s3d_upload_pending_size_bytes,
-        s3d_upload_uploaded_objects, s3d_upload_uploaded_size_bytes,
-        s3d_upload_failed_uploads, s3d_upload_orphaned_objects, and
-        s3d_upload_multipart_uploads.
+        Returns metrics about the background upload pipeline in the Prometheus text-based exposition format. The exposed series are s3d_upload_pending_objects, s3d_upload_pending_size_bytes, s3d_upload_uploaded_objects, s3d_upload_uploaded_size_bytes, s3d_upload_failed_uploads, s3d_upload_orphaned_objects, and s3d_upload_multipart_uploads.
+
       operationId: getPrometheus
       responses:
         "200":
@@ -49,9 +39,8 @@ paths:
         - metrics
       summary: Get upload pipeline stats as JSON
       description: >
-        Returns the same upload pipeline stats as the Prometheus endpoint, but
-        in JSON. Used by `s3d status` for a basic overview without requiring a
-        Prometheus stack.
+        Returns the same upload pipeline stats as the Prometheus endpoint, but in JSON. Used by `s3d status` for a basic overview without requiring a Prometheus stack.
+
       operationId: getUploadStats
       responses:
         "200":
@@ -66,8 +55,8 @@ paths:
         - uploads
       summary: Flush pending objects to Sia
       description: >
-        Uploads all pending objects to Sia immediately, regardless of padding,
-        and pins them so their local pending files are removed. Blocks until done.
+        Uploads all pending objects to Sia immediately, regardless of padding, and pins them so their local pending files are removed. Blocks until done.
+
       operationId: flushObjects
       responses:
         "200":
@@ -80,10 +69,8 @@ paths:
         - system
       summary: Upload a database snapshot to Sia
       description: >
-        Backs up the SQLite metadata database and uploads it to the Sia network
-        as a tagged, pinned object so it can be recovered later. Objects that a
-        snapshot references are not unpinned until the snapshot is deleted.
-        The backup does not block database reads or writes.
+        Backs up the SQLite metadata database and uploads it to the Sia network as a tagged, pinned object so it can be recovered later. Objects that a snapshot references are not unpinned until the snapshot is deleted. The backup does not block database reads or writes.
+
       operationId: createSnapshot
       responses:
         "200":
@@ -94,7 +81,6 @@ paths:
                 $ref: "#/components/schemas/Snapshot"
         "500":
           description: The snapshot could not be created.
-
 components:
   securitySchemes:
     basicAuth:

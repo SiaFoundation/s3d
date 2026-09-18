@@ -1,3 +1,31 @@
+## 0.1.4 (2026-09-11)
+
+### Features
+
+- Add presigned URLs
+- Authorize HeadBucket with s3:ListBucket
+- Make number of upload threads configurable
+
+#### Added support for public buckets via bucket policies
+
+`PutBucketPolicy`, `GetBucketPolicy`, `DeleteBucketPolicy` and
+`GetBucketPolicyStatus` are now implemented for policies that grant read access
+to everyone. A policy may allow `s3:GetObject`, `s3:GetObjectVersion`,
+`s3:ListBucket` and `s3:ListBucketVersions` to the `*` principal, which lets
+any caller respectively read an object, read a specific version of one, list
+the bucket, and list its versions. The grant covers unsigned requests as well
+as signed requests from other users. Each action is granted independently, and
+every other policy is rejected rather than partially applied.
+
+### Fixes
+
+#### Answer service root requests with an S3 error instead of a plain 404
+
+Non-GET requests to the service root returned Go's plain-text `404 page not
+found`. AWS dispatches on the method before authenticating there, answering 405
+with an `Allow: GET` header, and clients that probe the root before logging in,
+such as Cyberduck sending an unsigned `HEAD /`, cannot connect otherwise.
+
 ## 0.1.3 (2026-08-31)
 
 ### Features

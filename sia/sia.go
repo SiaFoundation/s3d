@@ -133,6 +133,14 @@ func WithDiskUsageLimit(limit uint64) Option {
 	}
 }
 
+// WithUploadThreads sets the number of object groups the background upload
+// loop uploads to Sia concurrently. Zero uses DefaultUploadThreads.
+func WithUploadThreads(n int) Option {
+	return func(s *Sia) {
+		s.uploadThreads = n
+	}
+}
+
 // Sia implements the s3.Backend interface for storing data on Sia.
 type Sia struct {
 	sdk   SDK
@@ -152,6 +160,7 @@ type Sia struct {
 	uploadDisabled    bool
 	uploadOptimalSize int64
 	uploadWastePct    float64
+	uploadThreads     int
 
 	lifecycleLoopInterval time.Duration
 	lifecycleDayDuration  time.Duration
@@ -214,7 +223,8 @@ type Store interface {
 	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (string, bool, objects.OrphanedFile, error)
 	GetObject(accessKeyID *string, bucket, object string, version s3.VersionRequest, partNumber *int32, action s3.PolicyActions) (*objects.Object, error)
 	DiskUsage() (uint64, error)
-	HeadBucket(accessKeyID, bucket string) error
+	HeadBucket(accessKeyID *string, bucket string) error
+	AssertBucketOwner(accessKeyID, bucket string) error
 	GetBucketVersioning(accessKeyID, bucket string) (string, error)
 	PutBucketVersioning(accessKeyID, bucket, status string) error
 	GetBucketPolicy(accessKeyID, bucket string) (s3.BucketPolicy, error)
@@ -277,6 +287,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 
 		directory:             directory,
 		uploadWastePct:        DefaultUploadWastePct,
+		uploadThreads:         DefaultUploadThreads,
 		lifecycleLoopInterval: defaultLifecycleLoopInterval,
 		lifecycleDayDuration:  defaultLifecycleDayDuration,
 		diskUsageTimeout:      defaultDiskUsageTimeout,
@@ -293,6 +304,11 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 	}
 	if sia.uploadWastePct <= 0 {
 		return nil, errors.New("upload waste percentage must be greater than 0")
+	} else if sia.uploadThreads < 0 {
+		return nil, fmt.Errorf("upload threads must not be negative, got %d", sia.uploadThreads)
+	}
+	if sia.uploadThreads == 0 {
+		sia.uploadThreads = DefaultUploadThreads
 	}
 
 	dir := filepath.Join(sia.directory, UploadsDirectory)

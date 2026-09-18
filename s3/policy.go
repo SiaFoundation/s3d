@@ -40,7 +40,7 @@ const (
 	ActionGetObject PolicyActions = 1
 	// ActionGetObjectVersion grants GetObject and HeadObject for a named version.
 	ActionGetObjectVersion PolicyActions = 2
-	// ActionListBucket grants ListObjects.
+	// ActionListBucket grants ListObjects and HeadBucket.
 	ActionListBucket PolicyActions = 4
 	// ActionListBucketVersions grants ListObjectVersions.
 	ActionListBucketVersions PolicyActions = 8
