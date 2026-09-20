@@ -555,11 +555,10 @@ func (s *Sia) DeleteSnapshot(ctx context.Context, objectID types.Hash256) error 
 		return fmt.Errorf("failed to unpin snapshot object: %w", err)
 	}
 
-	deleted, err := s.store.DeleteSnapshotsBySiaObject(objectID)
-	if err != nil {
+	// the sync loop may have already removed the record in response to the
+	// unpin above, so a missing row means the delete is done rather than absent
+	if _, err := s.store.DeleteSnapshotsBySiaObject(objectID); err != nil {
 		return fmt.Errorf("failed to delete snapshot: %w", err)
-	} else if deleted == 0 {
-		return s3.ErrSnapshotNotFound
 	}
 	s.logger.Info("deleted snapshot", zap.Stringer("objectID", &objectID))
 
