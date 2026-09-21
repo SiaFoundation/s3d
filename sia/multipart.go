@@ -38,6 +38,8 @@ func (s *Sia) createMultipartUploadDir(uploadID string) (string, error) {
 	uploadDir := s.multipartUploadPath(uploadID)
 	if err := os.Mkdir(uploadDir, 0700); err != nil {
 		return "", fmt.Errorf("failed to create upload directory: %w", err)
+	} else if err := syncDir(s.uploadDir()); err != nil {
+		return "", fmt.Errorf("failed to sync upload directory: %w", err)
 	}
 	return uploadDir, nil
 }
@@ -48,8 +50,12 @@ func (s *Sia) multipartPartPath(uploadID s3.UploadID, partNumber int) string {
 
 func (s *Sia) ensureMultipartPartDir(uploadID s3.UploadID, partNumber int) (string, error) {
 	partDir := s.multipartPartPath(uploadID, partNumber)
-	if err := os.Mkdir(partDir, 0700); err != nil && !os.IsExist(err) {
+	if err := os.Mkdir(partDir, 0700); os.IsExist(err) {
+		return partDir, nil
+	} else if err != nil {
 		return "", fmt.Errorf("failed to create part directory: %w", err)
+	} else if err := syncDir(s.multipartUploadPath(uploadID.String())); err != nil {
+		return "", fmt.Errorf("failed to sync upload directory: %w", err)
 	}
 	return partDir, nil
 }
