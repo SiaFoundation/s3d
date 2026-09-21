@@ -855,20 +855,24 @@ const (
 // with the request that carried it. User defined metadata arrives under
 // metaPrefix instead.
 var objectMetadataHeaders = map[string]struct{}{
-	"Cache-Control":                   {},
-	"Content-Disposition":             {},
-	"Content-Encoding":                {},
-	"Content-Language":                {},
-	"Content-Type":                    {},
-	"Expires":                         {},
-	"X-Amz-Checksum-Crc32":            {},
-	"X-Amz-Checksum-Crc32c":           {},
-	"X-Amz-Checksum-Crc64nvme":        {},
-	"X-Amz-Checksum-Md5":              {},
-	"X-Amz-Checksum-Sha1":             {},
-	"X-Amz-Checksum-Sha256":           {},
-	"X-Amz-Checksum-Sha512":           {},
-	"X-Amz-Website-Redirect-Location": {},
+	"Cache-Control":            {},
+	"Content-Disposition":      {},
+	"Content-Encoding":         {},
+	"Content-Language":         {},
+	"Content-Type":             {},
+	"Expires":                  {},
+	"X-Amz-Checksum-Crc32":     {},
+	"X-Amz-Checksum-Crc32c":    {},
+	"X-Amz-Checksum-Crc64nvme": {},
+	"X-Amz-Checksum-Md5":       {},
+	"X-Amz-Checksum-Sha1":      {},
+	"X-Amz-Checksum-Sha256":    {},
+	"X-Amz-Checksum-Sha512":    {},
+
+	// X-Amz-Website-Redirect-Location is an object header, but s3d does not
+	// implement static website hosting, so storing it would report a redirect
+	// that never happens.
+	// "X-Amz-Website-Redirect-Location": {},
 }
 
 // isObjectMetadataHeader reports whether the canonically formatted header name

@@ -105,6 +105,7 @@ func TestMetadataHeaders(t *testing.T) {
 		"X-Amz-Tagging",
 		"X-Amz-Object-Lock-Mode",
 		"X-Amz-Object-Lock-Retain-Until-Date",
+		"X-Amz-Website-Redirect-Location",
 		// encryption
 		"X-Amz-Server-Side-Encryption",
 		"X-Amz-Server-Side-Encryption-Aws-Kms-Key-Id",
