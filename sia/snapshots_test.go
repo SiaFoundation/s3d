@@ -201,6 +201,51 @@ func TestCreateSnapshot(t *testing.T) {
 	}
 }
 
+// TestCreateSnapshotPendingUploadMissing verifies that a pending object whose
+// local file is gone does not block a snapshot. A restored database carries
+// pending rows whose files were never part of the image, so failing here would
+// leave the restored node unable to snapshot at all.
+func TestCreateSnapshotPendingUploadMissing(t *testing.T) {
+	backend, store := testutil.NewBackend(t)
+	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
+
+	const bucket = "snapshot-bucket"
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	} else if _, err := s3Tester.PutObject(t.Context(), bucket, "pending", bytes.NewReader(frand.Bytes(100)), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// the upload loop is disabled, so the object is still buffered on disk
+	if stats, err := store.UploadStats(); err != nil {
+		t.Fatal(err)
+	} else if stats.PendingObjects != 1 {
+		t.Fatal("unexpected", stats.PendingObjects)
+	}
+
+	uploadDir := filepath.Join(backend.Dir, sia.UploadsDirectory)
+	entries, err := os.ReadDir(uploadDir)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(entries) != 1 {
+		t.Fatal("unexpected", len(entries))
+	} else if err := os.Remove(filepath.Join(uploadDir, entries[0].Name())); err != nil {
+		t.Fatal(err)
+	}
+
+	snap, err := backend.CreateSnapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshots, err := store.ListSnapshots(); err != nil {
+		t.Fatal(err)
+	} else if len(snapshots) != 1 {
+		t.Fatal("unexpected", len(snapshots))
+	} else if snapshots[0].SiaObjectID != snap.SiaObjectID {
+		t.Fatal("mismatch", snapshots[0].SiaObjectID)
+	}
+}
+
 // TestCreateSnapshotSyncRace verifies that CreateSnapshot succeeds when the
 // sync loop completes the snapshot before CreateSnapshot marks it pinned
 // itself, instead of rolling back the completed snapshot.

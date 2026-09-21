@@ -391,8 +391,21 @@ func (s *Sia) Close() error {
 // snapshot object, pins it, and marks the record pinned. On failure the
 // snapshot is rolled back.
 func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
+	// a snapshot backs up the metadata database, which stays worth capturing
+	// when an object cannot be flushed, so a failed flush is reported and the
+	// snapshot continues
 	if err := s.FlushObjects(ctx); err != nil {
-		return s3.Snapshot{}, fmt.Errorf("failed to flush objects before snapshot: %w", err)
+		if ctx.Err() != nil {
+			return s3.Snapshot{}, fmt.Errorf("failed to flush objects before snapshot: %w", err)
+		}
+		s.logger.Warn("failed to flush objects before snapshot", zap.Error(err))
+	}
+	if stats, sErr := s.store.UploadStats(); sErr != nil {
+		s.logger.Warn("failed to read upload stats before snapshot", zap.Error(sErr))
+	} else if stats.PendingObjects > 0 {
+		s.logger.Warn("snapshot does not cover objects still pending upload",
+			zap.Int64("pendingObjects", stats.PendingObjects),
+			zap.Int64("pendingSize", stats.PendingSize))
 	}
 
 	snap, gen, err := s.store.CreateSnapshot()
