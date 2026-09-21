@@ -508,6 +508,8 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 			return nil, fmt.Errorf("failed to sync object to disk: %w", err)
 		} else if err := f.Close(); err != nil {
 			return nil, fmt.Errorf("failed to close object file: %w", err)
+		} else if err := syncDir(s.uploadDir()); err != nil {
+			return nil, fmt.Errorf("failed to sync upload directory: %w", err)
 		}
 	}
 
