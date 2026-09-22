@@ -52,6 +52,10 @@ type (
 		// UploadThreads is the number of object groups uploaded to Sia
 		// concurrently by the background upload loop.
 		UploadThreads int `yaml:"uploadThreads"`
+		// DataShards is the number of shards each slab is split into.
+		DataShards uint8 `yaml:"dataShards"`
+		// ParityShards is the number of recovery shards added to each slab.
+		ParityShards uint8 `yaml:"parityShards"`
 	}
 
 	// Config contains the configuration for S3d.

@@ -404,6 +404,8 @@ log:
 sia:
   diskUsageLimit: 10737418240 # max bytes buffered on disk pending upload (0 disables the limit, default 10 GiB)
   uploadThreads: 1 # object groups uploaded to Sia concurrently by the background upload loop (default 4)
+  dataShards: 10 # shards each slab is split into (default 10)
+  parityShards: 20 # recovery shards added to each slab (default 20)
 s3:
   hostBases: # bases for virtual-hosted-style addressing ("localhost" is always included)
     - s3.example.com

@@ -18,6 +18,7 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/sia"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
+	"go.sia.tech/indexd/slabs"
 	"go.sia.tech/jape"
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
@@ -77,6 +78,8 @@ var cfg = Config{
 	Sia: Sia{
 		DiskUsageLimit: 10 * (1 << 30), // 10 GiB
 		UploadThreads:  sia.DefaultUploadThreads,
+		DataShards:     10,
+		ParityShards:   20,
 	},
 	S3: S3{},
 }
@@ -302,7 +305,9 @@ func main() {
 		checkFatalError("failed to create SDK client", err)
 	}
 
-	backend, err := sia.New(ctx, sia.NewSDK(sdkClient), store, cfg.Directory,
+	indexdSDK := sia.NewSDK(sdkClient, sia.WithUploadOptions(sdk.WithRedundancy(cfg.Sia.DataShards, cfg.Sia.ParityShards)))
+
+	backend, err := sia.New(ctx, indexdSDK, store, cfg.Directory,
 		sia.WithDiskUsageLimit(cfg.Sia.DiskUsageLimit),
 		sia.WithUploadThreads(cfg.Sia.UploadThreads),
 		sia.WithLogger(log.Named("backend")))
@@ -413,9 +418,10 @@ func validateServerConfig(cfg Config) error {
 		return errors.New("admin address must differ from the S3 HTTPS address")
 	case cfg.ApiHttpsAddress != "" && cfg.ApiAddress == cfg.ApiHttpsAddress:
 		return errors.New("S3 HTTP and HTTPS addresses must differ")
-	default:
-		return nil
 	}
+
+	totalShards := int(cfg.Sia.DataShards) + int(cfg.Sia.ParityShards)
+	return slabs.ValidateECParams(int(cfg.Sia.DataShards), totalShards)
 }
 
 func applicationDirectoryOS() string {
