@@ -10,6 +10,7 @@ import (
 	"hash"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"time"
@@ -461,13 +462,19 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 		return nil, err
 	}
 
-	if err := s.addDiskUsage(ctx, opts.ContentLength, nil); err != nil {
+	// an undeclared length reserves its bound instead, and gives back whatever
+	// it did not use once the body has been read
+	reserved := opts.ContentLength
+	if opts.ContentLength < 0 {
+		reserved = opts.MaxContentLength
+	}
+	if err := s.addDiskUsage(ctx, reserved, nil); err != nil {
 		return nil, err
 	}
 	var objPath string
 	defer func() {
 		if err != nil {
-			s.cleanupOrphan(objPath, opts.ContentLength)
+			s.cleanupOrphan(objPath, reserved)
 		}
 	}()
 
@@ -499,7 +506,14 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 		if err != nil {
 			return nil, fmt.Errorf("failed to create temporary file: %w", err)
 		}
-		size, err = io.Copy(f, io.LimitReader(r, opts.ContentLength))
+		// an undeclared length still reads one byte past what it reserved, so
+		// exceeding it is caught here rather than trusted to the caller. the
+		// bound saturates rather than wrapping to a limit that reads nothing
+		bound := reserved
+		if opts.ContentLength < 0 && bound < math.MaxInt64 {
+			bound++
+		}
+		size, err = io.Copy(f, io.LimitReader(r, bound))
 		if err != nil {
 			_ = f.Close()
 			return nil, fmt.Errorf("failed to store object: %w", err)
@@ -511,12 +525,26 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 		} else if err := syncDir(s.uploadDir()); err != nil {
 			return nil, fmt.Errorf("failed to sync upload directory: %w", err)
 		}
+
+		// an undeclared length is only known to be empty after the read, so the
+		// file it wrote is dropped to store the object the same way a declared
+		// empty one is
+		if size == 0 {
+			s.cleanupOrphan(objPath, 0)
+			objPath, fileName = "", nil
+		}
 	}
 
 	// check content length
-	if opts.ContentLength != size {
+	if opts.ContentLength >= 0 && opts.ContentLength != size {
 		return nil, s3errs.ErrIncompleteBody
+	} else if size > reserved {
+		return nil, s3errs.ErrEntityTooLarge
 	}
+	if reserved > size {
+		s.releaseDiskUsage(reserved - size)
+	}
+	reserved = size
 
 	// verify checksums
 	var contentMD5 [16]byte

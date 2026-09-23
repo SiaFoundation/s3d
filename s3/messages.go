@@ -34,6 +34,17 @@ type (
 		Owner   *UserInfo    `xml:"Owner,omitempty"`
 		Buckets []BucketInfo `xml:"Buckets>Bucket"`
 	}
+
+	// PostObjectResponse is the response to a POST Object request whose form
+	// asked for a 201.
+	PostObjectResponse struct {
+		XMLName xml.Name `xml:"PostResponse"`
+
+		Location string `xml:"Location"`
+		Bucket   string `xml:"Bucket"`
+		Key      string `xml:"Key"`
+		ETag     string `xml:"ETag"`
+	}
 )
 
 // ContentTime is a wrapper around time.Time to provide custom XML marshalling.
