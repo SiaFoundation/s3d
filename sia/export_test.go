@@ -5,8 +5,11 @@ import (
 	"time"
 )
 
-// OrphanLoopInterval exports orphanLoopInterval for testing.
-const OrphanLoopInterval = orphanLoopInterval
+// PruneSlabsInterval exports pruneSlabsInterval for testing.
+const PruneSlabsInterval = pruneSlabsInterval
+
+// SnapshotConfirmDelay exports snapshotConfirmDelay for testing.
+const SnapshotConfirmDelay = snapshotConfirmDelay
 
 // SetDiskUsageTimeout overrides the disk usage timeout for testing.
 func (s *Sia) SetDiskUsageTimeout(d time.Duration) { //nolint:revive
@@ -36,4 +39,9 @@ func (s *Sia) PinObjects(ctx context.Context) error { //nolint:revive
 // DeleteOrphanedUploads exports deleteOrphanedUploads for testing.
 func (s *Sia) DeleteOrphanedUploads() (int, error) { //nolint:revive
 	return s.deleteOrphanedUploads()
+}
+
+// ProcessSnapshotDeletions exports processSnapshotDeletions for testing.
+func (s *Sia) ProcessSnapshotDeletions(ctx context.Context, now time.Time) { //nolint:revive
+	s.processSnapshotDeletions(ctx, now)
 }

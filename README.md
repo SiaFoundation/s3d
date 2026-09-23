@@ -337,6 +337,8 @@ generate one.
 |------|-------------|
 | `-api.s3` | Address to serve the S3 API on (default `127.0.0.1:8000`) |
 | `-api.s3.https` | Address to serve the S3 API on over HTTPS (disabled by default, see [HTTPS](#https)) |
+| `-log.file.enabled` | Enable logging to a file (default `true`) |
+| `-log.stdout.enableANSI` | Enable ANSI color codes on stdout (default `true`, `false` on Windows) |
 
 ### Subcommands
 

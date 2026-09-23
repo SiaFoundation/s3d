@@ -2,18 +2,13 @@ openapi: "3.0.0"
 info:
   title: s3d Admin API
   description: >
-    s3d serves an admin API on a separate HTTP address for monitoring the
-    background upload pipeline. It is always enabled and defaults to
-    127.0.0.1:8001. Requests are authenticated via HTTP Basic authentication
-    using the configured admin password; the username is ignored.
-  version: 0.1.1
+    s3d serves an admin API on a separate HTTP address for monitoring the background upload pipeline. It is always enabled and defaults to 127.0.0.1:8001. Requests are authenticated via HTTP Basic authentication using the configured admin password; the username is ignored.
 
+  version: 0.1.4
 servers:
   - url: http://127.0.0.1:8001
-
 security:
   - basicAuth: []
-
 tags:
   - name: metrics
     description: Background upload pipeline statistics for monitoring.
@@ -21,7 +16,6 @@ tags:
     description: Background upload pipeline control.
   - name: system
     description: System administration endpoints.
-
 paths:
   /prometheus:
     get:
@@ -29,12 +23,8 @@ paths:
         - metrics
       summary: Get upload metrics in Prometheus exposition format
       description: >
-        Returns metrics about the background upload pipeline in the Prometheus
-        text-based exposition format. The exposed series are
-        s3d_upload_pending_objects, s3d_upload_pending_size_bytes,
-        s3d_upload_uploaded_objects, s3d_upload_uploaded_size_bytes,
-        s3d_upload_failed_uploads, s3d_upload_orphaned_objects, and
-        s3d_upload_multipart_uploads.
+        Returns metrics about the background upload pipeline in the Prometheus text-based exposition format. The exposed series are s3d_upload_pending_objects, s3d_upload_pending_size_bytes, s3d_upload_uploaded_objects, s3d_upload_uploaded_size_bytes, s3d_upload_failed_uploads, s3d_upload_orphaned_objects, and s3d_upload_multipart_uploads.
+
       operationId: getPrometheus
       responses:
         "200":
@@ -49,9 +39,8 @@ paths:
         - metrics
       summary: Get upload pipeline stats as JSON
       description: >
-        Returns the same upload pipeline stats as the Prometheus endpoint, but
-        in JSON. Used by `s3d status` for a basic overview without requiring a
-        Prometheus stack.
+        Returns the same upload pipeline stats as the Prometheus endpoint, but in JSON. Used by `s3d status` for a basic overview without requiring a Prometheus stack.
+
       operationId: getUploadStats
       responses:
         "200":
@@ -66,41 +55,32 @@ paths:
         - uploads
       summary: Flush pending objects to Sia
       description: >
-        Uploads all pending objects to Sia immediately, regardless of padding,
-        and pins them so their local pending files are removed. Blocks until done.
+        Uploads all pending objects to Sia immediately, regardless of padding, and pins them so their local pending files are removed. Blocks until done.
+
       operationId: flushObjects
       responses:
         "200":
           description: All pending objects were flushed to Sia.
         "500":
           description: Internal error while pinning, or the request was cancelled.
-  /system/sqlite3/backup:
+  /snapshots:
     post:
       tags:
         - system
-      summary: Back up the SQLite3 metadata database
+      summary: Upload a database snapshot to Sia
       description: >
-        Creates a backup of the SQLite metadata database using the SQLite
-        online backup API. Unlike copying the database file directly, the
-        backup is a consistent snapshot even while objects are being written.
-        The backup only contains the metadata database, not the buffered
-        objects that have not yet been uploaded to the Sia network.
-      operationId: backupSQLite3
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/BackupSQLite3Request"
+        Backs up the SQLite metadata database and uploads it to the Sia network as a tagged, pinned object so it can be recovered later. Objects that a snapshot references are not unpinned until the snapshot is deleted. The backup does not block database reads or writes.
+
+      operationId: createSnapshot
       responses:
         "200":
-          description: The backup was created successfully.
-        "400":
-          description: >
-            The request was invalid, e.g. the path was empty or not absolute.
+          description: The snapshot was created and uploaded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Snapshot"
         "500":
-          description: The backup could not be created.
-
+          description: The snapshot could not be created.
 components:
   securitySchemes:
     basicAuth:
@@ -139,15 +119,22 @@ components:
           type: integer
           format: int64
           description: In-progress multipart uploads.
-    BackupSQLite3Request:
+    Snapshot:
       type: object
-      description: Request body for creating a SQLite3 database backup.
-      required:
-        - path
+      description: A database backup uploaded to Sia.
       properties:
-        path:
+        id:
+          type: integer
+          format: int64
+          description: ID of the snapshot.
+        createdAt:
           type: string
-          description: >
-            Absolute filesystem path, resolved on the machine running s3d,
-            where the backup file will be written. It must not already exist.
-          example: /backups/s3d.sqlite3
+          format: date-time
+          description: Time the snapshot was recorded.
+        siaObjectID:
+          type: string
+          description: ID of the Sia object holding the backup.
+        objectCount:
+          type: integer
+          format: int64
+          description: Number of uploaded objects captured by the snapshot.
