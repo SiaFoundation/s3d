@@ -192,6 +192,10 @@ func (s *Store) DeleteSnapshotsBySiaObject(objectID types.Hash256) (deleted int6
 func (s *Store) ListSnapshots() (snapshots []s3.Snapshot, err error) {
 	err = s.transaction(func(tx *txn) error {
 		snapshots = snapshots[:0] // reuse same slice if transaction retries
+		// a recovery adopts rediscovered snapshots into fresh rows, so id
+		// order is the order this node learned of them rather than the order
+		// they were taken. Creation and generation give the latter, and id
+		// breaks the remaining ties so the order stays total
 		rows, err := tx.Query(`
 			SELECT id, created_at, sia_object_id, object_count
 			FROM snapshots
