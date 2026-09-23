@@ -594,3 +594,36 @@ func TestAdoptSnapshotWithholdsExistingOrphans(t *testing.T) {
 		t.Fatal("unexpected", orphans)
 	}
 }
+
+// TestListSnapshotsOrderBy covers a recovery that rediscovers snapshots on the
+// network and adopts them into fresh rows. Row id then records the order this
+// node learned of them rather than the order they were taken.
+func TestListSnapshotsOrderBy(t *testing.T) {
+	store := initTestDB(t, zaptest.NewLogger(t))
+
+	older := frand.Entropy256()
+	newer := frand.Entropy256()
+	cut := time.Now().Truncate(time.Second)
+
+	// adopting the older snapshot first gives it the lower row id
+	if _, err := store.AdoptSnapshot(older, cut.Add(-2*time.Hour), 1, 10); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AdoptSnapshot(newer, cut.Add(-time.Hour), 2, 20); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshots, err := store.ListSnapshots()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshots) != 2 {
+		t.Fatal("unexpected", len(snapshots))
+	}
+	if snapshots[0].SiaObjectID != newer {
+		t.Fatal("expected the newest snapshot first, got", snapshots[0].SiaObjectID)
+	}
+	if snapshots[1].SiaObjectID != older {
+		t.Fatal("expected the oldest snapshot last, got", snapshots[1].SiaObjectID)
+	}
+}
