@@ -136,6 +136,12 @@ bin-packing algorithm. A group is uploaded to Sia once its waste falls below the
 configured threshold (default 10%). This ensures objects are packed efficiently
 into slabs regardless of size, minimizing wasted space on the network.
 
+The erasure coding scheme is applied when a group is uploaded, not when an
+object is received. Changing `sia.dataShards` or `sia.parityShards` takes
+effect on the next restart and applies to every object still waiting in the
+uploads directory. Objects already uploaded keep the scheme they were stored
+with and remain readable.
+
 ## Multipart Uploads
 
 `s3d` supports S3 multipart uploads, allowing large files to be uploaded in
