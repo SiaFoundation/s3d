@@ -103,11 +103,10 @@ func (s *s3) bucketLocation(w http.ResponseWriter, r *http.Request, accessKeyID 
 		return err
 	}
 
+	// S3 reports us-east-1 as an empty LocationConstraint
 	region := s.region
-	if region == "" {
-		// Per AWS S3 API, "null" is used for the us-east-1 region. So we use it
-		// here as a default as well.
-		region = Null
+	if region == DefaultRegion {
+		region = ""
 	}
 
 	return writeXMLResponse(w, http.StatusOK, GetBucketLocation{

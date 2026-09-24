@@ -10,6 +10,9 @@ import (
 // Such as a VersionID or location.
 const Null = "null"
 
+// DefaultRegion is the region S3 reports as an empty LocationConstraint.
+const DefaultRegion = "us-east-1"
+
 // Common types
 type (
 	// UserInfo represents the owner of a resource
