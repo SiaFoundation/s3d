@@ -172,7 +172,7 @@ func TestCreateSnapshot(t *testing.T) {
 	}
 	backend.ProcessSnapshotDeletions(t.Context(), time.Now().Add(sia.SnapshotConfirmDelay))
 	if memSDK.Pinned(snap.SiaObjectID) {
-		t.Fatal("Sia object still pinned")
+		t.Fatal("snapshot object still pinned")
 	}
 	assertDeleting(t, store, 1)
 	backend.ProcessSnapshotDeletions(t.Context(), time.Now().Add(sia.SnapshotConfirmDelay))
@@ -197,14 +197,12 @@ func TestCreateSnapshot(t *testing.T) {
 	if err := backend.DeleteSnapshot(t.Context(), other.ID()); !errors.Is(err, s3.ErrSnapshotNotFound) {
 		t.Fatal("unexpected", err)
 	} else if !memSDK.Pinned(other.ID()) {
-		t.Fatal("deleting a snapshot unpinned an ordinary object")
+		t.Fatal("unexpected", other.ID())
 	}
 }
 
 // TestCreateSnapshotPendingUploadMissing verifies that a pending object whose
-// local file is gone does not block a snapshot. A restored database carries
-// pending rows whose files were never part of the image, so failing here would
-// leave the restored node unable to snapshot at all.
+// local file is gone does not block a snapshot.
 func TestCreateSnapshotPendingUploadMissing(t *testing.T) {
 	backend, store := testutil.NewBackend(t)
 	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
@@ -621,9 +619,7 @@ func TestListRemoteSnapshots(t *testing.T) {
 	} else if remote[1].ObjectID != snap1.SiaObjectID {
 		t.Fatal("mismatch", remote[1].ObjectID)
 	} else if remote[0].Metadata.Generation <= remote[1].Metadata.Generation {
-		// completing a snapshot bumps the counter, so the absolute values
-		// depend on when the sync observed each pin. Only the order is fixed
-		t.Fatal("expected the newer snapshot to hold the higher generation", remote[0].Metadata.Generation)
+		t.Fatal("unexpected", remote[0].Metadata.Generation, remote[1].Metadata.Generation)
 	} else if remote[0].Metadata.CreatedAt.Unix() != snap2.CreatedAt.Unix() {
 		t.Fatal("mismatch", remote[0].Metadata.CreatedAt)
 	}
@@ -647,9 +643,8 @@ func TestListRemoteSnapshots(t *testing.T) {
 	}
 }
 
-// TestFetchRemoteSnapshot covers the recovery shortcut: fetching a snapshot by
-// its object ID must not enumerate the account, because enumeration reads and
-// decrypts every object and so grows with how much is stored.
+// TestFetchRemoteSnapshot verifies that fetching a snapshot by its object ID
+// does not enumerate the account.
 func TestFetchRemoteSnapshot(t *testing.T) {
 	memSDK := testutil.NewMemorySDK()
 	backend, _ := testutil.NewBackend(t, testutil.WithSDK(memSDK))

@@ -20,6 +20,8 @@ import (
 )
 
 const (
+	latestSnapshot = "latest"
+
 	snapshotsUsage = `Usage: s3d snapshots [command]
 
 Manage database snapshots backed up to Sia.
@@ -175,7 +177,10 @@ func runSnapshotsRestore(ctx context.Context, cmd *flag.FlagSet, out string) {
 	}
 	target := cmd.Arg(0)
 
-	destDir := restoreDir(cfg.Directory, out)
+	destDir := cfg.Directory
+	if out != "" {
+		destDir = out
+	}
 	dbPath := filepath.Join(destDir, "s3d.db")
 
 	sdkClient := openSDK()
@@ -208,8 +213,7 @@ func runSnapshotsRestore(ctx context.Context, cmd *flag.FlagSet, out string) {
 	checkFatalError("failed to create temporary file", err)
 	defer os.Remove(tmp.Name())
 
-	// checkFatalError exits the process without running the deferred removal
-	// above, so the fatal paths below go through this instead
+	// remove the partial download before exiting
 	checkFatalRestoreError := func(msg string, err error) {
 		if err == nil {
 			return
@@ -229,9 +233,6 @@ func runSnapshotsRestore(ctx context.Context, cmd *flag.FlagSet, out string) {
 		checkFatalRestoreError("failed to close snapshot", err)
 	}
 
-	// the replaced database is the only record of the objects and pending
-	// uploads written after the snapshot was taken, so it is moved aside with
-	// its sidecars rather than removed
 	bakPath, err := backupExistingDatabase(dbPath)
 	if bakPath != "" {
 		fmt.Println("Moved the previous database to", bakPath)
@@ -243,12 +244,9 @@ func runSnapshotsRestore(ctx context.Context, cmd *flag.FlagSet, out string) {
 	fmt.Println("Start s3d to reconcile the restored database with the network.")
 }
 
-// backupExistingDatabase moves an existing database and its write ahead log and
-// shared memory aside, keeping them together so the copy stays openable. A
-// sidecar left behind without its database is moved too, so it cannot be
-// replayed into the restored one. It returns the path the database was moved
-// to, which is empty when there was no database to move, and returns it
-// alongside an error when a later move failed.
+// backupExistingDatabase moves the database at dbPath and its sidecars to a
+// timestamped backup path and returns that path, which is empty when no
+// database was moved.
 func backupExistingDatabase(dbPath string) (string, error) {
 	suffixes := []string{"", "-wal", "-shm"}
 
@@ -292,17 +290,6 @@ func backupExistingDatabase(dbPath string) (string, error) {
 	return moved, nil
 }
 
-// restoreDir returns the directory a restore writes its database to.
-func restoreDir(dataDir, out string) string {
-	if out == "" {
-		return dataDir
-	}
-	return out
-}
-
-// latestSnapshot selects the newest snapshot rather than a specific object ID.
-const latestSnapshot = "latest"
-
 // selectSnapshot picks the snapshot matching target, which is either
 // latestSnapshot or a Sia object ID.
 func selectSnapshot(snapshots []sia.RemoteSnapshot, target string) (sia.RemoteSnapshot, error) {
@@ -333,7 +320,6 @@ func selectSnapshot(snapshots []sia.RemoteSnapshot, target string) (sia.RemoteSn
 }
 
 // openSDK builds an SDK client from the app key stored in the local database.
-// The database is closed before returning.
 func openSDK() *sia.IndexdSDK {
 	store, err := openStore(zap.NewNop())
 	checkFatalError("failed to open database", err)

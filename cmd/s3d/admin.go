@@ -24,9 +24,8 @@ func requireAdminConfig() {
 }
 
 // adminRequest sends a request to the admin API route and decodes the JSON
-// response into out when it is non-nil. Cancellation is driven by ctx alone,
-// with no client timeout, since some operations (e.g. flushing objects) can
-// block for a long time.
+// response into out when out is not nil. Cancellation is driven by ctx alone,
+// with no client timeout, since some operations can block for a long time.
 func adminRequest(ctx context.Context, method, addr, password, route string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, method, "http://"+addr+route, nil)
 	if err != nil {
@@ -52,9 +51,9 @@ func adminRequest(ctx context.Context, method, addr, password, route string, out
 	return nil
 }
 
-// adminResponseError returns an error describing a non-200 admin API response,
-// including the response body when the server provided one. A missing resource
-// is reported as errNotFound so callers can recognize it.
+// adminResponseError returns an error describing an admin API response whose
+// status is not 200, including the response body when the server provided one,
+// or errNotFound for a 404.
 func adminResponseError(resp *http.Response) error {
 	if resp.StatusCode == http.StatusOK {
 		return nil

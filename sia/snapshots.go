@@ -16,7 +16,7 @@ import (
 )
 
 // remoteSnapshotBatchSize is the number of object events fetched per request
-// while enumerating the account. It is the indexer's maximum accepted limit.
+// while enumerating the account.
 const remoteSnapshotBatchSize = api.MaxLimit
 
 // RemoteSnapshot is a snapshot stored on the Sia network.
@@ -28,7 +28,7 @@ type RemoteSnapshot struct {
 }
 
 // ListRemoteSnapshots enumerates every object in the account and returns those
-// tagged as valid snapshots, newest first. It needs only the app key.
+// tagged as valid snapshots, newest first.
 func ListRemoteSnapshots(ctx context.Context, sdk SDK) ([]RemoteSnapshot, error) {
 	found := make(map[types.Hash256]RemoteSnapshot)
 
