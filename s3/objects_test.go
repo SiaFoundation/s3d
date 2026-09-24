@@ -1415,7 +1415,7 @@ func TestDeleteObjects(t *testing.T) {
 	objs, err = s3Tester.ListObjectsV2(t.Context(), bucket, nil, nil, s3.ListObjectsPage{})
 	if err != nil {
 		t.Fatal(err)
-	} else if objs.KeyCount != nil {
-		t.Fatalf("expected 0 remaining objects, got %d", *objs.KeyCount)
+	} else if objs.KeyCount == nil || *objs.KeyCount != 0 {
+		t.Fatalf("expected 0 remaining objects, got %v", objs.KeyCount)
 	}
 }
