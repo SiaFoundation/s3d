@@ -121,7 +121,7 @@ var (
 	ErrNoSuchBucketPolicy                             = Error{"NoSuchBucketPolicy", "The specified bucket does not have a bucket policy.", http.StatusNotFound}
 	ErrNoSuchCORSConfiguration                        = Error{"NoSuchCORSConfiguration", "The specified bucket does not have a CORS configuration.", http.StatusNotFound}
 	ErrNoSuchKey                                      = Error{"NoSuchKey", "The specified key does not exist.", http.StatusNotFound}
-	ErrNoSuchLifecycleConfiguration                   = Error{"NoSuchLifecycleConfiguration", "The specified lifecycle configuration does not exist.", http.StatusNotFound}
+	ErrNoSuchLifecycleConfiguration                   = Error{"NoSuchLifecycleConfiguration", "The lifecycle configuration does not exist.", http.StatusNotFound}
 	ErrNoSuchMultiRegionAccessPoint                   = Error{"NoSuchMultiRegionAccessPoint", "The specified Multi-Region Access Point does not exist.", http.StatusNotFound}
 	ErrNoSuchObjectLockConfiguration                  = Error{"NoSuchObjectLockConfiguration", "The specified object does not have an Object Lock configuration.", http.StatusNotFound}
 	ErrNoSuchTagSet                                   = Error{"NoSuchTagSet", "The specified tag does not exist.", http.StatusNotFound}
