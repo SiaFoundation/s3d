@@ -61,7 +61,7 @@ the database.
 Reads the admin address and password from the loaded config file or
 S3D_CONFIG_FILE.`
 
-	snapshotsRestoreUsage = `Usage: s3d snapshots restore [--out <dir>] [--force] <sia object id|latest>
+	snapshotsRestoreUsage = `Usage: s3d snapshots restore [--out <dir>] <sia object id|latest>
 
 Restore the database from a snapshot stored on Sia.
 
@@ -72,12 +72,13 @@ The object ID is printed when a snapshot is created and by 'snapshots list', so
 keeping it somewhere safe makes recovery much faster.
 
 The snapshot is then downloaded, decompressed and written to the data directory.
-Refuses to overwrite an existing database unless --force is set.
+An existing database is moved aside with its write ahead log rather than
+removed, so a restore can be undone.
 
 The app key is read from the configured data directory, so this requires an
 instance that has already run 's3d login'. With --out the restored database is
 written to that directory instead of replacing the configured one. Without --out
-the configured database is overwritten, so the daemon must be stopped.`
+the configured database is replaced, so the daemon must be stopped.`
 )
 
 func runSnapshotsCreate(ctx context.Context, cmd *flag.FlagSet) {
@@ -167,7 +168,7 @@ func runSnapshotsDelete(ctx context.Context, cmd *flag.FlagSet) {
 	fmt.Println("Deleted snapshot", objectID)
 }
 
-func runSnapshotsRestore(ctx context.Context, cmd *flag.FlagSet, force bool, out string) {
+func runSnapshotsRestore(ctx context.Context, cmd *flag.FlagSet, out string) {
 	if len(cmd.Args()) != 1 {
 		cmd.Usage()
 		os.Exit(1)
@@ -176,11 +177,6 @@ func runSnapshotsRestore(ctx context.Context, cmd *flag.FlagSet, force bool, out
 
 	destDir := restoreDir(cfg.Directory, out)
 	dbPath := filepath.Join(destDir, "s3d.db")
-	if _, err := os.Stat(dbPath); err == nil && !force {
-		checkFatalError("failed to restore snapshot", fmt.Errorf("%s already exists, pass --force to overwrite it", dbPath))
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-		checkFatalError("failed to check for an existing database", err)
-	}
 
 	sdkClient := openSDK()
 
@@ -233,16 +229,67 @@ func runSnapshotsRestore(ctx context.Context, cmd *flag.FlagSet, force bool, out
 		checkFatalRestoreError("failed to close snapshot", err)
 	}
 
-	// the write ahead log and shared memory belong to the replaced database
-	for _, sidecar := range []string{dbPath + "-wal", dbPath + "-shm"} {
-		if err := os.Remove(sidecar); err != nil && !errors.Is(err, os.ErrNotExist) {
-			checkFatalRestoreError("failed to remove stale sidecar", err)
-		}
+	// the replaced database is the only record of the objects and pending
+	// uploads written after the snapshot was taken, so it is moved aside with
+	// its sidecars rather than removed
+	bakPath, err := backupExistingDatabase(dbPath)
+	if bakPath != "" {
+		fmt.Println("Moved the previous database to", bakPath)
 	}
+	checkFatalRestoreError("failed to move the existing database aside", err)
 	checkFatalRestoreError("failed to write database", os.Rename(tmp.Name(), dbPath))
 
 	fmt.Printf("Restored %d objects from the snapshot taken at %s.\n", snap.Metadata.ObjectCount, snap.Metadata.CreatedAt.Format(time.RFC3339))
 	fmt.Println("Start s3d to reconcile the restored database with the network.")
+}
+
+// backupExistingDatabase moves an existing database and its write ahead log and
+// shared memory aside, keeping them together so the copy stays openable. A
+// sidecar left behind without its database is moved too, so it cannot be
+// replayed into the restored one. It returns the path the database was moved
+// to, which is empty when there was no database to move, and returns it
+// alongside an error when a later move failed.
+func backupExistingDatabase(dbPath string) (string, error) {
+	suffixes := []string{"", "-wal", "-shm"}
+
+	var present bool
+	for _, suffix := range suffixes {
+		if _, err := os.Stat(dbPath + suffix); err == nil {
+			present = true
+			break
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("failed to check for an existing database: %w", err)
+		}
+	}
+	if !present {
+		return "", nil
+	}
+
+	stamp := time.Now().UTC().Format("20060102T150405Z")
+	bakPath := dbPath + ".bak-" + stamp
+	// a second restore within the same second must not land on the previous
+	// backup and mix the two sets of files
+	for i := 1; ; i++ {
+		if _, err := os.Stat(bakPath); errors.Is(err, os.ErrNotExist) {
+			break
+		} else if err != nil {
+			return "", fmt.Errorf("failed to check for an existing backup: %w", err)
+		}
+		bakPath = fmt.Sprintf("%s.bak-%s.%d", dbPath, stamp, i)
+	}
+
+	var moved string
+	for _, suffix := range suffixes {
+		if err := os.Rename(dbPath+suffix, bakPath+suffix); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return moved, fmt.Errorf("failed to move %s aside: %w", dbPath+suffix, err)
+		}
+		if suffix == "" {
+			moved = bakPath
+		}
+	}
+	return moved, nil
 }
 
 // restoreDir returns the directory a restore writes its database to.

@@ -118,10 +118,9 @@ func main() {
 	snapshotsDeleteCmd := flagg.New("delete", snapshotsDeleteUsage)
 	snapshotsRestoreCmd := flagg.New("restore", snapshotsRestoreUsage)
 
-	var snapshotsListRemote, snapshotsRestoreForce bool
+	var snapshotsListRemote bool
 	var snapshotsRestoreOut string
 	snapshotsListCmd.BoolVar(&snapshotsListRemote, "remote", false, "list the snapshots stored on the Sia network")
-	snapshotsRestoreCmd.BoolVar(&snapshotsRestoreForce, "force", false, "overwrite an existing database")
 	snapshotsRestoreCmd.StringVar(&snapshotsRestoreOut, "out", "", "directory to write the restored database to (defaults to the data directory)")
 
 	// attempt to load the config file
@@ -250,7 +249,7 @@ func main() {
 		runSnapshotsDelete(ctx, snapshotsDeleteCmd)
 		return
 	case snapshotsRestoreCmd:
-		runSnapshotsRestore(ctx, snapshotsRestoreCmd, snapshotsRestoreForce, snapshotsRestoreOut)
+		runSnapshotsRestore(ctx, snapshotsRestoreCmd, snapshotsRestoreOut)
 		return
 	case rootCmd:
 		if len(cmd.Args()) != 0 {

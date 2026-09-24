@@ -79,7 +79,7 @@ func TestSelectSnapshot(t *testing.T) {
 func TestRestoreDir(t *testing.T) {
 	const dataDir = "/srv/s3d/main"
 
-	// without an output directory a restore overwrites the configured one
+	// without an output directory a restore replaces the configured one
 	if dir := restoreDir(dataDir, ""); dir != dataDir {
 		t.Fatal("unexpected", dir)
 	}
