@@ -1476,6 +1476,85 @@ func TestDiskUsageLimitOverwriteCleanup(t *testing.T) {
 	}
 }
 
+func TestTransferStats(t *testing.T) {
+	log := zaptest.NewLogger(t)
+	dir := t.TempDir()
+	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	if err := store.CreateUser(testutil.Owner); err != nil {
+		t.Fatal(err)
+	} else if err := store.CreateAccessKey(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey); err != nil {
+		t.Fatal(err)
+	}
+
+	memSDK := testutil.NewMemorySDK()
+	memSDK.SetSlabSize(100)
+	backend, err := sia.New(t.Context(), memSDK, store, dir,
+		sia.WithUploadDisabled(),
+		sia.WithLogger(log))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { backend.Close() })
+	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
+
+	const bucket = "bucket"
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	transfer := func() s3.TransferStats {
+		t.Helper()
+		stats, err := backend.UploadStats(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return stats.Transfer
+	}
+
+	// nothing has moved yet and no limit is configured
+	if tr := transfer(); tr.BufferUsed != 0 || tr.BufferLimit != 0 {
+		t.Fatalf("expected an empty unlimited buffer, got %d of %d", tr.BufferUsed, tr.BufferLimit)
+	} else if tr.IngressBytes != 0 || tr.UploadBytes != 0 {
+		t.Fatalf("expected no transferred bytes, got %d ingress and %d upload", tr.IngressBytes, tr.UploadBytes)
+	}
+
+	// the request body counts as ingress and the staged file as buffer usage,
+	// which is tracked even though no limit gates it
+	if _, err := s3Tester.PutObject(t.Context(), bucket, "obj", bytes.NewReader(frand.Bytes(100)), nil); err != nil {
+		t.Fatal(err)
+	}
+	if tr := transfer(); tr.BufferUsed != 100 {
+		t.Fatalf("expected 100 bytes buffered, got %d", tr.BufferUsed)
+	} else if tr.IngressBytes != 100 {
+		t.Fatalf("expected 100 bytes of ingress, got %d", tr.IngressBytes)
+	} else if tr.IngressActive != 0 {
+		t.Fatalf("expected no active ingress streams, got %d", tr.IngressActive)
+	} else if tr.UploadBytes != 0 {
+		t.Fatalf("expected no bytes handed to the uploader, got %d", tr.UploadBytes)
+	}
+
+	// uploading hands the buffered bytes to the Sia uploader, but the file
+	// stays on disk until the pin loop releases it
+	backend.UploadObjects(t.Context())
+	if tr := transfer(); tr.BufferUsed != 100 {
+		t.Fatalf("expected 100 bytes still buffered, got %d", tr.BufferUsed)
+	} else if tr.UploadBytes != 100 {
+		t.Fatalf("expected 100 bytes handed to the uploader, got %d", tr.UploadBytes)
+	} else if tr.UploadActive != 0 || tr.ActiveUploads != nil {
+		t.Fatalf("expected no active uploads, got %d", tr.UploadActive)
+	}
+
+	backend.PinObjects(t.Context())
+	if tr := transfer(); tr.BufferUsed != 0 {
+		t.Fatalf("expected the buffer to be released, got %d", tr.BufferUsed)
+	}
+}
+
 func TestDeleteObjectUnpin(t *testing.T) {
 	memSDK := testutil.NewMemorySDK()
 	memSDK.SetSlabSize(32)

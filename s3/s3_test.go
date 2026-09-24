@@ -11,6 +11,7 @@ import (
 	"net/http/httptrace"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -58,6 +59,8 @@ func TestPrometheus(t *testing.T) {
 		t.Fatal(err)
 	} else if !bytes.Contains(body, []byte("s3d_upload_pending_objects 0")) {
 		t.Fatalf("expected prometheus metrics, got %q", body)
+	} else if !bytes.Contains(body, []byte("s3d_transfer_ingress_bytes_total 0")) {
+		t.Fatalf("expected transfer metrics, got %q", body)
 	}
 }
 
@@ -83,7 +86,7 @@ func TestUploadStats(t *testing.T) {
 	var stats s3.UploadStats
 	if err := json.UnmarshalRead(resp.Body, &stats); err != nil {
 		t.Fatal(err)
-	} else if (stats != s3.UploadStats{}) {
+	} else if !reflect.DeepEqual(stats, s3.UploadStats{}) {
 		t.Fatal("expected zero-value stats on an empty backend", stats)
 	}
 }

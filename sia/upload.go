@@ -302,6 +302,8 @@ func (s *Sia) UploadStats(_ context.Context) (s3.UploadStats, error) {
 		return s3.UploadStats{}, err
 	}
 	stats.FailedUploads = s.failedUploads.Load()
+	stats.Transfer = s.transfer.snapshot()
+	stats.Transfer.BufferUsed, stats.Transfer.BufferLimit = s.bufferUsage()
 	return stats, nil
 }
 
@@ -312,6 +314,9 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 		return fmt.Errorf("failed to create packed upload: %w", err)
 	}
 	defer upload.Close()
+
+	active := s.transfer.beginUpload(group)
+	defer s.transfer.endUpload(active)
 
 	var objIdx []int
 	var errs []error
@@ -327,6 +332,7 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 			errs = append(errs, fmt.Errorf("failed to open upload for %s/%s: %w", obj.Bucket, obj.Name, err))
 			continue
 		}
+		rc = s.transfer.trackUpload(rc, active)
 		n, err := upload.Add(ctx, rc)
 		if err != nil {
 			s.failedUploads.Add(1)
@@ -354,6 +360,7 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 	}
 
 	// finalize upload
+	active.finalizing.Store(true)
 	results, err := upload.Finalize(ctx)
 	if err != nil {
 		s.failedUploads.Add(int64(len(objIdx)))

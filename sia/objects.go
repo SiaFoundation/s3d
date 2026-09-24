@@ -21,14 +21,19 @@ import (
 	"go.uber.org/zap"
 )
 
-// addDiskUsage reserves size bytes against the disk usage limit, blocking
-// until enough space is available. If no space frees up within the disk
-// usage timeout it fails with ErrSlowDown so clients can back off and
-// retry instead of pinning a handler indefinitely. If allowExcess returns
-// true the reservation bypasses the limit; it is re-evaluated each time
-// releaseDiskUsage is called.
+// addDiskUsage records size bytes of disk usage. When a limit is configured it
+// reserves the space against that limit, blocking until enough is available. If
+// no space frees up within the disk usage timeout it fails with ErrSlowDown so
+// clients can back off and retry instead of pinning a handler indefinitely. If
+// allowExcess returns true the reservation bypasses the limit; it is
+// re-evaluated each time releaseDiskUsage is called.
 func (s *Sia) addDiskUsage(ctx context.Context, size int64, allowExcess func() (bool, error)) error {
-	if size <= 0 || s.diskUsageLimit == 0 {
+	if size <= 0 {
+		return nil
+	} else if s.diskUsageLimit == 0 {
+		s.diskUsageMu.Lock()
+		s.diskUsage += uint64(size)
+		s.diskUsageMu.Unlock()
 		return nil
 	}
 	timeout := time.NewTimer(s.diskUsageTimeout)
@@ -65,13 +70,9 @@ func (s *Sia) addDiskUsage(ctx context.Context, size int64, allowExcess func() (
 	}
 }
 
-// releaseDiskUsage releases size bytes previously reserved by addDiskUsage.
+// releaseDiskUsage releases size bytes previously recorded by addDiskUsage.
 // Passing 0 wakes blocked waiters without releasing any space.
 func (s *Sia) releaseDiskUsage(size int64) {
-	if s.diskUsageLimit == 0 {
-		return
-	}
-
 	s.diskUsageMu.Lock()
 	defer s.diskUsageMu.Unlock()
 	if size > 0 {
@@ -86,6 +87,14 @@ func (s *Sia) releaseDiskUsage(size int64) {
 	}
 	close(s.diskUsageWake)
 	s.diskUsageWake = make(chan struct{})
+}
+
+// bufferUsage returns the bytes currently buffered on disk pending upload to
+// Sia and the configured limit. A zero limit means unlimited.
+func (s *Sia) bufferUsage() (used, limit int64) {
+	s.diskUsageMu.Lock()
+	defer s.diskUsageMu.Unlock()
+	return int64(s.diskUsage), int64(s.diskUsageLimit)
 }
 
 type (
@@ -464,6 +473,10 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	if err := s.addDiskUsage(ctx, opts.ContentLength, nil); err != nil {
 		return nil, err
 	}
+
+	r, ingressDone := s.transfer.trackIngress(r)
+	defer ingressDone()
+
 	var objPath string
 	defer func() {
 		if err != nil {

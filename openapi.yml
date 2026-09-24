@@ -23,7 +23,7 @@ paths:
         - metrics
       summary: Get upload metrics in Prometheus exposition format
       description: >
-        Returns metrics about the background upload pipeline in the Prometheus text-based exposition format. The exposed series are s3d_upload_pending_objects, s3d_upload_pending_size_bytes, s3d_upload_uploaded_objects, s3d_upload_uploaded_size_bytes, s3d_upload_failed_uploads, s3d_upload_orphaned_objects, and s3d_upload_multipart_uploads.
+        Returns metrics about the background upload pipeline in the Prometheus text exposition format. Pipeline and local buffer state is exposed under the s3d_upload_ prefix, transfer activity under s3d_transfer_. Rates are not exposed as series. Derive them from the byte totals, and read the progress of each upload from /stats/uploads.
 
       operationId: getPrometheus
       responses:
@@ -39,7 +39,7 @@ paths:
         - metrics
       summary: Get upload pipeline stats as JSON
       description: >
-        Returns the same upload pipeline stats as the Prometheus endpoint, but in JSON. Used by `s3d status` for a basic overview without requiring a Prometheus stack.
+        Returns the upload pipeline stats in JSON, including the live transfer rates and the progress of each upload in flight. Used by `s3d status` for a basic overview without requiring a Prometheus stack.
 
       operationId: getUploadStats
       responses:
@@ -113,6 +113,10 @@ components:
           type: integer
           format: int64
           description: Total size of uploaded objects in bytes.
+        unpinnedObjects:
+          type: integer
+          format: int64
+          description: Objects uploaded to Sia but not yet pinned in the indexer.
         failedUploads:
           type: integer
           format: int64
@@ -125,6 +129,70 @@ components:
           type: integer
           format: int64
           description: In-progress multipart uploads.
+        transfer:
+          $ref: "#/components/schemas/TransferStats"
+    TransferStats:
+      type: object
+      description: Live transfer activity. Byte totals cover the current process and rates cover the last few seconds.
+      properties:
+        ingressActive:
+          type: integer
+          format: int64
+          description: Request bodies currently being read from S3 clients.
+        ingressBytes:
+          type: integer
+          format: int64
+          description: Object bytes read from S3 request bodies since the process started.
+        ingressRate:
+          type: integer
+          format: int64
+          description: Object bytes per second read from S3 request bodies.
+        uploadActive:
+          type: integer
+          format: int64
+          description: Upload groups currently streaming to Sia.
+        uploadBytes:
+          type: integer
+          format: int64
+          description: Bytes handed to the Sia uploader since the process started. A retried upload is counted again.
+        uploadRate:
+          type: integer
+          format: int64
+          description: Bytes per second handed to the Sia uploader.
+        bufferUsed:
+          type: integer
+          format: int64
+          description: Bytes buffered on disk pending upload to Sia.
+        bufferLimit:
+          type: integer
+          format: int64
+          description: Configured disk buffer limit in bytes. Zero means unlimited.
+        activeUploads:
+          type: array
+          description: Upload groups currently streaming to Sia, in the order they started. Omitted when none are in flight.
+          items:
+            $ref: "#/components/schemas/ActiveUpload"
+    ActiveUpload:
+      type: object
+      description: An upload group being streamed from the local buffer to Sia.
+      properties:
+        label:
+          type: string
+          description: The object key when the group holds a single object, otherwise the number of objects it holds.
+        objects:
+          type: integer
+          description: Objects packed into the group.
+        size:
+          type: integer
+          format: int64
+          description: Total size of the group in bytes.
+        sent:
+          type: integer
+          format: int64
+          description: Bytes of the group handed to the Sia uploader. Some may still be buffered in memory rather than stored on hosts.
+        finalizing:
+          type: boolean
+          description: Whether every object has been handed over and the group is being finalized on the Sia network.
     BackupSQLite3Request:
       type: object
       description: Request body for creating a SQLite3 database backup.

@@ -152,6 +152,8 @@ type Sia struct {
 
 	failedUploads atomic.Int64
 
+	transfer transferStats
+
 	tg     *threadgroup.ThreadGroup
 	logger *zap.Logger
 }
@@ -314,6 +316,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		launchBgLoop(sia.uploadLoop),
 		launchBgLoop(sia.lifecycleLoop),
 		launchBgLoop(sia.pinLoop),
+		launchBgLoop(sia.statsLoop),
 	); err != nil {
 		return nil, err
 	}
