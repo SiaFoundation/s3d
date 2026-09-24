@@ -155,7 +155,7 @@ func (t *S3Tester) BucketLocation(ctx context.Context, bucket string) (string, e
 
 // copySource builds the x-amz-copy-source value, optionally pinned to a version.
 func copySource(bucket, object string, versionID *string) *string {
-	source := fmt.Sprintf("%s/%s", bucket, url.QueryEscape(object))
+	source := fmt.Sprintf("%s/%s", bucket, url.PathEscape(object))
 	if versionID != nil {
 		source += "?versionId=" + url.QueryEscape(*versionID)
 	}
