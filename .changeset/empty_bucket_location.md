@@ -2,8 +2,6 @@
 default: patch
 ---
 
-# Report an empty bucket location instead of "null"
+Report an empty bucket location instead of "null"
 
-GetBucketLocation answered with the literal string `null`, which some clients
-take at face value and then use as the signing region. An empty
-LocationConstraint is how S3 reports us-east-1.
+GetBucketLocation returned the literal string "null" for us-east-1. Amazon S3 represents the absence of a location constraint as an empty LocationConstraint element; SDKs expose this as null. Some clients were treating the literal "null" as the region name and using it for request signing.
