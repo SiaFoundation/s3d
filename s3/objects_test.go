@@ -311,7 +311,7 @@ func TestGetAndHeadObjectPart(t *testing.T) {
 		} else if obj.Size != int64(len(data)) {
 			t.Fatalf("size mismatch: expected %d, got %d", len(data), obj.Size)
 		} else if obj.PartsCount == nil || *obj.PartsCount != 3 {
-			t.Fatalf("parts count mismatch: expected %d, got %d", 3, obj.PartsCount)
+			t.Fatalf("parts count mismatch: expected %d, got %d", 3, aws.ToInt32(obj.PartsCount))
 		}
 
 		if !head {

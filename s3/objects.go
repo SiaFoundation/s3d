@@ -916,11 +916,6 @@ func parseSource(source string) (bucket, object string, version VersionRequest, 
 	return srcBucket, srcObject, version, nil
 }
 
-const (
-	checksumPrefix = "X-Amz-Checksum-"
-	metaPrefix     = "X-Amz-Meta-"
-)
-
 // objectMetadataHeaders are the header names stored with the object rather than
 // with the request that carried it. User defined metadata arrives under
 // metaPrefix instead.
