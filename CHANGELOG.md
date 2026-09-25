@@ -1,3 +1,50 @@
+## 0.2.0 (2026-09-25)
+
+### Breaking Changes
+
+- Replaced POST /system/sqlite3/backup with POST /snapshots
+
+### Features
+
+#### Add log flags
+
+`-log.file.enabled` and `-log.stdout.enableANSI` set the two log options from the
+command line, so a service manager that already captures stdout can turn off the
+log file and the color codes without editing the config file. Neither default
+changed.
+
+#### Make redundancy configurable
+
+`sia.dataShards` and `sia.parityShards` set the erasure coding scheme used for
+uploads, defaulting to the previous 10 of 30. An invalid combination is rejected
+before s3d opens its listeners or database. Objects already stored keep their
+original scheme and remain readable.
+
+#### Validate X-Amz-Checksum-* request headers
+
+`PutObject` now verifies the `CRC32`, `CRC32C`, `CRC64NVME`, `MD5`, `SHA1`,
+`SHA256` and `SHA512` checksum headers rather than storing them unchecked, and
+refuses a mismatch with `BadDigest`. A request naming more than one checksum is
+refused with `InvalidRequest`. Checksums sent as streaming `X-Amz-Trailer`
+values are verified the same way, which they previously were not.
+
+### Fixes
+
+#### Filter request headers from object metadata
+
+Object writes now store only object metadata headers. Request control headers
+such as signing, copy, tagging, ACL and encryption headers are no longer saved
+as metadata or replayed on later reads, and metadata stored by earlier versions
+is filtered when an object is read. A migration prunes it from the database so
+a later `CopyObject` does not carry it forward. `Content-Language` is now stored
+and returned with the object, which it previously was not.
+
+#### Sync the upload directory after staging an object
+
+Staged uploads were written and synced, but the directory holding them was
+not, so an unclean shutdown could leave the database referencing a file that
+no longer had a directory entry.
+
 ## 0.1.4 (2026-09-11)
 
 ### Features
