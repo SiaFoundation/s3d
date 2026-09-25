@@ -284,7 +284,7 @@ func TestMultipartListParts(t *testing.T) {
 	for i, p := range res.Parts {
 		expectedPartNumber := int32(i + 1)
 		if *p.PartNumber != expectedPartNumber {
-			t.Fatalf("part %d: expected part number %d, got %d", i, expectedPartNumber, p.PartNumber)
+			t.Fatalf("part %d: expected part number %d, got %d", i, expectedPartNumber, *p.PartNumber)
 		}
 		if *p.ETag != etags[i] {
 			t.Fatalf("part %d: expected ETag %q, got %q", i, etags[i], *p.ETag)
