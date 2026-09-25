@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/SiaFoundation/s3d/internal/testutil"
-	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	service "github.com/aws/aws-sdk-go-v2/service/s3"
 )
@@ -41,11 +40,11 @@ func TestBuckets(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// bucket location should be "null"
+		// bucket location should be empty, which is how S3 reports us-east-1
 		location, err := s3Tester.BucketLocation(t.Context(), bucket)
 		if err != nil {
 			t.Fatal(err)
-		} else if location != s3.Null {
+		} else if location != "" {
 			t.Fatalf("unexpected location: %q", location)
 		}
 
@@ -72,9 +71,11 @@ func TestBuckets(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// re-creating an owned bucket should fail with BucketAlreadyOwnedByYou
+		// creating an owned bucket again should succeed
 		err = s3Tester.CreateBucket(t.Context(), bucket)
-		testutil.AssertS3Error(t, s3errs.ErrBucketAlreadyOwnedByYou, err)
+		if err != nil {
+			t.Fatal(err)
+		}
 
 		// creating a bucket with invalid name should fail
 		err = s3Tester.CreateBucket(t.Context(), "invalid_bucket")

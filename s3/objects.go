@@ -895,19 +895,22 @@ func ParseETag(s string) [16]byte {
 // object and the source version from a "?versionId=<id>" suffix (the current
 // version when absent).
 func parseSource(source string) (bucket, object string, version VersionRequest, err error) {
-	parts := strings.SplitN(strings.TrimPrefix(source, "/"), "/", 2)
-	if len(parts) != 2 {
-		return "", "", NoVersion(), s3errs.ErrInvalidArgument
-	}
-	srcBucket := parts[0]
-	objAndQuery := strings.SplitN(parts[1], "?", 2)
+	pathAndQuery := strings.SplitN(strings.TrimPrefix(source, "/"), "?", 2)
 
-	srcObject, err := url.QueryUnescape(objAndQuery[0])
+	// the separator may itself be encoded, so decode before splitting the
+	// bucket from the object
+	decoded, err := url.PathUnescape(pathAndQuery[0])
 	if err != nil {
 		return "", "", NoVersion(), s3errs.ErrInvalidArgument
 	}
-	if len(objAndQuery) == 2 {
-		q, err := url.ParseQuery(objAndQuery[1])
+	parts := strings.SplitN(decoded, "/", 2)
+	if len(parts) != 2 {
+		return "", "", NoVersion(), s3errs.ErrInvalidArgument
+	}
+	srcBucket, srcObject := parts[0], parts[1]
+
+	if len(pathAndQuery) == 2 {
+		q, err := url.ParseQuery(pathAndQuery[1])
 		if err != nil {
 			return "", "", NoVersion(), s3errs.ErrInvalidArgument
 		}

@@ -1,6 +1,7 @@
 package s3
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -85,6 +86,12 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *st
 	}
 }
 
+// isDefaultRegion reports whether the handler serves the S3 default region,
+// either explicitly or because no region was configured.
+func (s *s3) isDefaultRegion() bool {
+	return s.region == "" || s.region == DefaultRegion
+}
+
 // bucketLocation handles GET Bucket location requests.
 //
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketLocation.html
@@ -103,11 +110,10 @@ func (s *s3) bucketLocation(w http.ResponseWriter, r *http.Request, accessKeyID 
 		return err
 	}
 
+	// S3 reports us-east-1 as an empty LocationConstraint
 	region := s.region
-	if region == "" {
-		// Per AWS S3 API, "null" is used for the us-east-1 region. So we use it
-		// here as a default as well.
-		region = Null
+	if s.isDefaultRegion() {
+		region = ""
 	}
 
 	return writeXMLResponse(w, http.StatusOK, GetBucketLocation{
@@ -130,7 +136,13 @@ func (s *s3) createBucket(w http.ResponseWriter, r *http.Request, accessKeyID, b
 		return s3errs.ErrNotImplemented // ACLs are not implemented
 	}
 
-	if err := s.backend.CreateBucket(r.Context(), accessKeyID, bucket); err != nil {
+	err := s.backend.CreateBucket(r.Context(), accessKeyID, bucket)
+	if errors.Is(err, s3errs.ErrBucketAlreadyOwnedByYou) && s.isDefaultRegion() {
+		// the default region answers 200 when the owner creates a bucket they
+		// already own, other regions return the error
+		err = nil
+	}
+	if err != nil {
 		return err
 	}
 
