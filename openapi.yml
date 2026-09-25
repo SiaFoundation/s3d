@@ -4,7 +4,7 @@ info:
   description: >
     s3d serves an admin API on a separate HTTP address for monitoring the background upload pipeline. It is always enabled and defaults to 127.0.0.1:8001. Requests are authenticated via HTTP Basic authentication using the configured admin password; the username is ignored.
 
-  version: 0.1.4
+  version: 0.2.0
 servers:
   - url: http://127.0.0.1:8001
 security:

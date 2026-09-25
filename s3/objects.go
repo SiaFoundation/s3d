@@ -218,7 +218,7 @@ func (s *s3) routeObject(w http.ResponseWriter, r *http.Request, accessKeyID *st
 }
 
 func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, accessKeyID, dstBucket, dstObject string, meta map[string]string) error {
-	source := meta["X-Amz-Copy-Source"]
+	source := r.Header.Get("X-Amz-Copy-Source")
 	log := s.logger.With(zap.String("dstBucket", dstBucket),
 		zap.String("dstObject", dstObject),
 		zap.String("source", source),
@@ -764,7 +764,7 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID strin
 		return err
 	}
 
-	if _, ok := meta["X-Amz-Copy-Source"]; ok {
+	if _, ok := r.Header["X-Amz-Copy-Source"]; ok {
 		return s.copyObject(w, r, accessKeyID, bucket, object, meta)
 	}
 
@@ -919,17 +919,46 @@ func parseSource(source string) (bucket, object string, version VersionRequest, 
 	return srcBucket, srcObject, version, nil
 }
 
+// objectMetadataHeaders are the header names stored with the object rather than
+// with the request that carried it. User defined metadata arrives under
+// metaPrefix instead.
+var objectMetadataHeaders = map[string]struct{}{
+	"Cache-Control":            {},
+	"Content-Disposition":      {},
+	"Content-Encoding":         {},
+	"Content-Language":         {},
+	"Content-Type":             {},
+	"Expires":                  {},
+	"X-Amz-Checksum-Crc32":     {},
+	"X-Amz-Checksum-Crc32c":    {},
+	"X-Amz-Checksum-Crc64nvme": {},
+	"X-Amz-Checksum-Md5":       {},
+	"X-Amz-Checksum-Sha1":      {},
+	"X-Amz-Checksum-Sha256":    {},
+	"X-Amz-Checksum-Sha512":    {},
+
+	// X-Amz-Website-Redirect-Location is an object header, but s3d does not
+	// implement static website hosting, so storing it would report a redirect
+	// that never happens.
+	// "X-Amz-Website-Redirect-Location": {},
+}
+
+// isObjectMetadataHeader reports whether the canonically formatted header name
+// belongs with the object rather than with the request that carried it.
+func isObjectMetadataHeader(name string) bool {
+	if strings.HasPrefix(name, metaPrefix) {
+		return true
+	}
+	_, ok := objectMetadataHeaders[name]
+	return ok
+}
+
 // metadataHeaders extracts S3 metadata headers from the given HTTP headers.
 func metadataHeaders(headers map[string][]string, sizeLimit int) (map[string]string, error) {
 	meta := make(map[string]string)
 	for hk, hv := range headers {
 		hk = textproto.CanonicalMIMEHeaderKey(hk)
-		if strings.HasPrefix(hk, "X-Amz-") ||
-			hk == "Content-Type" ||
-			hk == "Content-Disposition" ||
-			hk == "Content-Encoding" ||
-			hk == "Cache-Control" ||
-			hk == "Expires" {
+		if isObjectMetadataHeader(hk) {
 			meta[hk] = hv[0]
 		}
 	}
@@ -1344,6 +1373,13 @@ func (s *s3) setLifecycleExpirationHeader(ctx context.Context, w http.ResponseWr
 // a HEAD and a GET request for a /bucket/object URL.
 func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Request) error {
 	for mk, mv := range obj.Metadata {
+		// stored keys are not guaranteed to be canonically formatted
+		mk = textproto.CanonicalMIMEHeaderKey(mk)
+
+		if !isObjectMetadataHeader(mk) {
+			continue
+		}
+
 		// ranged responses should not include checksum headers, this prevents
 		// clients from checking the checksum of a partial object against the
 		// full object checksum

@@ -432,4 +432,25 @@ DROP TABLE sia_slab_slices_backup;
 CREATE INDEX sia_slab_slices_slab_id_idx ON sia_slab_slices(slab_id);`)
 		return err
 	},
+	// drop stored metadata that is not an object metadata header, so headers
+	// kept by an earlier version are not carried forward by CopyObject.
+	func(tx *txn, _ *zap.Logger) error {
+		_, err := tx.Exec(`
+UPDATE objects SET metadata = (
+    SELECT COALESCE(json_group_object(key, value), '{}') FROM json_each(objects.metadata)
+    WHERE lower(key) LIKE 'x-amz-meta-%' OR lower(key) IN (
+        'cache-control', 'content-disposition', 'content-encoding', 'content-language',
+        'content-type', 'expires', 'x-amz-checksum-crc32', 'x-amz-checksum-crc32c',
+        'x-amz-checksum-crc64nvme', 'x-amz-checksum-md5', 'x-amz-checksum-sha1',
+        'x-amz-checksum-sha256', 'x-amz-checksum-sha512'));
+
+UPDATE multipart_uploads SET metadata = (
+    SELECT COALESCE(json_group_object(key, value), '{}') FROM json_each(multipart_uploads.metadata)
+    WHERE lower(key) LIKE 'x-amz-meta-%' OR lower(key) IN (
+        'cache-control', 'content-disposition', 'content-encoding', 'content-language',
+        'content-type', 'expires', 'x-amz-checksum-crc32', 'x-amz-checksum-crc32c',
+        'x-amz-checksum-crc64nvme', 'x-amz-checksum-md5', 'x-amz-checksum-sha1',
+        'x-amz-checksum-sha256', 'x-amz-checksum-sha512'));`)
+		return err
+	},
 }
