@@ -48,8 +48,8 @@ its pin is confirmed, so one just created may not appear yet.
 
 With --remote, enumerate the snapshots stored on the Sia network instead. This
 needs nothing but the app key, which makes it the way to find a snapshot when
-the database is lost. It reads and decrypts every object in the account, so it
-takes longer the more you have stored.`
+the database is lost. It pages through every object event in the account, so it
+takes longer the more you have stored, and prints nothing until it finishes.`
 
 	snapshotsDeleteUsage = `Usage: s3d snapshots delete <sia object id>
 
@@ -69,7 +69,7 @@ Restore the database from a snapshot stored on Sia.
 
 Given a Sia object ID, the snapshot is fetched directly in a single request.
 Given "latest", the account is enumerated to find the newest snapshot, which
-reads and decrypts every object and so takes longer the more you have stored.
+pages through every object event and so takes longer the more you have stored.
 The object ID is printed when a snapshot is created and by 'snapshots list', so
 keeping it somewhere safe makes recovery much faster.
 

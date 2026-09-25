@@ -215,9 +215,11 @@ pin is confirmed. With `--remote` it enumerates the account on the Sia network
 instead, which needs nothing but the app key and is the way to find a snapshot
 after losing the database.
 
-Enumeration reads and decrypts every object in the account and prints nothing
-until it finishes, so it takes a while on a large account. It has not hung, so
-give it time.
+Enumeration pages through every object event in the account, 500 per request,
+each waiting on the one before it. The cost is those round trips, so it grows
+with everything ever stored rather than with the number of snapshots. An account
+of 850,000 events takes around 25 minutes. Nothing is printed until it finishes,
+so give it time.
 
 ```sh
 s3d snapshots list --remote
