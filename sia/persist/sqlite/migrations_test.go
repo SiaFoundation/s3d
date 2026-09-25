@@ -112,7 +112,8 @@ INSERT INTO global_settings (id, db_version) VALUES (0, 1); -- should not be cha
 -- seed data to verify migrations preserve existing rows
 INSERT INTO users (id, name) VALUES (1, 'user');
 INSERT INTO buckets (id, created_at, name, user_id) VALUES (1, 0, 'bucket', 1);
-INSERT INTO objects (bucket_id, name, content_md5, metadata, size, updated_at, filename) VALUES (1, 'obj', x'00', '{}', 10, 0, 'obj.dat');
+INSERT INTO objects (bucket_id, name, content_md5, metadata, size, updated_at, filename) VALUES (1, 'obj', x'00', '{"Content-Type":"text/plain","X-Amz-Meta-Colour":"blue","x-amz-date":"20260908T000000Z","X-Amz-Security-Token":"session","X-Amz-Website-Redirect-Location":"/a"}', 10, 0, 'obj.dat');
+INSERT INTO multipart_uploads (upload_id, bucket_id, name, metadata, created_at) VALUES (x'01', 1, 'upload', '{"Content-Type":"text/plain","X-Amz-Security-Token":"session"}', 0);
 INSERT INTO object_parts (bucket_id, name, part_number, filename, content_md5, content_length, offset) VALUES
     (1, 'obj', 1, 'part1.dat', x'01', 5, 0),
     (1, 'obj', 2, 'part2.dat', x'02', 5, 5);`
@@ -330,6 +331,20 @@ func TestMigrationConsistency(t *testing.T) {
 		t.Fatalf("expected version %d, got %d", expectedVersion, v)
 	}
 
+	// the seeded object keeps only its object metadata headers
+	var meta sqlMetaJSON
+	if err := store.db.QueryRow(`SELECT metadata FROM objects WHERE bucket_id = 1 AND name = 'obj'`).Scan(&meta); err != nil {
+		t.Fatal(err)
+	} else if len(meta) != 2 || meta["Content-Type"] != "text/plain" || meta["X-Amz-Meta-Colour"] != "blue" {
+		t.Fatalf("unexpected metadata %v", meta)
+	}
+	var uploadMeta sqlMetaJSON
+	if err := store.db.QueryRow(`SELECT metadata FROM multipart_uploads WHERE upload_id = x'01'`).Scan(&uploadMeta); err != nil {
+		t.Fatal(err)
+	} else if len(uploadMeta) != 1 || uploadMeta["Content-Type"] != "text/plain" {
+		t.Fatalf("unexpected upload metadata %v", uploadMeta)
+	}
+
 	// ensure the seeded object parts survived the migrations
 	var partCount int
 	if err := store.db.QueryRow(`SELECT COUNT(*) FROM object_parts WHERE bucket_id = 1 AND name = 'obj'`).Scan(&partCount); err != nil {
@@ -345,8 +360,8 @@ func TestMigrationConsistency(t *testing.T) {
 	}
 
 	// the stats table must have been backfilled from the seeded data. The
-	// single seeded object has a filename and no sia_object_id (size 10), so it
-	// is a pending upload; everything else is empty.
+	// single seeded object has a filename and no sia_object_id, size 10, so it
+	// is a pending upload, and the seeded multipart upload is counted too.
 	expectedStats := map[string]int64{
 		"pending_objects":   1,
 		"pending_size":      10,
@@ -354,7 +369,7 @@ func TestMigrationConsistency(t *testing.T) {
 		"uploaded_size":     0,
 		"unpinned_objects":  0,
 		"orphaned_objects":  0,
-		"multipart_uploads": 0,
+		"multipart_uploads": 1,
 	}
 	for stat, want := range expectedStats {
 		var got int64
