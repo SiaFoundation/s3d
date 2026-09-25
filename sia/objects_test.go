@@ -974,7 +974,7 @@ func TestSyncMetadata(t *testing.T) {
 	eventTime := time.Now().Truncate(time.Second)
 	deletedKey := stypes.Hash256{1, 2, 3}
 
-	// record a snapshot whose backup object matches the deleted event
+	// record a snapshot whose Sia object matches the deleted event
 	if snap, _, err := store.CreateSnapshot(); err != nil {
 		t.Fatal(err)
 	} else if err := store.MarkSnapshotPinning(snap.ID, deletedKey); err != nil {
@@ -1038,8 +1038,8 @@ func TestSyncMetadata(t *testing.T) {
 		t.Fatal("cursor should not change on no-op sync")
 	}
 
-	// uploads and pins an object tagged as a snapshot backup to the SDK
-	// without recording it locally
+	// uploads and pins an object tagged as a snapshot to the SDK without
+	// recording it locally
 	uploadSnapshotObject := func(meta objects.SnapshotMetadata) sdk.Object {
 		t.Helper()
 		raw, err := json.Marshal(meta)
@@ -1075,7 +1075,7 @@ func TestSyncMetadata(t *testing.T) {
 	leaked := uploadSnapshotObject(snapMeta)
 
 	// the sync leaves both objects pinned and adopts the leaked one, an object
-	// without a local record may be a backup made by a previous database
+	// without a local record may be a snapshot made by a previous database
 	memSDK.SetEvents([]sdk.ObjectEvent{
 		{Key: recorded.ID(), UpdatedAt: eventTime.Add(2 * time.Second), Object: &recorded},
 		{Key: leaked.ID(), UpdatedAt: eventTime.Add(3 * time.Second), Object: &leaked},
@@ -1090,6 +1090,8 @@ func TestSyncMetadata(t *testing.T) {
 		t.Fatal(err)
 	} else if len(snapshots) != 2 {
 		t.Fatal("unexpected", len(snapshots))
+	} else if snapshots[0].SiaObjectID != recorded.ID() {
+		t.Fatal("mismatch", snapshots[0].SiaObjectID)
 	} else if snapshots[1].SiaObjectID != leaked.ID() {
 		t.Fatal("mismatch", snapshots[1].SiaObjectID)
 	}
@@ -1109,11 +1111,17 @@ func TestSyncMetadata(t *testing.T) {
 	if !memSDK.Pinned(foreign.ID()) {
 		t.Fatal("expected unknown snapshot object to stay pinned")
 	}
+	// both adopted snapshots share the stamp from their metadata, so they sort
+	// behind the locally recorded one and ties list the later adoption first
 	if snapshots, err := store.ListSnapshots(); err != nil {
 		t.Fatal(err)
 	} else if len(snapshots) != 3 {
 		t.Fatal("unexpected", len(snapshots))
-	} else if snapshots[2].SiaObjectID != foreign.ID() {
+	} else if snapshots[0].SiaObjectID != recorded.ID() {
+		t.Fatal("mismatch", snapshots[0].SiaObjectID)
+	} else if snapshots[1].SiaObjectID != foreign.ID() {
+		t.Fatal("mismatch", snapshots[1].SiaObjectID)
+	} else if snapshots[2].SiaObjectID != leaked.ID() {
 		t.Fatal("mismatch", snapshots[2].SiaObjectID)
 	}
 	if cursor, err := store.ObjectsCursor(); err != nil {
@@ -1136,10 +1144,10 @@ func TestSyncMetadata(t *testing.T) {
 		t.Fatal(err)
 	} else if len(snapshots) != 4 {
 		t.Fatal("unexpected", len(snapshots))
-	} else if snapshots[2].ID != pending.ID {
-		t.Fatal("mismatch", snapshots[2].ID)
-	} else if snapshots[2].SiaObjectID != pendingObj.ID() {
-		t.Fatal("mismatch", snapshots[2].SiaObjectID)
+	} else if snapshots[0].ID != pending.ID {
+		t.Fatal("mismatch", snapshots[0].ID)
+	} else if snapshots[0].SiaObjectID != pendingObj.ID() {
+		t.Fatal("mismatch", snapshots[0].SiaObjectID)
 	}
 
 	// a tagged object with metadata s3d can't have written is left pinned

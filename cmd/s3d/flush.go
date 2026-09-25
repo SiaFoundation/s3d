@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 )
 
@@ -23,6 +24,6 @@ func runFlush(ctx context.Context, cmd *flag.FlagSet) {
 	requireAdminConfig()
 
 	fmt.Println("Flushing pending objects to Sia. This may take a while...")
-	checkFatalError("failed to flush objects", postAdmin(ctx, cfg.AdminAddress, cfg.AdminPassword, "/objects/flush"))
+	checkFatalError("failed to flush objects", adminRequest(ctx, http.MethodPost, cfg.AdminAddress, cfg.AdminPassword, "/objects/flush", nil))
 	fmt.Println("Flushed all pending objects.")
 }
