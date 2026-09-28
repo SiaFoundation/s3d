@@ -16,6 +16,7 @@ func TestParseSource(t *testing.T) {
 
 		// some clients encode the whole source, separator included
 		{source: "bucket%2Fkey", bucket: "bucket", object: "key"},
+		{source: "%2Fbucket%2Fkey", bucket: "bucket", object: "key"},
 		{source: "bucket/dir%2Ffile", bucket: "bucket", object: "dir/file"},
 		{source: "bucket%2Fkey?versionId=v1", bucket: "bucket", object: "key", version: SpecificVersion("v1")},
 

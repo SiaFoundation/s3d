@@ -895,7 +895,7 @@ func ParseETag(s string) [16]byte {
 // object and the source version from a "?versionId=<id>" suffix (the current
 // version when absent).
 func parseSource(source string) (bucket, object string, version VersionRequest, err error) {
-	pathAndQuery := strings.SplitN(strings.TrimPrefix(source, "/"), "?", 2)
+	pathAndQuery := strings.SplitN(source, "?", 2)
 
 	// the separator may itself be encoded, so decode before splitting the
 	// bucket from the object
@@ -903,7 +903,7 @@ func parseSource(source string) (bucket, object string, version VersionRequest, 
 	if err != nil {
 		return "", "", NoVersion(), s3errs.ErrInvalidArgument
 	}
-	parts := strings.SplitN(decoded, "/", 2)
+	parts := strings.SplitN(strings.TrimPrefix(decoded, "/"), "/", 2)
 	if len(parts) != 2 {
 		return "", "", NoVersion(), s3errs.ErrInvalidArgument
 	}
