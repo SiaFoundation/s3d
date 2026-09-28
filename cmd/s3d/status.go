@@ -39,6 +39,42 @@ func runStatus(ctx context.Context, cmd *flag.FlagSet) {
 	fmt.Printf("  Failed Uploads:    %d\n", stats.FailedUploads)
 	fmt.Printf("  Orphaned Objects:  %d\n", stats.OrphanedObjects)
 	fmt.Printf("  Multipart Uploads: %d\n", stats.MultipartUploads)
+
+	t := stats.Transfer
+	fmt.Println()
+	fmt.Println("Transfer")
+	fmt.Printf("  S3 Ingress:        %d active, %s/s\n", t.IngressActive, humanBytes(t.IngressRate))
+	fmt.Printf("  Sia Upload:        %d active, %s/s\n", len(t.ActiveUploads), humanBytes(t.UploadRate))
+	fmt.Printf("  Received:          %s\n", humanBytes(t.IngressBytes))
+	fmt.Printf("  Sent to Sia:       %s\n", humanBytes(t.UploadBytes))
+
+	fmt.Println()
+	fmt.Println("Local Buffer")
+	if stats.BufferLimit > 0 {
+		pct := 100 * float64(stats.BufferUsed) / float64(stats.BufferLimit)
+		fmt.Printf("  Used:              %s / %s, %.1f%%\n", humanBytes(stats.BufferUsed), humanBytes(stats.BufferLimit), pct)
+		fmt.Printf("  Headroom:          %s\n", humanBytes(max(stats.BufferLimit-stats.BufferUsed, 0)))
+	} else {
+		fmt.Printf("  Used:              %s, no limit\n", humanBytes(stats.BufferUsed))
+	}
+
+	if len(t.ActiveUploads) == 0 {
+		return
+	}
+	fmt.Println()
+	fmt.Println("Active Sia Uploads")
+	for _, upload := range t.ActiveUploads {
+		state := "uploading"
+		if upload.Finalizing {
+			state = "finalizing"
+		}
+		var pct float64
+		if upload.Size > 0 {
+			pct = 100 * float64(upload.Sent) / float64(upload.Size)
+		}
+		fmt.Printf("  %-10s %5.1f%%  %s / %s  %s\n",
+			state, pct, humanBytes(upload.Sent), humanBytes(upload.Size), upload.Label)
+	}
 }
 
 func fetchUploadStats(ctx context.Context, addr, password string) (s3.UploadStats, error) {

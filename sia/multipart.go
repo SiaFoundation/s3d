@@ -119,6 +119,10 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object string
 	if err := s.addDiskUsage(ctx, opts.ContentLength, allowExcess); err != nil {
 		return nil, err
 	}
+
+	r, ingressDone := s.transfer.trackIngress(r)
+	defer ingressDone()
+
 	var partPath string
 	defer func() {
 		if err != nil {
