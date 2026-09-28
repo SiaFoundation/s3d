@@ -467,26 +467,31 @@ func startLocalhostListener(listenAddr string, log *zap.Logger) (l net.Listener,
 }
 
 // tryLoadConfig tries to load the config file. It will try multiple locations
-// based on GOOS starting with PWD/s3d.yml. If the file does not exist, it will
-// try the next location. If an error occurs while loading the file, it will
-// print the error and exit. If the config is successfully loaded, the path to
-// the config file is returned.
+// based on GOOS starting with PWD/s3d.yml. If the file does not exist or is not
+// readable, it will try the next location. If an error occurs while loading the
+// file, it will print the error and exit. If the config is successfully loaded,
+// the path to the config file is returned.
 func tryLoadConfig() string {
-	for _, fp := range tryConfigPaths() {
+	if fp := os.Getenv(configFileEnvVar); fp != "" {
 		if err := LoadFile(fp, &cfg); err == nil {
 			return fp
 		} else if !errors.Is(err, os.ErrNotExist) {
+			checkFatalError("failed to load config file", err)
+		}
+		return ""
+	}
+
+	for _, fp := range configSearchPaths() {
+		if err := LoadFile(fp, &cfg); err == nil {
+			return fp
+		} else if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, os.ErrPermission) {
 			checkFatalError("failed to load config file", err)
 		}
 	}
 	return ""
 }
 
-func tryConfigPaths() []string {
-	if str := os.Getenv(configFileEnvVar); str != "" {
-		return []string{str}
-	}
-
+func configSearchPaths() []string {
 	paths := []string{
 		"s3d.yml",
 	}
