@@ -1860,7 +1860,7 @@ func TestProcessOrphansGatedOnSync(t *testing.T) {
 	backend, store := testutil.NewBackend(t, testutil.WithSDK(memSDK))
 
 	const bucket = "bucket"
-	if err := store.CreateBucket(testutil.AccessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(testutil.AccessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
 

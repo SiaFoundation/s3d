@@ -3,6 +3,7 @@ package s3
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"go.uber.org/zap"
@@ -20,7 +21,6 @@ var unsupportedBucketSubresources = map[string]struct{}{
 	"logging":             {},
 	"metrics":             {},
 	"notification":        {},
-	"object-lock":         {},
 	"ownershipControls":   {},
 	"publicAccessBlock":   {},
 	"replication":         {},
@@ -50,6 +50,8 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *st
 		return s.routeBucketPolicyStatus(w, r, accessKeyID, bucket)
 	case q.Has("location"):
 		return s.bucketLocation(w, r, accessKeyID, bucket)
+	case q.Has("object-lock"):
+		return s.routeBucketObjectLock(w, r, accessKeyID, bucket)
 	}
 
 	// routes with optional authentication. The backend rejects an anonymous
@@ -121,6 +123,12 @@ func (s *s3) bucketLocation(w http.ResponseWriter, r *http.Request, accessKeyID 
 	})
 }
 
+// CreateBucketOptions are the settings a CreateBucket request may carry.
+type CreateBucketOptions struct {
+	// ObjectLockEnabled turns on object lock and versioning.
+	ObjectLockEnabled bool
+}
+
 // createBucket handles PUT Bucket requests.
 //
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateBucket.html
@@ -135,7 +143,10 @@ func (s *s3) createBucket(w http.ResponseWriter, r *http.Request, accessKeyID, b
 		return s3errs.ErrNotImplemented // ACLs are not implemented
 	}
 
-	if err := s.backend.CreateBucket(r.Context(), accessKeyID, bucket); err != nil {
+	opts := CreateBucketOptions{
+		ObjectLockEnabled: strings.EqualFold(r.Header.Get(HeaderBucketObjectLockEnabled), "true"),
+	}
+	if err := s.backend.CreateBucket(r.Context(), accessKeyID, bucket, opts); err != nil {
 		return err
 	}
 

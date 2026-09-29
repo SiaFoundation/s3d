@@ -18,7 +18,7 @@ import (
 func TestSuspendedDeletePreconditionAgainstCurrentVersion(t *testing.T) {
 	const bucket = "test-bucket"
 	store := initTestDB(t, zaptest.NewLogger(t))
-	if err := store.CreateBucket(testAccessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(testAccessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	} else if err := store.PutBucketVersioning(testAccessKeyID, bucket, s3.VersioningStatusEnabled); err != nil {
 		t.Fatal(err)
@@ -58,7 +58,7 @@ func TestSuspendedDeletePreconditionAgainstCurrentVersion(t *testing.T) {
 func TestBucketForReadRejectsNoAction(t *testing.T) {
 	const bucket = "test-bucket"
 	store := initTestDB(t, zaptest.NewLogger(t))
-	if err := store.CreateBucket(testAccessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(testAccessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := store.PutObject(testAccessKeyID, bucket, "key", objects.PutOptions{ContentMD5: frand.Entropy128()}); err != nil {

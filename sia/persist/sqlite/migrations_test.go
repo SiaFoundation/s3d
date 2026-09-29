@@ -615,3 +615,108 @@ func TestMigrationKeepsCustomIndexerURL(t *testing.T) {
 		t.Fatalf("expected the configured URL %q, got %q", customURL, got)
 	}
 }
+
+func TestMigrationObjectLockPreservesRows(t *testing.T) {
+	log := zaptest.NewLogger(t)
+	fp := filepath.Join(t.TempDir(), "s3d.sqlite3")
+
+	// seed every table the migration touches, at the version just before it runs
+	const objectLockVersion = 14
+	store := initDBVersion(t, fp, objectLockVersion-1, log)
+	seed := []string{
+		`INSERT INTO users (id, name) VALUES (100, 'alice')`,
+		`INSERT INTO buckets (id, created_at, name, user_id, versioning_status) VALUES (100, 100, 'b1', 100, 'Enabled'), (200, 200, 'b2', 100, '')`,
+		`INSERT INTO objects (bucket_id, name, version_id, seq, content_md5, metadata, size, updated_at)
+			VALUES (100, 'k1', 'v1', 1, X'00', '{}', 0, 300), (100, 'k2', '', 2, X'00', '{}', 0, 400), (200, 'k3', '', 1, X'00', '{}', 0, 500)`,
+		`INSERT INTO object_parts (bucket_id, name, version_id, part_number, filename, content_md5, content_length, offset)
+			VALUES (100, 'k1', 'v1', 1, 'f1', X'00', 5, 0)`,
+		`INSERT INTO multipart_uploads (upload_id, bucket_id, name, metadata, created_at) VALUES (X'aa', 100, 'mp1', '{}', 600)`,
+		`INSERT INTO multipart_parts (upload_id, part_number, filename, content_md5, content_length, created_at) VALUES (X'aa', 1, 'f2', X'00', 7, 700)`,
+		`INSERT INTO bucket_lifecycle_configurations (bucket_id, configuration) VALUES (100, '<LifecycleConfiguration/>')`,
+	}
+	for _, stmt := range seed {
+		if _, err := store.db.Exec(stmt); err != nil {
+			t.Fatalf("seeding %q: %v", stmt, err)
+		}
+	}
+
+	tables := []string{"buckets", "objects", "object_parts", "multipart_uploads", "multipart_parts", "bucket_lifecycle_configurations"}
+	count := func(db *sql.DB, table string) int {
+		t.Helper()
+		var n int
+		if err := db.QueryRow(`SELECT count(*) FROM ` + table).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	before := make(map[string]int, len(tables))
+	for _, table := range tables {
+		before[table] = count(store.db, table)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	migrated, err := OpenDatabase(fp, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer migrated.Close()
+	if v := getDBVersion(migrated.db); v != objectLockVersion {
+		t.Fatalf("expected version %d, got %d", objectLockVersion, v)
+	}
+
+	for _, table := range tables {
+		if got := count(migrated.db, table); got != before[table] {
+			t.Errorf("expected %d rows in %s, got %d", before[table], table, got)
+		}
+	}
+
+	// the rebuild must not disturb the values it carries over
+	var name, versioning string
+	var createdAt int64
+	if err := migrated.db.QueryRow(`SELECT name, created_at, versioning_status FROM buckets WHERE id = 100`).Scan(&name, &createdAt, &versioning); err != nil {
+		t.Fatal(err)
+	} else if name != "b1" || createdAt != 100 || versioning != "Enabled" {
+		t.Fatalf("bucket 100 changed: %q %d %q", name, createdAt, versioning)
+	}
+
+	var seq, contentLength int64
+	if err := migrated.db.QueryRow(`SELECT seq FROM objects WHERE bucket_id = 100 AND name = 'k2'`).Scan(&seq); err != nil {
+		t.Fatal(err)
+	} else if seq != 2 {
+		t.Fatalf("expected seq 2, got %d", seq)
+	}
+	if err := migrated.db.QueryRow(`SELECT content_length FROM object_parts WHERE bucket_id = 100`).Scan(&contentLength); err != nil {
+		t.Fatal(err)
+	} else if contentLength != 5 {
+		t.Fatalf("expected content length 5, got %d", contentLength)
+	}
+
+	// existing rows must come out unlocked
+	var mode, legalHold string
+	var retainUntil sql.NullInt64
+	if err := migrated.db.QueryRow(`SELECT object_lock_mode, object_lock_retain_until, object_lock_legal_hold FROM objects WHERE bucket_id = 100 AND name = 'k1'`).Scan(&mode, &retainUntil, &legalHold); err != nil {
+		t.Fatal(err)
+	} else if mode != "" || retainUntil.Valid || legalHold != "" {
+		t.Fatalf("expected no lock, got %q %v %q", mode, retainUntil, legalHold)
+	}
+
+	// every restored row must still resolve through its foreign keys
+	rows, err := migrated.db.Query(`PRAGMA foreign_key_check`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var table, parent string
+		var rowid, fkid sql.NullInt64
+		if err := rows.Scan(&table, &rowid, &parent, &fkid); err != nil {
+			t.Fatal(err)
+		}
+		t.Errorf("foreign key violation in %s referencing %s", table, parent)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+}

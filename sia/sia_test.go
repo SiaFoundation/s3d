@@ -37,7 +37,7 @@ func TestDeleteOrphanedUploads(t *testing.T) {
 	}
 
 	// create bucket
-	if err := store.CreateBucket(testutil.AccessKeyID, "bucket"); err != nil {
+	if err := store.CreateBucket(testutil.AccessKeyID, "bucket", false); err != nil {
 		t.Fatal(err)
 	}
 

@@ -204,6 +204,16 @@ func (t *S3Tester) CreateBucket(ctx context.Context, bucket string) error {
 	return err
 }
 
+// CreateBucketWithObjectLock creates a new S3 bucket with object lock enabled.
+func (t *S3Tester) CreateBucketWithObjectLock(ctx context.Context, bucket string) error {
+	_, err := t.client.CreateBucket(ctx, &service.CreateBucketInput{
+		Bucket:                     aws.String(bucket),
+		CreateBucketConfiguration:  &types.CreateBucketConfiguration{},
+		ObjectLockEnabledForBucket: aws.Bool(true),
+	})
+	return err
+}
+
 // DeleteBucket deletes an S3 bucket.
 func (t *S3Tester) DeleteBucket(ctx context.Context, bucket string) error {
 	_, err := t.client.DeleteBucket(ctx, &service.DeleteBucketInput{
@@ -606,6 +616,28 @@ func (t *S3Tester) DeleteBucketLifecycle(ctx context.Context, bucket string) err
 		Bucket: aws.String(bucket),
 	})
 	return err
+}
+
+// PutObjectLockConfiguration is a convenience wrapper around the AWS SDK's
+// PutObjectLockConfiguration API.
+func (t *S3Tester) PutObjectLockConfiguration(ctx context.Context, bucket string, config *types.ObjectLockConfiguration) error {
+	_, err := t.client.PutObjectLockConfiguration(ctx, &service.PutObjectLockConfigurationInput{
+		Bucket:                  aws.String(bucket),
+		ObjectLockConfiguration: config,
+	})
+	return err
+}
+
+// GetObjectLockConfiguration is a convenience wrapper around the AWS SDK's
+// GetObjectLockConfiguration API.
+func (t *S3Tester) GetObjectLockConfiguration(ctx context.Context, bucket string) (*types.ObjectLockConfiguration, error) {
+	resp, err := t.client.GetObjectLockConfiguration(ctx, &service.GetObjectLockConfigurationInput{
+		Bucket: aws.String(bucket),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.ObjectLockConfiguration, nil
 }
 
 // PutBucketVersioning sets the versioning status of a bucket.
