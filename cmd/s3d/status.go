@@ -72,7 +72,7 @@ func runStatus(ctx context.Context, cmd *flag.FlagSet) {
 		if upload.Size > 0 {
 			pct = 100 * float64(upload.Sent) / float64(upload.Size)
 		}
-		fmt.Printf("  %-10s %5.1f%%  %s / %s  %s\n",
+		fmt.Printf("  %-10s %5.1f%%  %s / %s  %q\n",
 			state, pct, humanBytes(upload.Sent), humanBytes(upload.Size), upload.Label)
 	}
 }
