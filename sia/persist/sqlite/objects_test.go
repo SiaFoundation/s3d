@@ -31,7 +31,7 @@ func TestDiskUsage(t *testing.T) {
 	)
 
 	store := initTestDB(t, zaptest.NewLogger(t))
-	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -127,7 +127,7 @@ func TestAllFilenames(t *testing.T) {
 
 	store := initTestDB(t, zaptest.NewLogger(t))
 
-	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -273,7 +273,7 @@ func TestGetObject(t *testing.T) {
 	// create bucket
 	store := initTestDB(t, zap.NewNop())
 
-	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -395,7 +395,7 @@ func TestGetObjectPartFields(t *testing.T) {
 
 	store := initTestDB(t, zaptest.NewLogger(t))
 
-	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -465,7 +465,7 @@ func TestListObjects(t *testing.T) {
 
 	// prepare a bucket
 	bucket := "foo"
-	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -672,7 +672,7 @@ func TestListObjectsMatch(t *testing.T) {
 
 	// prepare a bucket
 	bucket := "foo"
-	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -775,7 +775,7 @@ func TestListObjectsWalk(t *testing.T) {
 
 	// prepare a bucket
 	bucket := "foo"
-	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -876,7 +876,7 @@ func BenchmarkListObjects(b *testing.B) {
 	size = max(size, 1)
 
 	populateBucket := func(bucket, delimiter string) {
-		if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+		if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 			b.Fatal(err)
 		}
 		err := store.transaction(func(tx *txn) error {
@@ -1049,7 +1049,7 @@ func TestOrphanedObjects(t *testing.T) {
 
 	store := initTestDB(t, zap.NewNop())
 
-	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1146,7 +1146,7 @@ func TestPutObjectOrphan(t *testing.T) {
 
 	store := initTestDB(t, zap.NewNop())
 
-	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1353,7 +1353,7 @@ func TestUpdateSiaObjects(t *testing.T) {
 
 	store := initTestDB(t, zaptest.NewLogger(t))
 
-	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1444,7 +1444,7 @@ func TestMarkObjectUploaded(t *testing.T) {
 
 	store := initTestDB(t, zaptest.NewLogger(t))
 
-	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1520,7 +1520,7 @@ func TestObjectsForUpload(t *testing.T) {
 
 	store := initTestDB(t, zaptest.NewLogger(t))
 
-	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1615,7 +1615,7 @@ func TestUploadStats(t *testing.T) {
 	)
 
 	store := initTestDB(t, zaptest.NewLogger(t))
-	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1780,7 +1780,7 @@ func TestMarkObjectPinned(t *testing.T) {
 	)
 
 	store := initTestDB(t, zaptest.NewLogger(t))
-	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1894,7 +1894,7 @@ func TestObjectsForPinning(t *testing.T) {
 	)
 
 	store := initTestDB(t, zaptest.NewLogger(t))
-	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2018,7 +2018,7 @@ func TestScheduleObjectForReupload(t *testing.T) {
 	)
 
 	store := initTestDB(t, zaptest.NewLogger(t))
-	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2126,7 +2126,7 @@ func TestVersioning(t *testing.T) {
 
 	t.Run("BucketConfiguration", func(t *testing.T) {
 		const bucket = "config"
-		if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+		if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 			t.Fatal(err)
 		}
 
@@ -2155,7 +2155,7 @@ func TestVersioning(t *testing.T) {
 			bucket = "enabled"
 			key    = "key"
 		)
-		if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+		if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 			t.Fatal(err)
 		} else if err := store.PutBucketVersioning(accessKeyID, bucket, s3.VersioningStatusEnabled); err != nil {
 			t.Fatal(err)
@@ -2246,7 +2246,7 @@ func TestVersioning(t *testing.T) {
 			bucket = "suspended"
 			key    = "key"
 		)
-		if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+		if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 			t.Fatal(err)
 		}
 
@@ -2316,7 +2316,7 @@ func TestListObjectVersions(t *testing.T) {
 	)
 
 	store := initTestDB(t, zaptest.NewLogger(t))
-	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	} else if err := store.PutBucketVersioning(accessKeyID, bucket, s3.VersioningStatusEnabled); err != nil {
 		t.Fatal(err)
@@ -2396,7 +2396,7 @@ func TestListObjectVersions(t *testing.T) {
 			bucket = "deleted-marker"
 			key    = "key"
 		)
-		if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+		if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 			t.Fatal(err)
 		} else if err := store.PutBucketVersioning(accessKeyID, bucket, s3.VersioningStatusEnabled); err != nil {
 			t.Fatal(err)
@@ -2445,7 +2445,7 @@ func TestListObjectVersions(t *testing.T) {
 			bucket = "null-marker"
 			key    = "key"
 		)
-		if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+		if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 			t.Fatal(err)
 		} else if err := store.PutBucketVersioning(accessKeyID, bucket, s3.VersioningStatusEnabled); err != nil {
 			t.Fatal(err)
@@ -2539,7 +2539,7 @@ func TestListObjectVersions(t *testing.T) {
 
 	t.Run("DeleteMarkerListed", func(t *testing.T) {
 		const bucket = "delete-marker"
-		if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+		if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 			t.Fatal(err)
 		} else if err := store.PutBucketVersioning(accessKeyID, bucket, s3.VersioningStatusEnabled); err != nil {
 			t.Fatal(err)
@@ -2570,7 +2570,7 @@ func TestListObjectVersions(t *testing.T) {
 
 	t.Run("DelimiterRollsUpCommonPrefixes", func(t *testing.T) {
 		const bucket = "delimiter"
-		if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+		if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 			t.Fatal(err)
 		} else if err := store.PutBucketVersioning(accessKeyID, bucket, s3.VersioningStatusEnabled); err != nil {
 			t.Fatal(err)

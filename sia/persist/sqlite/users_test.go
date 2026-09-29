@@ -172,17 +172,17 @@ func TestBucketOwnership(t *testing.T) {
 	}
 
 	// alice creates a bucket
-	if err := store.CreateBucket("ALICE_KEY", "shared-name"); err != nil {
+	if err := store.CreateBucket("ALICE_KEY", "shared-name", false); err != nil {
 		t.Fatal(err)
 	}
 
 	// alice creating the same bucket again returns BucketAlreadyOwnedByYou
-	if err := store.CreateBucket("ALICE_KEY", "shared-name"); !errors.Is(err, s3errs.ErrBucketAlreadyOwnedByYou) {
+	if err := store.CreateBucket("ALICE_KEY", "shared-name", false); !errors.Is(err, s3errs.ErrBucketAlreadyOwnedByYou) {
 		t.Fatal("expected ErrBucketAlreadyOwnedByYou", err)
 	}
 
 	// bob creating the same bucket returns BucketAlreadyExists
-	if err := store.CreateBucket("BOB_KEY", "shared-name"); !errors.Is(err, s3errs.ErrBucketAlreadyExists) {
+	if err := store.CreateBucket("BOB_KEY", "shared-name", false); !errors.Is(err, s3errs.ErrBucketAlreadyExists) {
 		t.Fatal("expected ErrBucketAlreadyExists", err)
 	}
 

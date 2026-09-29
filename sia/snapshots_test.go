@@ -220,7 +220,7 @@ func TestStuckPinningSnapshot(t *testing.T) {
 		t.Fatal(err)
 	} else if err := store.CreateAccessKey(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey); err != nil {
 		t.Fatal(err)
-	} else if err := store.CreateBucket(testutil.AccessKeyID, bucket); err != nil {
+	} else if err := store.CreateBucket(testutil.AccessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
 

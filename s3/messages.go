@@ -537,3 +537,44 @@ type (
 		MfaDelete string `xml:"MfaDelete,omitempty"`
 	}
 )
+
+// Types related to object lock routes
+type (
+	// ObjectLockConfiguration is the S3 bucket object lock configuration
+	// document used by PutObjectLockConfiguration and
+	// GetObjectLockConfiguration.
+	//
+	// https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObjectLockConfiguration.html
+	ObjectLockConfiguration struct {
+		XMLName xml.Name `xml:"ObjectLockConfiguration"`
+		Xmlns   string   `xml:"xmlns,attr,omitempty"`
+		// ObjectLockEnabled is "Enabled", the only value AWS defines.
+		ObjectLockEnabled string `xml:"ObjectLockEnabled,omitempty"`
+		// Rule holds the default retention and is absent when the bucket has
+		// none.
+		Rule *ObjectLockRule `xml:"Rule,omitempty"`
+	}
+
+	// ObjectLockRule wraps a bucket's default retention.
+	ObjectLockRule struct {
+		DefaultRetention *DefaultRetention `xml:"DefaultRetention,omitempty"`
+	}
+
+	// DefaultRetention is the retention stamped on every new version written
+	// to the bucket unless the request carries its own.
+	DefaultRetention struct {
+		// Mode is "GOVERNANCE" or "COMPLIANCE".
+		Mode string `xml:"Mode,omitempty"`
+		// Exactly one of Days and Years is set.
+		Days  *int `xml:"Days,omitempty"`
+		Years *int `xml:"Years,omitempty"`
+		// DefaultEventHold is not supported and is only parsed to reject it.
+		DefaultEventHold *EventHoldDuration `xml:"DefaultEventHold,omitempty"`
+	}
+
+	// EventHoldDuration is an event hold duration in days or years.
+	EventHoldDuration struct {
+		Days  *int `xml:"Days,omitempty"`
+		Years *int `xml:"Years,omitempty"`
+	}
+)

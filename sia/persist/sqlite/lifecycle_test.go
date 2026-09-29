@@ -20,7 +20,7 @@ func TestBucketLifecycleConfiguration(t *testing.T) {
 	)
 
 	store := initTestDB(t, zap.NewNop())
-	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -81,7 +81,7 @@ func TestAbortMultipartUploads(t *testing.T) {
 	)
 
 	store := initTestDB(t, zap.NewNop())
-	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -134,7 +134,7 @@ func TestExpireObjects(t *testing.T) {
 	)
 
 	store := initTestDB(t, zap.NewNop())
-	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -180,7 +180,7 @@ func TestExpireObjectsVersions(t *testing.T) {
 	)
 
 	store := initTestDB(t, zap.NewNop())
-	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	} else if err := store.PutBucketVersioning(accessKeyID, bucket, s3.VersioningStatusEnabled); err != nil {
 		t.Fatal(err)

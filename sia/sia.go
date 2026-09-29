@@ -220,7 +220,7 @@ type Store interface {
 
 	AllFilenames() ([]string, error)
 	CopyObject(accessKeyID, srcBucket, srcName string, srcVersion s3.VersionRequest, dstBucket, dstName string, opts s3.CopyObjectOptions) (*s3.CopyObjectResult, objects.OrphanedFile, error)
-	CreateBucket(accessKeyID, bucket string) error
+	CreateBucket(accessKeyID, bucket string, objectLock bool) error
 	DeleteBucket(accessKeyID, bucket string) error
 	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (string, bool, objects.OrphanedFile, error)
 	GetObject(accessKeyID *string, bucket, object string, version s3.VersionRequest, partNumber *int32, action s3.PolicyActions) (*objects.Object, error)
@@ -229,6 +229,8 @@ type Store interface {
 	AssertBucketOwner(accessKeyID, bucket string) error
 	GetBucketVersioning(accessKeyID, bucket string) (string, error)
 	PutBucketVersioning(accessKeyID, bucket, status string) error
+	GetBucketObjectLockConfiguration(accessKeyID, bucket string) (s3.ObjectLockConfiguration, error)
+	PutBucketObjectLockConfiguration(accessKeyID, bucket string, config s3.ObjectLockConfiguration) error
 	GetBucketPolicy(accessKeyID, bucket string) (s3.BucketPolicy, error)
 	PutBucketPolicy(accessKeyID, bucket string, policy s3.BucketPolicy) error
 	DeleteBucketPolicy(accessKeyID, bucket string) error
