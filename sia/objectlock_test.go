@@ -471,3 +471,166 @@ func TestObjectLockState(t *testing.T) {
 		}
 	})
 }
+
+func TestObjectRetentionAndLegalHold(t *testing.T) {
+	s3Tester := testutil.NewTester(t)
+	ctx := t.Context()
+
+	day := func(n int) time.Time {
+		return time.Now().AddDate(0, 0, n).UTC().Truncate(time.Millisecond)
+	}
+	governance := func(until time.Time) *types.ObjectLockRetention {
+		return &types.ObjectLockRetention{Mode: types.ObjectLockRetentionModeGovernance, RetainUntilDate: aws.Time(until)}
+	}
+	compliance := func(until time.Time) *types.ObjectLockRetention {
+		return &types.ObjectLockRetention{Mode: types.ObjectLockRetentionModeCompliance, RetainUntilDate: aws.Time(until)}
+	}
+	put := func(tb testing.TB, bucket, object string) {
+		tb.Helper()
+		if _, err := s3Tester.PutObject(ctx, bucket, object, bytes.NewReader([]byte("data")), nil); err != nil {
+			tb.Fatal(err)
+		}
+	}
+
+	bucket := "retained"
+	if err := s3Tester.CreateBucketWithObjectLock(ctx, bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	assertRetained := func(tb testing.TB, object string, version *string, want time.Time) {
+		tb.Helper()
+		got, err := s3Tester.GetObjectRetention(ctx, bucket, object, version)
+		if err != nil {
+			tb.Fatal(err)
+		} else if got.Mode != types.ObjectLockRetentionModeGovernance {
+			tb.Fatalf("expected GOVERNANCE, got %q", got.Mode)
+		} else if !got.RetainUntilDate.Equal(want) {
+			tb.Fatalf("expected %v, got %v", want, got.RetainUntilDate)
+		}
+	}
+
+	t.Run("Governance", func(t *testing.T) {
+		put(t, bucket, "a")
+		_, err := s3Tester.GetObjectRetention(ctx, bucket, "a", nil)
+		testutil.AssertS3Error(t, s3errs.ErrNoSuchObjectLockConfiguration, err)
+
+		until := day(10)
+		if err := s3Tester.PutObjectRetention(ctx, bucket, "a", nil, governance(until), false); err != nil {
+			t.Fatal(err)
+		}
+		assertRetained(t, "a", nil, until)
+
+		// re sending the same date is not a weakening
+		if err := s3Tester.PutObjectRetention(ctx, bucket, "a", nil, governance(until), false); err != nil {
+			t.Fatal(err)
+		}
+
+		longer := day(20)
+		if err := s3Tester.PutObjectRetention(ctx, bucket, "a", nil, governance(longer), false); err != nil {
+			t.Fatal(err)
+		}
+		assertRetained(t, "a", nil, longer)
+
+		shorter := day(2)
+		testutil.AssertS3Error(t, s3errs.ErrAccessDenied, s3Tester.PutObjectRetention(ctx, bucket, "a", nil, governance(shorter), false))
+		if err := s3Tester.PutObjectRetention(ctx, bucket, "a", nil, governance(shorter), true); err != nil {
+			t.Fatal(err)
+		}
+		assertRetained(t, "a", nil, shorter)
+
+		// an empty Retention document is the clear request
+		testutil.AssertS3Error(t, s3errs.ErrAccessDenied, s3Tester.PutObjectRetention(ctx, bucket, "a", nil, &types.ObjectLockRetention{}, false))
+		if err := s3Tester.PutObjectRetention(ctx, bucket, "a", nil, &types.ObjectLockRetention{}, true); err != nil {
+			t.Fatal(err)
+		}
+		_, err = s3Tester.GetObjectRetention(ctx, bucket, "a", nil)
+		testutil.AssertS3Error(t, s3errs.ErrNoSuchObjectLockConfiguration, err)
+	})
+
+	t.Run("ComplianceRefusesEvenWithBypass", func(t *testing.T) {
+		put(t, bucket, "d")
+		if err := s3Tester.PutObjectRetention(ctx, bucket, "d", nil, compliance(day(20)), false); err != nil {
+			t.Fatal(err)
+		}
+
+		err := s3Tester.PutObjectRetention(ctx, bucket, "d", nil, compliance(day(2)), true)
+		testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+
+		err = s3Tester.PutObjectRetention(ctx, bucket, "d", nil, governance(day(30)), true)
+		testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+	})
+
+	t.Run("LegalHoldTogglesFreely", func(t *testing.T) {
+		put(t, bucket, "g")
+
+		// a version that never had one has no legal hold to report
+		_, err := s3Tester.GetObjectLegalHold(ctx, bucket, "g", nil)
+		testutil.AssertS3Error(t, s3errs.ErrNoSuchObjectLockConfiguration, err)
+
+		for _, want := range []types.ObjectLockLegalHoldStatus{types.ObjectLockLegalHoldStatusOn, types.ObjectLockLegalHoldStatusOff} {
+			if err := s3Tester.PutObjectLegalHold(ctx, bucket, "g", nil, want); err != nil {
+				t.Fatal(err)
+			}
+			status, err := s3Tester.GetObjectLegalHold(ctx, bucket, "g", nil)
+			if err != nil {
+				t.Fatal(err)
+			} else if status != want {
+				t.Fatalf("expected %q, got %q", want, status)
+			}
+		}
+	})
+
+	t.Run("RefusedWithoutObjectLock", func(t *testing.T) {
+		plain := "unlocked"
+		if err := s3Tester.CreateBucket(ctx, plain); err != nil {
+			t.Fatal(err)
+		}
+		put(t, plain, "h")
+
+		testutil.AssertS3Error(t, s3errs.ErrInvalidRequest, s3Tester.PutObjectRetention(ctx, plain, "h", nil, governance(day(5)), false))
+		_, err := s3Tester.GetObjectRetention(ctx, plain, "h", nil)
+		testutil.AssertS3Error(t, s3errs.ErrInvalidRequest, err)
+		testutil.AssertS3Error(t, s3errs.ErrInvalidRequest, s3Tester.PutObjectLegalHold(ctx, plain, "h", nil, types.ObjectLockLegalHoldStatusOn))
+		_, err = s3Tester.GetObjectLegalHold(ctx, plain, "h", nil)
+		testutil.AssertS3Error(t, s3errs.ErrInvalidRequest, err)
+	})
+
+	t.Run("DeleteMarkerIsNotLockable", func(t *testing.T) {
+		put(t, bucket, "marked")
+		marked, err := s3Tester.DeleteObjectVersion(ctx, bucket, "marked", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		testutil.AssertS3Error(t, s3errs.ErrNoSuchKey, s3Tester.PutObjectRetention(ctx, bucket, "marked", nil, compliance(day(30)), false))
+		testutil.AssertS3Error(t, s3errs.ErrNoSuchKey, s3Tester.PutObjectLegalHold(ctx, bucket, "marked", nil, types.ObjectLockLegalHoldStatusOn))
+		testutil.AssertS3Error(t, s3errs.ErrMethodNotAllowed, s3Tester.PutObjectRetention(ctx, bucket, "marked", marked.VersionId, compliance(day(30)), false))
+	})
+
+	t.Run("VersionAddressed", func(t *testing.T) {
+		older, err := s3Tester.PutObjectVersion(ctx, bucket, "two", []byte("first"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		current, err := s3Tester.PutObjectVersion(ctx, bucket, "two", []byte("second"))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		until := day(15)
+		if err := s3Tester.PutObjectRetention(ctx, bucket, "two", &older, governance(until), false); err != nil {
+			t.Fatal(err)
+		}
+		assertRetained(t, "two", &older, until)
+
+		// the current version is untouched
+		_, err = s3Tester.GetObjectRetention(ctx, bucket, "two", &current)
+		testutil.AssertS3Error(t, s3errs.ErrNoSuchObjectLockConfiguration, err)
+
+		_, err = s3Tester.GetObjectRetention(ctx, bucket, "two", aws.String("0000000000000000000000000000000000000000000000000000000000000000"))
+		testutil.AssertS3Error(t, s3errs.ErrNoSuchVersion, err)
+
+		_, err = s3Tester.GetObjectRetention(ctx, bucket, "nope", nil)
+		testutil.AssertS3Error(t, s3errs.ErrNoSuchKey, err)
+	})
+}

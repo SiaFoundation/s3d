@@ -577,4 +577,31 @@ type (
 		Days  *int `xml:"Days,omitempty"`
 		Years *int `xml:"Years,omitempty"`
 	}
+
+	// ObjectRetention is the retention on a single object version, used by
+	// PutObjectRetention and GetObjectRetention.
+	//
+	// https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObjectRetention.html
+	ObjectRetention struct {
+		XMLName xml.Name `xml:"Retention"`
+		Xmlns   string   `xml:"xmlns,attr,omitempty"`
+		// Mode and RetainUntilDate are both absent when the request clears
+		// the retention.
+		Mode            string `xml:"Mode,omitempty"`
+		RetainUntilDate string `xml:"RetainUntilDate,omitempty"`
+
+		EventHold         *string            `xml:"EventHold,omitempty"`
+		EventHoldDuration *EventHoldDuration `xml:"EventHoldDuration,omitempty"`
+	}
+
+	// ObjectLegalHold is the legal hold on a single object version, used by
+	// PutObjectLegalHold and GetObjectLegalHold.
+	//
+	// https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObjectLegalHold.html
+	ObjectLegalHold struct {
+		XMLName xml.Name `xml:"LegalHold"`
+		Xmlns   string   `xml:"xmlns,attr,omitempty"`
+		// Status is "ON" or "OFF".
+		Status string `xml:"Status,omitempty"`
+	}
 )

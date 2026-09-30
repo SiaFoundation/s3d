@@ -417,6 +417,71 @@ type Backend interface {
 	//   [ErrObjectLockConfigurationNotFoundError] must be returned.
 	GetBucketObjectLockConfiguration(ctx context.Context, accessKeyID, bucket string) (ObjectLockConfiguration, error)
 
+	// PutObjectRetention replaces the retention on the addressed version. A
+	// zero retention clears it.
+	//
+	// - If the access key does not own the bucket, [ErrAccessDenied] must be
+	//   returned.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	//
+	// - If the bucket does not have object lock enabled, [ErrInvalidRequest]
+	//   must be returned.
+	//
+	// - If the object or version does not exist, [ErrNoSuchKey] or
+	//   [ErrNoSuchVersion] must be returned.
+	//
+	// - If the transition weakens a retention the caller may not weaken,
+	//   [ErrAccessDenied] must be returned.
+	PutObjectRetention(ctx context.Context, accessKeyID, bucket, object string, version VersionRequest, retention ObjectLockState, bypass bool) error
+
+	// GetObjectRetention returns the retention on the addressed version.
+	//
+	// - If the access key does not own the bucket, [ErrAccessDenied] must be
+	//   returned.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	//
+	// - If the bucket does not have object lock enabled, [ErrInvalidRequest]
+	//   must be returned.
+	//
+	// - If the object or version does not exist, [ErrNoSuchKey] or
+	//   [ErrNoSuchVersion] must be returned.
+	//
+	// - If the version carries no retention,
+	//   [ErrNoSuchObjectLockConfiguration] must be returned.
+	GetObjectRetention(ctx context.Context, accessKeyID, bucket, object string, version VersionRequest) (ObjectLockState, error)
+
+	// PutObjectLegalHold turns the legal hold on the addressed version on or
+	// off. A legal hold toggles freely in either retention mode.
+	//
+	// - If the access key does not own the bucket, [ErrAccessDenied] must be
+	//   returned.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	//
+	// - If the bucket does not have object lock enabled, [ErrInvalidRequest]
+	//   must be returned.
+	//
+	// - If the object or version does not exist, [ErrNoSuchKey] or
+	//   [ErrNoSuchVersion] must be returned.
+	PutObjectLegalHold(ctx context.Context, accessKeyID, bucket, object string, version VersionRequest, status string) error
+
+	// GetObjectLegalHold returns the legal hold on the addressed version, or
+	// "" when none was ever applied.
+	//
+	// - If the access key does not own the bucket, [ErrAccessDenied] must be
+	//   returned.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	//
+	// - If the bucket does not have object lock enabled, [ErrInvalidRequest]
+	//   must be returned.
+	//
+	// - If the object or version does not exist, [ErrNoSuchKey] or
+	//   [ErrNoSuchVersion] must be returned.
+	GetObjectLegalHold(ctx context.Context, accessKeyID, bucket, object string, version VersionRequest) (string, error)
+
 	// ListObjectVersions lists all versions (including delete markers) of the
 	// objects in the specified bucket.
 	//
@@ -673,6 +738,10 @@ func (s *s3) routeBase(w http.ResponseWriter, r *http.Request, accessKeyID *stri
 		err = s.routeVersioning(w, r, accessKeyID, bucket)
 	} else if _, ok := query["versions"]; ok {
 		err = s.routeVersions(w, r, accessKeyID, bucket)
+	} else if _, ok := query["retention"]; ok {
+		err = s.routeObjectRetention(w, r, accessKeyID, bucket, object, VersionFromQuery(query["versionId"]))
+	} else if _, ok := query["legal-hold"]; ok {
+		err = s.routeObjectLegalHold(w, r, accessKeyID, bucket, object, VersionFromQuery(query["versionId"]))
 	} else if version := VersionFromQuery(query["versionId"]); version.Specified {
 		err = s.routeVersion(w, r, accessKeyID, bucket, object, version)
 	} else if bucket != "" && object != "" {
