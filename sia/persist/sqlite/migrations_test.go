@@ -108,7 +108,7 @@ CREATE TABLE global_settings (
 );
 
 -- initialize the global settings table
-INSERT INTO global_settings (id, db_version) VALUES (0, 1); -- should not be changed
+INSERT INTO global_settings (id, db_version, app_key) VALUES (0, 1, x'0102'); -- should not be changed
 
 -- seed data to verify migrations preserve existing rows
 INSERT INTO users (id, name) VALUES (1, 'user');
