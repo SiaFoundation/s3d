@@ -340,6 +340,7 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 		VersionID:      obj.VersionID,
 		Versioned:      obj.Versioned,
 		IsDeleteMarker: obj.IsDeleteMarker,
+		ObjectLock:     obj.ObjectLock,
 	}
 	switch {
 	case obj.IsDeleteMarker:
@@ -564,6 +565,7 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 		Length:        size,
 		FileName:      fileName,
 		Preconditions: opts.Preconditions,
+		ObjectLock:    opts.ObjectLock,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to store object metadata: %w", err)

@@ -59,7 +59,7 @@ type objectMutationResult struct {
 // fresh version and retains existing ones; otherwise the null version is
 // replaced. The replaced null version's data is orphaned only after the new row
 // exists, so data shared with it (a dedup or self-copy) is retained.
-func putObject(tx *txn, bid int64, name string, status string, contentMD5 [16]byte, meta map[string]string, length int64, partsCount int32, fileName *string, siaObject *objects.SiaObject) (objectMutationResult, error) {
+func putObject(tx *txn, bid int64, name string, status string, contentMD5 [16]byte, meta map[string]string, length int64, partsCount int32, fileName *string, siaObject *objects.SiaObject, lock objectLock) (objectMutationResult, error) {
 	if meta == nil {
 		meta = make(map[string]string) // force '{}' instead of 'null' in JSON
 	}
@@ -91,11 +91,11 @@ func putObject(tx *txn, bid int64, name string, status string, contentMD5 [16]by
 	}
 
 	if _, err := tx.Exec(`
-		INSERT INTO objects (bucket_id, name, version_id, seq, is_delete_marker, is_latest, sia_object_id, content_md5, metadata, size, parts_count, updated_at, filename)
-		VALUES ($1, $2, $3, $4, FALSE, TRUE, $5, $6, $7, $8, $9, $10, $11)
+		INSERT INTO objects (bucket_id, name, version_id, seq, is_delete_marker, is_latest, sia_object_id, content_md5, metadata, size, parts_count, updated_at, filename, object_lock_mode, object_lock_retain_until, object_lock_legal_hold)
+		VALUES ($1, $2, $3, $4, FALSE, TRUE, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 	`, bid, name, version, seq, id, sqlMD5(contentMD5),
 		sqlMetaJSON(meta), length, partsCount, sqlTime(time.Now()),
-		fileName); err != nil {
+		fileName, lock.Mode, lock.RetainUntil, lock.LegalHold); err != nil {
 		return objectMutationResult{}, fmt.Errorf("failed to insert object: %w", err)
 	}
 
