@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -107,7 +108,7 @@ CREATE TABLE global_settings (
 );
 
 -- initialize the global settings table
-INSERT INTO global_settings (id, db_version) VALUES (0, 1); -- should not be changed
+INSERT INTO global_settings (id, db_version, app_key) VALUES (0, 1, x'0102'); -- should not be changed
 
 -- seed data to verify migrations preserve existing rows
 INSERT INTO users (id, name) VALUES (1, 'user');
@@ -530,4 +531,45 @@ func TestMigrationConsistency(t *testing.T) {
 			}
 		}
 	}
+
+	// ensure each table's definition matches the baseline. table_info covers
+	// columns but not CHECK constraints or foreign keys, which only exist in
+	// the stored CREATE TABLE text.
+	getTableSQL := func(db *sql.DB, table string) (string, error) {
+		var stmt string
+		err := db.QueryRow(`SELECT sql FROM sqlite_schema WHERE type='table' AND name=$1`, table).Scan(&stmt)
+		return normalizeSchemaSQL(stmt), err
+	}
+
+	for k := range baselineTables {
+		if strings.HasPrefix(k, "sqlite_") {
+			continue // internal tables have no stored sql
+		}
+		want, err := getTableSQL(baseline.db, k)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := getTableSQL(store.db, k)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want != got {
+			t.Errorf("table %s differs\n baseline: %s\n migrated: %s", k, want, got)
+		}
+	}
+}
+
+// normalizeSchemaSQL strips comments, collapses whitespace and drops the quotes
+// that ALTER TABLE RENAME leaves around a table name, so a migrated definition
+// can be compared against the one in init.sql.
+func normalizeSchemaSQL(stmt string) string {
+	var b strings.Builder
+	for line := range strings.SplitSeq(stmt, "\n") {
+		if i := strings.Index(line, "--"); i >= 0 {
+			line = line[:i]
+		}
+		b.WriteString(line)
+		b.WriteString(" ")
+	}
+	return strings.Join(strings.Fields(strings.ReplaceAll(b.String(), `"`, "")), " ")
 }
