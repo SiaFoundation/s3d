@@ -473,12 +473,14 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 		return nil, err
 	}
 
+	// track the request before reserving disk space so a request blocked
+	// by the disk usage limit still counts as active
+	r, ingressDone := s.transfer.trackIngress(r)
+	defer ingressDone()
+
 	if err := s.addDiskUsage(ctx, opts.ContentLength, nil); err != nil {
 		return nil, err
 	}
-
-	r, ingressDone := s.transfer.trackIngress(r)
-	defer ingressDone()
 
 	var objPath string
 	defer func() {
