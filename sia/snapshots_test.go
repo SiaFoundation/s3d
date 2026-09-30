@@ -25,9 +25,9 @@ import (
 	"lukechampine.com/frand"
 )
 
-// downloadBackup fetches a snapshot's backup object from the SDK and returns
+// downloadSnapshot fetches a snapshot's Sia object from the SDK and returns
 // the decompressed database image.
-func downloadBackup(t *testing.T, memSDK *testutil.MemorySDK, id types.Hash256) []byte {
+func downloadSnapshot(t *testing.T, memSDK *testutil.MemorySDK, id types.Hash256) []byte {
 	t.Helper()
 	data, ok := memSDK.ObjectData(id)
 	if !ok {
@@ -58,16 +58,14 @@ func downloadMetadata(t *testing.T, memSDK *testutil.MemorySDK, id types.Hash256
 	return meta
 }
 
-// snapshotEvent builds the event the indexer emits for a live snapshot
-// object, carrying the object's metadata.
+// snapshotEvent builds the event the indexer emits for a live snapshot object,
+// carrying the object's slabs and metadata.
 func snapshotEvent(t *testing.T, memSDK *testutil.MemorySDK, id types.Hash256, at time.Time) sdk.ObjectEvent {
 	t.Helper()
-	raw, ok := memSDK.ObjectMetadata(id)
+	obj, ok := memSDK.StoredObject(id)
 	if !ok {
 		t.Fatal("snapshot object not found")
 	}
-	obj := sdk.NewEmptyObject()
-	obj.UpdateMetadata(raw)
 	return sdk.ObjectEvent{Key: id, UpdatedAt: at, Object: &obj}
 }
 
@@ -114,12 +112,12 @@ func TestCreateSnapshot(t *testing.T) {
 		t.Fatal("expected non-zero created at")
 	}
 
-	// the uploaded backup decompresses to a SQLite database
-	if db := downloadBackup(t, memSDK, snap.SiaObjectID); !bytes.HasPrefix(db, []byte("SQLite format 3\x00")) {
-		t.Fatal("unexpected backup header")
+	// the uploaded snapshot decompresses to a SQLite database
+	if db := downloadSnapshot(t, memSDK, snap.SiaObjectID); !bytes.HasPrefix(db, []byte("SQLite format 3\x00")) {
+		t.Fatal("unexpected snapshot header")
 	}
 
-	// no temporary backup files or sidecars are left behind
+	// no temporary snapshot files or sidecars are left behind
 	entries, err := os.ReadDir(filepath.Join(backend.Dir, sia.TmpDirectory))
 	if err != nil {
 		t.Fatal(err)
@@ -129,6 +127,28 @@ func TestCreateSnapshot(t *testing.T) {
 			t.Fatal("leftover temp file", e.Name())
 		}
 	}
+
+	// the backend lists the snapshot it recorded and reports the sync state
+	backend.SyncMetadata(t.Context())
+	if listed, err := backend.ListSnapshots(t.Context()); err != nil {
+		t.Fatal(err)
+	} else if len(listed.Snapshots) != 1 {
+		t.Fatal("unexpected", len(listed.Snapshots))
+	} else if listed.Snapshots[0].SiaObjectID != snap.SiaObjectID {
+		t.Fatal("mismatch", listed.Snapshots[0].SiaObjectID)
+	} else if !listed.Synced {
+		t.Fatal("expected synced")
+	}
+
+	// a failing sync clears the synced flag
+	memSDK.SetEventsError(errors.New("events failed"))
+	backend.SyncMetadata(t.Context())
+	if listed, err := backend.ListSnapshots(t.Context()); err != nil {
+		t.Fatal(err)
+	} else if listed.Synced {
+		t.Fatal("expected not synced")
+	}
+	memSDK.SetEventsError(nil)
 
 	// a pin failure rolls the snapshot back, the staged object is never stored
 	memSDK.SetPinError(errors.New("pin failed"))
@@ -174,6 +194,139 @@ func TestCreateSnapshot(t *testing.T) {
 		t.Fatal(err)
 	} else if len(snapshots) != 0 {
 		t.Fatal("unexpected", len(snapshots))
+	}
+
+	// deleting a snapshot that is already gone reports not found
+	if err := backend.DeleteSnapshot(t.Context(), snap.SiaObjectID); !errors.Is(err, s3.ErrSnapshotNotFound) {
+		t.Fatal("unexpected", err)
+	}
+
+	// an id that belongs to an ordinary object is not a snapshot, so it is
+	// reported not found and its data is left pinned
+	other, err := memSDK.AddObject(t.Context(), strings.NewReader("not a snapshot"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.DeleteSnapshot(t.Context(), other.ID()); !errors.Is(err, s3.ErrSnapshotNotFound) {
+		t.Fatal("unexpected", err)
+	} else if !memSDK.Pinned(other.ID()) {
+		t.Fatal("unexpected", other.ID())
+	}
+
+	// an object the network has already dropped still clears its record, so a
+	// delete is never blocked by an object that is gone
+	memSDK.SetPinError(nil)
+	gone, err := backend.CreateSnapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := memSDK.DeleteObject(t.Context(), gone.SiaObjectID); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.DeleteSnapshot(t.Context(), gone.SiaObjectID); err != nil {
+		t.Fatal(err)
+	}
+	if snapshots, err := store.ListSnapshots(); err != nil {
+		t.Fatal(err)
+	} else if len(snapshots) != 0 {
+		t.Fatal("unexpected", len(snapshots))
+	}
+
+	// any other unpin failure keeps the record so the delete can be retried
+	kept, err := backend.CreateSnapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	memSDK.SetDeleteError(errors.New("unpin failed"))
+	if err := backend.DeleteSnapshot(t.Context(), kept.SiaObjectID); err == nil {
+		t.Fatal("expected error")
+	}
+	memSDK.SetDeleteError(nil)
+	if snapshots, err := store.ListSnapshots(); err != nil {
+		t.Fatal(err)
+	} else if len(snapshots) != 1 {
+		t.Fatal("unexpected", len(snapshots))
+	} else if snapshots[0].SiaObjectID != kept.SiaObjectID {
+		t.Fatal("mismatch", snapshots[0].SiaObjectID)
+	}
+}
+
+// TestCreateSnapshotFlushesPendingObjects verifies that a snapshot flushes the
+// objects still buffered on disk and counts them.
+func TestCreateSnapshotFlushesPendingObjects(t *testing.T) {
+	backend, store := testutil.NewBackend(t)
+	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
+
+	const bucket = "snapshot-bucket"
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	} else if _, err := s3Tester.PutObject(t.Context(), bucket, "pending", bytes.NewReader(frand.Bytes(100)), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// the upload loop is disabled, so the object is still buffered on disk
+	if stats, err := store.UploadStats(); err != nil {
+		t.Fatal(err)
+	} else if stats.PendingObjects != 1 {
+		t.Fatal("unexpected", stats.PendingObjects)
+	}
+
+	snap, err := backend.CreateSnapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// the flush drained the pending object and the snapshot captured it
+	if stats, err := store.UploadStats(); err != nil {
+		t.Fatal(err)
+	} else if stats.PendingObjects != 0 {
+		t.Fatal("unexpected", stats.PendingObjects)
+	}
+	if snap.ObjectCount != 1 {
+		t.Fatal("unexpected", snap.ObjectCount)
+	}
+}
+
+// TestCreateSnapshotPendingUploadMissing verifies that a pending object whose
+// local file is gone does not block a snapshot.
+func TestCreateSnapshotPendingUploadMissing(t *testing.T) {
+	backend, store := testutil.NewBackend(t)
+	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
+
+	const bucket = "snapshot-bucket"
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	} else if _, err := s3Tester.PutObject(t.Context(), bucket, "pending", bytes.NewReader(frand.Bytes(100)), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// the upload loop is disabled, so the object is still buffered on disk
+	if stats, err := store.UploadStats(); err != nil {
+		t.Fatal(err)
+	} else if stats.PendingObjects != 1 {
+		t.Fatal("unexpected", stats.PendingObjects)
+	}
+
+	uploadDir := filepath.Join(backend.Dir, sia.UploadsDirectory)
+	entries, err := os.ReadDir(uploadDir)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(entries) != 1 {
+		t.Fatal("unexpected", len(entries))
+	} else if err := os.Remove(filepath.Join(uploadDir, entries[0].Name())); err != nil {
+		t.Fatal(err)
+	}
+
+	snap, err := backend.CreateSnapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshots, err := store.ListSnapshots(); err != nil {
+		t.Fatal(err)
+	} else if len(snapshots) != 1 {
+		t.Fatal("unexpected", len(snapshots))
+	} else if snapshots[0].SiaObjectID != snap.SiaObjectID {
+		t.Fatal("mismatch", snapshots[0].SiaObjectID)
 	}
 }
 
@@ -234,7 +387,7 @@ func TestStuckPinningSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// an object deleted after that snapshot started, so its backup may
+	// an object deleted after that snapshot started, so the snapshot may
 	// reference it
 	objID := stageUpload(t, memSDK, store, bucket, "a", time.Now().Add(time.Hour))
 	if err := backend.PinObjects(t.Context()); err != nil {
@@ -250,11 +403,11 @@ func TestStuckPinningSnapshot(t *testing.T) {
 	if orphans, err := store.OrphanedObjects(100); err != nil {
 		t.Fatal(err)
 	} else if len(orphans) != 0 {
-		t.Fatal("an object the unconfirmed backup may reference was released", orphans)
+		t.Fatal("an object the unconfirmed snapshot may reference was released", orphans)
 	}
 	backend.ProcessOrphans(t.Context())
 	if !memSDK.Pinned(objID) {
-		t.Fatal("an object the unconfirmed backup may reference was unpinned")
+		t.Fatal("an object the unconfirmed snapshot may reference was unpinned")
 	}
 
 	// the deletion pass does not touch the record before the confirm delay
@@ -282,7 +435,7 @@ func assertDeleting(t *testing.T, store *sqlite.Store, want int) {
 	}
 }
 
-// pinSnapshotObject uploads and pins a backup object carrying the metadata
+// pinSnapshotObject uploads and pins a snapshot object carrying the metadata
 // CreateSnapshot writes for snap, the network state a pin that landed leaves.
 func pinSnapshotObject(t *testing.T, memSDK *testutil.MemorySDK, store *sqlite.Store, snap s3.Snapshot, gen int64) types.Hash256 {
 	t.Helper()
@@ -447,14 +600,14 @@ func TestSnapshotRecovery(t *testing.T) {
 	backendA.SyncMetadata(t.Context())
 
 	// delete the first snapshot and unpin its object, its record now only
-	// lives on inside the second snapshot's backup
+	// lives on inside the second snapshot
 	if _, err := storeA.DeleteSnapshotsBySiaObject(snap1.SiaObjectID); err != nil {
 		t.Fatal(err)
 	} else if err := memSDK.DeleteObject(t.Context(), snap1.SiaObjectID); err != nil {
 		t.Fatal(err)
 	}
 
-	// a third snapshot only exists on the network, not in the second backup
+	// a third snapshot only exists on the network, not in the second snapshot
 	snap3, err := backendA.CreateSnapshot(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -463,9 +616,9 @@ func TestSnapshotRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// restore the second snapshot's backup into a fresh directory
+	// restore the second snapshot into a fresh directory
 	dirB := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dirB, "s3d.sqlite"), downloadBackup(t, memSDK, snap2.SiaObjectID), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(dirB, "s3d.sqlite"), downloadSnapshot(t, memSDK, snap2.SiaObjectID), 0600); err != nil {
 		t.Fatal(err)
 	}
 	memSDK.SetEvents(nil)
@@ -484,8 +637,8 @@ func TestSnapshotRecovery(t *testing.T) {
 	}
 	memSDK.SetEvents(events)
 	backendB.SyncMetadata(t.Context())
-	if snapshots := assertSnapshots(storeB, snap2.SiaObjectID, snap3.SiaObjectID); snapshots[0].CreatedAt.Unix() != snap2.CreatedAt.Unix() {
-		t.Fatal("mismatch", snapshots[0].CreatedAt)
+	if snapshots := assertSnapshots(storeB, snap3.SiaObjectID, snap2.SiaObjectID); snapshots[1].CreatedAt.Unix() != snap2.CreatedAt.Unix() {
+		t.Fatal("mismatch", snapshots[1].CreatedAt)
 	}
 
 	// the generation counter continues past the adopted snapshots and their
@@ -508,7 +661,7 @@ func TestSnapshotRecovery(t *testing.T) {
 	storeC, backendC := openBackend(t, memSDK, log, t.TempDir())
 	memSDK.SetEvents(append(events, snapshotEvent(t, memSDK, snapB.SiaObjectID, eventTime.Add(5*time.Second))))
 	backendC.SyncMetadata(t.Context())
-	assertSnapshots(storeC, snap2.SiaObjectID, snap3.SiaObjectID, snapB.SiaObjectID)
+	assertSnapshots(storeC, snapB.SiaObjectID, snap3.SiaObjectID, snap2.SiaObjectID)
 	if err := backendC.Close(); err != nil {
 		t.Fatal(err)
 	}
