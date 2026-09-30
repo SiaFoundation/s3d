@@ -17,7 +17,6 @@ import (
 	"github.com/SiaFoundation/s3d/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
-	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -26,16 +25,16 @@ import (
 	"go.uber.org/zap/zaptest"
 )
 
-func newAdminServer(t *testing.T) (string, *http.Client, *sqlite.Store) {
+func newAdminServer(t *testing.T) (string, *http.Client) {
 	t.Helper()
-	backend, store := testutil.NewBackend(t)
+	backend, _ := testutil.NewBackend(t)
 	server := httptest.NewServer(s3.NewAdmin(backend))
 	t.Cleanup(server.Close)
-	return server.URL, server.Client(), store
+	return server.URL, server.Client()
 }
 
 func TestPrometheus(t *testing.T) {
-	baseURL, httpClient, _ := newAdminServer(t)
+	baseURL, httpClient := newAdminServer(t)
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, baseURL+"/prometheus", nil)
 	if err != nil {
@@ -62,7 +61,7 @@ func TestPrometheus(t *testing.T) {
 }
 
 func TestUploadStats(t *testing.T) {
-	baseURL, httpClient, _ := newAdminServer(t)
+	baseURL, httpClient := newAdminServer(t)
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, baseURL+"/stats/uploads", nil)
 	if err != nil {
@@ -89,7 +88,10 @@ func TestUploadStats(t *testing.T) {
 }
 
 func TestCreateSnapshot(t *testing.T) {
-	baseURL, httpClient, store := newAdminServer(t)
+	backend, store := testutil.NewBackend(t)
+	server := httptest.NewServer(s3.NewAdmin(backend))
+	t.Cleanup(server.Close)
+	baseURL, httpClient := server.URL, server.Client()
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, baseURL+"/snapshots", nil)
 	if err != nil {
@@ -113,19 +115,72 @@ func TestCreateSnapshot(t *testing.T) {
 		t.Fatal("expected snapshot to have a sia object id")
 	}
 
+	listSnapshots := func() []s3.Snapshot {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, baseURL+"/snapshots", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		}
+		var list s3.SnapshotList
+		if err := json.UnmarshalRead(resp.Body, &list); err != nil {
+			t.Fatal(err)
+		}
+		return list.Snapshots
+	}
+
 	// the object is recorded before the pin and the record is completed once
-	// the indexer confirms the object, so the snapshot is listed
+	// the indexer confirms the object
 	if known, err := store.HasSnapshotObject(snapshot.SiaObjectID); err != nil {
 		t.Fatal(err)
 	} else if !known {
 		t.Fatal("expected known object")
 	}
-	if snapshots, err := store.ListSnapshots(); err != nil {
-		t.Fatal(err)
-	} else if len(snapshots) != 1 {
-		t.Fatal("unexpected", len(snapshots))
+	// the snapshot is listed
+	snapshots := listSnapshots()
+	if len(snapshots) != 1 {
+		t.Fatalf("expected 1 snapshot, got %d", len(snapshots))
 	} else if snapshots[0].SiaObjectID != snapshot.SiaObjectID {
 		t.Fatal("mismatch", snapshots[0].SiaObjectID)
+	}
+
+	// snapshots are addressed by their Sia object ID, the only identifier that
+	// survives losing the database
+	deleteSnapshot := func(id string) int {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodDelete, baseURL+"/snapshots/"+id, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if status := deleteSnapshot(snapshots[0].SiaObjectID.String()); status != http.StatusOK {
+		t.Fatalf("expected 200, got %d", status)
+	}
+
+	if listed := listSnapshots(); len(listed) != 0 {
+		t.Fatalf("expected 0 snapshots after delete, got %d", len(listed))
+	}
+
+	// deleting it again reports not found, and a malformed id is rejected
+	// before it reaches the backend
+	if status := deleteSnapshot(snapshots[0].SiaObjectID.String()); status != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", status)
+	}
+	if status := deleteSnapshot("not-a-sia-object-id"); status != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", status)
 	}
 }
 

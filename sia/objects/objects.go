@@ -15,8 +15,8 @@ const (
 	// so recovery can identify snapshots among all account objects.
 	SnapshotType = "s3d-snapshot"
 
-	// SnapshotEncodingGzip is the encoding recorded for snapshots whose backup
-	// is gzip compressed before upload.
+	// SnapshotEncodingGzip is the encoding recorded for snapshots that are
+	// gzip compressed before upload.
 	SnapshotEncodingGzip = "gzip"
 
 	// maxSnapshotGeneration caps the generation accepted from snapshot
@@ -35,10 +35,6 @@ var (
 	// ErrObjectNotFound is returned by MarkObjectUploaded when the pending
 	// object does not exist.
 	ErrObjectNotFound = errors.New("object not found")
-
-	// ErrSnapshotNotFound is returned by snapshot operations when no snapshot
-	// matches the addressed id and expected state.
-	ErrSnapshotNotFound = errors.New("snapshot not found")
 )
 
 // Object represents a stored object with its metadata.

@@ -18,6 +18,11 @@ network. The server stores lightweight metadata in a local SQLite database.
 Objects are buffered on disk before being uploaded to Sia in the background;
 see [Upload Packing](#upload-packing) for details.
 
+Run a single `s3d` instance per app key and data directory. Each instance keeps
+its own record of what it has stored and runs cleanup passes against the shared
+account on the Sia network, so two instances sharing either will interfere with
+each other and can unpin each other's data.
+
 To build your own app on Sia, take a look at the
 [Sia Developer Portal](https://devs.sia.storage).
 
@@ -172,13 +177,54 @@ adminPassword: change-me # required
 Requests are authenticated via HTTP Basic authentication using the configured
 password; the username is ignored.
 
-The admin API is documented in [`openapi.yml`](openapi.yml). It exposes
-`GET /prometheus` for upload pipeline metrics in the Prometheus text exposition
-format, and `GET /stats/uploads` for the same stats as JSON, which `s3d status`
-uses for a basic overview without requiring a Prometheus stack.
+The admin API is documented in [`openapi.yml`](openapi.yml) and rendered at
+[api.sia.tech/s3d](https://api.sia.tech/s3d). It serves upload pipeline metrics
+in the Prometheus text exposition format.
 
 ```sh
 curl -u ":change-me" http://127.0.0.1:8001/prometheus
+```
+
+## Snapshots
+
+**Snapshots are experimental.** The commands and the format written to Sia may
+still change.
+
+A snapshot is a copy of the SQLite metadata database, compressed and uploaded to
+Sia as a pinned object. It captures the mapping from S3 keys to Sia objects
+along with the users and access keys, so restoring one brings back an instance
+that can serve the data already stored on the network. The object data itself is
+never copied, it already lives on Sia and the database only references it.
+
+Creating a snapshot first flushes the objects still buffered on disk, so the
+call blocks for as long as that upload takes. Objects that fail to flush are
+logged and the snapshot is taken without them.
+
+Each snapshot is identified by its Sia object ID, printed on creation and by
+`s3d snapshots list`. It is the only identifier that survives losing the
+database, so keep it somewhere outside the data directory.
+
+Snapshots assume one `s3d` instance owns the app key, see the
+[Overview](#overview).
+
+### Creating and listing
+
+```sh
+s3d snapshots create
+s3d snapshots list
+```
+
+`list` reads the running instance's own records, newest first. Its first line
+reports whether the instance has finished syncing with the Sia network. Until it
+has, the list may be incomplete.
+
+### Deleting
+
+Deleting unpins the snapshot's Sia object and removes its record, releasing the
+objects it was withholding from cleanup.
+
+```sh
+s3d snapshots delete 0d4f2c9a1b7e3568af0c21d9e4b85730c6a91f42db38e7051c9a6b24f80d3e17
 ```
 
 ## HTTPS
@@ -356,6 +402,7 @@ generate one.
 | `status` | Print a basic overview of the background upload pipeline |
 | `users` | Manage S3 users (create, delete, list) |
 | `keys` | Manage S3 access keys (create, delete, list) |
+| `snapshots` | Manage database snapshots backed up to Sia. Experimental, see [Snapshots](#snapshots) |
 
 ### Default Ports
 
