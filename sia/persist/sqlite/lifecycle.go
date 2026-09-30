@@ -11,6 +11,7 @@ import (
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia"
 	"github.com/SiaFoundation/s3d/sia/objects"
+	"go.uber.org/zap"
 )
 
 // PutBucketLifecycleConfiguration stores the serialized lifecycle configuration
@@ -209,6 +210,10 @@ func (s *Store) ExpireObjects(bucket string, prefix string, before time.Time, li
 			res, err := deleteCurrentObject(tx, bid, name, status, s3.ObjectID{Key: name})
 			if errors.Is(err, sql.ErrNoRows) {
 				continue // current version vanished concurrently; nothing to do
+			} else if errors.Is(err, s3errs.ErrAccessDenied) {
+				// a locked version is never expired
+				s.log.Warn("skipping expiry of a locked object", zap.String("bucket", bucket), zap.String("key", name))
+				continue
 			} else if err != nil {
 				return err
 			}
@@ -216,6 +221,8 @@ func (s *Store) ExpireObjects(bucket string, prefix string, before time.Time, li
 				orphans = append(orphans, res.orphanFile)
 			}
 		}
+		// the candidate count, not the removed count, the caller ends the sweep
+		// when a batch comes back short
 		deleted = len(names)
 		return nil
 	})

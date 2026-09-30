@@ -634,3 +634,187 @@ func TestObjectRetentionAndLegalHold(t *testing.T) {
 		testutil.AssertS3Error(t, s3errs.ErrNoSuchKey, err)
 	})
 }
+
+func TestObjectLockEnforcement(t *testing.T) {
+	s3Tester := testutil.NewTester(t)
+	ctx := t.Context()
+	until := time.Now().AddDate(0, 0, 10).UTC().Truncate(time.Millisecond)
+
+	bucket := "enforced"
+	if err := s3Tester.CreateBucketWithObjectLock(ctx, bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// put returns the version the write created
+	put := func(tb testing.TB, object string, in *service.PutObjectInput) string {
+		tb.Helper()
+		in.Bucket, in.Key, in.Body = aws.String(bucket), aws.String(object), bytes.NewReader([]byte("data"))
+		resp, err := s3Tester.Client().PutObject(ctx, in)
+		if err != nil {
+			tb.Fatal(err)
+		}
+		return *resp.VersionId
+	}
+	governance := func(tb testing.TB, object string) string {
+		tb.Helper()
+		return put(tb, object, &service.PutObjectInput{
+			ObjectLockMode:            types.ObjectLockModeGovernance,
+			ObjectLockRetainUntilDate: aws.Time(until),
+		})
+	}
+
+	t.Run("GovernanceRefusesVersionedDelete", func(t *testing.T) {
+		version := governance(t, "a")
+		_, err := s3Tester.ConditionalDeleteObject(ctx, bucket, "a", aws.String(version), testutil.DeleteConditions{})
+		testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+	})
+
+	t.Run("GovernanceYieldsToBypass", func(t *testing.T) {
+		version := governance(t, "b")
+		if _, err := s3Tester.Client().DeleteObject(ctx, &service.DeleteObjectInput{
+			Bucket:                    aws.String(bucket),
+			Key:                       aws.String("b"),
+			VersionId:                 aws.String(version),
+			BypassGovernanceRetention: aws.Bool(true),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("ComplianceRefusesBypass", func(t *testing.T) {
+		version := put(t, "c", &service.PutObjectInput{
+			ObjectLockMode:            types.ObjectLockModeCompliance,
+			ObjectLockRetainUntilDate: aws.Time(until),
+		})
+		_, err := s3Tester.Client().DeleteObject(ctx, &service.DeleteObjectInput{
+			Bucket:                    aws.String(bucket),
+			Key:                       aws.String("c"),
+			VersionId:                 aws.String(version),
+			BypassGovernanceRetention: aws.Bool(true),
+		})
+		testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+	})
+
+	// a legal hold yields to nothing, bypass included
+	t.Run("LegalHoldRefusesBypass", func(t *testing.T) {
+		version := put(t, "d", &service.PutObjectInput{
+			ObjectLockLegalHoldStatus: types.ObjectLockLegalHoldStatusOn,
+		})
+		_, err := s3Tester.Client().DeleteObject(ctx, &service.DeleteObjectInput{
+			Bucket:                    aws.String(bucket),
+			Key:                       aws.String("d"),
+			VersionId:                 aws.String(version),
+			BypassGovernanceRetention: aws.Bool(true),
+		})
+		testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+
+		// clearing it makes the version destroyable again
+		if err := s3Tester.PutObjectLegalHold(ctx, bucket, "d", aws.String(version), types.ObjectLockLegalHoldStatusOff); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s3Tester.ConditionalDeleteObject(ctx, bucket, "d", aws.String(version), testutil.DeleteConditions{}); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	// an unversioned delete writes a delete marker and destroys nothing, so it
+	// is allowed against a locked version
+	t.Run("DeleteMarkerAlwaysAllowed", func(t *testing.T) {
+		governance(t, "e")
+		if err := s3Tester.DeleteObject(ctx, bucket, "e"); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("MultiDeleteReportsTheLockedKey", func(t *testing.T) {
+		locked := governance(t, "f")
+		free := put(t, "g", &service.PutObjectInput{})
+
+		res, err := s3Tester.DeleteObjects(ctx, bucket, []types.ObjectIdentifier{
+			{Key: aws.String("f"), VersionId: aws.String(locked)},
+			{Key: aws.String("g"), VersionId: aws.String(free)},
+		}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(res.Errors) != 1 {
+			t.Fatalf("expected one error, got %d", len(res.Errors))
+		} else if *res.Errors[0].Key != "f" {
+			t.Fatalf("expected the locked key, got %q", *res.Errors[0].Key)
+		} else if res.Errors[0].VersionId == nil || *res.Errors[0].VersionId != locked {
+			t.Fatalf("expected version %q on the failed entry, got %v", locked, res.Errors[0].VersionId)
+		} else if *res.Errors[0].Code != "AccessDenied" {
+			t.Fatalf("expected AccessDenied, got %q", *res.Errors[0].Code)
+		}
+
+		// the rest of the batch still deletes
+		if len(res.Deleted) != 1 || *res.Deleted[0].Key != "g" {
+			t.Fatalf("expected g to be deleted, got %+v", res.Deleted)
+		}
+	})
+
+	// once the retention expires the version is no longer protected. Only the
+	// release is asserted here, the refusal is covered above with a retention
+	// far enough out that a slow round trip cannot invert it.
+	t.Run("ExpiredRetentionReleases", func(t *testing.T) {
+		expires := time.Now().Add(2 * time.Second)
+		version := put(t, "h", &service.PutObjectInput{
+			ObjectLockMode:            types.ObjectLockModeGovernance,
+			ObjectLockRetainUntilDate: aws.Time(expires),
+		})
+
+		time.Sleep(time.Until(expires) + 500*time.Millisecond)
+		if _, err := s3Tester.ConditionalDeleteObject(ctx, bucket, "h", aws.String(version), testutil.DeleteConditions{}); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	// a bucket cannot be drained while a lock refuses its last version, so the
+	// lock is what keeps the bucket alive, not merely the row being present
+	t.Run("BucketCannotBeDrained", func(t *testing.T) {
+		other := "stillheld"
+		if err := s3Tester.CreateBucketWithObjectLock(ctx, other); err != nil {
+			t.Fatal(err)
+		}
+		resp, err := s3Tester.Client().PutObject(ctx, &service.PutObjectInput{
+			Bucket:                    aws.String(other),
+			Key:                       aws.String("held"),
+			Body:                      bytes.NewReader([]byte("data")),
+			ObjectLockMode:            types.ObjectLockModeCompliance,
+			ObjectLockRetainUntilDate: aws.Time(until),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// the only version refuses to go, with or without bypass
+		_, err = s3Tester.Client().DeleteObject(ctx, &service.DeleteObjectInput{
+			Bucket:                    aws.String(other),
+			Key:                       aws.String("held"),
+			VersionId:                 resp.VersionId,
+			BypassGovernanceRetention: aws.Bool(true),
+		})
+		testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+		testutil.AssertS3Error(t, s3errs.ErrBucketNotEmpty, s3Tester.DeleteBucket(ctx, other))
+
+		// the same bucket drains once nothing is locked
+		plain := "drains"
+		if err := s3Tester.CreateBucketWithObjectLock(ctx, plain); err != nil {
+			t.Fatal(err)
+		}
+		free, err := s3Tester.Client().PutObject(ctx, &service.PutObjectInput{
+			Bucket: aws.String(plain),
+			Key:    aws.String("free"),
+			Body:   bytes.NewReader([]byte("data")),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s3Tester.ConditionalDeleteObject(ctx, plain, "free", free.VersionId, testutil.DeleteConditions{}); err != nil {
+			t.Fatal(err)
+		}
+		if err := s3Tester.DeleteBucket(ctx, plain); err != nil {
+			t.Fatal(err)
+		}
+	})
+}

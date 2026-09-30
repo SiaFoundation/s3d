@@ -58,7 +58,7 @@ func (s *Store) DiskUsage() (usage uint64, err error) {
 // marker, a suspended bucket replaces the null version with a null delete
 // marker, and an unversioned bucket deletes outright. A removed object's
 // filename is returned for cleanup if no longer referenced.
-func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (versionID string, isDeleteMarker bool, orphan objects.OrphanedFile, _ error) {
+func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID, bypass bool) (versionID string, isDeleteMarker bool, orphan objects.OrphanedFile, _ error) {
 	err := s.transaction(func(tx *txn) error {
 		versionID, isDeleteMarker, orphan = "", false, objects.OrphanedFile{} // reset per attempt
 
@@ -71,7 +71,7 @@ func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (
 		// independent of the bucket's versioning status.
 		if objectID.VersionID != nil {
 			version := *objectID.VersionID
-			res, err := deleteSpecificVersion(tx, bid, objectID.Key, version, objectID)
+			res, err := deleteSpecificVersion(tx, bid, objectID.Key, version, objectID, bypass)
 			if errors.Is(err, sql.ErrNoRows) {
 				versionID = s3.FormatVersion(version) // idempotent: report as deleted
 				return nil
@@ -980,7 +980,11 @@ type deletedRow struct {
 // deleted row. found is false when no such row exists (the returned row is
 // then the zero value). It does not orphan the row's data; callers pass the
 // returned row to orphanDeleted for that.
-func deleteObject(tx *txn, bid int64, name string, version string) (row deletedRow, found bool, _ error) {
+func deleteObject(tx *txn, bid int64, name string, version string, bypass bool) (row deletedRow, found bool, _ error) {
+	if err := checkObjectLock(tx, bid, name, version, bypass); err != nil {
+		return deletedRow{}, false, err
+	}
+
 	var id sql.Null[sqlHash256]
 	var wasLatest bool
 	err := tx.QueryRow(`
