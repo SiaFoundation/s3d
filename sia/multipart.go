@@ -69,7 +69,7 @@ func (s *Sia) CreateMultipartUpload(ctx context.Context, accessKeyID, bucket, ob
 	}
 
 	// create multipart upload in the database
-	if err := s.store.CreateMultipartUpload(accessKeyID, bucket, object, uploadID, opts.Meta); err != nil {
+	if err := s.store.CreateMultipartUpload(accessKeyID, bucket, object, uploadID, opts.Meta, opts.ObjectLock); err != nil {
 		s.cleanupOrphan(uploadDir, 0)
 		return nil, fmt.Errorf("failed to create multipart upload: %w", err)
 	}
