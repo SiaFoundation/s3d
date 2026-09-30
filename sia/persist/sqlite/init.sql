@@ -147,9 +147,9 @@ CREATE INDEX orphaned_objects_gen_idx ON orphaned_objects(orphaned_at_gen);
 CREATE TABLE snapshots (
     id INTEGER PRIMARY KEY,
     created_at INTEGER NOT NULL,
-    object_count INTEGER NOT NULL, -- uploaded objects captured by the backup
+    object_count INTEGER NOT NULL, -- uploaded objects captured by the snapshot
 
-    sia_object_id BLOB, -- backup object on the network, set before the pin is issued
+    sia_object_id BLOB, -- snapshot object on the network, set before the pin is issued
 
     gen INTEGER NOT NULL, -- generation the snapshot started at
     gen_completed INTEGER, -- generation it completed at, NULL until pinned
@@ -161,7 +161,7 @@ CREATE TABLE snapshots (
 -- serves the orphan guard, both halves probe by completion generation
 CREATE INDEX snapshots_gen_completed_idx ON snapshots(gen_completed, gen);
 
--- one record per backup object
+-- one record per snapshot object
 CREATE UNIQUE INDEX snapshots_sia_object_id_idx ON snapshots(sia_object_id) WHERE sia_object_id IS NOT NULL;
 
 CREATE TABLE bucket_lifecycle_configurations (
