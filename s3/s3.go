@@ -89,7 +89,7 @@ type Backend interface {
 	//   unconditional, reporting no version and no delete marker. That covers a
 	//   key with no versions, a key whose current version is a delete marker,
 	//   and a named version that is not there.
-	DeleteObject(ctx context.Context, accessKeyID, bucket string, object ObjectID) (*DeleteObjectResult, error)
+	DeleteObject(ctx context.Context, accessKeyID, bucket string, object ObjectID, opts DeleteObjectOptions) (*DeleteObjectResult, error)
 
 	// DeleteObjects deletes multiple objects from the specified bucket for the
 	// user identified by the given access key.
@@ -105,7 +105,7 @@ type Backend interface {
 	// - Each object carries the same preconditions as DeleteObject, with the
 	//   same outcomes, except that a failed precondition fails only that object,
 	//   which is reported in the result's Error list.
-	DeleteObjects(ctx context.Context, accessKeyID, bucket string, objects []ObjectID) (*ObjectsDeleteResult, error)
+	DeleteObjects(ctx context.Context, accessKeyID, bucket string, objects []ObjectID, opts DeleteObjectOptions) (*ObjectsDeleteResult, error)
 
 	// GetObject retrieves the object with the given key from the specified
 	// bucket for the user identified by the given access key. The provided
