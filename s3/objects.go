@@ -185,10 +185,8 @@ type CopyObjectOptions struct {
 var unsupportedObjectSubresources = map[string]struct{}{
 	"acl":          {},
 	"attributes":   {},
-	"legal-hold":   {},
 	"renameObject": {},
 	"restore":      {},
-	"retention":    {},
 	"select":       {},
 	"tagging":      {},
 	"torrent":      {},
