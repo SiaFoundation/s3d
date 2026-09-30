@@ -108,7 +108,7 @@ CREATE TABLE global_settings (
 );
 
 -- initialize the global settings table
-INSERT INTO global_settings (id, db_version) VALUES (0, 1); -- should not be changed
+INSERT INTO global_settings (id, db_version, app_key) VALUES (0, 1, x'0102'); -- should not be changed
 
 -- seed data to verify migrations preserve existing rows
 INSERT INTO users (id, name) VALUES (1, 'user');
@@ -314,6 +314,18 @@ func TestMigrationConsistency(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
+
+	// the v1 fixture carries an app key and no indexer_url, the state the
+	// backfill exists for, so it must have supplied the assumed default. The
+	// literal is spelled out rather than compared against compatIndexerURL,
+	// which would move with it and assert nothing.
+	var indexerURL string
+	if err := store.db.QueryRow(`SELECT indexer_url FROM global_settings`).Scan(&indexerURL); err != nil {
+		t.Fatal(err)
+	} else if indexerURL != "https://sia.storage" {
+		t.Fatalf("expected the backfilled URL, got %q", indexerURL)
+	}
+
 	v := getDBVersion(store.db)
 	if v != expectedVersion {
 		t.Fatalf("expected version %d, got %d", expectedVersion, v)
@@ -572,4 +584,34 @@ func normalizeSchemaSQL(stmt string) string {
 		b.WriteString(" ")
 	}
 	return strings.Join(strings.Fields(strings.ReplaceAll(b.String(), `"`, "")), " ")
+}
+
+// TestMigrationKeepsCustomIndexerURL checks the backfill only fills a missing
+// URL and never overwrites one the operator configured.
+func TestMigrationKeepsCustomIndexerURL(t *testing.T) {
+	const customURL = "https://indexer.example"
+	log := zaptest.NewLogger(t)
+	fp := filepath.Join(t.TempDir(), "s3d.sqlite3")
+
+	// version 3 is the first with an indexer_url column to set
+	store := initDBVersion(t, fp, 3, log)
+	if _, err := store.db.Exec(`UPDATE global_settings SET app_key = $1, indexer_url = $2`, frand.Bytes(64), customURL); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	migrated, err := OpenDatabase(fp, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer migrated.Close()
+
+	var got string
+	if err := migrated.db.QueryRow(`SELECT indexer_url FROM global_settings`).Scan(&got); err != nil {
+		t.Fatal(err)
+	} else if got != customURL {
+		t.Fatalf("expected the configured URL %q, got %q", customURL, got)
+	}
 }

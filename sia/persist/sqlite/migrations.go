@@ -8,7 +8,7 @@ import (
 )
 
 // compatIndexerURL is the indexer assumed for a database that predates the
-// indexer_url column, frozen so the migration cannot follow a moving default.
+// indexer_url column.
 const compatIndexerURL = "https://sia.storage"
 
 // migrations is a list of functions that are run to migrate the database from
@@ -457,8 +457,7 @@ UPDATE multipart_uploads SET metadata = (
         'x-amz-checksum-sha256', 'x-amz-checksum-sha512'));`)
 		return err
 	},
-	// restore the app_key and indexer_url CHECK. Migration 2 added the column
-	// with a plain ALTER TABLE, which cannot carry a table level constraint.
+	// restore the app_key and indexer_url CHECK on global_settings
 	func(tx *txn, log *zap.Logger) error {
 		res, err := tx.Exec(`UPDATE global_settings SET indexer_url = $1 WHERE app_key IS NOT NULL AND (indexer_url IS NULL OR indexer_url = '')`, compatIndexerURL)
 		if err != nil {
@@ -466,7 +465,7 @@ UPDATE multipart_uploads SET metadata = (
 		} else if n, err := res.RowsAffected(); err != nil {
 			return err
 		} else if n > 0 {
-			log.Warn("app key predates the stored indexer URL, assuming the default. Re-run 's3d login' if this node used a custom indexer",
+			log.Warn("app key predates the stored indexer URL, assuming the default. A node that used a custom indexer will not reach it",
 				zap.String("indexerURL", compatIndexerURL))
 		}
 
