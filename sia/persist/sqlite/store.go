@@ -34,6 +34,11 @@ func (s *Store) DBVersion() int64 {
 	return getDBVersion(s.db)
 }
 
+// SchemaVersion returns the database schema version this build expects.
+func SchemaVersion() int64 {
+	return int64(len(migrations) + 1)
+}
+
 // transaction executes a function within a database transaction. If the
 // function returns an error, the transaction is rolled back. Otherwise, the
 // transaction is committed. If the transaction fails due to a busy error, it is
@@ -129,7 +134,7 @@ func OpenDatabase(fp string, log *zap.Logger) (*Store, error) {
 		path: fp,
 		log:  log,
 	}
-	if err := store.init(int64(len(migrations) + 1)); err != nil {
+	if err := store.init(SchemaVersion()); err != nil {
 		return nil, err
 	}
 	sqliteVersion, _, _ := sqlite3.Version()
