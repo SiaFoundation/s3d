@@ -1,3 +1,9 @@
+## 0.2.1 (2026-09-30)
+
+### Fixes
+
+- Fixed config file lookup aborting when a location cannot be read
+
 ## 0.2.0 (2026-09-25)
 
 ### Breaking Changes
