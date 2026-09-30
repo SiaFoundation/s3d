@@ -179,7 +179,7 @@ func TestPinLoopPinsCopyAfterSourceDeleted(t *testing.T) {
 
 	// delete src before the pin loop has a chance to run; src's
 	// unpinned_objects row goes with it via FK cascade
-	if _, _, _, err := store.DeleteObject(testutil.AccessKeyID, bucket, s3.ObjectID{Key: srcName}); err != nil {
+	if _, _, _, err := store.DeleteObject(testutil.AccessKeyID, bucket, s3.ObjectID{Key: srcName}, false); err != nil {
 		t.Fatal(err)
 	}
 
