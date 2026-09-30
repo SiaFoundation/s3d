@@ -227,6 +227,9 @@ type bucketRead struct {
 	owner      string
 	versioning string
 	mayList    bool
+	// isOwner reports whether the caller owns the bucket, which gates the
+	// object lock state a read reports.
+	isOwner bool
 }
 
 // userInfo returns the bucket's owner, which a listing reports in place of the
@@ -263,7 +266,7 @@ func bucketForRead(tx *txn, accessKeyID *string, bucket string, action s3.Policy
 		if err != nil {
 			return bucketRead{}, err
 		} else if ownerID == uid {
-			b.mayList = true // the owner may always list
+			b.mayList, b.isOwner = true, true // the owner may always list
 			return b, nil
 		}
 	}
