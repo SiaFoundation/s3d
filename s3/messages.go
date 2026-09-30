@@ -10,6 +10,9 @@ import (
 // Such as a VersionID or location.
 const Null = "null"
 
+// DefaultRegion is the region S3 reports as an empty LocationConstraint.
+const DefaultRegion = "us-east-1"
+
 // Common types
 type (
 	// UserInfo represents the owner of a resource
@@ -144,7 +147,7 @@ type (
 
 		// Returns the number of keys included in the response. The value is always
 		// less than or equal to the MaxKeys value.
-		KeyCount int64 `xml:"KeyCount,omitempty"`
+		KeyCount int64 `xml:"KeyCount"`
 
 		// If the response is truncated, Amazon S3 returns this parameter with a
 		// continuation token. You can specify the token as the continuation-token
