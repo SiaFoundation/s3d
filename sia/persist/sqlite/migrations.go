@@ -7,6 +7,10 @@ import (
 	"go.uber.org/zap"
 )
 
+// compatIndexerURL is the indexer assumed for a database that predates the
+// indexer_url column.
+const compatIndexerURL = "https://sia.storage"
+
 // migrations is a list of functions that are run to migrate the database from
 // one version to the next. Migrations are used to update existing databases to
 // match the schema in init.sql.
@@ -451,6 +455,36 @@ UPDATE multipart_uploads SET metadata = (
         'content-type', 'expires', 'x-amz-checksum-crc32', 'x-amz-checksum-crc32c',
         'x-amz-checksum-crc64nvme', 'x-amz-checksum-md5', 'x-amz-checksum-sha1',
         'x-amz-checksum-sha256', 'x-amz-checksum-sha512'));`)
+		return err
+	},
+	// restore the app_key and indexer_url CHECK on global_settings
+	func(tx *txn, log *zap.Logger) error {
+		res, err := tx.Exec(`UPDATE global_settings SET indexer_url = $1 WHERE app_key IS NOT NULL AND (indexer_url IS NULL OR indexer_url = '')`, compatIndexerURL)
+		if err != nil {
+			return err
+		} else if n, err := res.RowsAffected(); err != nil {
+			return err
+		} else if n > 0 {
+			log.Warn("app key predates the stored indexer URL, assuming the default. A node that used a custom indexer will not reach it",
+				zap.String("indexerURL", compatIndexerURL))
+		}
+
+		_, err = tx.Exec(`
+CREATE TABLE global_settings_new (
+	id INTEGER PRIMARY KEY NOT NULL DEFAULT 0 CHECK (id = 0), -- enforce a single row
+	db_version INTEGER NOT NULL, -- used for migrations
+	app_key BLOB,
+	indexer_url TEXT,
+	last_sync_at INTEGER NOT NULL DEFAULT 0,
+	last_sync_key BLOB NOT NULL DEFAULT X'0000000000000000000000000000000000000000000000000000000000000000',
+	snapshot_gen INTEGER NOT NULL DEFAULT 0,
+	-- app_key and indexer_url are always set or nulled together
+	CHECK ((app_key IS NULL AND indexer_url IS NULL) OR (app_key IS NOT NULL AND indexer_url IS NOT NULL))
+);
+INSERT INTO global_settings_new (id, db_version, app_key, indexer_url, last_sync_at, last_sync_key, snapshot_gen)
+	SELECT id, db_version, app_key, indexer_url, last_sync_at, last_sync_key, snapshot_gen FROM global_settings;
+DROP TABLE global_settings;
+ALTER TABLE global_settings_new RENAME TO global_settings;`)
 		return err
 	},
 }
