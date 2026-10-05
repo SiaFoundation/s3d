@@ -227,6 +227,35 @@ objects it was withholding from cleanup.
 s3d snapshots delete 0d4f2c9a1b7e3568af0c21d9e4b85730c6a91f42db38e7051c9a6b24f80d3e17
 ```
 
+### Restoring
+
+Restoring writes a snapshot's database into a new data directory. The
+destination must be empty or missing, so a restore can never overwrite an
+existing database.
+
+```sh
+s3d snapshots restore
+```
+
+With no arguments the command walks the whole recovery. When the machine has no
+app key it asks for the recovery phrase of the account holding the snapshots and
+registers in memory, leaving no database behind. It then lists the snapshots
+stored on the network, asks which one to restore and where to put it. Listing
+enumerates every object in the account, so it takes longer the more you have
+stored.
+
+Given a Sia object ID the snapshot is fetched in a single request instead, with
+no enumeration and, on a machine that already holds an authorized app key, no
+prompts.
+
+```sh
+s3d snapshots restore --out /srv/s3d-restored 0d4f2c9a1b7e3568af0c21d9e4b85730c6a91f42db38e7051c9a6b24f80d3e17
+```
+
+Run `s3d config` for the restored directory before starting `s3d`. On startup
+the instance reconciles the restored database against the network, adopting the
+snapshots and objects it finds there.
+
 ## HTTPS
 
 `s3d` can serve the S3 API over TLS in addition to plain HTTP. Set
