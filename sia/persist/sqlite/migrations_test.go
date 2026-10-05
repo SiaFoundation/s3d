@@ -662,8 +662,8 @@ func TestMigrationObjectLockPreservesRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer migrated.Close()
-	if v := getDBVersion(migrated.db); v != objectLockVersion {
-		t.Fatalf("expected version %d, got %d", objectLockVersion, v)
+	if v, want := getDBVersion(migrated.db), int64(len(migrations)+1); v != want {
+		t.Fatalf("expected version %d, got %d", want, v)
 	}
 
 	for _, table := range tables {
