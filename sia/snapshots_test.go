@@ -3,6 +3,7 @@ package sia_test
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -664,5 +665,148 @@ func TestSnapshotRecovery(t *testing.T) {
 	assertSnapshots(storeC, snapB.SiaObjectID, snap3.SiaObjectID, snap2.SiaObjectID)
 	if err := backendC.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestListRemoteSnapshots(t *testing.T) {
+	memSDK := testutil.NewMemorySDK()
+	backend, store := testutil.NewBackend(t, testutil.WithSDK(memSDK))
+
+	snap1, err := backend.CreateSnapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap2, err := backend.CreateSnapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// an ordinary object carries no snapshot tag and must be ignored
+	other, err := memSDK.AddObject(t.Context(), strings.NewReader("not a snapshot"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	at := time.Now().Truncate(time.Second)
+	events := []sdk.ObjectEvent{
+		snapshotEvent(t, memSDK, snap2.SiaObjectID, at.Add(2*time.Second)),
+		snapshotEvent(t, memSDK, snap1.SiaObjectID, at.Add(time.Second)),
+		{Key: other.ID(), UpdatedAt: at.Add(3 * time.Second), Object: &other},
+	}
+	memSDK.SetEvents(events)
+
+	// the network is enumerated newest first
+	remote, err := sia.ListRemoteSnapshots(t.Context(), memSDK)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(remote) != 2 {
+		t.Fatal("unexpected", len(remote))
+	} else if remote[0].ObjectID != snap2.SiaObjectID {
+		t.Fatal("mismatch", remote[0].ObjectID)
+	} else if remote[1].ObjectID != snap1.SiaObjectID {
+		t.Fatal("mismatch", remote[1].ObjectID)
+	} else if remote[0].Metadata.Generation <= remote[1].Metadata.Generation {
+		t.Fatal("unexpected", remote[0].Metadata.Generation, remote[1].Metadata.Generation)
+	} else if remote[0].Metadata.CreatedAt.Unix() != snap2.CreatedAt.Unix() {
+		t.Fatal("mismatch", remote[0].Metadata.CreatedAt)
+	}
+
+	// the snapshot downloads and decompresses to a database image
+	var buf bytes.Buffer
+	if err := sia.DownloadSnapshot(t.Context(), memSDK, remote[0], &buf); err != nil {
+		t.Fatal(err)
+	} else if !bytes.HasPrefix(buf.Bytes(), []byte("SQLite format 3\x00")) {
+		t.Fatal("unexpected snapshot header")
+	}
+
+	// a deleted snapshot drops out of the listing
+	memSDK.SetEvents(append(events, sdk.ObjectEvent{Key: snap1.SiaObjectID, UpdatedAt: at.Add(4 * time.Second), Deleted: true}))
+	if remote, err := sia.ListRemoteSnapshots(t.Context(), memSDK); err != nil {
+		t.Fatal(err)
+	} else if len(remote) != 1 {
+		t.Fatal("unexpected", len(remote))
+	} else if remote[0].ObjectID != snap2.SiaObjectID {
+		t.Fatal("mismatch", remote[0].ObjectID)
+	}
+
+	// the snapshot created later carries the lower generation, so ordering on
+	// generation alone would return the two the wrong way round
+	newerID := pinSnapshotObject(t, memSDK, store, s3.Snapshot{CreatedAt: at.Add(time.Hour)}, 1)
+	olderID := pinSnapshotObject(t, memSDK, store, s3.Snapshot{CreatedAt: at}, 2)
+	memSDK.SetEvents([]sdk.ObjectEvent{
+		snapshotEvent(t, memSDK, olderID, at.Add(5*time.Second)),
+		snapshotEvent(t, memSDK, newerID, at.Add(6*time.Second)),
+	})
+	if remote, err := sia.ListRemoteSnapshots(t.Context(), memSDK); err != nil {
+		t.Fatal(err)
+	} else if len(remote) != 2 {
+		t.Fatal("unexpected", len(remote))
+	} else if remote[0].ObjectID != newerID {
+		t.Fatal("mismatch", remote[0].ObjectID)
+	} else if remote[1].ObjectID != olderID {
+		t.Fatal("mismatch", remote[1].ObjectID)
+	}
+}
+
+// TestFetchRemoteSnapshot verifies that fetching a snapshot by its object ID
+// does not enumerate the account.
+func TestFetchRemoteSnapshot(t *testing.T) {
+	memSDK := testutil.NewMemorySDK()
+	backend, _ := testutil.NewBackend(t, testutil.WithSDK(memSDK))
+
+	snap, err := backend.CreateSnapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := memSDK.AddObject(t.Context(), strings.NewReader("not a snapshot"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// the background sync loop enumerates too, so stop it before counting the
+	// calls this fetch makes
+	if err := backend.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	before := memSDK.ObjectEventCalls()
+	remote, err := sia.FetchRemoteSnapshot(t.Context(), memSDK, snap.SiaObjectID)
+	if err != nil {
+		t.Fatal(err)
+	} else if remote.ObjectID != snap.SiaObjectID {
+		t.Fatal("mismatch", remote.ObjectID)
+	} else if remote.Metadata.ObjectCount != snap.ObjectCount {
+		t.Fatal("unexpected", remote.Metadata.ObjectCount)
+	} else if calls := memSDK.ObjectEventCalls(); calls != before {
+		t.Fatal("fetching by id enumerated the account", calls-before, "times")
+	}
+
+	// the fetched snapshot is usable, not just described
+	var buf bytes.Buffer
+	if err := sia.DownloadSnapshot(t.Context(), memSDK, remote, &buf); err != nil {
+		t.Fatal(err)
+	} else if !bytes.HasPrefix(buf.Bytes(), []byte("SQLite format 3\x00")) {
+		t.Fatal("unexpected snapshot header")
+	}
+
+	// a cancelled context fails the download instead of reporting a database
+	// the caller would then rename into place
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	buf.Reset()
+	if err := sia.DownloadSnapshot(cancelled, memSDK, remote, &buf); !errors.Is(err, context.Canceled) {
+		t.Fatal("unexpected", err)
+	}
+
+	// an object that is not a snapshot is rejected rather than restored
+	if _, err := sia.FetchRemoteSnapshot(t.Context(), memSDK, other.ID()); err == nil {
+		t.Fatal("expected an error")
+	} else if !strings.Contains(err.Error(), "not a snapshot") {
+		t.Fatal("unexpected", err)
+	}
+
+	// so is an id that does not exist
+	if _, err := sia.FetchRemoteSnapshot(t.Context(), memSDK, types.Hash256(frand.Entropy256())); err == nil {
+		t.Fatal("expected an error")
 	}
 }
