@@ -1624,7 +1624,7 @@ func TestUploadStats(t *testing.T) {
 		stats, err := store.UploadStats()
 		if err != nil {
 			t.Fatal(err)
-		} else if stats != expected {
+		} else if !reflect.DeepEqual(stats, expected) {
 			t.Fatalf("expected %+v, got %+v", expected, stats)
 		}
 	}

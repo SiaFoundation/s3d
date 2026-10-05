@@ -111,6 +111,11 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object string
 		return nil, err
 	}
 
+	// track the request before reserving disk space so a request blocked
+	// by the disk usage limit still counts as active
+	r, ingressDone := s.transfer.trackIngress(r)
+	defer ingressDone()
+
 	// allow exceeding the limit once any part has been stored so
 	// concurrent parts of the same upload can complete
 	allowExcess := func() (bool, error) {
@@ -119,6 +124,7 @@ func (s *Sia) UploadPart(ctx context.Context, accessKeyID, bucket, object string
 	if err := s.addDiskUsage(ctx, opts.ContentLength, allowExcess); err != nil {
 		return nil, err
 	}
+
 	var partPath string
 	defer func() {
 		if err != nil {
