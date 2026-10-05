@@ -1,3 +1,21 @@
+## 0.2.1 (2026-10-05)
+
+### Features
+
+- Report live transfer stats
+
+### Fixes
+
+- Add missing CHECK constraint on global_settings
+- Fixed config file lookup aborting when a location cannot be read
+- Always include KeyCount in ListObjectsV2 responses
+- Match the AWS wording for NoSuchLifecycleConfiguration
+- Accept a percent encoded CopyObject source
+
+#### Report an empty bucket location instead of "null"
+
+GetBucketLocation returned the literal string "null" for us-east-1. Amazon S3 represents the absence of a location constraint as an empty LocationConstraint element; SDKs expose this as null. Some clients were treating the literal "null" as the region name and using it for request signing.
+
 ## 0.2.0 (2026-09-25)
 
 ### Breaking Changes
