@@ -337,10 +337,14 @@ func setListenAddress(context string, current string, allowEmpty bool) string {
 	}
 }
 
+// stdin is shared by every prompt. A reader per call would buffer past the
+// line it returns and drop the rest, so chained prompts only work when a
+// terminal feeds them one line at a time.
+var stdin = bufio.NewReader(os.Stdin)
+
 func readInput(context string) string {
 	fmt.Printf("%s: ", context)
-	r := bufio.NewReader(os.Stdin)
-	input, err := r.ReadString('\n')
+	input, err := stdin.ReadString('\n')
 	checkFatalError("failed to read input", err)
 	return strings.TrimSpace(input)
 }
