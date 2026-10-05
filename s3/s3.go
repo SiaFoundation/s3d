@@ -57,10 +57,9 @@ type Backend interface {
 	CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject string, srcVersion VersionRequest, dstBucket, dstObject string, opts CopyObjectOptions) (*CopyObjectResult, error)
 
 	// CreateBucket creates a new bucket with the given name for the user
-	// identified by the given access key. Re-creating a bucket the user
-	// already owns is idempotent and preserves its contents (matching the AWS
-	// default region). If the bucket exists and is owned by another user,
-	// [ErrBucketAlreadyExists] must be returned.
+	// identified by the given access key. If the bucket exists and is owned by
+	// the same user, [ErrBucketAlreadyOwnedByYou] must be returned. If it is
+	// owned by another user, [ErrBucketAlreadyExists] must be returned.
 	CreateBucket(ctx context.Context, accessKeyID, name string) error
 
 	// DeleteBucket deletes the bucket with the given name for the user

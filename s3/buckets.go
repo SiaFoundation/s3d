@@ -85,6 +85,12 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *st
 	}
 }
 
+// isDefaultRegion reports whether the handler serves the S3 default region,
+// either explicitly or because no region was configured.
+func (s *s3) isDefaultRegion() bool {
+	return s.region == "" || s.region == DefaultRegion
+}
+
 // bucketLocation handles GET Bucket location requests.
 //
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketLocation.html
@@ -103,11 +109,10 @@ func (s *s3) bucketLocation(w http.ResponseWriter, r *http.Request, accessKeyID 
 		return err
 	}
 
+	// S3 reports us-east-1 as an empty LocationConstraint
 	region := s.region
-	if region == "" {
-		// Per AWS S3 API, "null" is used for the us-east-1 region. So we use it
-		// here as a default as well.
-		region = Null
+	if s.isDefaultRegion() {
+		region = ""
 	}
 
 	return writeXMLResponse(w, http.StatusOK, GetBucketLocation{
