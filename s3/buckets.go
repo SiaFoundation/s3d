@@ -143,8 +143,15 @@ func (s *s3) createBucket(w http.ResponseWriter, r *http.Request, accessKeyID, b
 		return s3errs.ErrNotImplemented // ACLs are not implemented
 	}
 
-	opts := CreateBucketOptions{
-		ObjectLockEnabled: strings.EqualFold(r.Header.Get(HeaderBucketObjectLockEnabled), "true"),
+	var opts CreateBucketOptions
+	if v := r.Header.Get(HeaderBucketObjectLockEnabled); v != "" {
+		switch {
+		case strings.EqualFold(v, "true"):
+			opts.ObjectLockEnabled = true
+		case strings.EqualFold(v, "false"):
+		default:
+			return fmt.Errorf("object lock enabled must be true or false, got %q: %w", v, s3errs.ErrInvalidRequest)
+		}
 	}
 	if err := s.backend.CreateBucket(r.Context(), accessKeyID, bucket, opts); err != nil {
 		return err
