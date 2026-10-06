@@ -10,9 +10,14 @@ import (
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/wallet"
+	"go.sia.tech/indexd/api/app"
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
 )
+
+// defaultIndexerURL is the indexer s3d registers with unless the operator
+// picks another one.
+const defaultIndexerURL = "https://sia.storage"
 
 func openStore(log *zap.Logger) (*sqlite.Store, error) {
 	if err := os.MkdirAll(cfg.Directory, 0700); err != nil {
@@ -48,16 +53,30 @@ func runLoginCmd(ctx context.Context, configPath string) {
 	checkFatalError("failed to open database", err)
 	defer store.Close()
 
-	if _, existingURL, err := store.AppKey(); err == nil {
-		fmt.Println(ansiStyle("33", fmt.Sprintf("This app is already registered with %s.", existingURL)))
-		return
-	} else if !errors.Is(err, sqlite.ErrNoAppKey) {
+	suggestedIndexerURL := defaultIndexerURL
+	existingKey, existingURL, err := store.AppKey()
+	if err != nil && !errors.Is(err, sqlite.ErrNoAppKey) {
 		checkFatalError("failed to check app key", err)
+	} else if err == nil {
+		// a stored key is only a valid registration while the indexer still
+		// authorizes it, so a revoked key must not block a new registration
+		authorized, err := app.NewClient(existingURL).CheckAppAuth(ctx, existingKey)
+		checkFatalError("failed to check app authorization", err)
+
+		if authorized {
+			fmt.Println(ansiStyle("33", fmt.Sprintf("This app is already registered with %s.", existingURL)))
+			return
+		}
+
+		fmt.Println(ansiStyle("33", fmt.Sprintf("The app key registered with %s is no longer authorized.", existingURL)))
+		fmt.Println(ansiStyle("33", "Continuing will replace it with a new registration."))
+		fmt.Println("")
+		suggestedIndexerURL = existingURL
 	}
 
-	indexerURL := readInput("Indexer URL (default: https://sia.storage)")
+	indexerURL := readInput(fmt.Sprintf("Indexer URL (default: %s)", suggestedIndexerURL))
 	if indexerURL == "" {
-		indexerURL = "https://sia.storage"
+		indexerURL = suggestedIndexerURL
 	}
 
 	phrase := promptRecoveryPhrase()
