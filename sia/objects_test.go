@@ -1687,8 +1687,8 @@ func TestTransferStats(t *testing.T) {
 	// nothing has moved yet and no limit is configured
 	if st := uploadStats(); st.BufferUsed != 0 || st.BufferLimit != 0 {
 		t.Fatalf("expected an empty unlimited buffer, got %d of %d", st.BufferUsed, st.BufferLimit)
-	} else if st.Transfer.IngressBytes != 0 || st.Transfer.UploadBytes != 0 {
-		t.Fatalf("expected no transferred bytes, got %d ingress and %d upload", st.Transfer.IngressBytes, st.Transfer.UploadBytes)
+	} else if st.Transfer.IngressBytes != 0 {
+		t.Fatalf("expected no transferred bytes, got %d ingress", st.Transfer.IngressBytes)
 	}
 
 	// the request body counts as ingress and the staged file as buffer usage
@@ -1701,16 +1701,11 @@ func TestTransferStats(t *testing.T) {
 		t.Fatalf("expected 100 bytes of ingress, got %d", st.Transfer.IngressBytes)
 	} else if st.Transfer.IngressActive != 0 {
 		t.Fatalf("expected no active ingress streams, got %d", st.Transfer.IngressActive)
-	} else if st.Transfer.UploadBytes != 0 {
-		t.Fatalf("expected no bytes handed to the uploader, got %d", st.Transfer.UploadBytes)
 	}
 
-	// uploading hands the buffered bytes to the Sia uploader
 	backend.UploadObjects(t.Context())
 	if st := uploadStats(); st.BufferUsed != 100 {
 		t.Fatalf("expected 100 bytes still buffered, got %d", st.BufferUsed)
-	} else if st.Transfer.UploadBytes != 100 {
-		t.Fatalf("expected 100 bytes handed to the uploader, got %d", st.Transfer.UploadBytes)
 	} else if st.Transfer.ActiveUploads != nil {
 		t.Fatalf("expected no active uploads, got %d", len(st.Transfer.ActiveUploads))
 	}

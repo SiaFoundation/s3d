@@ -277,7 +277,7 @@ func (s *MemorySDK) SetFailUploads(fail bool) {
 }
 
 // UploadPacked creates a new packed upload.
-func (s *MemorySDK) UploadPacked() (sia.PackedUpload, error) {
+func (s *MemorySDK) UploadPacked(_ ...sdk.UploadOption) (sia.PackedUpload, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.failUploads {

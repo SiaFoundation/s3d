@@ -82,8 +82,8 @@ func (s *IndexdSDK) Upload(ctx context.Context, obj *sdk.Object, r io.Reader) er
 }
 
 // UploadPacked creates a new packed upload.
-func (s *IndexdSDK) UploadPacked() (PackedUpload, error) {
-	return s.inner.UploadPacked(s.ulOpts...)
+func (s *IndexdSDK) UploadPacked(opts ...sdk.UploadOption) (PackedUpload, error) {
+	return s.inner.UploadPacked(append(slices.Clone(s.ulOpts), opts...)...)
 }
 
 // PinObject pins the given object in the indexer.

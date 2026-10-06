@@ -192,7 +192,7 @@ type SDK interface {
 	ObjectEvents(ctx context.Context, cursor slabs.Cursor, limit int) ([]sdk.ObjectEvent, error)
 	OptimalDataSize() (int64, error)
 	Upload(ctx context.Context, obj *sdk.Object, r io.Reader) error
-	UploadPacked() (PackedUpload, error)
+	UploadPacked(opts ...sdk.UploadOption) (PackedUpload, error)
 	PinObject(ctx context.Context, obj sdk.Object) error
 	PruneSlabs(ctx context.Context, opts ...api.URLQueryParameterOption) error
 	SealObject(obj sdk.Object) sdk.SealedObject
