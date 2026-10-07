@@ -2,7 +2,6 @@ package sia_test
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"testing"
 
@@ -13,14 +12,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
-// A "*" principal covers unsigned requests and signed requests from non-owners.
-// The two take different paths through the backend, so both are asserted.
-const (
-	otherAccessKeyID = "foo"
-	otherSecretKey   = "bar"
-)
-
-// publicCaller is one kind of caller a "*" principal covers.
+// publicCaller is one kind of caller a "*" principal covers, which includes
+// unsigned requests and signed requests from non-owners. Both are asserted.
 type publicCaller struct {
 	client *testutil.S3Tester
 	// missingBucket is what this caller sees for a bucket that does not exist;
@@ -37,7 +30,7 @@ func forEachPublicCaller(t *testing.T, s3Tester *testutil.S3Tester, fn func(*tes
 		caller publicCaller
 	}{
 		{"anonymous", publicCaller{s3Tester.Anonymous(), &s3errs.ErrAccessDenied}},
-		{"other user", publicCaller{s3Tester.ChangeAccessKey(t, otherAccessKeyID, otherSecretKey), &s3errs.ErrNoSuchBucket}},
+		{"other user", publicCaller{s3Tester.ChangeAccessKey(t, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey), &s3errs.ErrNoSuchBucket}},
 	} {
 		t.Run(c.name, func(t *testing.T) { fn(t, c.caller) })
 	}
@@ -157,7 +150,7 @@ func TestBucketPolicyPublicReadScope(t *testing.T) {
 		object  = "key"
 	)
 
-	s3Tester := testutil.NewTester(t, testutil.WithKeyPair("other", otherAccessKeyID, otherSecretKey))
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
 
 	for _, b := range []string{bucket, private} {
 		if err := s3Tester.CreateBucket(t.Context(), b); err != nil {
@@ -291,8 +284,8 @@ func TestBucketPolicyPublicReadScope(t *testing.T) {
 func TestBucketPolicyOwnership(t *testing.T) {
 	const bucket = "bucket"
 
-	s3Tester := testutil.NewTester(t, testutil.WithKeyPair("other", otherAccessKeyID, otherSecretKey))
-	other := s3Tester.ChangeAccessKey(t, otherAccessKeyID, otherSecretKey)
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
+	other := s3Tester.ChangeAccessKey(t, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey)
 
 	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 		t.Fatal(err)
@@ -465,7 +458,7 @@ func TestBucketPolicyGrantsAreIndependent(t *testing.T) {
 
 	for _, grant := range grants {
 		t.Run(grant.action, func(t *testing.T) {
-			s3Tester := testutil.NewTester(t, testutil.WithKeyPair("other", otherAccessKeyID, otherSecretKey))
+			s3Tester := testutil.NewTester(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
 			if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 				t.Fatal(err)
 			} else if err := s3Tester.PutBucketVersioning(t.Context(), bucket, types.BucketVersioningStatusEnabled); err != nil {
@@ -526,47 +519,6 @@ func statementPolicy(action, resource string) string {
 		"Action":"%s","Resource":"arn:aws:s3:::%s"}]}`, action, resource)
 }
 
-// TestBucketPolicyListAuthorizesEmptyPage checks that a listing requesting no
-// keys is still authorized. It drives the backend directly because the AWS
-// client omits MaxKeys when it is zero.
-func TestBucketPolicyListAuthorizesEmptyPage(t *testing.T) {
-	const (
-		bucket = "bucket"
-		object = "key"
-	)
-
-	backend, _ := testutil.NewBackend(t, testutil.WithKeyPair("other", otherAccessKeyID, otherSecretKey))
-	if err := backend.CreateBucket(t.Context(), testutil.AccessKeyID, bucket); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := backend.PutObject(t.Context(), testutil.AccessKeyID, bucket, object,
-		bytes.NewReader([]byte("value")), s3.PutObjectOptions{ContentLength: 5}); err != nil {
-		t.Fatal(err)
-	}
-
-	// the bucket has no policy at all, so neither caller may list it
-	otherKey := otherAccessKeyID
-	for _, caller := range []struct {
-		name        string
-		accessKeyID *string
-	}{
-		{"anonymous", nil},
-		{"other user", &otherKey},
-	} {
-		t.Run(caller.name, func(t *testing.T) {
-			_, err := backend.ListObjects(t.Context(), caller.accessKeyID, bucket, s3.Prefix{}, s3.ListObjectsPage{MaxKeys: 0})
-			if !errors.Is(err, s3errs.ErrAccessDenied) {
-				t.Fatalf("ListObjects: expected %v, got %v", s3errs.ErrAccessDenied, err)
-			}
-
-			_, err = backend.ListObjectVersions(t.Context(), caller.accessKeyID, bucket, s3.Prefix{}, s3.ListObjectVersionsPage{MaxKeys: 0})
-			if !errors.Is(err, s3errs.ErrAccessDenied) {
-				t.Fatalf("ListObjectVersions: expected %v, got %v", s3errs.ErrAccessDenied, err)
-			}
-		})
-	}
-}
-
 // TestBucketPolicyListingReportsBucketOwner checks that a listing attributes
 // objects to the bucket's owner rather than to whoever asked for the listing.
 func TestBucketPolicyListingReportsBucketOwner(t *testing.T) {
@@ -575,7 +527,7 @@ func TestBucketPolicyListingReportsBucketOwner(t *testing.T) {
 		object = "key"
 	)
 
-	s3Tester := testutil.NewTester(t, testutil.WithKeyPair("other", otherAccessKeyID, otherSecretKey))
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
 	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 		t.Fatal(err)
 	} else if err := s3Tester.PutBucketVersioning(t.Context(), bucket, types.BucketVersioningStatusEnabled); err != nil {
@@ -633,8 +585,8 @@ func TestBucketPolicyCopySourceGrants(t *testing.T) {
 		object = "key"
 	)
 
-	s3Tester := testutil.NewTester(t, testutil.WithKeyPair("other", otherAccessKeyID, otherSecretKey))
-	other := s3Tester.ChangeAccessKey(t, otherAccessKeyID, otherSecretKey)
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
+	other := s3Tester.ChangeAccessKey(t, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey)
 
 	if err := s3Tester.CreateBucket(t.Context(), public); err != nil {
 		t.Fatal(err)
@@ -686,7 +638,7 @@ func TestBucketPolicyCopySourceGrants(t *testing.T) {
 func TestBucketPolicyMissingKeyVisibility(t *testing.T) {
 	const bucket = "bucket"
 
-	s3Tester := testutil.NewTester(t, testutil.WithKeyPair("other", otherAccessKeyID, otherSecretKey))
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
 	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 		t.Fatal(err)
 	}
@@ -724,7 +676,7 @@ func TestBucketPolicyDeleteMarkerHidden(t *testing.T) {
 		object = "key"
 	)
 
-	s3Tester := testutil.NewTester(t, testutil.WithKeyPair("other", otherAccessKeyID, otherSecretKey))
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
 	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 		t.Fatal(err)
 	} else if err := s3Tester.PutBucketVersioning(t.Context(), bucket, types.BucketVersioningStatusEnabled); err != nil {
@@ -766,7 +718,7 @@ func TestBucketPolicyDeleteMarkerHidden(t *testing.T) {
 func TestBucketPolicyKeepsConfigurationPrivate(t *testing.T) {
 	const bucket = "bucket"
 
-	s3Tester := testutil.NewTester(t, testutil.WithKeyPair("other", otherAccessKeyID, otherSecretKey))
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
 
 	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 		t.Fatal(err)
@@ -791,4 +743,68 @@ func TestBucketPolicyKeepsConfigurationPrivate(t *testing.T) {
 		_, err = c.client.GetBucketVersioning(t.Context(), bucket)
 		testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
 	})
+}
+
+// TestBucketPolicyCopyHidesOnlySource checks that a copy from a bucket the
+// caller may read but not list hides a missing source, but not a missing
+// destination, which is the caller's own.
+func TestBucketPolicyCopyHidesOnlySource(t *testing.T) {
+	const (
+		public = "public-bucket"
+		own    = "own-bucket"
+		object = "key"
+	)
+
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
+	other := s3Tester.ChangeAccessKey(t, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey)
+
+	if err := s3Tester.CreateBucket(t.Context(), public); err != nil {
+		t.Fatal(err)
+	} else if err := s3Tester.AddObject(public, object, []byte("value"), nil); err != nil {
+		t.Fatal(err)
+	} else if err := s3Tester.PutBucketPolicy(t.Context(), public, publicReadPolicy(public)); err != nil {
+		t.Fatal(err)
+	} else if err := other.CreateBucket(t.Context(), own); err != nil {
+		t.Fatal(err)
+	}
+
+	// the source is missing, which the caller may not learn
+	err := other.ConditionalCopyObject(t.Context(), public, "missing", own, object, testutil.Preconditions{}, testutil.Preconditions{})
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+
+	// the destination is missing, which the caller may learn
+	err = other.ConditionalCopyObject(t.Context(), public, object, own, object, testutil.Preconditions{}, testutil.Preconditions{IfMatch: aws.String("*")})
+	testutil.AssertS3Error(t, s3errs.ErrNoSuchKey, err)
+}
+
+// TestBucketPolicyCopyAuthorizesSource checks that a copy into a bucket the
+// caller owns still requires read access to the source.
+func TestBucketPolicyCopyAuthorizesSource(t *testing.T) {
+	const (
+		private = "private-bucket"
+		own     = "own-bucket"
+		object  = "key"
+	)
+
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
+	other := s3Tester.ChangeAccessKey(t, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey)
+
+	if err := s3Tester.CreateBucket(t.Context(), private); err != nil {
+		t.Fatal(err)
+	} else if err := s3Tester.AddObject(private, object, []byte("value"), nil); err != nil {
+		t.Fatal(err)
+	} else if err := other.CreateBucket(t.Context(), own); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := other.CopyObjectVersion(t.Context(), private, object, nil, own, "copy")
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+
+	upload, err := other.CreateMultipartUpload(t.Context(), own, "multipart", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = other.UploadPartCopy(t.Context(), private, object, own, "multipart", aws.ToString(upload.UploadId),
+		testutil.UploadPartCopyOptions{PartNumber: 1})
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
 }

@@ -24,7 +24,7 @@ func TestApplyLifecycleRules(t *testing.T) {
 
 	put := func(object string) {
 		t.Helper()
-		if _, err := backend.PutObject(ctx, testutil.AccessKeyID, bucket, object, bytes.NewReader([]byte("data")), s3.PutObjectOptions{ContentLength: 4}); err != nil {
+		if _, err := backend.PutObject(ctx, bucket, object, bytes.NewReader([]byte("data")), s3.PutObjectOptions{ContentLength: 4}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -37,11 +37,11 @@ func TestApplyLifecycleRules(t *testing.T) {
 
 	// incomplete multipart upload with an on-disk part, aborted once the
 	// rule's window has elapsed
-	upload, err := backend.CreateMultipartUpload(ctx, testutil.AccessKeyID, bucket, "uploads/u", s3.CreateMultipartUploadOptions{})
+	upload, err := backend.CreateMultipartUpload(ctx, bucket, "uploads/u", s3.CreateMultipartUploadOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := backend.UploadPart(ctx, testutil.AccessKeyID, bucket, "uploads/u", upload.UploadID, bytes.NewReader([]byte("part")), s3.UploadPartOptions{PartNumber: 1, ContentLength: 4}); err != nil {
+	if _, err := backend.UploadPart(ctx, bucket, "uploads/u", upload.UploadID, bytes.NewReader([]byte("part")), s3.UploadPartOptions{PartNumber: 1, ContentLength: 4}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -70,7 +70,7 @@ func TestApplyLifecycleRules(t *testing.T) {
 			},
 		},
 	}
-	if err := backend.PutBucketLifecycleConfiguration(ctx, testutil.AccessKeyID, bucket, config); err != nil {
+	if err := backend.PutBucketLifecycleConfiguration(ctx, bucket, config); err != nil {
 		t.Fatal(err)
 	}
 
@@ -78,16 +78,15 @@ func TestApplyLifecycleRules(t *testing.T) {
 	// younger than the Days and DaysAfterInitiation windows
 	backend.ApplyLifecycleRules(ctx, time.Now())
 
-	accessKeyID := testutil.AccessKeyID
-	if _, err := backend.GetObject(ctx, &accessKeyID, bucket, "logs/old", s3.NoVersion(), nil, nil); !errors.Is(err, s3errs.ErrNoSuchKey) {
+	if _, err := backend.GetObject(ctx, bucket, "logs/old", s3.NoVersion(), nil, nil); !errors.Is(err, s3errs.ErrNoSuchKey) {
 		t.Fatalf("expected logs/old to be expired, got %v", err)
 	}
-	obj, err := backend.GetObject(ctx, &accessKeyID, bucket, "days/obj", s3.NoVersion(), nil, nil)
+	obj, err := backend.GetObject(ctx, bucket, "days/obj", s3.NoVersion(), nil, nil)
 	if err != nil {
 		t.Fatalf("expected days/obj to survive, got %v", err)
 	}
 	obj.Body.Close()
-	if _, err := backend.ListParts(ctx, testutil.AccessKeyID, bucket, "uploads/u", upload.UploadID, s3.ListPartsPage{MaxParts: 10}); err != nil {
+	if _, err := backend.ListParts(ctx, bucket, "uploads/u", upload.UploadID, s3.ListPartsPage{MaxParts: 10}); err != nil {
 		t.Fatalf("expected fresh upload to survive, got %v", err)
 	}
 
@@ -95,19 +94,19 @@ func TestApplyLifecycleRules(t *testing.T) {
 	// abort the upload, but still skip the disabled rule
 	backend.ApplyLifecycleRules(ctx, time.Now().AddDate(0, 0, 31))
 
-	if _, err := backend.GetObject(ctx, &accessKeyID, bucket, "days/obj", s3.NoVersion(), nil, nil); !errors.Is(err, s3errs.ErrNoSuchKey) {
+	if _, err := backend.GetObject(ctx, bucket, "days/obj", s3.NoVersion(), nil, nil); !errors.Is(err, s3errs.ErrNoSuchKey) {
 		t.Fatalf("expected days/obj to be expired, got %v", err)
 	}
 
 	// data/keep should survive (rule disabled)
-	obj, err = backend.GetObject(ctx, &accessKeyID, bucket, "data/keep", s3.NoVersion(), nil, nil)
+	obj, err = backend.GetObject(ctx, bucket, "data/keep", s3.NoVersion(), nil, nil)
 	if err != nil {
 		t.Fatalf("expected data/keep to survive, got %v", err)
 	}
 	obj.Body.Close()
 
 	// the upload should have been aborted and its directory removed
-	if _, err := backend.ListParts(ctx, testutil.AccessKeyID, bucket, "uploads/u", upload.UploadID, s3.ListPartsPage{MaxParts: 10}); !errors.Is(err, s3errs.ErrNoSuchUpload) {
+	if _, err := backend.ListParts(ctx, bucket, "uploads/u", upload.UploadID, s3.ListPartsPage{MaxParts: 10}); !errors.Is(err, s3errs.ErrNoSuchUpload) {
 		t.Fatalf("expected upload to be aborted, got %v", err)
 	}
 	uploadDir := backend.UploadDir(upload.UploadID)

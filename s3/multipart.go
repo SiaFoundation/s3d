@@ -176,53 +176,54 @@ func (uid UploadID) String() string {
 	return hex.EncodeToString(uid[:])
 }
 
-// routeMultipartUpload operates on routes that contain '?uploadId=<id>' in the
-// query string.
-func (s *s3) routeMultipartUpload(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket, object, uploadID string) error {
-	validatedKey, err := assertAuth(accessKeyID)
-	if err != nil {
-		return err
-	}
-
-	validatedID, err := ParseUploadID(uploadID)
-	if err != nil {
-		return s3errs.ErrNoSuchUpload
-	}
-
+// routeMultipartUpload routes requests that contain '?uploadId=<id>' in the
+// query string. The upload ID is validated once the caller is authorized.
+func (s *s3) routeMultipartUpload(r *http.Request, object, uploadID string) (operation, error) {
+	var action string
+	var handle func(http.ResponseWriter, *http.Request, *bucketAccess, string, UploadID) error
 	switch r.Method {
 	case http.MethodPut:
-		return s.addUploadPart(w, r, validatedKey, bucket, object, validatedID)
-	case http.MethodGet:
-		return s.listUploadParts(w, r, validatedKey, bucket, object, validatedID)
+		action, handle = actionPutObject, s.addUploadPart
 	case http.MethodPost:
-		return s.completeMultipartUpload(w, r, validatedKey, bucket, object, validatedID)
+		action, handle = actionPutObject, s.completeMultipartUpload
+	case http.MethodGet:
+		action, handle = actionListMultipartUploadParts, s.listUploadParts
 	case http.MethodDelete:
-		return s.abortMultipartUpload(w, r, validatedKey, bucket, object, validatedID)
+		action, handle = actionAbortMultipartUpload, s.abortMultipartUpload
 	default:
-		return s3errs.ErrMethodNotAllowed
+		return operation{}, s3errs.ErrMethodNotAllowed
 	}
+	return operation{action: action, serve: func(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
+		validatedID, err := ParseUploadID(uploadID)
+		if err != nil {
+			return s3errs.ErrNoSuchUpload
+		}
+		return handle(w, r, access, object, validatedID)
+	}}, nil
 }
 
-// routeMultipartUploadBase operates on routes that contain '?uploads' in the
+// routeMultipartUploadBase routes requests that contain '?uploads' in the
 // query string. These routes may or may not have a value for bucket or object;
-// this is validated and handled in the target handler functions.
-func (s *s3) routeMultipartUploadBase(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket, object string) error {
-	validatedKey, err := assertAuth(accessKeyID)
-	if err != nil {
-		return err
-	}
-
+// a listing without a bucket is rejected here, and the rest is validated in
+// the target handler functions.
+func (s *s3) routeMultipartUploadBase(r *http.Request, bucket, object string) (operation, error) {
 	switch r.Method {
 	case http.MethodPost:
-		return s.createMultipartUpload(w, r, validatedKey, bucket, object)
+		return operation{action: actionPutObject, serve: func(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
+			return s.createMultipartUpload(w, r, access, object)
+		}}, nil
 	case http.MethodGet:
-		return s.listMultipartUploads(w, r, validatedKey, bucket)
+		if bucket == "" {
+			return operation{}, s3errs.ErrInvalidRequest
+		}
+		return operation{action: actionListBucketMultipartUploads, serve: s.listMultipartUploads}, nil
 	default:
-		return s3errs.ErrMethodNotAllowed
+		return operation{}, s3errs.ErrMethodNotAllowed
 	}
 }
 
-func (s *s3) abortMultipartUpload(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object string, uploadID UploadID) error {
+func (s *s3) abortMultipartUpload(w http.ResponseWriter, r *http.Request, access *bucketAccess, object string, uploadID UploadID) error {
+	bucket := access.bucket
 	log := s.logger.With(
 		zap.String("bucket", bucket),
 		zap.String("object", object),
@@ -230,7 +231,7 @@ func (s *s3) abortMultipartUpload(w http.ResponseWriter, r *http.Request, access
 	)
 	log.Debug("abort multipart upload")
 
-	if err := s.backend.AbortMultipartUpload(r.Context(), accessKeyID, bucket, object, uploadID); err != nil {
+	if err := s.backend.AbortMultipartUpload(r.Context(), bucket, object, uploadID); err != nil {
 		return err
 	}
 
@@ -238,7 +239,8 @@ func (s *s3) abortMultipartUpload(w http.ResponseWriter, r *http.Request, access
 	return nil
 }
 
-func (s *s3) createMultipartUpload(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object string) error {
+func (s *s3) createMultipartUpload(w http.ResponseWriter, r *http.Request, access *bucketAccess, object string) error {
+	bucket := access.bucket
 	log := s.logger.With(
 		zap.String("bucket", bucket),
 		zap.String("object", object),
@@ -256,7 +258,7 @@ func (s *s3) createMultipartUpload(w http.ResponseWriter, r *http.Request, acces
 		return err
 	}
 
-	result, err := s.backend.CreateMultipartUpload(r.Context(), accessKeyID, bucket, object, CreateMultipartUploadOptions{
+	result, err := s.backend.CreateMultipartUpload(r.Context(), bucket, object, CreateMultipartUploadOptions{
 		Meta: meta,
 	})
 	if err != nil {
@@ -271,11 +273,8 @@ func (s *s3) createMultipartUpload(w http.ResponseWriter, r *http.Request, acces
 	})
 }
 
-func (s *s3) listMultipartUploads(w http.ResponseWriter, r *http.Request, accessKeyID, bucket string) error {
-	if bucket == "" {
-		return s3errs.ErrInvalidRequest
-	}
-
+func (s *s3) listMultipartUploads(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
+	bucket := access.bucket
 	query := r.URL.Query()
 	maxUploads, err := parseClampedInt(query.Get("max-uploads"), DefaultMaxMultipartUploads, 1, MaxMultipartUploads)
 	if err != nil {
@@ -294,7 +293,7 @@ func (s *s3) listMultipartUploads(w http.ResponseWriter, r *http.Request, access
 		MaxUploads:     maxUploads,
 	}
 
-	result, err := s.backend.ListMultipartUploads(r.Context(), accessKeyID, bucket, opts, page)
+	result, err := s.backend.ListMultipartUploads(r.Context(), bucket, opts, page)
 	if err != nil {
 		return err
 	}
@@ -316,11 +315,8 @@ func (s *s3) listMultipartUploads(w http.ResponseWriter, r *http.Request, access
 		resp.CommonPrefixes = append(resp.CommonPrefixes, CommonPrefix{Prefix: cp})
 	}
 
-	owner, err := s.backend.UserInfo(r.Context(), accessKeyID)
-	if err != nil {
-		return err
-	}
-
+	// the bucket owner owns every upload in it, whoever initiated it
+	owner := access.owner
 	for _, upload := range result.Uploads {
 		resp.Uploads = append(resp.Uploads, ListedMultipartUpload{
 			Key:          upload.Key,
@@ -335,7 +331,8 @@ func (s *s3) listMultipartUploads(w http.ResponseWriter, r *http.Request, access
 	return writeXMLResponse(w, http.StatusOK, resp)
 }
 
-func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, accessKeyID, dstBucket, dstObject string, uploadID UploadID, partNumber int) error {
+func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, dst *bucketAccess, dstObject string, uploadID UploadID, partNumber int) error {
+	dstBucket := dst.bucket
 	source := r.Header.Get("X-Amz-Copy-Source")
 	rnge := r.Header.Get("X-Amz-Copy-Source-Range")
 	log := s.logger.With(zap.String("dstBucket", dstBucket),
@@ -360,13 +357,18 @@ func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, accessKeyID, dstBu
 		return err
 	}
 
-	result, err := s.backend.UploadPartCopy(r.Context(), accessKeyID, srcBucket, srcObject, srcVersion, dstBucket, dstObject, uploadID, UploadPartCopyOptions{
+	src, err := s.authorizeCopySource(r, dst, srcBucket, srcObject, srcVersion)
+	if err != nil {
+		return err
+	}
+
+	result, err := s.backend.UploadPartCopy(r.Context(), srcBucket, srcObject, srcVersion, dstBucket, dstObject, uploadID, UploadPartCopyOptions{
 		PartNumber:          partNumber,
 		Range:               srcRange,
 		SourcePreconditions: copySourcePreconditions(r.Header),
 	})
 	if err != nil {
-		return err
+		return src.hideMissingSource(err)
 	}
 
 	etag := FormatETag(result.ContentMD5[:], 0)
@@ -380,7 +382,8 @@ func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, accessKeyID, dstBu
 	})
 }
 
-func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object string, uploadID UploadID) error {
+func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, access *bucketAccess, object string, uploadID UploadID) error {
+	bucket := access.bucket
 	log := s.logger.With(
 		zap.String("bucket", bucket),
 		zap.String("object", object),
@@ -399,7 +402,7 @@ func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, accessKeyID, 
 
 	// copy part
 	if _, ok := r.Header["X-Amz-Copy-Source"]; ok {
-		return s.copyPart(w, r, accessKeyID, bucket, object, uploadID, int(*partNumber))
+		return s.copyPart(w, r, access, object, uploadID, int(*partNumber))
 	}
 
 	// content length is mandatory
@@ -424,7 +427,7 @@ func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, accessKeyID, 
 		return err
 	}
 
-	res, err := s.backend.UploadPart(r.Context(), accessKeyID, bucket, object, uploadID, r.Body, UploadPartOptions{
+	res, err := s.backend.UploadPart(r.Context(), bucket, object, uploadID, r.Body, UploadPartOptions{
 		PartNumber:    int(*partNumber),
 		ContentLength: r.ContentLength,
 		ContentMD5:    contentMD5,
@@ -438,7 +441,8 @@ func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, accessKeyID, 
 	return nil
 }
 
-func (s *s3) listUploadParts(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object string, uploadID UploadID) error {
+func (s *s3) listUploadParts(w http.ResponseWriter, r *http.Request, access *bucketAccess, object string, uploadID UploadID) error {
+	bucket := access.bucket
 	log := s.logger.With(
 		zap.String("bucket", bucket),
 		zap.String("object", object),
@@ -453,7 +457,7 @@ func (s *s3) listUploadParts(w http.ResponseWriter, r *http.Request, accessKeyID
 	}
 
 	// list parts
-	result, err := s.backend.ListParts(r.Context(), accessKeyID, bucket, object, uploadID, page)
+	result, err := s.backend.ListParts(r.Context(), bucket, object, uploadID, page)
 	if err != nil {
 		return err
 	}
@@ -475,12 +479,8 @@ func (s *s3) listUploadParts(w http.ResponseWriter, r *http.Request, accessKeyID
 		}
 	}
 
-	owner, err := s.backend.UserInfo(r.Context(), accessKeyID)
-	if err != nil {
-		return err
-	}
-	resp.Owner = owner
-	resp.Initiator = owner
+	resp.Owner = access.owner
+	resp.Initiator = access.owner
 
 	for _, part := range result.Parts {
 		resp.Parts = append(resp.Parts, ListedPartResponse{
@@ -494,7 +494,8 @@ func (s *s3) listUploadParts(w http.ResponseWriter, r *http.Request, accessKeyID
 	return writeXMLResponse(w, http.StatusOK, resp)
 }
 
-func (s *s3) completeMultipartUpload(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object string, uploadID UploadID) error {
+func (s *s3) completeMultipartUpload(w http.ResponseWriter, r *http.Request, access *bucketAccess, object string, uploadID UploadID) error {
+	bucket := access.bucket
 	log := s.logger.With(
 		zap.String("bucket", bucket),
 		zap.String("object", object),
@@ -522,7 +523,7 @@ func (s *s3) completeMultipartUpload(w http.ResponseWriter, r *http.Request, acc
 		}
 	}
 
-	res, err := s.backend.CompleteMultipartUpload(r.Context(), accessKeyID, bucket, object, uploadID, parts, requestPreconditions(r.Header))
+	res, err := s.backend.CompleteMultipartUpload(r.Context(), bucket, object, uploadID, parts, requestPreconditions(r.Header))
 	if err != nil {
 		return err
 	}

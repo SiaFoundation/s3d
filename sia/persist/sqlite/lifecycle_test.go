@@ -8,7 +8,6 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia/objects"
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"go.uber.org/zap"
 	"lukechampine.com/frand"
 )
@@ -26,17 +25,17 @@ func TestBucketLifecycleConfiguration(t *testing.T) {
 
 	// missing configuration returns ErrNoSuchLifecycleConfiguration; unknown
 	// bucket returns ErrNoSuchBucket
-	if _, err := store.GetBucketLifecycleConfiguration(accessKeyID, bucket); !errors.Is(err, s3errs.ErrNoSuchLifecycleConfiguration) {
+	if _, err := store.GetBucketLifecycleConfiguration(bucket); !errors.Is(err, s3errs.ErrNoSuchLifecycleConfiguration) {
 		t.Fatalf("expected ErrNoSuchLifecycleConfiguration, got %v", err)
-	} else if err := store.PutBucketLifecycleConfiguration(accessKeyID, "nope", "<x/>"); !errors.Is(err, s3errs.ErrNoSuchBucket) {
+	} else if err := store.PutBucketLifecycleConfiguration("nope", "<x/>"); !errors.Is(err, s3errs.ErrNoSuchBucket) {
 		t.Fatalf("expected ErrNoSuchBucket, got %v", err)
 	}
 
 	// store and read back
 	const config = "<LifecycleConfiguration></LifecycleConfiguration>"
-	if err := store.PutBucketLifecycleConfiguration(accessKeyID, bucket, config); err != nil {
+	if err := store.PutBucketLifecycleConfiguration(bucket, config); err != nil {
 		t.Fatal(err)
-	} else if got, err := store.GetBucketLifecycleConfiguration(accessKeyID, bucket); err != nil {
+	} else if got, err := store.GetBucketLifecycleConfiguration(bucket); err != nil {
 		t.Fatal(err)
 	} else if got != config {
 		t.Fatalf("expected %q, got %q", config, got)
@@ -44,11 +43,11 @@ func TestBucketLifecycleConfiguration(t *testing.T) {
 
 	// overwrite replaces the configuration
 	const updated = "<LifecycleConfiguration><Rule/></LifecycleConfiguration>"
-	if err := store.PutBucketLifecycleConfiguration(accessKeyID, bucket, updated); err != nil {
+	if err := store.PutBucketLifecycleConfiguration(bucket, updated); err != nil {
 		t.Fatal(err)
 	}
 	store.assertCount(1, "bucket_lifecycle_configurations")
-	if got, err := store.GetBucketLifecycleConfiguration(accessKeyID, bucket); err != nil {
+	if got, err := store.GetBucketLifecycleConfiguration(bucket); err != nil {
 		t.Fatal(err)
 	} else if got != updated {
 		t.Fatalf("expected %q, got %q", updated, got)
@@ -63,13 +62,13 @@ func TestBucketLifecycleConfiguration(t *testing.T) {
 	}
 
 	// delete removes the configuration and is idempotent
-	if err := store.DeleteBucketLifecycleConfiguration(accessKeyID, bucket); err != nil {
+	if err := store.DeleteBucketLifecycleConfiguration(bucket); err != nil {
 		t.Fatal(err)
 	}
 	store.assertCount(0, "bucket_lifecycle_configurations")
-	if err := store.DeleteBucketLifecycleConfiguration(accessKeyID, bucket); err != nil {
+	if err := store.DeleteBucketLifecycleConfiguration(bucket); err != nil {
 		t.Fatalf("expected delete to be idempotent, got %v", err)
-	} else if _, err := store.GetBucketLifecycleConfiguration(accessKeyID, bucket); !errors.Is(err, s3errs.ErrNoSuchLifecycleConfiguration) {
+	} else if _, err := store.GetBucketLifecycleConfiguration(bucket); !errors.Is(err, s3errs.ErrNoSuchLifecycleConfiguration) {
 		t.Fatalf("expected ErrNoSuchLifecycleConfiguration, got %v", err)
 	}
 }
@@ -87,21 +86,21 @@ func TestAbortMultipartUploads(t *testing.T) {
 
 	// old upload under the "logs/" prefix with a single part
 	oldUpload := s3.NewUploadID()
-	if err := store.CreateMultipartUpload(accessKeyID, bucket, "logs/a", oldUpload, nil); err != nil {
+	if err := store.CreateMultipartUpload(bucket, "logs/a", oldUpload, nil); err != nil {
 		t.Fatal(err)
-	} else if _, _, err := store.AddMultipartPart(accessKeyID, bucket, "logs/a", oldUpload, "p1", 1, frand.Entropy128(), 500); err != nil {
+	} else if _, _, err := store.AddMultipartPart(bucket, "logs/a", oldUpload, "p1", 1, frand.Entropy128(), 500); err != nil {
 		t.Fatal(err)
 	}
 
 	// recent upload under the "logs/" prefix
 	newUpload := s3.NewUploadID()
-	if err := store.CreateMultipartUpload(accessKeyID, bucket, "logs/b", newUpload, nil); err != nil {
+	if err := store.CreateMultipartUpload(bucket, "logs/b", newUpload, nil); err != nil {
 		t.Fatal(err)
 	}
 
 	// upload under a different prefix
 	otherUpload := s3.NewUploadID()
-	if err := store.CreateMultipartUpload(accessKeyID, bucket, "data/c", otherUpload, nil); err != nil {
+	if err := store.CreateMultipartUpload(bucket, "data/c", otherUpload, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -140,17 +139,17 @@ func TestExpireObjects(t *testing.T) {
 
 	// pending on-disk object that should expire
 	oldFile := "old.obj"
-	if _, _, err := store.PutObject(accessKeyID, bucket, "logs/old", objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 100, FileName: &oldFile}); err != nil {
+	if _, _, err := store.PutObject(bucket, "logs/old", objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 100, FileName: &oldFile}); err != nil {
 		t.Fatal(err)
 	}
 	// recent object under the same prefix that should survive
 	newFile := "new.obj"
-	if _, _, err := store.PutObject(accessKeyID, bucket, "logs/new", objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 200, FileName: &newFile}); err != nil {
+	if _, _, err := store.PutObject(bucket, "logs/new", objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 200, FileName: &newFile}); err != nil {
 		t.Fatal(err)
 	}
 	// object under a different prefix that should survive
 	otherFile := "other.obj"
-	if _, _, err := store.PutObject(accessKeyID, bucket, "data/keep", objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 300, FileName: &otherFile}); err != nil {
+	if _, _, err := store.PutObject(bucket, "data/keep", objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 300, FileName: &otherFile}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -182,15 +181,15 @@ func TestExpireObjectsVersions(t *testing.T) {
 	store := initTestDB(t, zap.NewNop())
 	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
 		t.Fatal(err)
-	} else if err := store.PutBucketVersioning(accessKeyID, bucket, s3.VersioningStatusEnabled); err != nil {
+	} else if err := store.PutBucketVersioning(bucket, s3.VersioningStatusEnabled); err != nil {
 		t.Fatal(err)
 	}
 
-	oldVersion, _, err := store.PutObject(accessKeyID, bucket, key, objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 100, FileName: new(string)})
+	oldVersion, _, err := store.PutObject(bucket, key, objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 100, FileName: new(string)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	currentVersion, _, err := store.PutObject(accessKeyID, bucket, key, objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 200, FileName: new(string)})
+	currentVersion, _, err := store.PutObject(bucket, key, objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 200, FileName: new(string)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,11 +208,11 @@ func TestExpireObjectsVersions(t *testing.T) {
 	} else if len(orphans) != 0 {
 		t.Fatalf("expected no orphans, got %+v", orphans)
 	}
-	if obj, err := store.GetObject(aws.String(accessKeyID), bucket, key, s3.NoVersion(), nil, s3.ActionGetObject); err != nil {
+	if obj, err := store.GetObject(bucket, key, s3.NoVersion(), nil); err != nil {
 		t.Fatal(err)
 	} else if obj.VersionID != currentVersion {
 		t.Fatalf("expected current version %q, got %q", currentVersion, obj.VersionID)
-	} else if _, err := store.GetObject(aws.String(accessKeyID), bucket, key, s3.SpecificVersion(oldVersion), nil, s3.ActionGetObject); err != nil {
+	} else if _, err := store.GetObject(bucket, key, s3.SpecificVersion(oldVersion), nil); err != nil {
 		t.Fatalf("expected old noncurrent version to remain, got %v", err)
 	}
 }

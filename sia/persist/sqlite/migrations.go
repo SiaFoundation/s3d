@@ -487,4 +487,10 @@ DROP TABLE global_settings;
 ALTER TABLE global_settings_new RENAME TO global_settings;`)
 		return err
 	},
+	// drop public_actions; access is now derived from the stored policy
+	// document on every request.
+	func(tx *txn, _ *zap.Logger) error {
+		_, err := tx.Exec(`ALTER TABLE buckets DROP COLUMN public_actions`)
+		return err
+	},
 }

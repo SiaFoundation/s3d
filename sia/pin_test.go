@@ -10,7 +10,6 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"lukechampine.com/frand"
 )
 
@@ -30,7 +29,7 @@ func stageUpload(t *testing.T, memSDK *testutil.MemorySDK, store *sqlite.Store, 
 
 	fn := name + ".upload"
 	md5 := frand.Entropy128()
-	if _, _, err := store.PutObject(testutil.AccessKeyID, bucket, name, objects.PutOptions{ContentMD5: md5, Length: int64(len(data)), FileName: &fn}); err != nil {
+	if _, _, err := store.PutObject(bucket, name, objects.PutOptions{ContentMD5: md5, Length: int64(len(data)), FileName: &fn}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.MarkObjectUploaded(bucket, name, "", md5, sealed, pinBefore); err != nil {
@@ -84,7 +83,7 @@ func TestPinLoopRetriesOnFailure(t *testing.T) {
 
 	// the object is still uploaded (sia_object_id set) - failure didn't
 	// demote it, just delayed the retry
-	obj, err := store.GetObject(aws.String(testutil.AccessKeyID), bucket, name, s3.NoVersion(), nil, s3.ActionGetObject)
+	obj, err := store.GetObject(bucket, name, s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.SiaObject == nil {
@@ -125,7 +124,7 @@ func TestPinLoopDemotesExpiredUploads(t *testing.T) {
 	}
 
 	// the object should be back in the upload queue with sia_object_id cleared
-	obj, err := store.GetObject(aws.String(testutil.AccessKeyID), bucket, name, s3.NoVersion(), nil, s3.ActionGetObject)
+	obj, err := store.GetObject(bucket, name, s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.SiaObject != nil {
@@ -173,13 +172,13 @@ func TestPinLoopPinsCopyAfterSourceDeleted(t *testing.T) {
 	stageUpload(t, memSDK, store, bucket, srcName, time.Now().Add(time.Hour))
 
 	// copy src -> dst while src is uploaded but not yet pinned
-	if _, _, err := store.CopyObject(testutil.AccessKeyID, bucket, srcName, s3.NoVersion(), bucket, dstName, s3.CopyObjectOptions{Replace: true}); err != nil {
+	if _, _, err := store.CopyObject(bucket, srcName, s3.NoVersion(), bucket, dstName, s3.CopyObjectOptions{Replace: true}); err != nil {
 		t.Fatal(err)
 	}
 
 	// delete src before the pin loop has a chance to run; src's
 	// unpinned_objects row goes with it via FK cascade
-	if _, _, _, err := store.DeleteObject(testutil.AccessKeyID, bucket, s3.ObjectID{Key: srcName}); err != nil {
+	if _, _, _, err := store.DeleteObject(bucket, s3.ObjectID{Key: srcName}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -191,7 +190,7 @@ func TestPinLoopPinsCopyAfterSourceDeleted(t *testing.T) {
 	}
 
 	// dst's on-disk file should have been released and its filename cleared
-	dst, err := store.GetObject(aws.String(testutil.AccessKeyID), bucket, dstName, s3.NoVersion(), nil, s3.ActionGetObject)
+	dst, err := store.GetObject(bucket, dstName, s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if dst.SiaObject == nil {

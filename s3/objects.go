@@ -1,7 +1,6 @@
 package s3
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/xml"
@@ -141,6 +140,11 @@ type PutObjectOptions struct {
 	ContentSHA256 *[32]byte
 	Checksum      *RequestChecksum
 	Preconditions ObjectPreconditions
+
+	// BucketOwner, if set, is the [UserInfo.ID] that must still own the bucket
+	// when the object is stored, since the bucket may be recreated while the
+	// body is read. Otherwise [ErrNoSuchBucket] must be returned.
+	BucketOwner string
 }
 
 // RequestChecksum is an additional checksum a client asked to have validated,
@@ -171,6 +175,22 @@ type CopyObjectOptions struct {
 	DestinationPreconditions ObjectPreconditions
 }
 
+// CopySourceError wraps an error about the source of a copy, so the S3 API
+// handler can tell a missing source from a missing destination.
+type CopySourceError struct {
+	Err error
+}
+
+// Error implements the error interface.
+func (e CopySourceError) Error() string {
+	return "copy source: " + e.Err.Error()
+}
+
+// Unwrap returns the wrapped error.
+func (e CopySourceError) Unwrap() error {
+	return e.Err
+}
+
 var unsupportedObjectSubresources = map[string]struct{}{
 	"acl":          {},
 	"attributes":   {},
@@ -183,41 +203,25 @@ var unsupportedObjectSubresources = map[string]struct{}{
 	"torrent":      {},
 }
 
-// routeObject handles URLs that contain both a bucket path segment and an
-// object path segment.
-func (s *s3) routeObject(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket, object string) error {
+// routeObject routes URLs that contain both a bucket path segment and an object
+// path segment.
+func (s *s3) routeObject(r *http.Request, object string) (operation, error) {
 	for param := range r.URL.Query() {
 		if _, ok := unsupportedObjectSubresources[param]; ok {
-			return fmt.Errorf("unsupported query subresource %q: %w", param, s3errs.ErrNotImplemented)
+			return operation{}, fmt.Errorf("unsupported query subresource %q: %w", param, s3errs.ErrNotImplemented)
 		}
 	}
 
-	// routes with optional authentication
-	switch r.Method {
-	case http.MethodGet:
-		return s.getObject(w, r, accessKeyID, bucket, object, NoVersion())
-	case http.MethodHead:
-		return s.headObject(w, r, accessKeyID, bucket, object, NoVersion())
-	default:
+	if r.Method == http.MethodPut {
+		return operation{action: actionPutObject, serve: func(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
+			return s.putObject(w, r, access, object)
+		}}, nil
 	}
-
-	validatedKey, err := assertAuth(accessKeyID)
-	if err != nil {
-		return err
-	}
-
-	// routes with mandatory authentication
-	switch r.Method {
-	case http.MethodPut:
-		return s.putObject(w, r, validatedKey, bucket, object)
-	case http.MethodDelete:
-		return s.deleteObject(w, r, validatedKey, bucket, object, NoVersion())
-	default:
-		return s3errs.ErrMethodNotAllowed
-	}
+	return s.routeObjectVersion(r, object, NoVersion())
 }
 
-func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, accessKeyID, dstBucket, dstObject string, meta map[string]string) error {
+func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, dst *bucketAccess, dstObject string, meta map[string]string) error {
+	dstBucket := dst.bucket
 	source := r.Header.Get("X-Amz-Copy-Source")
 	log := s.logger.With(zap.String("dstBucket", dstBucket),
 		zap.String("dstObject", dstObject),
@@ -242,14 +246,19 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, accessKeyID, dst
 		return s3errs.ErrInvalidRequest
 	}
 
-	result, err := s.backend.CopyObject(r.Context(), accessKeyID, srcBucket, srcObject, srcVersion, dstBucket, dstObject, CopyObjectOptions{
+	src, err := s.authorizeCopySource(r, dst, srcBucket, srcObject, srcVersion)
+	if err != nil {
+		return err
+	}
+
+	result, err := s.backend.CopyObject(r.Context(), srcBucket, srcObject, srcVersion, dstBucket, dstObject, CopyObjectOptions{
 		Meta:                     meta,
 		Replace:                  replace,
 		SourcePreconditions:      copySourcePreconditions(r.Header),
 		DestinationPreconditions: requestPreconditions(r.Header),
 	})
 	if err != nil {
-		return err
+		return src.hideMissingSource(err)
 	}
 
 	if result.VersionID != "" {
@@ -267,7 +276,8 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, accessKeyID, dst
 	})
 }
 
-func (s *s3) deleteObject(w http.ResponseWriter, r *http.Request, accessKeyID string, bucket, object string, version VersionRequest) error {
+func (s *s3) deleteObject(w http.ResponseWriter, r *http.Request, access *bucketAccess, object string, version VersionRequest) error {
+	bucket := access.bucket
 	log := s.logger.With(zap.String("bucket", bucket),
 		zap.String("object", object),
 		zap.String("version", version.LogValue()))
@@ -278,7 +288,7 @@ func (s *s3) deleteObject(w http.ResponseWriter, r *http.Request, accessKeyID st
 		return err
 	}
 
-	result, err := s.backend.DeleteObject(r.Context(), accessKeyID, bucket, oid)
+	result, err := s.backend.DeleteObject(r.Context(), bucket, oid)
 	if err != nil {
 		return err
 	}
@@ -294,7 +304,12 @@ func (s *s3) deleteObject(w http.ResponseWriter, r *http.Request, accessKeyID st
 	return nil
 }
 
-func (s *s3) deleteObjects(w http.ResponseWriter, r *http.Request, accessKeyID string, bucket string) error {
+// deleteObjects handles DeleteObjects requests. Each object is authorized
+// here, and a denied one is reported in the result.
+//
+// https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html
+func (s *s3) deleteObjects(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
+	bucket := access.bucket
 	log := s.logger.With(zap.String("bucket", bucket))
 	log.Debug("delete objects")
 
@@ -307,19 +322,33 @@ func (s *s3) deleteObjects(w http.ResponseWriter, r *http.Request, accessKeyID s
 		return s3errs.ErrMalformedXML
 	}
 
-	for i := range req.Objects {
+	var allowed []ObjectID
+	var denied []ErrorResult
+	for _, obj := range req.Objects {
 		// the wire value "null" maps to the null version (empty internally); a
 		// nil VersionID means no version was specified.
-		if v := req.Objects[i].VersionID; v != nil && *v == Null {
-			empty := ""
-			req.Objects[i].VersionID = &empty
+		if obj.VersionID != nil && *obj.VersionID == Null {
+			obj.VersionID = new(string)
+		}
+		version := NoVersion()
+		if obj.VersionID != nil {
+			version = SpecificVersion(*obj.VersionID)
+		}
+		if err := access.assertObjectAllowed(deleteAction(version), obj.Key); err != nil {
+			denied = append(denied, ErrorResult{Key: obj.Key, Code: s3errs.ErrorCode(err), Message: err.Error()})
+		} else {
+			allowed = append(allowed, obj)
 		}
 	}
-
-	res, err := s.backend.DeleteObjects(r.Context(), accessKeyID, bucket, req.Objects)
-	if err != nil {
-		return err
+	res := &ObjectsDeleteResult{}
+	if len(allowed) > 0 {
+		var err error
+		res, err = s.backend.DeleteObjects(r.Context(), bucket, allowed)
+		if err != nil {
+			return err
+		}
 	}
+	res.Error = append(res.Error, denied...)
 
 	if req.Quiet {
 		res.Deleted = nil
@@ -327,19 +356,12 @@ func (s *s3) deleteObjects(w http.ResponseWriter, r *http.Request, accessKeyID s
 	return writeXMLResponse(w, http.StatusOK, res)
 }
 
-func (s *s3) getObject(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket, object string, version VersionRequest) error {
-	return s.serveObject(w, r, accessKeyID, bucket, object, version, false)
-}
-
-func (s *s3) headObject(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket, object string, version VersionRequest) error {
-	return s.serveObject(w, r, accessKeyID, bucket, object, version, true)
-}
-
 // serveObject implements the shared logic for GET and HEAD on a /bucket/object
 // URL. The only meaningful difference is that HEAD never streams the body. When
 // head is true, the backend's HeadObject is used and any returned body is
 // closed; otherwise GetObject is used and the body is streamed to the response.
-func (s *s3) serveObject(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket, object string, version VersionRequest, head bool) error {
+func (s *s3) serveObject(w http.ResponseWriter, r *http.Request, access *bucketAccess, object string, version VersionRequest, head bool) error {
+	bucket := access.bucket
 	log := s.logger.With(zap.String("bucket", bucket),
 		zap.String("object", object),
 		zap.String("version", version.LogValue()))
@@ -364,12 +386,12 @@ func (s *s3) serveObject(w http.ResponseWriter, r *http.Request, accessKeyID *st
 	// retrieve object (HEAD fetches metadata only)
 	var obj *Object
 	if head {
-		obj, err = s.backend.HeadObject(r.Context(), accessKeyID, bucket, object, version, rnge, partNumber)
+		obj, err = s.backend.HeadObject(r.Context(), bucket, object, version, rnge, partNumber)
 	} else {
-		obj, err = s.backend.GetObject(r.Context(), accessKeyID, bucket, object, version, rnge, partNumber)
+		obj, err = s.backend.GetObject(r.Context(), bucket, object, version, rnge, partNumber)
 	}
 	if err != nil {
-		return err
+		return access.hideMissing(err)
 	}
 	// the body is only consumed on the successful GET path below; close it on
 	// every other path (HEAD, delete marker, error)
@@ -381,14 +403,19 @@ func (s *s3) serveObject(w http.ResponseWriter, r *http.Request, accessKeyID *st
 
 	// a delete marker has no data and cannot be retrieved with GET or HEAD.
 	if obj.IsDeleteMarker {
+		// a current delete marker proves the key once existed, so it is
+		// hidden like a missing key
+		if !version.Specified {
+			if err := access.assertBucketAllowed(actionListBucket); err != nil {
+				return err
+			}
+		}
 		return deleteMarkerError(w, obj, version)
 	}
 
 	// write headers
 	setVersionHeaders(w, obj)
-	if accessKeyID != nil {
-		s.setLifecycleExpirationHeader(r.Context(), w, *accessKeyID, bucket, object, obj.LastModified)
-	}
+	s.setLifecycleExpirationHeader(w, r, access, object, obj.LastModified)
 	if err := writeGetOrHeadObjectHeaders(obj, w, r); err != nil {
 		return err
 	}
@@ -499,7 +526,8 @@ func (b *ObjectsListResult) AddPrefix(prefix string) {
 	}
 }
 
-func (s *s3) listObjectsV1(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket string) error {
+func (s *s3) listObjectsV1(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
+	bucket := access.bucket
 	log := s.logger.With(zap.String("bucket", bucket))
 	log.Debug("list objects v1")
 
@@ -511,17 +539,19 @@ func (s *s3) listObjectsV1(w http.ResponseWriter, r *http.Request, accessKeyID *
 		return err
 	}
 
-	page := ListObjectsPage{MaxKeys: maxKeys, FetchOwner: aws.Bool(true)}
+	page := ListObjectsPage{MaxKeys: maxKeys}
 	if _, hasMarker := q["marker"]; hasMarker {
 		marker := q.Get("marker")
 		page.Marker = &marker
 	}
 
 	// list objects
-	objects, err := s.backend.ListObjects(r.Context(), accessKeyID, bucket, prefix, page)
+	objects, err := s.backend.ListObjects(r.Context(), bucket, prefix, page)
 	if err != nil {
 		return err
 	}
+	// V1 always reports owners
+	setOwner(objects, access.owner)
 
 	// URL-escape object keys and common prefixes if requested
 	if r.FormValue("encoding-type") == "url" {
@@ -552,7 +582,8 @@ func (s *s3) listObjectsV1(w http.ResponseWriter, r *http.Request, accessKeyID *
 	return writeXMLResponse(w, http.StatusOK, result)
 }
 
-func (s *s3) listObjectsV2(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket string) error {
+func (s *s3) listObjectsV2(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
+	bucket := access.bucket
 	log := s.logger.With(zap.String("bucket", bucket))
 	log.Debug("list objects")
 
@@ -570,9 +601,11 @@ func (s *s3) listObjectsV2(w http.ResponseWriter, r *http.Request, accessKeyID *
 	}
 
 	// list objects
-	objects, err := s.backend.ListObjects(r.Context(), accessKeyID, bucket, prefix, page)
+	objects, err := s.backend.ListObjects(r.Context(), bucket, prefix, page)
 	if err != nil {
 		return err
+	} else if aws.ToBool(page.FetchOwner) {
+		setOwner(objects, access.owner)
 	}
 
 	// URL-escape object keys and common prefixes if requested
@@ -620,7 +653,8 @@ func (s *s3) listObjectsV2(w http.ResponseWriter, r *http.Request, accessKeyID *
 	return writeXMLResponse(w, http.StatusOK, result)
 }
 
-func (s *s3) listObjectVersions(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket string) error {
+func (s *s3) listObjectVersions(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
+	bucket := access.bucket
 	log := s.logger.With(zap.String("bucket", bucket))
 	log.Debug("list object versions")
 
@@ -632,7 +666,7 @@ func (s *s3) listObjectVersions(w http.ResponseWriter, r *http.Request, accessKe
 		return err
 	}
 
-	versions, err := s.backend.ListObjectVersions(r.Context(), accessKeyID, bucket, prefix, page)
+	versions, err := s.backend.ListObjectVersions(r.Context(), bucket, prefix, page)
 	if err != nil {
 		return err
 	}
@@ -674,7 +708,7 @@ func (s *s3) listObjectVersions(w http.ResponseWriter, r *http.Request, accessKe
 				VersionID:    FormatVersion(v.VersionID),
 				IsLatest:     v.IsLatest,
 				LastModified: NewContentTime(v.LastModified),
-				Owner:        v.Owner,
+				Owner:        access.owner,
 			})
 			continue
 		}
@@ -685,7 +719,7 @@ func (s *s3) listObjectVersions(w http.ResponseWriter, r *http.Request, accessKe
 			LastModified: NewContentTime(v.LastModified),
 			Size:         v.Size,
 			ETag:         v.ETag,
-			Owner:        v.Owner,
+			Owner:        access.owner,
 		})
 	}
 	result.CommonPrefixes = versions.CommonPrefixes
@@ -693,6 +727,14 @@ func (s *s3) listObjectVersions(w http.ResponseWriter, r *http.Request, accessKe
 		result.CommonPrefixes[i].Prefix = escape(result.CommonPrefixes[i].Prefix)
 	}
 	return writeXMLResponse(w, http.StatusOK, result)
+}
+
+// setOwner reports the bucket's owner as the owner of every listed object,
+// whoever wrote it.
+func setOwner(objects *ObjectsListResult, owner *UserInfo) {
+	for i := range objects.Contents {
+		objects.Contents[i].Owner = owner
+	}
 }
 
 // FormatVersion renders an internal version ID for an S3 response. The null
@@ -748,7 +790,8 @@ func (v VersionRequest) LogValue() string {
 	return FormatVersion(v.ID)
 }
 
-func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID string, bucket, object string) (err error) {
+func (s *s3) putObject(w http.ResponseWriter, r *http.Request, access *bucketAccess, object string) (err error) {
+	bucket := access.bucket
 	log := s.logger.With(zap.String("bucket", bucket),
 		zap.String("object", object))
 	log.Debug("put object")
@@ -765,7 +808,7 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID strin
 	}
 
 	if _, ok := r.Header["X-Amz-Copy-Source"]; ok {
-		return s.copyObject(w, r, accessKeyID, bucket, object, meta)
+		return s.copyObject(w, r, access, object, meta)
 	}
 
 	// content length is mandatory
@@ -795,19 +838,20 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID strin
 		return err
 	}
 
-	res, err := s.backend.PutObject(r.Context(), accessKeyID, bucket, object, r.Body, PutObjectOptions{
+	res, err := s.backend.PutObject(r.Context(), bucket, object, r.Body, PutObjectOptions{
 		ContentLength: r.ContentLength,
 		ContentMD5:    contentMD5,
 		ContentSHA256: contentSHA256,
 		Checksum:      checksum,
 		Meta:          meta,
 		Preconditions: requestPreconditions(r.Header),
+		BucketOwner:   access.owner.ID,
 	})
 	if err != nil {
 		return err
 	}
 
-	s.setLifecycleExpirationHeader(r.Context(), w, accessKeyID, bucket, object, time.Now())
+	s.setLifecycleExpirationHeader(w, r, access, object, time.Now())
 	if res.VersionID != "" {
 		w.Header().Set("x-amz-version-id", res.VersionID)
 	}
@@ -994,9 +1038,8 @@ func metadataHeaders(headers map[string][]string, sizeLimit int) (map[string]str
 
 // ListObjectsPage specifies pagination options for listing objects in a bucket.
 type ListObjectsPage struct {
-	// FetchOwner specifies whether owner information should be included in
-	// the response. If nil or false, the Owner field of returned objects will
-	// be nil. If true, the Owner field of returned objects will be set.
+	// FetchOwner specifies whether the response reports object owners. Backends
+	// leave Owner nil; the S3 API handler fills in the bucket owner.
 	FetchOwner *bool
 
 	// Marker specifies the key in the bucket that represents the last item in
@@ -1018,9 +1061,6 @@ type ListObjectsPage struct {
 // ListObjectVersionsPage specifies pagination options for listing object
 // versions in a bucket.
 type ListObjectVersionsPage struct {
-	// FetchOwner specifies whether owner information should be included.
-	FetchOwner *bool
-
 	// KeyMarker is the key to resume listing after, or nil to start from the
 	// beginning.
 	KeyMarker *string
@@ -1044,7 +1084,6 @@ type ObjectVersion struct {
 	LastModified   time.Time
 	ETag           string // empty for delete markers
 	Size           int64
-	Owner          *UserInfo
 }
 
 // ObjectVersionsListResult contains the result of a ListObjectVersions
@@ -1254,7 +1293,6 @@ func listObjectVersionsPageFromQuery(query url.Values) (page ListObjectVersionsP
 	}
 
 	page.MaxKeys = maxKeys
-	page.FetchOwner = aws.Bool(true) // always fetch owner for the versions endpoint
 
 	if _, ok := query["key-marker"]; ok {
 		page.KeyMarker = aws.String(query.Get("key-marker"))
@@ -1359,8 +1397,11 @@ func parseRangeHeader(s string) (*ObjectRangeRequest, error) {
 // setLifecycleExpirationHeader sets the x-amz-expiration response header when an
 // enabled lifecycle expiration rule applies to the object. It is best-effort:
 // any error fetching the configuration is swallowed so the request is unaffected.
-func (s *s3) setLifecycleExpirationHeader(ctx context.Context, w http.ResponseWriter, accessKeyID, bucket, object string, lastModified time.Time) {
-	config, err := s.backend.GetBucketLifecycleConfiguration(ctx, accessKeyID, bucket)
+func (s *s3) setLifecycleExpirationHeader(w http.ResponseWriter, r *http.Request, access *bucketAccess, object string, lastModified time.Time) {
+	if err := access.assertBucketAllowed(actionGetLifecycleConfiguration); err != nil {
+		return
+	}
+	config, err := s.backend.GetBucketLifecycleConfiguration(r.Context(), access.bucket)
 	if err != nil {
 		return
 	}

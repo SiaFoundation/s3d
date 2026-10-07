@@ -2,6 +2,7 @@ package s3
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -12,7 +13,7 @@ func TestParseBucketPolicy(t *testing.T) {
 	tests := []struct {
 		name   string
 		policy string
-		want   PolicyActions
+		want   []string
 		err    error
 	}{
 		{
@@ -29,78 +30,78 @@ func TestParseBucketPolicy(t *testing.T) {
     }
   ]
 }`,
-			want: ActionGetObject,
+			want: []string{actionGetObject},
 		},
 		{
 			// AWS allows Statement as a single object, not only an array
 			name: "single statement object",
 			policy: `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Principal":"*",
 				"Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/*"}}`,
-			want: ActionGetObject,
+			want: []string{actionGetObject},
 		},
 		{
 			// AWS treats the service prefix and action name as case insensitive
 			name: "action in a different case",
 			policy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*",
 				"Action":"S3:GetObject","Resource":"arn:aws:s3:::bucket/*"}]}`,
-			want: ActionGetObject,
+			want: []string{actionGetObject},
 		},
 		{
 			name: "action in lower case",
 			policy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*",
 				"Action":"s3:listbucket","Resource":"arn:aws:s3:::bucket"}]}`,
-			want: ActionListBucket,
+			want: []string{actionListBucket},
 		},
 		{
 			name: "principal as AWS object",
 			policy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow",
 				"Principal":{"AWS":"*"},"Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/*"}]}`,
-			want: ActionGetObject,
+			want: []string{actionGetObject},
 		},
 		{
 			name: "principal as AWS array",
 			policy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow",
 				"Principal":{"AWS":["*"]},"Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/*"}]}`,
-			want: ActionGetObject,
+			want: []string{actionGetObject},
 		},
 		{
 			name: "action and resource as arrays",
 			policy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*",
 				"Action":["s3:GetObject"],"Resource":["arn:aws:s3:::bucket/*"]}]}`,
-			want: ActionGetObject,
+			want: []string{actionGetObject},
 		},
 		{
 			name: "two equivalent statements",
 			policy: `{"Version":"2012-10-17","Statement":[
 				{"Effect":"Allow","Principal":"*","Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/*"},
 				{"Effect":"Allow","Principal":"*","Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/*"}]}`,
-			want: ActionGetObject,
+			want: []string{actionGetObject},
 		},
 		{
 			name: "versioned read",
 			policy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*",
 				"Action":["s3:GetObject","s3:GetObjectVersion"],"Resource":"arn:aws:s3:::bucket/*"}]}`,
-			want: ActionGetObject | ActionGetObjectVersion,
+			want: []string{actionGetObject, actionGetObjectVersion},
 		},
 		{
 			// s3:ListBucket is granted on the bucket ARN, without the "/*"
 			name: "list bucket",
 			policy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*",
 				"Action":"s3:ListBucket","Resource":"arn:aws:s3:::bucket"}]}`,
-			want: ActionListBucket,
+			want: []string{actionListBucket},
 		},
 		{
 			name: "list object versions",
 			policy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*",
 				"Action":["s3:ListBucket","s3:ListBucketVersions"],"Resource":"arn:aws:s3:::bucket"}]}`,
-			want: ActionListBucket | ActionListBucketVersions,
+			want: []string{actionListBucket, actionListBucketVersions},
 		},
 		{
 			name: "read and list as separate statements",
 			policy: `{"Version":"2012-10-17","Statement":[
 				{"Effect":"Allow","Principal":"*","Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/*"},
 				{"Effect":"Allow","Principal":"*","Action":"s3:ListBucket","Resource":"arn:aws:s3:::bucket"}]}`,
-			want: ActionGetObject | ActionListBucket,
+			want: []string{actionGetObject, actionListBucket},
 		},
 		{
 			// one statement naming both resources pairs each action with its own
@@ -108,20 +109,20 @@ func TestParseBucketPolicy(t *testing.T) {
 			policy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*",
 				"Action":["s3:GetObject","s3:GetObjectVersion","s3:ListBucket","s3:ListBucketVersions"],
 				"Resource":["arn:aws:s3:::bucket","arn:aws:s3:::bucket/*"]}]}`,
-			want: ActionGetObject | ActionGetObjectVersion | ActionListBucket | ActionListBucketVersions,
+			want: []string{actionGetObject, actionGetObjectVersion, actionListBucket, actionListBucketVersions},
 		},
 		{
 			// an object action with no object resource grants nothing, as in S3
 			name: "object action with only the bucket resource",
 			policy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*",
 				"Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket"}]}`,
-			want: 0,
+			want: nil,
 		},
 		{
 			name: "bucket action with only the object resource",
 			policy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*",
 				"Action":"s3:ListBucket","Resource":"arn:aws:s3:::bucket/*"}]}`,
-			want: 0,
+			want: nil,
 		},
 
 		// malformed documents
@@ -351,7 +352,13 @@ func TestParseBucketPolicy(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			policy, err := parseBucketPolicy("bucket", strings.NewReader(test.policy))
+			document, err := readBucketPolicy(strings.NewReader(test.policy))
+			if err != nil {
+				t.Fatal(err)
+			} else if document != test.policy {
+				t.Fatalf("expected document to be read verbatim, got %q", document)
+			}
+			policy, err := parseBucketPolicy("bucket", document)
 			if test.err != nil {
 				if !errors.Is(err, test.err) {
 					t.Fatalf("expected %v, got %v", test.err, err)
@@ -360,10 +367,18 @@ func TestParseBucketPolicy(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatal(err)
-			} else if policy.Public != test.want {
-				t.Fatalf("expected actions %b, got %b", test.want, policy.Public)
-			} else if policy.Document != test.policy {
-				t.Fatalf("expected document to be stored verbatim, got %q", policy.Document)
+			}
+			for _, action := range supportedPolicyActions {
+				resource := policyARNPrefix + "bucket"
+				if isObjectAction(action) {
+					resource += "/key"
+				}
+				if got, want := policy.allows(action, resource), slices.Contains(test.want, action); got != want {
+					t.Fatalf("action %s: expected %v, got %v", action, want, got)
+				}
+			}
+			if got, want := policy.isPublic("bucket"), len(test.want) > 0; got != want {
+				t.Fatalf("expected public %v, got %v", want, got)
 			}
 		})
 	}
@@ -377,40 +392,7 @@ func TestParseBucketPolicyTooLarge(t *testing.T) {
 	policy := `{"Version":"2012-10-17","Statement":[{"Sid":"` + padding + `","Effect":"Allow",
 		"Principal":"*","Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/*"}]}`
 
-	if _, err := parseBucketPolicy("bucket", strings.NewReader(policy)); !errors.Is(err, s3errs.ErrPolicyTooLarge) {
+	if _, err := readBucketPolicy(strings.NewReader(policy)); !errors.Is(err, s3errs.ErrPolicyTooLarge) {
 		t.Fatalf("expected %v, got %v", s3errs.ErrPolicyTooLarge, err)
-	}
-}
-
-func TestPolicyActionsAllows(t *testing.T) {
-	granted := ActionGetObject | ActionListBucket
-
-	tests := []struct {
-		name string
-		want PolicyActions
-		ok   bool
-	}{
-		{"granted", ActionGetObject, true},
-		{"other granted", ActionListBucket, true},
-		{"both granted", ActionGetObject | ActionListBucket, true},
-		{"not granted", ActionGetObjectVersion, false},
-		{"one of two not granted", ActionGetObject | ActionGetObjectVersion, false},
-		// an empty set is contained in every set, so allowing it would
-		// authorize a caller that named no action against any policy
-		{"no action", 0, false},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if got := granted.Allows(test.want); got != test.ok {
-				t.Fatalf("expected %v, got %v", test.ok, got)
-			}
-		})
-	}
-
-	// including against a policy that grants nothing
-	var none PolicyActions
-	if none.Allows(0) {
-		t.Fatal("expected an empty want to be denied by an empty grant")
 	}
 }

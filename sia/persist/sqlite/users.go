@@ -182,14 +182,17 @@ func (s *Store) UserNameForAccessKey(accessKeyID string) (name string, err error
 	return
 }
 
-// LoadSecret returns the secret key for the given access key ID.
-func (s *Store) LoadSecret(accessKeyID string) (string, error) {
-	var secret string
-	err := s.transaction(func(tx *txn) error {
-		return tx.QueryRow("SELECT secret_key FROM access_keys WHERE access_key_id = $1", accessKeyID).Scan(&secret)
+// LoadSecret returns the secret key for the given access key ID and the name
+// of the user it belongs to.
+func (s *Store) LoadSecret(accessKeyID string) (secret, userName string, err error) {
+	err = s.transaction(func(tx *txn) error {
+		return tx.QueryRow(`
+			SELECT ak.secret_key, u.name FROM access_keys ak
+			INNER JOIN users u ON u.id = ak.user_id
+			WHERE ak.access_key_id = $1`, accessKeyID).Scan(&secret, &userName)
 	})
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", s3errs.ErrInvalidAccessKeyId
+		return "", "", s3errs.ErrInvalidAccessKeyId
 	}
-	return secret, err
+	return
 }

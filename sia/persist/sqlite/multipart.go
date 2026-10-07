@@ -14,13 +14,13 @@ import (
 )
 
 // CreateMultipartUpload persists metadata for a new multipart upload.
-func (s *Store) CreateMultipartUpload(accessKeyID, bucket, name string, uploadID s3.UploadID, meta map[string]string) error {
+func (s *Store) CreateMultipartUpload(bucket, name string, uploadID s3.UploadID, meta map[string]string) error {
 	if meta == nil {
 		meta = make(map[string]string) // force '{}' instead of 'null' in JSON
 	}
 
 	return s.transaction(func(tx *txn) error {
-		bid, err := bucketID(tx, accessKeyID, bucket)
+		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
@@ -40,10 +40,10 @@ func (s *Store) CreateMultipartUpload(accessKeyID, bucket, name string, uploadID
 // object's ID has no remaining references, it is inserted into the
 // orphaned_objects table. If the overwrite leaves a previously pending file
 // unreferenced, its filename is returned so the caller can remove it from disk.
-func (s *Store) CompleteMultipartUpload(accessKeyID, bucket, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64, preconditions s3.ObjectPreconditions) (versionID string, orphan objects.OrphanedFile, _ error) {
+func (s *Store) CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64, preconditions s3.ObjectPreconditions) (versionID string, orphan objects.OrphanedFile, _ error) {
 	err := s.transaction(func(tx *txn) error {
 		versionID, orphan = "", objects.OrphanedFile{} // reset per attempt
-		bid, status, err := bucketIDAndVersioning(tx, accessKeyID, bucket)
+		bid, status, err := bucketIDAndVersioning(tx, bucket)
 		if err != nil {
 			return err
 		}
@@ -137,9 +137,9 @@ func (s *Store) CompleteMultipartUpload(accessKeyID, bucket, name string, upload
 
 // AbortMultipartUpload removes a multipart upload from the store and returns
 // the total size of all parts that were removed.
-func (s *Store) AbortMultipartUpload(accessKeyID, bucket, name string, uploadID s3.UploadID) (size int64, _ error) {
+func (s *Store) AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) (size int64, _ error) {
 	err := s.transaction(func(tx *txn) error {
-		bid, err := bucketID(tx, accessKeyID, bucket)
+		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
@@ -168,11 +168,11 @@ func (s *Store) AbortMultipartUpload(accessKeyID, bucket, name string, uploadID 
 // AddMultipartPart adds metadata for a multipart part to the store. It returns
 // the previous part's filename and content length if a part with the same
 // number already existed.
-func (s *Store) AddMultipartPart(accessKeyID, bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (prev string, size int64, _ error) {
+func (s *Store) AddMultipartPart(bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (prev string, size int64, _ error) {
 	if err := s.transaction(func(tx *txn) error {
 		prev = "" // reset per transaction attempt
 
-		bid, err := bucketID(tx, accessKeyID, bucket)
+		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
@@ -211,9 +211,9 @@ func (s *Store) AddMultipartPart(accessKeyID, bucket, name string, uploadID s3.U
 
 // HasMultipartUpload checks if a multipart upload exists and reports whether
 // any parts have been uploaded for it.
-func (s *Store) HasMultipartUpload(accessKeyID, bucket, name string, uploadID s3.UploadID) (hasParts bool, err error) {
+func (s *Store) HasMultipartUpload(bucket, name string, uploadID s3.UploadID) (hasParts bool, err error) {
 	err = s.transaction(func(tx *txn) error {
-		bid, err := bucketID(tx, accessKeyID, bucket)
+		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
@@ -235,12 +235,12 @@ func (s *Store) HasMultipartUpload(accessKeyID, bucket, name string, uploadID s3
 }
 
 // MultipartParts returns the parts belonging to the specified multipart upload.
-func (s *Store) MultipartParts(accessKeyID, bucket, name string, uploadID s3.UploadID) ([]objects.Part, error) {
+func (s *Store) MultipartParts(bucket, name string, uploadID s3.UploadID) ([]objects.Part, error) {
 	var parts []objects.Part
 	if err := s.transaction(func(tx *txn) error {
 		parts = parts[:0] // reuse same slice if transaction retries
 
-		bid, err := bucketID(tx, accessKeyID, bucket)
+		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
@@ -280,7 +280,7 @@ func (s *Store) MultipartParts(accessKeyID, bucket, name string, uploadID s3.Upl
 }
 
 // ListParts lists uploaded parts for a multipart upload.
-func (s *Store) ListParts(accessKeyID, bucket, name string, uploadID s3.UploadID, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error) {
+func (s *Store) ListParts(bucket, name string, uploadID s3.UploadID, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error) {
 	res := &s3.ListPartsResult{
 		Parts: make([]s3.UploadPart, 0, maxParts),
 	}
@@ -290,7 +290,7 @@ func (s *Store) ListParts(accessKeyID, bucket, name string, uploadID s3.UploadID
 		res.IsTruncated = false
 		res.NextPartNumberMarker = ""
 
-		bid, err := bucketID(tx, accessKeyID, bucket)
+		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
@@ -341,7 +341,7 @@ func (s *Store) ListParts(accessKeyID, bucket, name string, uploadID s3.UploadID
 
 // ListMultipartUploads lists all multipart uploads for the given bucket and
 // filters.
-func (s *Store) ListMultipartUploads(accessKeyID, bucket string, prefix s3.Prefix, page s3.ListMultipartUploadsPage) (_ *s3.ListMultipartUploadsResult, err error) {
+func (s *Store) ListMultipartUploads(bucket string, prefix s3.Prefix, page s3.ListMultipartUploadsPage) (_ *s3.ListMultipartUploadsResult, err error) {
 	// parse upload ID marker
 	var uploadIDMarker s3.UploadID
 	if page.UploadIDMarker != "" {
@@ -382,7 +382,7 @@ func (s *Store) ListMultipartUploads(accessKeyID, bucket string, prefix s3.Prefi
 		res.NextKeyMarker = ""                      // reset per transaction attempt
 		res.NextUploadIDMarker = ""                 // reset per transaction attempt
 
-		bid, err := bucketID(tx, accessKeyID, bucket)
+		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
