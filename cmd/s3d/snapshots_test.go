@@ -85,4 +85,13 @@ func TestCheckSnapshotVersion(t *testing.T) {
 	} else if !strings.Contains(err.Error(), "newer") {
 		t.Fatal("unexpected", err)
 	}
+
+	// nor one compressed with an encoding this build does not know
+	foreign := remote(version)
+	foreign.Metadata.Encoding = "zstd"
+	if err := checkSnapshotVersion(foreign); err == nil {
+		t.Fatal("expected an error")
+	} else if !strings.Contains(err.Error(), "encoding") {
+		t.Fatal("unexpected", err)
+	}
 }
