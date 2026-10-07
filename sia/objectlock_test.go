@@ -520,7 +520,7 @@ func TestObjectRetentionAndLegalHold(t *testing.T) {
 		}
 		assertRetained(t, "a", nil, until)
 
-		// re sending the same date is not a weakening
+		// resending the same date is not a weakening
 		if err := s3Tester.PutObjectRetention(ctx, bucket, "a", nil, governance(until), false); err != nil {
 			t.Fatal(err)
 		}
