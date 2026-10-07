@@ -31,4 +31,4 @@ jobs:
           npm install --global swagger-spec-validator@5.0.0
           swagger-spec-validator openapi.yml
   test:
-    uses: SiaFoundation/workflows/.github/workflows/go-test.yml@dddded471aae1c7b6f0fbc388d603b8b16336f6f # master
+    uses: SiaFoundation/workflows/.github/workflows/go-test.yml@b42741de5798fcb1881143d714a923501ec4ff89 # master
