@@ -15,6 +15,7 @@ import (
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/sia"
+	"github.com/SiaFoundation/s3d/sia/objects"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"go.sia.tech/core/types"
 	sdk "go.sia.tech/siastorage"
@@ -319,6 +320,8 @@ func prepareRestoreDir(dir string) error {
 func checkSnapshotVersion(snap sia.RemoteSnapshot) error {
 	if v := sqlite.SchemaVersion(); snap.Metadata.DBVersion > v {
 		return fmt.Errorf("snapshot database version %d is newer than the %d this build supports", snap.Metadata.DBVersion, v)
+	} else if enc := snap.Metadata.Encoding; enc != objects.SnapshotEncodingGzip {
+		return fmt.Errorf("snapshot encoding %q is not supported by this build", enc)
 	}
 	return nil
 }

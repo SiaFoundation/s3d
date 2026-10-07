@@ -254,7 +254,11 @@ s3d snapshots restore --out /srv/s3d-restored 0d4f2c9a1b7e3568af0c21d9e4b85730c6
 
 Run `s3d config` for the restored directory before starting `s3d`. On startup
 the instance reconciles the restored database against the network, adopting the
-snapshots and objects it finds there.
+snapshots it finds there.
+
+A restore brings back the database as it was when the snapshot was taken.
+Objects written after that are not recovered. Objects still buffered on disk at
+the time had not reached Sia, so they stay listed but cannot be read.
 
 ## HTTPS
 
