@@ -18,7 +18,8 @@ func (s *Store) GetBucketObjectLockConfiguration(accessKeyID, bucket string) (co
 
 		var enabled bool
 		var mode string
-		var days, years *int
+		var days *int
+		var years *int
 		err = tx.QueryRow(`SELECT object_lock_enabled, default_retention_mode, default_retention_days, default_retention_years
 			FROM buckets WHERE id = $1`, bid).Scan(&enabled, &mode, &days, &years)
 		if err != nil {
@@ -59,7 +60,8 @@ func (s *Store) PutBucketObjectLockConfiguration(accessKeyID, bucket string, con
 		}
 
 		var mode string
-		var days, years *int
+		var days *int
+		var years *int
 		if config.Rule != nil {
 			mode = config.Rule.DefaultRetention.Mode
 			days = config.Rule.DefaultRetention.Days

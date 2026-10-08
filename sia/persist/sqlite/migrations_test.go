@@ -673,7 +673,8 @@ func TestMigrationObjectLockPreservesRows(t *testing.T) {
 	}
 
 	// the rebuild must not disturb the values it carries over
-	var name, versioning string
+	var name string
+	var versioning string
 	var createdAt int64
 	if err := migrated.db.QueryRow(`SELECT name, created_at, versioning_status FROM buckets WHERE id = 100`).Scan(&name, &createdAt, &versioning); err != nil {
 		t.Fatal(err)
@@ -681,7 +682,8 @@ func TestMigrationObjectLockPreservesRows(t *testing.T) {
 		t.Fatalf("bucket 100 changed: %q %d %q", name, createdAt, versioning)
 	}
 
-	var seq, contentLength int64
+	var seq int64
+	var contentLength int64
 	if err := migrated.db.QueryRow(`SELECT seq FROM objects WHERE bucket_id = 100 AND name = 'k2'`).Scan(&seq); err != nil {
 		t.Fatal(err)
 	} else if seq != 2 {
@@ -694,7 +696,8 @@ func TestMigrationObjectLockPreservesRows(t *testing.T) {
 	}
 
 	// existing rows must come out unlocked
-	var mode, legalHold string
+	var mode string
+	var legalHold string
 	var retainUntil sql.NullInt64
 	if err := migrated.db.QueryRow(`SELECT object_lock_mode, object_lock_retain_until, object_lock_legal_hold FROM objects WHERE bucket_id = 100 AND name = 'k1'`).Scan(&mode, &retainUntil, &legalHold); err != nil {
 		t.Fatal(err)
@@ -709,8 +712,10 @@ func TestMigrationObjectLockPreservesRows(t *testing.T) {
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var table, parent string
-		var rowid, fkid sql.NullInt64
+		var table string
+		var parent string
+		var rowid sql.NullInt64
+		var fkid sql.NullInt64
 		if err := rows.Scan(&table, &rowid, &parent, &fkid); err != nil {
 			t.Fatal(err)
 		}
