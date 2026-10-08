@@ -25,6 +25,10 @@ const (
 	ObjectLockEnabled             = "Enabled"
 	HeaderBucketObjectLockEnabled = "X-Amz-Bucket-Object-Lock-Enabled"
 
+	// HeaderBypassGovernanceRetention lets a caller weaken or clear a
+	// GOVERNANCE retention. It has no effect on COMPLIANCE.
+	HeaderBypassGovernanceRetention = "X-Amz-Bypass-Governance-Retention"
+
 	maxRetentionDays  = 36500
 	maxRetentionYears = 100
 )
@@ -220,10 +224,6 @@ func (s *s3) getBucketObjectLock(w http.ResponseWriter, r *http.Request, accessK
 	config.Xmlns = "http://s3.amazonaws.com/doc/2006-03-01/"
 	return writeXMLResponse(w, http.StatusOK, config)
 }
-
-// HeaderBypassGovernanceRetention lets a caller weaken or clear a GOVERNANCE
-// retention. It has no effect on COMPLIANCE.
-const HeaderBypassGovernanceRetention = "X-Amz-Bypass-Governance-Retention"
 
 // bypassGovernanceRetention reports whether the request asked to bypass a
 // GOVERNANCE retention.
