@@ -720,6 +720,11 @@ func (s *Store) CopyObject(accessKeyID, srcBucket, srcName string, srcVersion s3
 			return err
 		}
 
+		lock, err := effectiveObjectLock(tx, dstBid, opts.ObjectLock)
+		if err != nil {
+			return err
+		}
+
 		// a self-copy onto the same null version rewrites the row in place to
 		// preserve its object_parts and avoid orphaning. Refresh seq too so a
 		// suspended-bucket restore of versionId=null makes it current again.
@@ -740,10 +745,6 @@ func (s *Store) CopyObject(accessKeyID, srcBucket, srcName string, srcVersion s3
 			return err
 		}
 
-		lock, err := effectiveObjectLock(tx, dstBid, opts.ObjectLock)
-		if err != nil {
-			return err
-		}
 		res, err := putObject(tx, dstBid, dstName, dstStatus, obj.ContentMD5, obj.Meta, obj.Length, obj.PartsCount, obj.FileName, obj.SiaObject, lock)
 		if err != nil {
 			return err
