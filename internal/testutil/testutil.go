@@ -37,10 +37,13 @@ const (
 	// Owner is the default owner name for objects created by S3Tester
 	Owner = "s3tester"
 
-	// OtherOwner, OtherAccessKeyID and OtherSecretAccessKey are a second
-	// user's key pair, for use with WithKeyPair.
-	OtherOwner           = "other"
-	OtherAccessKeyID     = "foo"
+	// OtherOwner is the name of a second user, for use with WithKeyPair.
+	OtherOwner = "other"
+
+	// OtherAccessKeyID is the access key of OtherOwner.
+	OtherAccessKeyID = "foo"
+
+	// OtherSecretAccessKey is the secret key of OtherOwner.
 	OtherSecretAccessKey = "bar"
 )
 
