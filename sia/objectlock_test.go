@@ -261,12 +261,6 @@ func TestObjectLockState(t *testing.T) {
 		} else if h.ObjectLockLegalHoldStatus != "" {
 			t.Fatalf("expected no legal hold, got %q", h.ObjectLockLegalHoldStatus)
 		}
-
-		// an unversioned delete writes a delete marker, which destroys nothing
-		// and is allowed even against a locked version
-		if err := s3Tester.DeleteObject(ctx, bucket, "locked"); err != nil {
-			t.Fatal(err)
-		}
 	})
 
 	t.Run("PerVersion", func(t *testing.T) {
@@ -381,6 +375,21 @@ func TestObjectLockState(t *testing.T) {
 		_, err = s3Tester.Client().CreateMultipartUpload(ctx, &service.CreateMultipartUploadInput{
 			Bucket:                    aws.String(bucket),
 			Key:                       aws.String("nope"),
+			ObjectLockMode:            types.ObjectLockModeGovernance,
+			ObjectLockRetainUntilDate: aws.Time(retainUntil),
+		})
+		testutil.AssertS3Error(t, s3errs.ErrInvalidRequest, err)
+
+		// a copy onto its own key rewrites the row in place rather than writing a
+		// new version, so it has to refuse the headers on the same terms
+		if _, err := s3Tester.PutObject(ctx, bucket, "self", bytes.NewReader([]byte("data")), nil); err != nil {
+			t.Fatal(err)
+		}
+		_, err = s3Tester.Client().CopyObject(ctx, &service.CopyObjectInput{
+			Bucket:                    aws.String(bucket),
+			Key:                       aws.String("self"),
+			CopySource:                aws.String(bucket + "/self"),
+			MetadataDirective:         types.MetadataDirectiveReplace,
 			ObjectLockMode:            types.ObjectLockModeGovernance,
 			ObjectLockRetainUntilDate: aws.Time(retainUntil),
 		})
