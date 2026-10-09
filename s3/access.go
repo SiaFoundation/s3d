@@ -3,6 +3,7 @@ package s3
 import (
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/SiaFoundation/s3d/s3/auth"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
@@ -37,7 +38,9 @@ type bucketAccess struct {
 	owner          *UserInfo
 	policyDocument string
 	policy         bucketPolicy
-	isOwner        bool // false for an anonymous caller
+	isOwner        bool          // false for an anonymous caller
+	requestContext policyContext // nil when the policy has no statements
+	request        *http.Request
 }
 
 // operation is a routed request: the action it requires and the handler that
@@ -69,9 +72,9 @@ func (s *s3) authorize(r *http.Request, caller *auth.Caller, bucket, object stri
 	}
 	switch {
 	case op.multiObjectDelete:
-		// the handler authorizes each object once it has read their names, but
-		// a caller that may delete nothing is denied before the body is read
-		err = access.assertAllowedInBucket(actionDeleteObject, actionDeleteObjectVersion)
+		// the keys and version IDs are only known once the body is read, so
+		// deleteObjects checks every key, including explicit denies
+		err = access.assertDeleteAllowedInBucket()
 	case isObjectAction(op.action):
 		err = access.assertObjectAllowed(op.action, object)
 	default:
@@ -79,6 +82,14 @@ func (s *s3) authorize(r *http.Request, caller *auth.Caller, bucket, object stri
 	}
 	if err != nil {
 		return nil, err
+	}
+	switch op.action {
+	case actionGetBucketPolicy, actionPutBucketPolicy, actionDeleteBucketPolicy:
+		// S3 reserves the policy APIs for the owner even when a policy grants
+		// them to another user
+		if !access.isOwner {
+			return nil, s3errs.ErrMethodNotAllowed
+		}
 	}
 	return access, nil
 }
@@ -98,11 +109,15 @@ func (s *s3) bucketAccess(r *http.Request, caller *auth.Caller, bucket string) (
 		owner:          info.Owner,
 		policyDocument: info.PolicyDocument,
 		isOwner:        caller != nil && caller.UserID == info.Owner.ID,
+		policy:         s.parsedPolicy(bucket, info.PolicyDocument),
+		request:        r,
 	}
-	// the owner is allowed everything, so a policy that no longer parses never
-	// locks them out of replacing it
-	if !access.isOwner {
-		access.policy = s.parsedPolicy(bucket, info.PolicyDocument)
+	// without statements only ownership decides access
+	if len(access.policy.statements) > 0 {
+		access.requestContext = s.requestPolicyContext(r, caller)
+		// the bucket's owner is the user the resource belongs to
+		access.requestContext["aws:resourceaccount"] = []string{info.Owner.ID}
+		access.requestContext["s3:resourceaccount"] = []string{info.Owner.ID}
 	}
 	return access, nil
 }
@@ -117,7 +132,7 @@ func (s *s3) authorizeCopySource(r *http.Request, dst *bucketAccess, srcBucket, 
 			return nil, err
 		}
 	}
-	if err := src.assertObjectAllowed(readAction(srcVersion), srcObject); err != nil {
+	if err := src.assertVersionAllowed(readAction(srcVersion), srcObject, srcVersion, nil); err != nil {
 		return nil, err
 	}
 	return src, nil
@@ -135,7 +150,17 @@ func (a *bucketAccess) assertAuth() (string, error) {
 // assertAllowed checks that the caller may perform action on resource. An
 // empty action is always denied, even for the owner.
 func (a *bucketAccess) assertAllowed(action, resource string) error {
-	if action != "" && (a.isOwner || a.policy.allows(action, resource)) {
+	requestContext, err := a.actionPolicyContext(action)
+	if err != nil {
+		return err
+	}
+	return a.check(requestContext, action, resource)
+}
+
+// check checks that the policy allows the caller action on resource, given
+// requestContext.
+func (a *bucketAccess) check(requestContext policyContext, action, resource string) error {
+	if a.policy.allows(a.caller, requestContext, a.isOwner, action, resource) {
 		return nil
 	}
 	return s3errs.ErrAccessDenied
@@ -153,33 +178,58 @@ func (a *bucketAccess) assertObjectAllowed(action, object string) error {
 	return a.assertAllowed(action, objectARN(a.bucket, object))
 }
 
-// assertAllowedInBucket checks that the caller may perform one of actions on
-// at least one resource in the bucket.
-func (a *bucketAccess) assertAllowedInBucket(actions ...string) error {
-	for _, action := range actions {
-		if a.isOwner || a.policy.allowsInBucket(action, a.bucket) {
+// assertDeleteAllowedInBucket denies a multi-delete request up front when no
+// statement could allow deletion. Resource and condition checks wait for each
+// key and version ID.
+func (a *bucketAccess) assertDeleteAllowedInBucket() error {
+	if a.isOwner {
+		return nil
+	}
+	for _, stmt := range a.policy.statements {
+		if stmt.Effect == policyEffectAllow && stmt.principalMatches(a.caller) &&
+			(stmt.namesAction(actionDeleteObject) || stmt.namesAction(actionDeleteObjectVersion)) {
 			return nil
 		}
 	}
 	return s3errs.ErrAccessDenied
 }
 
-// hideMissing hides missing keys and versions from callers that may not
-// list the bucket, so they cannot enumerate it by probing keys.
-func (a *bucketAccess) hideMissing(err error) error {
+// assertVersionAllowed supplies a version and extra context keys independently
+// of the URL, for copy sources and individual keys in a multi-delete request.
+func (a *bucketAccess) assertVersionAllowed(action, object string, version VersionRequest, extra policyContext) error {
+	if version.Specified {
+		extra = extra.merge(policyContext{"s3:versionid": {FormatVersion(version.ID)}})
+	}
+	return a.check(a.requestContext.merge(extra), action, objectARN(a.bucket, object))
+}
+
+// hideMissing hides a missing object or version from callers that may not
+// list it, so they cannot enumerate the bucket by probing keys.
+func (a *bucketAccess) hideMissing(err error, object string) error {
 	if errors.Is(err, s3errs.ErrNoSuchKey) || errors.Is(err, s3errs.ErrNoSuchVersion) {
-		if denied := a.assertBucketAllowed(actionListBucket); denied != nil {
+		if denied := a.assertListAllowed(object); denied != nil {
 			return denied
 		}
 	}
 	return err
 }
 
+// assertListAllowed checks that the caller may list the bucket with object as
+// the prefix, and so learn whether object exists. s3:max-keys is the default
+// limit, since a listing always has one.
+func (a *bucketAccess) assertListAllowed(object string) error {
+	requestContext := a.requestContext.merge(policyContext{
+		"s3:prefix":   {object},
+		"s3:max-keys": {strconv.Itoa(DefaultMaxBucketKeys)},
+	})
+	return a.check(requestContext, actionListBucket, bucketARN(a.bucket))
+}
+
 // hideMissingSource is [bucketAccess.hideMissing] for errors the backend
 // attributes to the source of a copy.
-func (a *bucketAccess) hideMissingSource(err error) error {
+func (a *bucketAccess) hideMissingSource(err error, object string) error {
 	if errors.As(err, new(CopySourceError)) {
-		return a.hideMissing(err)
+		return a.hideMissing(err, object)
 	}
 	return err
 }

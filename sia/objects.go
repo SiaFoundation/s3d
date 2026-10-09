@@ -281,11 +281,15 @@ func (s *Sia) DeleteObjects(ctx context.Context, bucket string, objects []s3.Obj
 		}
 
 		if err != nil && !errors.Is(err, s3errs.ErrNoSuchKey) {
-			result.Error = append(result.Error, s3.ErrorResult{
+			errResult := s3.ErrorResult{
 				Key:     obj.Key,
 				Code:    s3errs.ErrorCode(err),
 				Message: err.Error(),
-			})
+			}
+			if obj.VersionID != nil {
+				errResult.VersionID = s3.FormatVersion(*obj.VersionID)
+			}
+			result.Error = append(result.Error, errResult)
 			continue
 		}
 

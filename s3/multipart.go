@@ -368,7 +368,7 @@ func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, dst *bucketAccess,
 		SourcePreconditions: copySourcePreconditions(r.Header),
 	})
 	if err != nil {
-		return src.hideMissingSource(err)
+		return src.hideMissingSource(err, srcObject)
 	}
 
 	etag := FormatETag(result.ContentMD5[:], 0)

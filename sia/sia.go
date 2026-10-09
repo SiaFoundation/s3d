@@ -70,6 +70,10 @@ var (
 	// ErrUserAlreadyExists is returned when creating a user that already exists.
 	ErrUserAlreadyExists = errors.New("user already exists")
 
+	// ErrReservedUserName is returned when creating a user whose name bucket
+	// policies use for anonymous callers.
+	ErrReservedUserName = errors.New("user name is reserved")
+
 	// ErrUserNotFound is returned when a user does not exist.
 	ErrUserNotFound = errors.New("user not found")
 
