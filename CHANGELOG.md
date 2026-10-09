@@ -1,3 +1,9 @@
+## 0.2.2 (2026-10-09)
+
+### Features
+
+- Fixed the reported Sia upload rate reading zero during an upload
+
 ## 0.2.1 (2026-10-05)
 
 ### Features
