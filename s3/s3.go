@@ -60,7 +60,7 @@ type Backend interface {
 	// identified by the given access key. If the bucket exists and is owned by
 	// the same user, [ErrBucketAlreadyOwnedByYou] must be returned. If it is
 	// owned by another user, [ErrBucketAlreadyExists] must be returned.
-	CreateBucket(ctx context.Context, accessKeyID, name string) error
+	CreateBucket(ctx context.Context, accessKeyID, name string, opts CreateBucketOptions) error
 
 	// DeleteBucket deletes the bucket with the given name for the user
 	// identified by the given access key.
@@ -377,6 +377,9 @@ type Backend interface {
 	//   [ErrAccessDenied] must be returned.
 	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	//
+	// - If the bucket has object lock enabled and status is "Suspended",
+	//   [ErrInvalidBucketState] must be returned.
 	PutBucketVersioning(ctx context.Context, accessKeyID, bucket, status string) error
 
 	// GetBucketVersioning returns the versioning state of the specified
@@ -388,6 +391,31 @@ type Backend interface {
 	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
 	GetBucketVersioning(ctx context.Context, accessKeyID, bucket string) (status string, err error)
+
+	// PutBucketObjectLockConfiguration turns on object lock for the specified
+	// bucket and replaces its default retention rule. A configuration carrying
+	// no rule clears the default retention.
+	//
+	// - If the access key does not have permission to configure the bucket,
+	//   [ErrAccessDenied] must be returned.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	//
+	// - If the bucket's versioning is not enabled, [ErrInvalidBucketState] must
+	//   be returned.
+	PutBucketObjectLockConfiguration(ctx context.Context, accessKeyID, bucket string, config ObjectLockConfiguration) error
+
+	// GetBucketObjectLockConfiguration returns the object lock configuration of
+	// the specified bucket.
+	//
+	// - If the access key does not have permission to read the bucket
+	//   configuration, [ErrAccessDenied] must be returned.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	//
+	// - If the bucket does not have object lock enabled,
+	//   [ErrObjectLockConfigurationNotFoundError] must be returned.
+	GetBucketObjectLockConfiguration(ctx context.Context, accessKeyID, bucket string) (ObjectLockConfiguration, error)
 
 	// ListObjectVersions lists all versions (including delete markers) of the
 	// objects in the specified bucket.

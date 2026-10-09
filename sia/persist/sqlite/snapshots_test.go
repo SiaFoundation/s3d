@@ -19,7 +19,7 @@ func TestSnapshots(t *testing.T) {
 
 	store := initTestDB(t, zaptest.NewLogger(t))
 
-	if err := store.CreateBucket(testAccessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(testAccessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
 
