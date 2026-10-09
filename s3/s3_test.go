@@ -3,6 +3,7 @@ package s3_test
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json/v2"
 	"io"
@@ -316,5 +317,56 @@ func TestErrorResponseDrain(t *testing.T) {
 		t.Fatal("unexpected", rec.Code)
 	} else if rec.Header().Get("Connection") != "close" {
 		t.Fatal("expected Connection close header")
+	}
+}
+
+// TestPutObjectContentMD5 covers the Content-MD5 header, which is decoded
+// before the body is read. A value that did not decode to a 16 byte digest
+// once panicked the handler and dropped the connection.
+func TestPutObjectContentMD5(t *testing.T) {
+	backend, _ := testutil.NewBackend(t)
+	handler := s3.New(backend, s3.WithLogger(zaptest.NewLogger(t)))
+
+	signer := v4.NewSigner()
+	creds := aws.Credentials{
+		AccessKeyID:     testutil.AccessKeyID,
+		SecretAccessKey: testutil.SecretAccessKey,
+	}
+
+	put := func(t *testing.T, path, digest, body string) *httptest.ResponseRecorder {
+		t.Helper()
+
+		req := httptest.NewRequest(http.MethodPut, "http://localhost:8000"+path, strings.NewReader(body))
+		req.Host = "localhost:8000"
+		if body != "" {
+			req.Header.Set("Content-Length", strconv.Itoa(len(body)))
+		}
+		if digest != "" {
+			req.Header.Set("Content-Md5", digest)
+		}
+		payloadHash := sha256.Sum256([]byte(body))
+		hashHex := hex.EncodeToString(payloadHash[:])
+		req.Header.Set("X-Amz-Content-Sha256", hashHex)
+		if err := signer.SignHTTP(t.Context(), creds, req, hashHex, "s3", "us-east-1", time.Now()); err != nil {
+			t.Fatal(err)
+		}
+
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	if rec := put(t, "/bucket", "", ""); rec.Code != http.StatusOK {
+		t.Fatalf("failed to create bucket: %d %s", rec.Code, rec.Body)
+	}
+
+	expected := s3errs.ErrInvalidDigest
+	for _, size := range []int{8, 32} {
+		digest := base64.StdEncoding.EncodeToString(make([]byte, size))
+		rec := put(t, "/bucket/object", digest, "payload")
+		if rec.Code != expected.HTTPStatus || !strings.Contains(rec.Body.String(), expected.Code) {
+			t.Fatalf("a %d byte digest: expected %d %s, got %d %s",
+				size, expected.HTTPStatus, expected.Code, rec.Code, rec.Body)
+		}
 	}
 }

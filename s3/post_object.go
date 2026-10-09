@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -37,8 +38,9 @@ const (
 )
 
 const (
-	// maxPostFieldBytes bounds the fields preceding the file, so a form cannot
-	// buffer an arbitrary amount before the upload starts.
+	// maxPostFieldBytes bounds everything the parser reads before the file, so
+	// a form cannot make the server read an arbitrary amount before the upload
+	// starts.
 	maxPostFieldBytes = 64 * 1024
 
 	// postFilenameVariable is replaced in the key with the name the client gave
@@ -82,6 +84,43 @@ func (f postForm) expandFilename() {
 	}
 }
 
+// errPostPreData is returned by the bounded preamble reader once a form has
+// made the parser read more than it is allowed to before the file part.
+var errPostPreData = errors.New("post pre data limit exceeded")
+
+// postPreamble bounds the bytes a form can make the parser read before the
+// file part is reached. None of it is authenticated at that point, so the
+// bound covers the preamble, the part headers and the field values alike, and
+// it is lifted once the file part takes over.
+type postPreamble struct {
+	reader    io.Reader
+	remaining int64
+}
+
+func (p *postPreamble) Read(b []byte) (int, error) {
+	if p.remaining <= 0 {
+		return 0, errPostPreData
+	}
+	if int64(len(b)) > p.remaining {
+		b = b[:p.remaining]
+	}
+	n, err := p.reader.Read(b)
+	p.remaining -= int64(n)
+	return n, err
+}
+
+// release lifts the bound, which the file streams without.
+func (p *postPreamble) release() {
+	p.remaining = math.MaxInt64
+}
+
+// isPostForm reports whether a request carries a form submission, which is
+// what tells a POST Object request apart from the other bucket POSTs.
+func isPostForm(r *http.Request) bool {
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	return err == nil && mediaType == "multipart/form-data"
+}
+
 // parsePostForm reads the fields preceding the file and returns them with the
 // file's part still open, so the upload streams rather than being buffered.
 func parsePostForm(r *http.Request) (postForm, *multipart.Part, error) {
@@ -93,41 +132,32 @@ func parsePostForm(r *http.Request) (postForm, *multipart.Part, error) {
 	}
 
 	form := postForm{fields: make(map[string]string)}
-	reader := multipart.NewReader(r.Body, params["boundary"])
-	var buffered int
+	preamble := &postPreamble{reader: r.Body, remaining: maxPostFieldBytes}
+	reader := multipart.NewReader(preamble, params["boundary"])
 	for {
 		part, err := reader.NextPart()
-		if errors.Is(err, io.EOF) {
+		if errors.Is(err, errPostPreData) {
+			return postForm{}, nil, s3errs.ErrMaxPostPreDataLengthExceededError
+		} else if errors.Is(err, io.EOF) {
 			// the file is required and every field has to precede it
 			return postForm{}, nil, s3errs.ErrIncorrectNumberOfFilesInPostRequest
 		} else if err != nil {
 			return postForm{}, nil, s3errs.ErrMalformedPOSTRequest
 		}
 
-		for name, values := range part.Header {
-			buffered += len(name)
-			for _, value := range values {
-				buffered += len(value)
-			}
-		}
-		if buffered > maxPostFieldBytes {
-			return postForm{}, nil, s3errs.ErrMaxPostPreDataLengthExceededError
-		}
-
 		name := strings.ToLower(part.FormName())
 		if name == postFieldFile {
 			form.filename = part.FileName()
+			preamble.release()
 			return form, part, nil
 		}
 
-		value, err := io.ReadAll(io.LimitReader(part, int64(maxPostFieldBytes-buffered)+1))
+		value, err := io.ReadAll(part)
 		part.Close()
-		if err != nil {
-			return postForm{}, nil, s3errs.ErrMalformedPOSTRequest
-		}
-		buffered += len(value)
-		if buffered > maxPostFieldBytes {
+		if errors.Is(err, errPostPreData) {
 			return postForm{}, nil, s3errs.ErrMaxPostPreDataLengthExceededError
+		} else if err != nil {
+			return postForm{}, nil, s3errs.ErrMalformedPOSTRequest
 		}
 		form.fields[name] = string(value)
 	}
@@ -394,10 +424,11 @@ func (s *s3) postObject(w http.ResponseWriter, r *http.Request, headerKeyID *str
 
 	var contentMD5 *[16]byte
 	if encoded, ok := form.fields[postFieldContentMD5]; ok {
-		contentMD5 = new([16]byte)
-		if n, err := base64.StdEncoding.Decode(contentMD5[:], []byte(encoded)); err != nil || n != len(contentMD5) {
-			return s3errs.ErrInvalidDigest
+		digest, err := parseContentMD5(encoded)
+		if err != nil {
+			return err
 		}
+		contentMD5 = digest
 	}
 
 	// the redirect is resolved before the upload, so nothing that can fail is

@@ -1,7 +1,6 @@
 package s3
 
 import (
-	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"net/http"
@@ -412,10 +411,11 @@ func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, accessKeyID, 
 	// extract Content-MD5 header
 	var contentMD5 *[16]byte
 	if md5Header := r.Header.Get("Content-Md5"); md5Header != "" {
-		contentMD5 = new([16]byte)
-		if n, err := base64.StdEncoding.Decode(contentMD5[:], []byte(md5Header)); err != nil || n != len(contentMD5) {
-			return s3errs.ErrInvalidDigest
+		digest, err := parseContentMD5(md5Header)
+		if err != nil {
+			return err
 		}
+		contentMD5 = digest
 	}
 
 	// extract SHA256 checksum from "X-Amz-Content-Sha256" header if present

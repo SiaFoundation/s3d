@@ -767,11 +767,11 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID strin
 	// extract Content-MD5 header
 	var contentMD5 *[16]byte
 	if _, exists := r.Header["Content-Md5"]; exists {
-		md5Base64 := r.Header.Get("Content-Md5")
-		contentMD5 = new([16]byte)
-		if n, err := base64.StdEncoding.Decode(contentMD5[:], []byte(md5Base64)); err != nil || n != len(contentMD5) {
-			return s3errs.ErrInvalidDigest
+		digest, err := parseContentMD5(r.Header.Get("Content-Md5"))
+		if err != nil {
+			return err
 		}
+		contentMD5 = digest
 	}
 
 	// extract SHA256 checksum from "X-Amz-Content-Sha256" header if present
@@ -842,6 +842,18 @@ func ParseETag(s string) [16]byte {
 	copy(etag[:], decoded)
 
 	return etag
+}
+
+// parseContentMD5 decodes a base64 encoded MD5 digest, as a Content-MD5
+// header or a form field carries it.
+func parseContentMD5(encoded string) (*[16]byte, error) {
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil || len(decoded) != 16 {
+		return nil, s3errs.ErrInvalidDigest
+	}
+	var digest [16]byte
+	copy(digest[:], decoded)
+	return &digest, nil
 }
 
 // parseSource parses an X-Amz-Copy-Source string and returns the bucket,
