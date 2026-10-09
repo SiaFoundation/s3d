@@ -215,6 +215,25 @@ AWS Signature V4 exclusively. SigV4A is not implemented. Supported
 
 Bucket lifecycle configuration supports prefix-based `AbortIncompleteMultipartUpload` rules and current-object `Expiration` rules.
 
+Object Lock is supported in both `GOVERNANCE` and `COMPLIANCE` mode, with
+retention periods, legal holds and bucket default retention rules. Creating a
+bucket with `x-amz-bucket-object-lock-enabled` also enables versioning, while
+turning object lock on afterwards requires versioning to already be enabled.
+Neither can be turned off once object lock is on. Event holds, the mechanism
+behind variable retention, are refused with `NotImplemented` rather than
+accepted and ignored.
+
+`x-amz-bypass-governance-retention` lets the bucket owner shorten, clear or
+delete through a `GOVERNANCE` retention. It has no effect on `COMPLIANCE` and
+none on a legal hold.
+
+Lock state lives in the local metadata database alongside the rest of the
+object metadata, so the trust boundary for a `COMPLIANCE` retention is write
+access to that database, not the S3 API. Restoring a backup of that database
+taken before a retention was applied is one way through it. This is the same
+shape as an AWS `COMPLIANCE` retention being bounded by the AWS account
+continuing to exist.
+
 Bucket policies are supported only to grant read access to everyone.
 `PutBucketPolicy` accepts `Allow` statements whose principal is `*` and whose
 actions are drawn from this set:
@@ -289,7 +308,7 @@ delete with nothing to delete is a no-op, as an unconditional one is.
 | ListBuckets | ✓ | |
 | GetBucketLocation | ✓ | |
 | GetBucketVersioning | ✓ | |
-| PutBucketVersioning | ◐ | `MfaDelete` is rejected; `Enabled` and `Suspended` are supported |
+| PutBucketVersioning | ◐ | `MfaDelete` is rejected, `Enabled` and `Suspended` are supported, and `Suspended` is refused on an object lock bucket |
 | GetBucketAcl | ✗ | |
 | PutBucketAcl | ✗ | |
 | GetBucketPolicy | ✓ | |
@@ -306,6 +325,8 @@ delete with nothing to delete is a no-op, as an unconditional one is.
 | GetBucketEncryption | ✗ | |
 | PutBucketEncryption | ✗ | |
 | PublicAccessBlock | ✗ | |
+| GetObjectLockConfiguration | ✓ | |
+| PutObjectLockConfiguration | ◐ | `DefaultEventHold` is rejected |
 | **Objects** | | |
 | PutObject | ✓ | |
 | GetObject | ✓ | |
@@ -320,8 +341,10 @@ delete with nothing to delete is a no-op, as an unconditional one is.
 | PutObjectAcl | ✗ | |
 | GetObjectTagging | ✗ | |
 | PutObjectTagging | ✗ | |
-| GetObjectLock | ✗ | |
-| PutObjectLock | ✗ | |
+| GetObjectRetention | ✓ | |
+| PutObjectRetention | ◐ | `EventHold` and `EventHoldDuration` are rejected |
+| GetObjectLegalHold | ✓ | |
+| PutObjectLegalHold | ✓ | |
 | SelectObjectContent | ✗ | |
 | **Multipart** | | |
 | CreateMultipartUpload | ✓ | |
