@@ -27,6 +27,18 @@ import (
 	"go.uber.org/zap/zaptest"
 )
 
+// signRequest signs req, whose body is body, with the given key pair.
+func signRequest(t *testing.T, req *http.Request, body, accessKeyID, secretKey string) {
+	t.Helper()
+	hash := sha256.Sum256([]byte(body))
+	payload := hex.EncodeToString(hash[:])
+	req.Header.Set("X-Amz-Content-Sha256", payload)
+	creds := aws.Credentials{AccessKeyID: accessKeyID, SecretAccessKey: secretKey}
+	if err := v4.NewSigner().SignHTTP(t.Context(), creds, req, payload, "s3", "us-east-1", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func newAdminServer(t *testing.T) (string, *http.Client, *sqlite.Store) {
 	t.Helper()
 	backend, store := testutil.NewBackend(t)
@@ -208,18 +220,127 @@ func TestAccessDenied(t *testing.T) {
 	})
 }
 
+// TestAuthorizationRoutes guards every implemented bucket and object route
+// against anonymous and authenticated non-owner access to a private bucket.
+func TestAuthorizationRoutes(t *testing.T) {
+	const bucket = "private-bucket"
+	backend, _ := testutil.NewBackend(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
+	if err := backend.CreateBucket(t.Context(), testutil.AccessKeyID, bucket); err != nil {
+		t.Fatal(err)
+	}
+	handler := s3.New(backend, s3.WithLogger(zaptest.NewLogger(t)))
+
+	upload := s3.NewUploadID().String()
+	tests := []struct {
+		name, method, path, body, source string
+	}{
+		{name: "HeadBucket", method: http.MethodHead, path: "/private-bucket"},
+		{name: "ListObjects", method: http.MethodGet, path: "/private-bucket"},
+		{name: "ListObjectsV2", method: http.MethodGet, path: "/private-bucket?list-type=2"},
+		{name: "EmptyListObjects", method: http.MethodGet, path: "/private-bucket?max-keys=0"},
+		{name: "ListObjectVersions", method: http.MethodGet, path: "/private-bucket?versions"},
+		{name: "EmptyListObjectVersions", method: http.MethodGet, path: "/private-bucket?versions&max-keys=0"},
+		{name: "DeleteBucket", method: http.MethodDelete, path: "/private-bucket"},
+		{name: "GetBucketLocation", method: http.MethodGet, path: "/private-bucket?location"},
+		{name: "GetBucketVersioning", method: http.MethodGet, path: "/private-bucket?versioning"},
+		{name: "PutBucketVersioning", method: http.MethodPut, path: "/private-bucket?versioning"},
+		{name: "GetBucketLifecycleConfiguration", method: http.MethodGet, path: "/private-bucket?lifecycle"},
+		{name: "PutBucketLifecycleConfiguration", method: http.MethodPut, path: "/private-bucket?lifecycle"},
+		{name: "DeleteBucketLifecycle", method: http.MethodDelete, path: "/private-bucket?lifecycle"},
+		{name: "GetBucketPolicy", method: http.MethodGet, path: "/private-bucket?policy"},
+		{name: "PutBucketPolicy", method: http.MethodPut, path: "/private-bucket?policy"},
+		{name: "DeleteBucketPolicy", method: http.MethodDelete, path: "/private-bucket?policy"},
+		{name: "GetBucketPolicyStatus", method: http.MethodGet, path: "/private-bucket?policyStatus"},
+		{name: "GetObject", method: http.MethodGet, path: "/private-bucket/key"},
+		{name: "HeadObject", method: http.MethodHead, path: "/private-bucket/key"},
+		{name: "GetObjectVersion", method: http.MethodGet, path: "/private-bucket/key?versionId=null"},
+		{name: "HeadObjectVersion", method: http.MethodHead, path: "/private-bucket/key?versionId=null"},
+		{name: "DeleteObject", method: http.MethodDelete, path: "/private-bucket/key"},
+		{name: "DeleteObjectVersion", method: http.MethodDelete, path: "/private-bucket/key?versionId=null"},
+		{name: "PutObject", method: http.MethodPut, path: "/private-bucket/key"},
+		{name: "CopyObject", method: http.MethodPut, path: "/private-bucket/key", source: "/private-bucket/source"},
+		{name: "CreateMultipartUpload", method: http.MethodPost, path: "/private-bucket/key?uploads"},
+		{name: "ListMultipartUploads", method: http.MethodGet, path: "/private-bucket?uploads"},
+		{name: "UploadPart", method: http.MethodPut, path: "/private-bucket/key?uploadId=" + upload + "&partNumber=1"},
+		{name: "UploadPartCopy", method: http.MethodPut, path: "/private-bucket/key?uploadId=" + upload + "&partNumber=1", source: "/private-bucket/source"},
+		{name: "ListParts", method: http.MethodGet, path: "/private-bucket/key?uploadId=" + upload},
+		{name: "CompleteMultipartUpload", method: http.MethodPost, path: "/private-bucket/key?uploadId=" + upload},
+		{name: "AbortMultipartUpload", method: http.MethodDelete, path: "/private-bucket/key?uploadId=" + upload},
+		{name: "DeleteObjects", method: http.MethodPost, path: "/private-bucket?delete", body: "<Delete><Object><Key>first</Key></Object><Object><Key>second</Key><VersionId>null</VersionId></Object></Delete>"},
+	}
+	for _, signed := range []bool{false, true} {
+		caller := "anonymous"
+		if signed {
+			caller = "other user"
+		}
+		t.Run(caller, func(t *testing.T) {
+			for _, test := range tests {
+				t.Run(test.name, func(t *testing.T) {
+					req := httptest.NewRequest(test.method, "http://localhost"+test.path, strings.NewReader(test.body))
+					if test.source != "" {
+						req.Header.Set("X-Amz-Copy-Source", test.source)
+					}
+					if signed {
+						signRequest(t, req, test.body, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey)
+					}
+					rec := httptest.NewRecorder()
+					handler.ServeHTTP(rec, req)
+					if rec.Code != http.StatusForbidden {
+						t.Fatalf("expected status %d, got %d: %s", http.StatusForbidden, rec.Code, rec.Body)
+					}
+				})
+			}
+		})
+	}
+}
+
+// TestRouteValidationOrder checks requests that no handler serves: a signed
+// caller is told why, but an anonymous one is denied before its request is
+// validated.
+func TestRouteValidationOrder(t *testing.T) {
+	backend, _ := testutil.NewBackend(t)
+	if err := backend.CreateBucket(t.Context(), testutil.AccessKeyID, "bucket"); err != nil {
+		t.Fatal(err)
+	}
+	handler := s3.New(backend, s3.WithLogger(zaptest.NewLogger(t)))
+
+	anonymous := func(method, path string) *http.Request {
+		return httptest.NewRequest(method, "http://localhost"+path, nil)
+	}
+	signed := func(method, path string) *http.Request {
+		req := anonymous(method, path)
+		signRequest(t, req, "", testutil.AccessKeyID, testutil.SecretAccessKey)
+		return req
+	}
+	tests := []struct {
+		name string
+		req  *http.Request
+		code int
+	}{
+		{"anonymous object with wrong method", anonymous(http.MethodPost, "/bucket/key"), http.StatusForbidden},
+		{"signed object with wrong method", signed(http.MethodPost, "/bucket/key"), http.StatusMethodNotAllowed},
+		{"anonymous browser upload", anonymous(http.MethodPost, "/bucket"), http.StatusForbidden},
+		{"signed browser upload", signed(http.MethodPost, "/bucket"), http.StatusNotImplemented},
+		{"anonymous uploads without a bucket", anonymous(http.MethodGet, "/?uploads"), http.StatusForbidden},
+		{"signed uploads without a bucket", signed(http.MethodGet, "/?uploads"), http.StatusBadRequest},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, test.req)
+			if rec.Code != test.code {
+				t.Fatalf("expected status %d, got %d: %s", test.code, rec.Code, rec.Body)
+			}
+		})
+	}
+}
+
 // TestHostBucketStyles verifies that path-style and virtual-hosted-style
 // requests both work, with and without a port in the Host header.
 // "localhost" is implicitly available as a host bucket base.
 func TestHostBucketStyles(t *testing.T) {
 	backend, _ := testutil.NewBackend(t)
 	handler := s3.New(backend, s3.WithLogger(zaptest.NewLogger(t)))
-
-	signer := v4.NewSigner()
-	creds := aws.Credentials{
-		AccessKeyID:     testutil.AccessKeyID,
-		SecretAccessKey: testutil.SecretAccessKey,
-	}
 
 	do := func(t *testing.T, method, host, path, body string) *httptest.ResponseRecorder {
 		t.Helper()
@@ -229,12 +350,7 @@ func TestHostBucketStyles(t *testing.T) {
 		if body != "" {
 			req.Header.Set("Content-Length", strconv.Itoa(len(body)))
 		}
-		payloadHash := sha256.Sum256([]byte(body))
-		hashHex := hex.EncodeToString(payloadHash[:])
-		req.Header.Set("X-Amz-Content-Sha256", hashHex)
-		if err := signer.SignHTTP(t.Context(), creds, req, hashHex, "s3", "us-east-1", time.Now()); err != nil {
-			t.Fatal(err)
-		}
+		signRequest(t, req, body, testutil.AccessKeyID, testutil.SecretAccessKey)
 
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)

@@ -615,3 +615,46 @@ func TestMigrationKeepsCustomIndexerURL(t *testing.T) {
 		t.Fatalf("expected the configured URL %q, got %q", customURL, got)
 	}
 }
+
+// TestMigrationDropPublicActions checks that dropping the public_actions
+// column keeps each bucket's policy document and versioning status.
+func TestMigrationDropPublicActions(t *testing.T) {
+	const document = `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Principal":"*","Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/*"}}`
+	log := zaptest.NewLogger(t)
+	fp := filepath.Join(t.TempDir(), "s3d.sqlite3")
+
+	// version 13 is the last with a public_actions column
+	store := initDBVersion(t, fp, 13, log)
+	if _, err := store.db.Exec(`UPDATE buckets SET policy = $1, public_actions = 1, versioning_status = 'Enabled' WHERE name = 'bucket'`, document); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	migrated, err := OpenDatabase(fp, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer migrated.Close()
+
+	var columns int
+	if err := migrated.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('buckets') WHERE name = 'public_actions'`).Scan(&columns); err != nil {
+		t.Fatal(err)
+	} else if columns != 0 {
+		t.Fatal("expected public_actions to be dropped")
+	}
+
+	info, err := migrated.BucketAccessInfo("bucket")
+	if err != nil {
+		t.Fatal(err)
+	} else if info.PolicyDocument != document {
+		t.Fatalf("expected document %q, got %q", document, info.PolicyDocument)
+	}
+	status, err := migrated.GetBucketVersioning("bucket")
+	if err != nil {
+		t.Fatal(err)
+	} else if status != "Enabled" {
+		t.Fatalf("expected versioning to be kept, got %q", status)
+	}
+}

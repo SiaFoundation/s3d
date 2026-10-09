@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3/auth"
@@ -17,7 +18,8 @@ import (
 )
 
 // Backend defines the interface for an S3 backend that data uploaded via the S3
-// API will be stored in.
+// API will be stored in. Bucket and object operations receive already authorized
+// requests and must attribute objects and storage to the bucket owner.
 type Backend interface {
 	auth.KeyStore
 
@@ -32,14 +34,12 @@ type Backend interface {
 	//
 	// - If the source bucket does not exist, [ErrNoSuchBucket] must be returned.
 	//
-	// - If the source object does not exist, [ErrNoSuchKey] must be returned,
-	//   or [ErrAccessDenied] when the caller reaches the source bucket through a
-	//   policy that does not grant s3:ListBucket.
+	// - If the source object does not exist, [ErrNoSuchKey] must be returned.
+	//
+	// - Errors about the source object, including a failed source
+	//   precondition, must be wrapped in [CopySourceError].
 	//
 	// - If the destination bucket does not exist, [ErrNoSuchBucket] must be returned.
-	//
-	// - If the access key does not have permission to read the source object or
-	//   write to the destination bucket, [ErrAccessDenied] must be returned.
 	//
 	// - If the source and destination are the same, the object is kept but its metadata
 	//   is merged with the provided metadata.
@@ -54,30 +54,23 @@ type Backend interface {
 	//
 	// - opts.DestinationPreconditions must be evaluated against the current
 	//   version of the destination, via ObjectPreconditions.CheckWrite.
-	CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject string, srcVersion VersionRequest, dstBucket, dstObject string, opts CopyObjectOptions) (*CopyObjectResult, error)
+	CopyObject(ctx context.Context, srcBucket, srcObject string, srcVersion VersionRequest, dstBucket, dstObject string, opts CopyObjectOptions) (*CopyObjectResult, error)
 
-	// CreateBucket creates a new bucket with the given name for the user
-	// identified by the given access key. If the bucket exists and is owned by
-	// the same user, [ErrBucketAlreadyOwnedByYou] must be returned. If it is
-	// owned by another user, [ErrBucketAlreadyExists] must be returned.
+	// CreateBucket creates a new bucket owned by the user identified by the
+	// access key. If the bucket exists and is owned by the same user,
+	// [ErrBucketAlreadyOwnedByYou] must be returned. If it is owned by another
+	// user, [ErrBucketAlreadyExists] must be returned.
 	CreateBucket(ctx context.Context, accessKeyID, name string) error
 
-	// DeleteBucket deletes the bucket with the given name for the user
-	// identified by the given access key.
-	//
-	// - If the access key does not have permission to delete the bucket,
-	//   [ErrAccessDenied] must be returned.
+	// DeleteBucket deletes the bucket with the given name.
 	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
 	//
 	// - If the bucket is not empty, [ErrBucketNotEmpty] must be returned.
-	DeleteBucket(ctx context.Context, accessKeyID, name string) error
+	DeleteBucket(ctx context.Context, name string) error
 
 	// DeleteObject deletes the object with the given key from the specified
-	// bucket for the user identified by the given access key.
-	//
-	// - If the access key does not have permission to delete the object,
-	//   [ErrAccessDenied] must be returned.
+	// bucket.
 	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
 	//
@@ -89,13 +82,9 @@ type Backend interface {
 	//   unconditional, reporting no version and no delete marker. That covers a
 	//   key with no versions, a key whose current version is a delete marker,
 	//   and a named version that is not there.
-	DeleteObject(ctx context.Context, accessKeyID, bucket string, object ObjectID) (*DeleteObjectResult, error)
+	DeleteObject(ctx context.Context, bucket string, object ObjectID) (*DeleteObjectResult, error)
 
-	// DeleteObjects deletes multiple objects from the specified bucket for the
-	// user identified by the given access key.
-	//
-	// - If the access key does not have permission to delete the objects,
-	//   [ErrAccessDenied] must be returned.
+	// DeleteObjects deletes multiple objects from the specified bucket.
 	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
 	//
@@ -105,88 +94,50 @@ type Backend interface {
 	// - Each object carries the same preconditions as DeleteObject, with the
 	//   same outcomes, except that a failed precondition fails only that object,
 	//   which is reported in the result's Error list.
-	DeleteObjects(ctx context.Context, accessKeyID, bucket string, objects []ObjectID) (*ObjectsDeleteResult, error)
+	DeleteObjects(ctx context.Context, bucket string, objects []ObjectID) (*ObjectsDeleteResult, error)
 
 	// GetObject retrieves the object with the given key from the specified
-	// bucket for the user identified by the given access key. The provided
-	// range is either nil if no range was requested, or contains the requested,
-	// byte range. If partNumber is not nil, the specified part of a multipart
-	// upload is retrieved, this can not be combined with a byte range.
+	// bucket. The provided range is either nil if no range was requested, or
+	// contains the requested byte range. If partNumber is not nil, the
+	// specified part of a multipart upload is retrieved, this can not be
+	// combined with a byte range.
 	//
-	// - If the access key does not have permission to access the object,
-	//   [ErrAccessDenied] must be returned, unless the bucket's policy grants
-	//   the action the request needs to everyone: s3:GetObjectVersion when it
-	//   names a version, s3:GetObject otherwise. A 'nil' accessKeyID indicates
-	//   the anonymous user.
-	//
-	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned, except
-	//   to an anonymous caller, which gets [ErrAccessDenied] so it cannot probe
-	//   for buckets it may not read.
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
 	//
 	// - If the object with the given key in the specified bucket does not exist,
-	//   [ErrNoSuchKey] must be returned. A caller reaching the bucket through a
-	//   policy that does not grant s3:ListBucket gets [ErrAccessDenied] instead,
-	//   for a missing key, a missing version, or a current version that is a
-	//   delete marker, so it cannot enumerate the bucket by probing keys.
+	//   [ErrNoSuchKey] must be returned. The S3 API handler hides this error
+	//   from callers that may not list the bucket.
 	//
 	// - If the requested range is not satisfiable, [ErrInvalidRange] must be
 	//   returned. You can use the 'Range' method on 'rnge' for that.
 	//
-	// - version unspecified returns the current version ([ErrNoSuchKey] if it is
-	//   a delete marker); a specified request returns that exact version ("" is
-	//   the null version, [ErrNoSuchVersion] if absent). The result may be a
-	//   delete marker (Object.IsDeleteMarker).
-	GetObject(ctx context.Context, accessKeyID *string, bucket, object string, version VersionRequest, rnge *ObjectRangeRequest, partNumber *int32) (*Object, error)
+	// - version unspecified returns the current version; a specified request
+	//   returns that exact version ("" is the null version, [ErrNoSuchVersion]
+	//   if absent). The result may be a delete marker (Object.IsDeleteMarker).
+	GetObject(ctx context.Context, bucket, object string, version VersionRequest, rnge *ObjectRangeRequest, partNumber *int32) (*Object, error)
 
-	// HeadBucket checks if the bucket with the given name exists and is
-	// readable by the given access key.
-	//
-	// - If the access key does not have permission to read the bucket,
-	//   [ErrAccessDenied] must be returned, unless the bucket's policy grants
-	//   s3:ListBucket to everyone. A 'nil' accessKeyID indicates the anonymous
-	//   user.
-	//
-	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned, except
-	//   to an anonymous caller, which gets [ErrAccessDenied] so it cannot probe
-	//   for buckets it may not read.
-	HeadBucket(ctx context.Context, accessKeyID *string, name string) error
-
-	// AssertBucketOwner checks that the given access key owns the bucket. It
-	// gates the bucket's own configuration, which a policy never opens up.
-	//
-	// - If the bucket is owned by another user, [ErrAccessDenied] must be
-	//   returned.
+	// BucketAccessInfo returns the bucket's owner and policy document. It is
+	// called on every bucket request.
 	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
-	AssertBucketOwner(ctx context.Context, accessKeyID, bucket string) error
+	BucketAccessInfo(ctx context.Context, bucket string) (BucketAccessInfo, error)
 
 	// HeadObject is like GetObject but only retrieves the metadata of the
 	// object and returns an empty body.
-	HeadObject(ctx context.Context, accessKeyID *string, bucket, object string, version VersionRequest, rnge *ObjectRangeRequest, partNumber *int32) (*Object, error)
+	HeadObject(ctx context.Context, bucket, object string, version VersionRequest, rnge *ObjectRangeRequest, partNumber *int32) (*Object, error)
 
 	// ListBuckets lists all available buckets for the user identified by the
 	// given access key.
 	ListBuckets(ctx context.Context, accessKeyID string) ([]BucketInfo, error)
 
-	// ListObjects lists objects in the specified bucket for the user identified
-	// by the given access key. The backend should use the prefix to limit the
-	// contents of the bucket and sort the results into the Contents and
-	// CommonPrefixes fields of the returned ObjectsListResult.
+	// ListObjects lists objects in the specified bucket, using the prefix to
+	// limit the contents of the bucket and sort the results into the Contents
+	// and CommonPrefixes fields of the returned ObjectsListResult.
 	//
-	// - If the access key does not have permission to list objects in the bucket,
-	//   [ErrAccessDenied] must be returned, unless the bucket's policy grants
-	//   s3:ListBucket to everyone. A 'nil' accessKeyID indicates the
-	//   anonymous user.
-	//
-	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned, except
-	//   to an anonymous caller, which gets [ErrAccessDenied] so it cannot probe
-	//   for buckets it may not read.
-	ListObjects(ctx context.Context, accessKeyID *string, bucket string, prefix Prefix, page ListObjectsPage) (*ObjectsListResult, error)
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	ListObjects(ctx context.Context, bucket string, prefix Prefix, page ListObjectsPage) (*ObjectsListResult, error)
 
 	// PutObject puts an object with the given key into the specified bucket.
-	//
-	// - If the access key does not have permission to store the object,
-	//   [ErrAccessDenied] must be returned.
 	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
 	//
@@ -202,43 +153,31 @@ type Backend interface {
 	//
 	// - opts.Preconditions must be evaluated against the current version of the
 	//   object, via ObjectPreconditions.CheckWrite.
-	PutObject(ctx context.Context, accessKeyID string, bucket, object string, r io.Reader, opts PutObjectOptions) (*PutObjectResult, error)
+	PutObject(ctx context.Context, bucket, object string, r io.Reader, opts PutObjectOptions) (*PutObjectResult, error)
 
 	// CreateMultipartUpload creates a new multipart upload for the specified
 	// key in the specified bucket.
 	//
-	// - If the access key does not have permission to store the object,
-	//   [ErrAccessDenied] must be returned.
-	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
-	CreateMultipartUpload(ctx context.Context, accessKeyID, bucket, object string, opts CreateMultipartUploadOptions) (*CreateMultipartUploadResult, error)
+	CreateMultipartUpload(ctx context.Context, bucket, object string, opts CreateMultipartUploadOptions) (*CreateMultipartUploadResult, error)
 
 	// ListMultipartUploads lists in-progress multipart uploads for the given
 	// bucket.
 	//
-	// - If the access key does not have permission to list uploads for the
-	//   bucket, [ErrAccessDenied] must be returned.
-	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
-	ListMultipartUploads(ctx context.Context, accessKeyID, bucket string, opts ListMultipartUploadsOptions, page ListMultipartUploadsPage) (*ListMultipartUploadsResult, error)
+	ListMultipartUploads(ctx context.Context, bucket string, opts ListMultipartUploadsOptions, page ListMultipartUploadsPage) (*ListMultipartUploadsResult, error)
 
 	// AbortMultipartUpload aborts an in-progress multipart upload and
 	// discards any uploaded parts.
-	//
-	// - If the access key does not have permission to write to the object,
-	//   [ErrAccessDenied] must be returned.
 	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
 	//
 	// - If the multipart upload ID is not known or no longer active,
 	//   [ErrNoSuchUpload] must be returned.
-	AbortMultipartUpload(ctx context.Context, accessKeyID, bucket, object string, uploadID UploadID) error
+	AbortMultipartUpload(ctx context.Context, bucket, object string, uploadID UploadID) error
 
 	// UploadPart uploads a single part for a previously initiated multipart
 	// upload.
-	//
-	// - If the access key does not have permission to write to the object,
-	//   [ErrAccessDenied] must be returned.
 	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
 	//
@@ -250,20 +189,18 @@ type Backend interface {
 	//
 	// - If ContentMD5 or ContentSHA256 are set in opts, and the checksums of
 	//   the data read from 'r' do not match, [ErrBadDigest] must be returned.
-	UploadPart(ctx context.Context, accessKeyID, bucket, object string, uploadID UploadID, r io.Reader, opts UploadPartOptions) (*UploadPartResult, error)
+	UploadPart(ctx context.Context, bucket, object string, uploadID UploadID, r io.Reader, opts UploadPartOptions) (*UploadPartResult, error)
 
 	// UploadPartCopy copies a part from an existing object as part of a
 	// multipart upload.
 	//
-	// - If the access key does not have permission to read the source object or
-	//   write to the destination object, [ErrAccessDenied] must be returned.
-	//
 	// - If either the source or destination bucket does not exist,
 	// [ErrNoSuchBucket] must be returned.
 	//
-	// - If the source object does not exist, [ErrNoSuchKey] must be returned,
-	//   or [ErrAccessDenied] when the caller reaches the source bucket through a
-	//   policy that does not grant s3:ListBucket.
+	// - If the source object does not exist, [ErrNoSuchKey] must be returned.
+	//
+	// - Errors about the source object, including a failed source
+	//   precondition, must be wrapped in [CopySourceError].
 	//
 	// - srcVersion selects the source version: an unspecified request copies the
 	//   current version ([ErrNoSuchKey] if it is a delete marker), a specified
@@ -279,24 +216,18 @@ type Backend interface {
 	// - opts.Range must be resolved against the size of the source object, via
 	//   CopySourceRange.Range. A resolved range larger than
 	//   [MaxUploadPartSize] returns [ErrEntityTooLarge].
-	UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObject string, srcVersion VersionRequest, dstBucket, dstObject string, uploadID UploadID, opts UploadPartCopyOptions) (*UploadPartCopyResult, error)
+	UploadPartCopy(ctx context.Context, srcBucket, srcObject string, srcVersion VersionRequest, dstBucket, dstObject string, uploadID UploadID, opts UploadPartCopyOptions) (*UploadPartCopyResult, error)
 
 	// ListParts lists uploaded parts for the specified multipart upload.
-	//
-	// - If the access key does not have permission to list parts,
-	//   [ErrAccessDenied] must be returned.
 	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
 	//
 	// - If the multipart upload ID is not known or no longer active,
 	//   [ErrNoSuchUpload] must be returned.
-	ListParts(ctx context.Context, accessKeyID, bucket, object string, uploadID UploadID, page ListPartsPage) (*ListPartsResult, error)
+	ListParts(ctx context.Context, bucket, object string, uploadID UploadID, page ListPartsPage) (*ListPartsResult, error)
 
 	// CompleteMultipartUpload completes a multipart upload by assembling the
 	// previously uploaded parts into the final object.
-	//
-	// - If the access key does not have permission to write to the object,
-	//   [ErrAccessDenied] must be returned.
 	//
 	// - If any referenced part is missing or its ETag does not match,
 	//   [ErrInvalidPart] must be returned.
@@ -308,99 +239,60 @@ type Backend interface {
 	//
 	// - preconditions must be evaluated against the current version of the
 	//   object, via ObjectPreconditions.CheckWrite.
-	CompleteMultipartUpload(ctx context.Context, accessKeyID, bucket, object string, uploadID UploadID, parts []CompleteMultipartPart, preconditions ObjectPreconditions) (*CompleteMultipartUploadResult, error)
+	CompleteMultipartUpload(ctx context.Context, bucket, object string, uploadID UploadID, parts []CompleteMultipartPart, preconditions ObjectPreconditions) (*CompleteMultipartUploadResult, error)
 
 	// PutBucketLifecycleConfiguration sets the lifecycle configuration for the
 	// specified bucket, replacing any existing configuration.
 	//
-	// - If the access key does not have permission to configure the bucket,
-	//   [ErrAccessDenied] must be returned.
-	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
-	PutBucketLifecycleConfiguration(ctx context.Context, accessKeyID, bucket string, config LifecycleConfiguration) error
+	PutBucketLifecycleConfiguration(ctx context.Context, bucket string, config LifecycleConfiguration) error
 
 	// GetBucketLifecycleConfiguration returns the lifecycle configuration for
 	// the specified bucket.
-	//
-	// - If the access key does not have permission to read the bucket
-	//   configuration, [ErrAccessDenied] must be returned.
 	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
 	//
 	// - If the bucket has no lifecycle configuration,
 	//   [ErrNoSuchLifecycleConfiguration] must be returned.
-	GetBucketLifecycleConfiguration(ctx context.Context, accessKeyID, bucket string) (LifecycleConfiguration, error)
+	GetBucketLifecycleConfiguration(ctx context.Context, bucket string) (LifecycleConfiguration, error)
 
 	// DeleteBucketLifecycleConfiguration removes the lifecycle configuration
 	// for the specified bucket. It is not an error if no configuration exists.
 	//
-	// - If the access key does not have permission to configure the bucket,
-	//   [ErrAccessDenied] must be returned.
-	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
-	DeleteBucketLifecycleConfiguration(ctx context.Context, accessKeyID, bucket string) error
+	DeleteBucketLifecycleConfiguration(ctx context.Context, bucket string) error
 
 	// PutBucketPolicy sets the policy for the specified bucket, replacing any
-	// existing policy. The policy is already validated; the backend stores it
-	// and honors [BucketPolicy.Public] on subsequent reads.
-	//
-	// - If the access key does not have permission to configure the bucket,
-	//   [ErrAccessDenied] must be returned.
+	// existing policy. The document is already validated; the backend stores it
+	// verbatim.
 	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
-	PutBucketPolicy(ctx context.Context, accessKeyID, bucket string, policy BucketPolicy) error
-
-	// GetBucketPolicy returns the policy of the specified bucket, its document
-	// exactly as supplied to PutBucketPolicy.
-	//
-	// - If the access key does not have permission to read the bucket
-	//   configuration, [ErrAccessDenied] must be returned.
-	//
-	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
-	//
-	// - If the bucket has no policy, [ErrNoSuchBucketPolicy] must be returned.
-	GetBucketPolicy(ctx context.Context, accessKeyID, bucket string) (BucketPolicy, error)
+	PutBucketPolicy(ctx context.Context, bucket, document string) error
 
 	// DeleteBucketPolicy removes the policy of the specified bucket, revoking
 	// any anonymous access. It is not an error if no policy exists.
 	//
-	// - If the access key does not have permission to configure the bucket,
-	//   [ErrAccessDenied] must be returned.
-	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
-	DeleteBucketPolicy(ctx context.Context, accessKeyID, bucket string) error
+	DeleteBucketPolicy(ctx context.Context, bucket string) error
 
 	// PutBucketVersioning sets the versioning state of the specified bucket.
 	// status is either "Enabled" or "Suspended".
 	//
-	// - If the access key does not have permission to configure the bucket,
-	//   [ErrAccessDenied] must be returned.
-	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
-	PutBucketVersioning(ctx context.Context, accessKeyID, bucket, status string) error
+	PutBucketVersioning(ctx context.Context, bucket, status string) error
 
 	// GetBucketVersioning returns the versioning state of the specified
 	// bucket. The status is "" if the bucket has never been configured,
 	// otherwise "Enabled" or "Suspended".
 	//
-	// - If the access key does not have permission to read the bucket
-	//   configuration, [ErrAccessDenied] must be returned.
-	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
-	GetBucketVersioning(ctx context.Context, accessKeyID, bucket string) (status string, err error)
+	GetBucketVersioning(ctx context.Context, bucket string) (status string, err error)
 
 	// ListObjectVersions lists all versions (including delete markers) of the
 	// objects in the specified bucket.
 	//
-	// - If the access key does not have permission to list the bucket,
-	//   [ErrAccessDenied] must be returned, unless the bucket's policy grants
-	//   s3:ListBucketVersions to everyone. A 'nil' accessKeyID indicates the
-	//   anonymous user.
-	//
-	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned, except
-	//   to an anonymous caller, which gets [ErrAccessDenied] so it cannot probe
-	//   for buckets it may not read.
-	ListObjectVersions(ctx context.Context, accessKeyID *string, bucket string, prefix Prefix, page ListObjectVersionsPage) (*ObjectVersionsListResult, error)
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	ListObjectVersions(ctx context.Context, bucket string, prefix Prefix, page ListObjectVersionsPage) (*ObjectVersionsListResult, error)
 
 	// UploadStats returns statistics about the background upload pipeline.
 	UploadStats(ctx context.Context) (UploadStats, error)
@@ -420,6 +312,10 @@ type s3 struct {
 	hostBucketBases []string
 	logger          *zap.Logger
 	region          string
+
+	// policies caches parsed policies by bucket name
+	policyMu sync.Mutex
+	policies map[string]cachedPolicy
 }
 
 // Option is a configuration option for the S3 API handler.
@@ -528,12 +424,12 @@ func NewAdmin(b Backend, opts ...Option) http.Handler {
 
 // authMiddleware is an HTTP middleware that authenticates requests using AWS v4
 // signing. If authentication is successful, the wrapped handler is called with
-// the access key ID of the authenticated user.
+// the caller that signed the request.
 // - If authentication fails, an error response is sent and the wrapped handler
 // is not called.
 // - If the request is not signed, the wrapped handler is called with a nil
-// access key ID, indicating an anonymous request.
-func (s s3) authMiddleware(handler auth.AuthenticatedHandler) http.Handler {
+// caller, indicating an anonymous request.
+func (s *s3) authMiddleware(handler auth.AuthenticatedHandler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		s.logger.Debug("authenticating request",
 			zap.String("method", req.Method),
@@ -541,7 +437,7 @@ func (s s3) authMiddleware(handler auth.AuthenticatedHandler) http.Handler {
 			zap.String(auth.HeaderXAMZDate, req.Header.Get(auth.HeaderXAMZDate)))
 
 		// NOTE: If 'region' is empty here, all regions are allowed.
-		accessKeyID, err := auth.HandleAuth(req, s.backend, s.region, time.Now())
+		caller, err := auth.HandleAuth(req, s.backend, s.region, time.Now())
 		if err != nil {
 			s.logger.Debug("authentication failed", zap.Error(err),
 				zap.String("accessKeyID", auth.AccessKeyIDFromRequest(req)))
@@ -549,7 +445,7 @@ func (s s3) authMiddleware(handler auth.AuthenticatedHandler) http.Handler {
 			return
 		}
 
-		handler.ServeHTTP(w, req, accessKeyID)
+		handler.ServeHTTP(w, req, caller)
 	})
 }
 
@@ -579,10 +475,10 @@ func (s *s3) bucketFromHost(host string) (bucket string, ok bool) {
 // hostBucketBaseMiddleware handles VirtualHost-style bucket URLs:
 // https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingBucket.html
 func (s *s3) hostBucketBaseMiddleware(handler auth.AuthenticatedHandler) auth.AuthenticatedHandler {
-	return auth.AuthenticatedHandlerFunc(func(w http.ResponseWriter, rq *http.Request, accessKeyID *string) {
+	return auth.AuthenticatedHandlerFunc(func(w http.ResponseWriter, rq *http.Request, caller *auth.Caller) {
 		bucket, ok := s.bucketFromHost(rq.Host)
 		if !ok {
-			handler.ServeHTTP(w, rq, accessKeyID)
+			handler.ServeHTTP(w, rq, caller)
 			return
 		}
 		p := rq.URL.Path
@@ -590,7 +486,7 @@ func (s *s3) hostBucketBaseMiddleware(handler auth.AuthenticatedHandler) auth.Au
 		if p != "/" {
 			rq.URL.Path += p
 		}
-		handler.ServeHTTP(w, rq, accessKeyID)
+		handler.ServeHTTP(w, rq, caller)
 	})
 }
 
@@ -607,7 +503,7 @@ func (s *s3) hostBucketBaseMiddleware(handler auth.AuthenticatedHandler) auth.Au
 // to degrade, especially around multipart uploads.
 //
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_Operations_Amazon_Simple_Storage_Service.html
-func (s *s3) routeBase(w http.ResponseWriter, r *http.Request, accessKeyID *string) {
+func (s *s3) routeBase(w http.ResponseWriter, r *http.Request, caller *auth.Caller) {
 	// NOTE: the request body is not drained here. Handlers consume it on
 	// success and writeErrorResponse performs a bounded drain on failure.
 
@@ -615,9 +511,7 @@ func (s *s3) routeBase(w http.ResponseWriter, r *http.Request, accessKeyID *stri
 		path   = strings.TrimPrefix(r.URL.Path, "/")
 		parts  = strings.SplitN(path, "/", 2)
 		bucket = parts[0]
-		query  = r.URL.Query()
 		object = ""
-		err    error
 	)
 	if len(parts) == 2 {
 		object = parts[1]
@@ -637,27 +531,22 @@ func (s *s3) routeBase(w http.ResponseWriter, r *http.Request, accessKeyID *stri
 	// common headers at
 	// https://docs.aws.amazon.com/AmazonS3/latest/API/RESTCommonResponseHeaders.html.
 	//
-	if uploadID := query.Get("uploadId"); uploadID != "" {
-		err = s.routeMultipartUpload(w, r, accessKeyID, bucket, object, uploadID)
-	} else if _, ok := query["uploads"]; ok {
-		err = s.routeMultipartUploadBase(w, r, accessKeyID, bucket, object)
-	} else if _, ok := query["versioning"]; ok {
-		err = s.routeVersioning(w, r, accessKeyID, bucket)
-	} else if _, ok := query["versions"]; ok {
-		err = s.routeVersions(w, r, accessKeyID, bucket)
-	} else if version := VersionFromQuery(query["versionId"]); version.Specified {
-		err = s.routeVersion(w, r, accessKeyID, bucket, object, version)
-	} else if bucket != "" && object != "" {
-		err = s.routeObject(w, r, accessKeyID, bucket, object)
-	} else if bucket != "" {
-		err = s.routeBucket(w, r, accessKeyID, bucket)
-	} else if r.Method == "GET" {
-		err = s.listBuckets(w, r, accessKeyID)
-	} else {
+	op, err := s.route(r, bucket, object)
+	if errors.Is(err, errServiceRootMethod) {
 		// an unsigned request arrives here as anonymous, and clients probing the
 		// root expect 405 with "Allow: GET" rather than a 403
 		w.Header().Set("Allow", http.MethodGet)
 		err = s3errs.ErrMethodNotAllowed
+	} else if err != nil && caller == nil {
+		// an anonymous caller is refused before its request is validated, so it
+		// is not told how to correct it
+		err = s3errs.ErrAccessDenied
+	} else if err == nil {
+		var access *bucketAccess
+		access, err = s.authorize(r, caller, bucket, object, op)
+		if err == nil {
+			err = op.serve(w, r, access)
+		}
 	}
 	if err != nil {
 		// only consider 5xx errors as "real" errors when logging. Other errors
@@ -672,66 +561,69 @@ func (s *s3) routeBase(w http.ResponseWriter, r *http.Request, accessKeyID *stri
 	}
 }
 
-// routeVersioning operates on routes that contain '?versioning' in the query
+// errServiceRootMethod is returned by route for a request to the service root
+// other than ListBuckets.
+var errServiceRootMethod = errors.New("method not allowed on the service root")
+
+// route resolves a request to the operation that serves it. Validation is
+// left to the handler, so it runs after authorization.
+func (s *s3) route(r *http.Request, bucket, object string) (operation, error) {
+	query := r.URL.Query()
+	if uploadID := query.Get("uploadId"); uploadID != "" {
+		return s.routeMultipartUpload(r, object, uploadID)
+	} else if _, ok := query["uploads"]; ok {
+		return s.routeMultipartUploadBase(r, bucket, object)
+	} else if _, ok := query["versioning"]; ok {
+		return s.routeVersioning(r)
+	} else if _, ok := query["versions"]; ok {
+		return s.routeVersions(r)
+	} else if version := VersionFromQuery(query["versionId"]); version.Specified {
+		return s.routeObjectVersion(r, object, version)
+	} else if bucket != "" && object != "" {
+		return s.routeObject(r, object)
+	} else if bucket != "" {
+		return s.routeBucket(r)
+	} else if r.Method == http.MethodGet {
+		return operation{action: actionListAllMyBuckets, serve: s.listBuckets}, nil
+	}
+	return operation{}, errServiceRootMethod
+}
+
+// routeVersioning routes requests that contain '?versioning' in the query
 // string.
-func (s *s3) routeVersioning(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket string) error {
-	validatedKey, err := assertAuth(accessKeyID)
-	if err != nil {
-		return err
-	}
+func (s *s3) routeVersioning(r *http.Request) (operation, error) {
 	switch r.Method {
 	case http.MethodGet:
-		return s.getBucketVersioning(w, r, validatedKey, bucket)
+		return operation{action: actionGetBucketVersioning, serve: s.getBucketVersioning}, nil
 	case http.MethodPut:
-		return s.putBucketVersioning(w, r, validatedKey, bucket)
+		return operation{action: actionPutBucketVersioning, serve: s.putBucketVersioning}, nil
 	default:
-		return s3errs.ErrMethodNotAllowed
+		return operation{}, s3errs.ErrMethodNotAllowed
 	}
 }
 
-// routeVersions operates on routes that contain '?versions' in the query string.
-func (s *s3) routeVersions(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket string) error {
-	switch r.Method {
-	case http.MethodGet:
-		return s.listObjectVersions(w, r, accessKeyID, bucket)
-	default:
-		return s3errs.ErrMethodNotAllowed
+// routeVersions routes requests that contain '?versions' in the query string.
+func (s *s3) routeVersions(r *http.Request) (operation, error) {
+	if r.Method != http.MethodGet {
+		return operation{}, s3errs.ErrMethodNotAllowed
 	}
+	return operation{action: actionListBucketVersions, serve: s.listObjectVersions}, nil
 }
 
-// routeVersion operates on routes that contain '?versionId=<id>' in the
-// query string, addressing a specific version of an object.
-func (s *s3) routeVersion(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket, object string, version VersionRequest) error {
-	// routes with optional authentication
+// routeObjectVersion routes GET, HEAD and DELETE requests for a version of an
+// object, or for its current version if version is unspecified.
+func (s *s3) routeObjectVersion(r *http.Request, object string, version VersionRequest) (operation, error) {
 	switch r.Method {
-	case http.MethodGet:
-		return s.getObject(w, r, accessKeyID, bucket, object, version)
-	case http.MethodHead:
-		return s.headObject(w, r, accessKeyID, bucket, object, version)
-	default:
-	}
-
-	validatedKey, err := assertAuth(accessKeyID)
-	if err != nil {
-		return err
-	}
-
-	// routes with mandatory authentication
-	switch r.Method {
+	case http.MethodGet, http.MethodHead:
+		head := r.Method == http.MethodHead
+		return operation{action: readAction(version), serve: func(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
+			return s.serveObject(w, r, access, object, version, head)
+		}}, nil
 	case http.MethodDelete:
-		return s.deleteObject(w, r, validatedKey, bucket, object, version)
+		return operation{action: deleteAction(version), serve: func(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
+			return s.deleteObject(w, r, access, object, version)
+		}}, nil
 	default:
-		return s3errs.ErrMethodNotAllowed
+		return operation{}, s3errs.ErrMethodNotAllowed
 	}
-}
-
-// assertAuth checks if the accessKeyID is not nil, returning an error if it is.
-// If the accessKeyID is valid, it is returned as a string. This adds a layer of
-// safety to ensure that handlers that require authentication are not
-// accidentally called with an empty accessKeyID.
-func assertAuth(accessKeyID *string) (string, error) {
-	if accessKeyID == nil {
-		return "", s3errs.ErrAccessDenied
-	}
-	return *accessKeyID, nil
 }

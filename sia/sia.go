@@ -215,32 +215,30 @@ type Store interface {
 	CreateAccessKey(userName, accessKeyID, secretKey string) error
 	DeleteAccessKey(accessKeyID string) error
 	ListAccessKeys(userName *string) ([]AccessKeyInfo, error)
-	LoadSecret(accessKeyID string) (string, error)
+	LoadSecret(accessKeyID string) (secret, userName string, err error)
 	UserNameForAccessKey(accessKeyID string) (string, error)
 
 	AllFilenames() ([]string, error)
-	CopyObject(accessKeyID, srcBucket, srcName string, srcVersion s3.VersionRequest, dstBucket, dstName string, opts s3.CopyObjectOptions) (*s3.CopyObjectResult, objects.OrphanedFile, error)
+	CopyObject(srcBucket, srcName string, srcVersion s3.VersionRequest, dstBucket, dstName string, opts s3.CopyObjectOptions) (*s3.CopyObjectResult, objects.OrphanedFile, error)
 	CreateBucket(accessKeyID, bucket string) error
-	DeleteBucket(accessKeyID, bucket string) error
-	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (string, bool, objects.OrphanedFile, error)
-	GetObject(accessKeyID *string, bucket, object string, version s3.VersionRequest, partNumber *int32, action s3.PolicyActions) (*objects.Object, error)
+	DeleteBucket(bucket string) error
+	DeleteObject(bucket string, objectID s3.ObjectID) (string, bool, objects.OrphanedFile, error)
+	GetObject(bucket, object string, version s3.VersionRequest, partNumber *int32) (*objects.Object, error)
 	DiskUsage() (uint64, error)
-	HeadBucket(accessKeyID *string, bucket string) error
-	AssertBucketOwner(accessKeyID, bucket string) error
-	GetBucketVersioning(accessKeyID, bucket string) (string, error)
-	PutBucketVersioning(accessKeyID, bucket, status string) error
-	GetBucketPolicy(accessKeyID, bucket string) (s3.BucketPolicy, error)
-	PutBucketPolicy(accessKeyID, bucket string, policy s3.BucketPolicy) error
-	DeleteBucketPolicy(accessKeyID, bucket string) error
+	BucketAccessInfo(bucket string) (s3.BucketAccessInfo, error)
+	GetBucketVersioning(bucket string) (string, error)
+	PutBucketVersioning(bucket, status string) error
+	PutBucketPolicy(bucket, document string) error
+	DeleteBucketPolicy(bucket string) error
 	ObjectsCursor() (slabs.Cursor, error)
 	SetObjectsCursor(cursor slabs.Cursor) error
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
-	ListObjects(accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error)
-	ListObjectVersions(accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectVersionsPage) (*s3.ObjectVersionsListResult, error)
+	ListObjects(bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error)
+	ListObjectVersions(bucket string, prefix s3.Prefix, page s3.ListObjectVersionsPage) (*s3.ObjectVersionsListResult, error)
 	ObjectPartsByName(bucket, name, versionID string) ([]objects.Part, error)
 	ObjectsForUpload() ([]objects.ObjectForUpload, error)
 	OrphanedObjects(limit int) ([]types.Hash256, error)
-	PutObject(accessKeyID, bucket, name string, opts objects.PutOptions) (string, objects.OrphanedFile, error)
+	PutObject(bucket, name string, opts objects.PutOptions) (string, objects.OrphanedFile, error)
 	MarkObjectUploaded(bucket, name, versionID string, contentMD5 [16]byte, sealed sdk.SealedObject, pinBefore time.Time) error
 	MarkObjectPinned(siaObjectID types.Hash256) ([]objects.OrphanedFile, error)
 	ScheduleObjectForReupload(siaObjectID types.Hash256) error
@@ -249,19 +247,19 @@ type Store interface {
 	RescheduleUnpinnedObject(siaObjectID types.Hash256, nextAttemptAt time.Time) error
 	UpdateSiaObjects(siaObjects []objects.SiaObject) (int64, error)
 	RemoveOrphanedObject(objectID types.Hash256) error
-	AbortMultipartUpload(accessKeyID, bucket, name string, uploadID s3.UploadID) (int64, error)
-	AddMultipartPart(accessKeyID, bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (string, int64, error)
-	CreateMultipartUpload(accessKeyID, bucket, name string, uploadID s3.UploadID, meta map[string]string) error
-	CompleteMultipartUpload(accessKeyID, bucket, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64, preconditions s3.ObjectPreconditions) (string, objects.OrphanedFile, error)
-	HasMultipartUpload(accessKeyID, bucket, name string, uploadID s3.UploadID) (hasParts bool, err error)
-	ListMultipartUploads(accessKeyID, bucket string, prefix s3.Prefix, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error)
-	ListParts(accessKeyID, bucket, name string, uploadID s3.UploadID, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error)
-	MultipartParts(accessKeyID, bucket, name string, uploadID s3.UploadID) ([]objects.Part, error)
+	AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) (int64, error)
+	AddMultipartPart(bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (string, int64, error)
+	CreateMultipartUpload(bucket, name string, uploadID s3.UploadID, meta map[string]string) error
+	CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64, preconditions s3.ObjectPreconditions) (string, objects.OrphanedFile, error)
+	HasMultipartUpload(bucket, name string, uploadID s3.UploadID) (hasParts bool, err error)
+	ListMultipartUploads(bucket string, prefix s3.Prefix, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error)
+	ListParts(bucket, name string, uploadID s3.UploadID, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error)
+	MultipartParts(bucket, name string, uploadID s3.UploadID) ([]objects.Part, error)
 	UploadStats() (s3.UploadStats, error)
 
-	PutBucketLifecycleConfiguration(accessKeyID, bucket, config string) error
-	GetBucketLifecycleConfiguration(accessKeyID, bucket string) (string, error)
-	DeleteBucketLifecycleConfiguration(accessKeyID, bucket string) error
+	PutBucketLifecycleConfiguration(bucket, config string) error
+	GetBucketLifecycleConfiguration(bucket string) (string, error)
+	DeleteBucketLifecycleConfiguration(bucket string) error
 	AllBucketLifecycleConfigurations() ([]BucketLifecycleConfiguration, error)
 	AbortMultipartUploads(bucket string, prefix string, before time.Time, limit int) ([]AbortedUpload, error)
 	ExpireObjects(bucket string, prefix string, before time.Time, limit int) (int, []objects.OrphanedFile, error)
@@ -647,13 +645,14 @@ func (s *Sia) UserInfo(_ context.Context, accessKeyID string) (*s3.UserInfo, err
 	}, nil
 }
 
-// LoadSecret loads the secret key for the given access key ID.
-func (s *Sia) LoadSecret(_ context.Context, accessKeyID string) (auth.SecretAccessKey, error) {
-	secret, err := s.store.LoadSecret(accessKeyID)
+// LoadSecret loads the secret key for the given access key ID and the user it
+// belongs to, whose name is the ID [Sia.UserInfo] reports.
+func (s *Sia) LoadSecret(_ context.Context, accessKeyID string) (auth.SecretAccessKey, string, error) {
+	secret, userName, err := s.store.LoadSecret(accessKeyID)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return auth.SecretAccessKey(secret), nil
+	return auth.SecretAccessKey(secret), userName, nil
 }
 
 func (s *Sia) deleteOrphanedUploads() (int, error) { //nolint:revive

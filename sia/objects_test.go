@@ -283,7 +283,7 @@ func TestPutObject(t *testing.T) {
 		}
 
 		// verify the object is on disk
-		obj, err := store.GetObject(aws.String(testutil.AccessKeyID), bucket, "pending", s3.NoVersion(), nil, s3.ActionGetObject)
+		obj, err := store.GetObject(bucket, "pending", s3.NoVersion(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -314,7 +314,7 @@ func TestPutObject(t *testing.T) {
 		backend.PinObjects(t.Context())
 
 		// verify the object is now on Sia
-		obj, err = store.GetObject(aws.String(testutil.AccessKeyID), bucket, "pending", s3.NoVersion(), nil, s3.ActionGetObject)
+		obj, err = store.GetObject(bucket, "pending", s3.NoVersion(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -351,7 +351,7 @@ func TestPutObject(t *testing.T) {
 		if _, err := s3Tester.PutObject(t.Context(), bucket, "blocked", bytes.NewReader(blocked), nil); err != nil {
 			t.Fatal(err)
 		}
-		blockedObj, err := store.GetObject(aws.String(testutil.AccessKeyID), bucket, "blocked", s3.NoVersion(), nil, s3.ActionGetObject)
+		blockedObj, err := store.GetObject(bucket, "blocked", s3.NoVersion(), nil)
 		if err != nil {
 			t.Fatal(err)
 		} else if blockedObj.FileName == nil {
@@ -363,7 +363,7 @@ func TestPutObject(t *testing.T) {
 		backend.UploadObjects(t.Context())
 
 		// assert blocked object was not uploaded
-		blockedObj, err = store.GetObject(aws.String(testutil.AccessKeyID), bucket, "blocked", s3.NoVersion(), nil, s3.ActionGetObject)
+		blockedObj, err = store.GetObject(bucket, "blocked", s3.NoVersion(), nil)
 		if err != nil {
 			t.Fatal(err)
 		} else if blockedObj.FileName == nil {
@@ -380,7 +380,7 @@ func TestPutObject(t *testing.T) {
 		backend.PinObjects(t.Context())
 
 		// assert object was uploaded
-		blockedObj, err = store.GetObject(aws.String(testutil.AccessKeyID), bucket, "blocked", s3.NoVersion(), nil, s3.ActionGetObject)
+		blockedObj, err = store.GetObject(bucket, "blocked", s3.NoVersion(), nil)
 		if err != nil {
 			t.Fatal(err)
 		} else if blockedObj.FileName != nil {
@@ -397,7 +397,7 @@ func TestPutObject(t *testing.T) {
 		backend.PinObjects(t.Context())
 		memSDK.SetAccountErr(nil)
 
-		blockedObj, err = store.GetObject(aws.String(testutil.AccessKeyID), bucket, "blocked", s3.NoVersion(), nil, s3.ActionGetObject)
+		blockedObj, err = store.GetObject(bucket, "blocked", s3.NoVersion(), nil)
 		if err != nil {
 			t.Fatal(err)
 		} else if blockedObj.FileName != nil {
@@ -481,7 +481,7 @@ func TestFlushObjects(t *testing.T) {
 	}
 
 	// the object should now be served from Sia
-	obj, err := store.GetObject(aws.String(testutil.AccessKeyID), bucket, "small", s3.NoVersion(), nil, s3.ActionGetObject)
+	obj, err := store.GetObject(bucket, "small", s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.FileName != nil {
@@ -952,7 +952,7 @@ func TestSyncMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	obj, err := store.GetObject(aws.String(testutil.AccessKeyID), bucket, "obj", s3.NoVersion(), nil, s3.ActionGetObject)
+	obj, err := store.GetObject(bucket, "obj", s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.FileName == nil {
@@ -964,7 +964,7 @@ func TestSyncMetadata(t *testing.T) {
 	}
 
 	// record the original sealed object
-	origObj, err := store.GetObject(aws.String(testutil.AccessKeyID), bucket, "obj", s3.NoVersion(), nil, s3.ActionGetObject)
+	origObj, err := store.GetObject(bucket, "obj", s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1017,7 +1017,7 @@ func TestSyncMetadata(t *testing.T) {
 	}
 
 	// the object's sia_object should have been re-sealed by the sync
-	objAfter, err := store.GetObject(aws.String(testutil.AccessKeyID), bucket, "obj", s3.NoVersion(), nil, s3.ActionGetObject)
+	objAfter, err := store.GetObject(bucket, "obj", s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1282,7 +1282,7 @@ func TestOverwritePendingObjectCleansUpFile(t *testing.T) {
 	uploadsDir := filepath.Join(dir, sia.UploadsDirectory)
 	pendingFilename := func(t *testing.T, object string) string {
 		t.Helper()
-		obj, err := store.GetObject(aws.String(testutil.AccessKeyID), bucket, object, s3.NoVersion(), nil, s3.ActionGetObject)
+		obj, err := store.GetObject(bucket, object, s3.NoVersion(), nil)
 		if err != nil {
 			t.Fatal(err)
 		} else if obj.FileName == nil {
@@ -1493,7 +1493,7 @@ func TestDiskUsageLimitTimeout(t *testing.T) {
 
 	// a put blocked at the limit fails with SlowDown once the wait times out
 	data := frand.Bytes(10)
-	_, err = backend.PutObject(t.Context(), testutil.AccessKeyID, bucket, "b", bytes.NewReader(data), s3.PutObjectOptions{ContentLength: int64(len(data))})
+	_, err = backend.PutObject(t.Context(), bucket, "b", bytes.NewReader(data), s3.PutObjectOptions{ContentLength: int64(len(data))})
 	if !errors.Is(err, s3errs.ErrSlowDown) {
 		t.Fatal("unexpected", err)
 	}
@@ -1505,7 +1505,7 @@ func TestDiskUsageLimitTimeout(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 		cancel()
 	}()
-	_, err = backend.PutObject(ctx, testutil.AccessKeyID, bucket, "c", bytes.NewReader(data), s3.PutObjectOptions{ContentLength: int64(len(data))})
+	_, err = backend.PutObject(ctx, bucket, "c", bytes.NewReader(data), s3.PutObjectOptions{ContentLength: int64(len(data))})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatal("unexpected", err)
 	}
@@ -1831,7 +1831,7 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := store.DeleteObject(testutil.AccessKeyID, bucket, s3.ObjectID{Key: "C"}); err != nil {
+	if _, _, _, err := store.DeleteObject(bucket, s3.ObjectID{Key: "C"}); err != nil {
 		t.Fatal(err)
 	}
 	siaBackend.ProcessOrphans(t.Context())
@@ -1864,7 +1864,7 @@ func TestProcessOrphansGatedOnSync(t *testing.T) {
 	if err := backend.PinObjects(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := store.DeleteObject(testutil.AccessKeyID, bucket, s3.ObjectID{Key: "a"}); err != nil {
+	if _, _, _, err := store.DeleteObject(bucket, s3.ObjectID{Key: "a"}); err != nil {
 		t.Fatal(err)
 	}
 

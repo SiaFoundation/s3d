@@ -277,29 +277,26 @@ func (f *LifecycleFilter) validate() error {
 	return nil
 }
 
-// routeBucketLifecycle dispatches the ?lifecycle bucket subresource.
-func (s *s3) routeBucketLifecycle(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket string) error {
-	validatedKey, err := assertAuth(accessKeyID)
-	if err != nil {
-		return err
-	}
+// routeBucketLifecycle routes the ?lifecycle bucket subresource.
+func (s *s3) routeBucketLifecycle(r *http.Request) (operation, error) {
 	switch r.Method {
 	case http.MethodPut:
-		return s.putBucketLifecycle(w, r, validatedKey, bucket)
+		return operation{action: actionPutLifecycleConfiguration, serve: s.putBucketLifecycle}, nil
 	case http.MethodGet:
-		return s.getBucketLifecycle(w, r, validatedKey, bucket)
+		return operation{action: actionGetLifecycleConfiguration, serve: s.getBucketLifecycle}, nil
 	case http.MethodDelete:
-		return s.deleteBucketLifecycle(w, r, validatedKey, bucket)
+		// S3 has no separate action for deleting the configuration
+		return operation{action: actionPutLifecycleConfiguration, serve: s.deleteBucketLifecycle}, nil
 	default:
-		return s3errs.ErrMethodNotAllowed
+		return operation{}, s3errs.ErrMethodNotAllowed
 	}
 }
 
 // putBucketLifecycle handles PUT Bucket lifecycle requests.
 //
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketLifecycleConfiguration.html
-func (s *s3) putBucketLifecycle(w http.ResponseWriter, r *http.Request, accessKeyID, bucket string) error {
-	s.logger.Debug("putting bucket lifecycle configuration", zap.String("bucket", bucket))
+func (s *s3) putBucketLifecycle(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
+	s.logger.Debug("putting bucket lifecycle configuration", zap.String("bucket", access.bucket))
 
 	var config LifecycleConfiguration
 	if err := decodeXMLBody(r.Body, &config); err != nil {
@@ -310,16 +307,16 @@ func (s *s3) putBucketLifecycle(w http.ResponseWriter, r *http.Request, accessKe
 	}
 	config.assignRuleIDs()
 
-	return s.backend.PutBucketLifecycleConfiguration(r.Context(), accessKeyID, bucket, config)
+	return s.backend.PutBucketLifecycleConfiguration(r.Context(), access.bucket, config)
 }
 
 // getBucketLifecycle handles GET Bucket lifecycle requests.
 //
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketLifecycleConfiguration.html
-func (s *s3) getBucketLifecycle(w http.ResponseWriter, r *http.Request, accessKeyID, bucket string) error {
-	s.logger.Debug("getting bucket lifecycle configuration", zap.String("bucket", bucket))
+func (s *s3) getBucketLifecycle(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
+	s.logger.Debug("getting bucket lifecycle configuration", zap.String("bucket", access.bucket))
 
-	config, err := s.backend.GetBucketLifecycleConfiguration(r.Context(), accessKeyID, bucket)
+	config, err := s.backend.GetBucketLifecycleConfiguration(r.Context(), access.bucket)
 	if err != nil {
 		return err
 	}
@@ -332,10 +329,10 @@ func (s *s3) getBucketLifecycle(w http.ResponseWriter, r *http.Request, accessKe
 // deleteBucketLifecycle handles DELETE Bucket lifecycle requests.
 //
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteBucketLifecycle.html
-func (s *s3) deleteBucketLifecycle(w http.ResponseWriter, r *http.Request, accessKeyID, bucket string) error {
-	s.logger.Debug("deleting bucket lifecycle configuration", zap.String("bucket", bucket))
+func (s *s3) deleteBucketLifecycle(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
+	s.logger.Debug("deleting bucket lifecycle configuration", zap.String("bucket", access.bucket))
 
-	if err := s.backend.DeleteBucketLifecycleConfiguration(r.Context(), accessKeyID, bucket); err != nil {
+	if err := s.backend.DeleteBucketLifecycleConfiguration(r.Context(), access.bucket); err != nil {
 		return err
 	}
 	w.WriteHeader(http.StatusNoContent)

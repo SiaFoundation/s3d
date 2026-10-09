@@ -32,13 +32,13 @@ func TestHandleAuthV4Presigned(t *testing.T) {
 	store := mockKeyStore{exampleAccessKey: SecretAccessKey(exampleSecret)}
 
 	req := httptest.NewRequest(http.MethodGet, presignedURL, nil)
-	accessKeyID, err := HandleAuth(req, store, exampleRegion, exampleTime.Add(time.Hour))
+	caller, err := HandleAuth(req, store, exampleRegion, exampleTime.Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
-	} else if accessKeyID == nil {
+	} else if caller == nil {
 		t.Fatal("expected access key ID, got anonymous")
-	} else if *accessKeyID != exampleAccessKey {
-		t.Fatalf("expected access key ID %q, got %q", exampleAccessKey, *accessKeyID)
+	} else if want := (Caller{AccessKeyID: exampleAccessKey, UserID: mockUserID(exampleAccessKey)}); *caller != want {
+		t.Fatalf("expected caller %+v, got %+v", want, *caller)
 	}
 
 	// setQuery returns a mutation that sets query parameter key to value, or
@@ -256,10 +256,10 @@ func TestHandleAuthV4PresignedPayload(t *testing.T) {
 	// against
 	authenticate := func(t *testing.T, req *http.Request) *[32]byte {
 		t.Helper()
-		accessKeyID, err := HandleAuth(req, store, exampleRegion, now)
+		caller, err := HandleAuth(req, store, exampleRegion, now)
 		if err != nil {
 			t.Fatal(err)
-		} else if accessKeyID == nil || *accessKeyID != exampleAccessKey {
+		} else if caller == nil || caller.AccessKeyID != exampleAccessKey {
 			t.Fatal("access key ID mismatch")
 		}
 		hash, err := Sha256HashFromRequest(req)

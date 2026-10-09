@@ -20,8 +20,8 @@ const (
 // putBucketVersioning handles PUT Bucket versioning requests.
 //
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketVersioning.html
-func (s *s3) putBucketVersioning(w http.ResponseWriter, r *http.Request, accessKeyID, bucket string) error {
-	s.logger.Debug("putting bucket versioning configuration", zap.String("bucket", bucket))
+func (s *s3) putBucketVersioning(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
+	s.logger.Debug("putting bucket versioning configuration", zap.String("bucket", access.bucket))
 
 	var config VersioningConfiguration
 	if err := decodeXMLBody(r.Body, &config); err != nil {
@@ -40,16 +40,16 @@ func (s *s3) putBucketVersioning(w http.ResponseWriter, r *http.Request, accessK
 		return s3errs.ErrIllegalVersioningConfigurationException
 	}
 
-	return s.backend.PutBucketVersioning(r.Context(), accessKeyID, bucket, config.Status)
+	return s.backend.PutBucketVersioning(r.Context(), access.bucket, config.Status)
 }
 
 // getBucketVersioning handles GET Bucket versioning requests.
 //
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketVersioning.html
-func (s *s3) getBucketVersioning(w http.ResponseWriter, r *http.Request, accessKeyID, bucket string) error {
-	s.logger.Debug("getting bucket versioning configuration", zap.String("bucket", bucket))
+func (s *s3) getBucketVersioning(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
+	s.logger.Debug("getting bucket versioning configuration", zap.String("bucket", access.bucket))
 
-	status, err := s.backend.GetBucketVersioning(r.Context(), accessKeyID, bucket)
+	status, err := s.backend.GetBucketVersioning(r.Context(), access.bucket)
 	if err != nil {
 		return err
 	}

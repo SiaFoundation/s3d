@@ -246,8 +246,8 @@ func (s *Sia) cleanupOrphanFile(o objects.OrphanedFile) {
 // CopyObject copies an object from the source bucket and object key to the
 // destination bucket and object key. opts.Meta contains any metadata that
 // should be merged into the copied object except for the x-amz-acl header.
-func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject string, srcVersion s3.VersionRequest, dstBucket, dstObject string, opts s3.CopyObjectOptions) (*s3.CopyObjectResult, error) {
-	result, orphan, err := s.store.CopyObject(accessKeyID, srcBucket, srcObject, srcVersion, dstBucket, dstObject, opts)
+func (s *Sia) CopyObject(ctx context.Context, srcBucket, srcObject string, srcVersion s3.VersionRequest, dstBucket, dstObject string, opts s3.CopyObjectOptions) (*s3.CopyObjectResult, error) {
+	result, orphan, err := s.store.CopyObject(srcBucket, srcObject, srcVersion, dstBucket, dstObject, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -256,9 +256,9 @@ func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject 
 }
 
 // DeleteObject deletes the object with the given key from the specified
-// bucket for the user identified by the given access key.
-func (s *Sia) DeleteObject(ctx context.Context, accessKeyID, bucket string, object s3.ObjectID) (*s3.DeleteObjectResult, error) {
-	versionID, isDeleteMarker, orphan, err := s.store.DeleteObject(accessKeyID, bucket, object)
+// bucket.
+func (s *Sia) DeleteObject(ctx context.Context, bucket string, object s3.ObjectID) (*s3.DeleteObjectResult, error) {
+	versionID, isDeleteMarker, orphan, err := s.store.DeleteObject(bucket, object)
 	if err != nil {
 		return nil, err
 	}
@@ -270,18 +270,12 @@ func (s *Sia) DeleteObject(ctx context.Context, accessKeyID, bucket string, obje
 	}, nil
 }
 
-// DeleteObjects deletes multiple objects from the specified bucket for the
-// user identified by the given access key.
-func (s *Sia) DeleteObjects(ctx context.Context, accessKeyID, bucket string, objects []s3.ObjectID) (*s3.ObjectsDeleteResult, error) {
-	// an inaccessible bucket fails the whole request rather than every key
-	if err := s.store.AssertBucketOwner(accessKeyID, bucket); err != nil {
-		return nil, err
-	}
-
+// DeleteObjects deletes multiple objects from the specified bucket.
+func (s *Sia) DeleteObjects(ctx context.Context, bucket string, objects []s3.ObjectID) (*s3.ObjectsDeleteResult, error) {
 	var result s3.ObjectsDeleteResult
 
 	for _, obj := range objects {
-		versionID, isDeleteMarker, orphan, err := s.store.DeleteObject(accessKeyID, bucket, obj)
+		versionID, isDeleteMarker, orphan, err := s.store.DeleteObject(bucket, obj)
 		if err == nil {
 			s.cleanupOrphanFile(orphan)
 		}
@@ -309,26 +303,21 @@ func (s *Sia) DeleteObjects(ctx context.Context, accessKeyID, bucket string, obj
 }
 
 // GetObject retrieves the object with the given key from the specified
-// bucket for the user identified by the given access key. The provided
-// range is either nil if no range was requested, or contains the requested,
-// byte range. version selects a specific version, or the current version when
-// unspecified.
-func (s *Sia) GetObject(ctx context.Context, accessKeyID *string, bucket, object string, version s3.VersionRequest, rnge *s3.ObjectRangeRequest, partNumber *int32) (*s3.Object, error) {
-	return s.headOrGetObject(ctx, accessKeyID, bucket, object, version, rnge, partNumber, false)
+// bucket. The provided range is either nil if no range was requested, or
+// contains the requested byte range. version selects a specific version, or
+// the current version when unspecified.
+func (s *Sia) GetObject(ctx context.Context, bucket, object string, version s3.VersionRequest, rnge *s3.ObjectRangeRequest, partNumber *int32) (*s3.Object, error) {
+	return s.headOrGetObject(ctx, bucket, object, version, rnge, partNumber, false)
 }
 
 // HeadObject is like GetObject but only retrieves the metadata of the
 // object and returns an empty body.
-func (s *Sia) HeadObject(ctx context.Context, accessKeyID *string, bucket, object string, version s3.VersionRequest, rnge *s3.ObjectRangeRequest, partNumber *int32) (*s3.Object, error) {
-	return s.headOrGetObject(ctx, accessKeyID, bucket, object, version, rnge, partNumber, true)
+func (s *Sia) HeadObject(ctx context.Context, bucket, object string, version s3.VersionRequest, rnge *s3.ObjectRangeRequest, partNumber *int32) (*s3.Object, error) {
+	return s.headOrGetObject(ctx, bucket, object, version, rnge, partNumber, true)
 }
 
-func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, object string, version s3.VersionRequest, requestedRange *s3.ObjectRangeRequest, partNumber *int32, head bool) (*s3.Object, error) {
-	// decided once so the retry below stays authorized as the read the client
-	// asked for, not as a versioned one
-	action := s3.ReadAction(version)
-
-	obj, err := s.store.GetObject(accessKeyID, bucket, object, version, partNumber, action)
+func (s *Sia) headOrGetObject(ctx context.Context, bucket, object string, version s3.VersionRequest, requestedRange *s3.ObjectRangeRequest, partNumber *int32, head bool) (*s3.Object, error) {
+	obj, err := s.store.GetObject(bucket, object, version, partNumber)
 	if err != nil {
 		return nil, err
 	}
@@ -383,7 +372,7 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 			// the upload loop moved the file to Sia between our GetObject
 			// and file open, re-fetch the same version to get the updated
 			// metadata and retry
-			obj, err = s.store.GetObject(accessKeyID, bucket, object, s3.SpecificVersion(obj.VersionID), partNumber, action)
+			obj, err = s.store.GetObject(bucket, object, s3.SpecificVersion(obj.VersionID), partNumber)
 			if err != nil {
 				return nil, err
 			} else if obj.FileName != nil {
@@ -416,13 +405,11 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 	return resp, nil
 }
 
-// ListObjects lists objects in the specified bucket for the user identified
-// by the given access key. The backend should use the prefix to limit the
-// contents of the bucket and sort the results into the Contents and
+// ListObjects lists objects in the specified bucket, using the prefix to
+// limit the contents of the bucket and sort the results into the Contents and
 // CommonPrefixes fields of the returned ObjectsListResult.
-func (s *Sia) ListObjects(ctx context.Context, accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error) {
-	// the store rejects an anonymous list unless the policy grants s3:ListBucket
-	result, err := s.store.ListObjects(accessKeyID, bucket, prefix, page)
+func (s *Sia) ListObjects(ctx context.Context, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error) {
+	result, err := s.store.ListObjects(bucket, prefix, page)
 	if err != nil {
 		return nil, err
 	}
@@ -430,12 +417,9 @@ func (s *Sia) ListObjects(ctx context.Context, accessKeyID *string, bucket strin
 }
 
 // ListObjectVersions lists all versions (including delete markers) of the
-// objects in the specified bucket for the user identified by the given access
-// key.
-func (s *Sia) ListObjectVersions(ctx context.Context, accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectVersionsPage) (*s3.ObjectVersionsListResult, error) {
-	// the store rejects an anonymous list unless the policy grants
-	// s3:ListBucketVersions
-	result, err := s.store.ListObjectVersions(accessKeyID, bucket, prefix, page)
+// objects in the specified bucket.
+func (s *Sia) ListObjectVersions(ctx context.Context, bucket string, prefix s3.Prefix, page s3.ListObjectVersionsPage) (*s3.ObjectVersionsListResult, error) {
+	result, err := s.store.ListObjectVersions(bucket, prefix, page)
 	if err != nil {
 		return nil, err
 	}
@@ -446,11 +430,11 @@ func (s *Sia) ListObjectVersions(ctx context.Context, accessKeyID *string, bucke
 // checkWritePreconditions evaluates the preconditions against the current
 // version of the object a write would replace. It runs outside the write's
 // transaction, so it is a fail-fast check only; the store re-checks atomically.
-func (s *Sia) checkWritePreconditions(accessKeyID, bucket, object string, p s3.ObjectPreconditions) error {
+func (s *Sia) checkWritePreconditions(bucket, object string, p s3.ObjectPreconditions) error {
 	if !p.HasWritePreconditions() {
 		return nil
 	}
-	obj, err := s.store.GetObject(&accessKeyID, bucket, object, s3.NoVersion(), nil, s3.ActionGetObject)
+	obj, err := s.store.GetObject(bucket, object, s3.NoVersion(), nil)
 	if errors.Is(err, s3errs.ErrNoSuchKey) {
 		return p.CheckWrite(nil)
 	} else if err != nil {
@@ -461,15 +445,10 @@ func (s *Sia) checkWritePreconditions(accessKeyID, bucket, object string, p s3.O
 }
 
 // PutObject puts an object with the given key into the specified bucket.
-func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object string, r io.Reader, opts s3.PutObjectOptions) (_ *s3.PutObjectResult, err error) {
-	// fail fast if the bucket is inaccessible before streaming the body to disk
-	if err := s.store.AssertBucketOwner(accessKeyID, bucket); err != nil {
-		return nil, err
-	}
-
-	// likewise for a precondition that already cannot hold, so a doomed write
-	// does not stream its whole body first
-	if err := s.checkWritePreconditions(accessKeyID, bucket, object, opts.Preconditions); err != nil {
+func (s *Sia) PutObject(ctx context.Context, bucket, object string, r io.Reader, opts s3.PutObjectOptions) (_ *s3.PutObjectResult, err error) {
+	// fail fast if a precondition already cannot hold, so a doomed write does
+	// not stream its whole body first
+	if err := s.checkWritePreconditions(bucket, object, opts.Preconditions); err != nil {
 		return nil, err
 	}
 
@@ -558,12 +537,13 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	}
 
 	// store the object in the database
-	versionID, orphan, err := s.store.PutObject(accessKeyID, bucket, object, objects.PutOptions{
+	versionID, orphan, err := s.store.PutObject(bucket, object, objects.PutOptions{
 		ContentMD5:    contentMD5,
 		Meta:          opts.Meta,
 		Length:        size,
 		FileName:      fileName,
 		Preconditions: opts.Preconditions,
+		BucketOwner:   opts.BucketOwner,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to store object metadata: %w", err)
