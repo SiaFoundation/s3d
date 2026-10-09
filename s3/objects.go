@@ -63,6 +63,13 @@ type CopyObjectResult struct {
 	PartsCount      int32
 }
 
+// DeleteObjectOptions are the request scoped settings a delete may carry.
+type DeleteObjectOptions struct {
+	// BypassGovernanceRetention lets the caller destroy a version held by a
+	// GOVERNANCE retention. It has no effect on COMPLIANCE or a legal hold.
+	BypassGovernanceRetention bool
+}
+
 // DeleteObjectResult contains information about the result of a DeleteObject
 // operation.
 type DeleteObjectResult struct {
@@ -288,7 +295,9 @@ func (s *s3) deleteObject(w http.ResponseWriter, r *http.Request, accessKeyID st
 		return err
 	}
 
-	result, err := s.backend.DeleteObject(r.Context(), accessKeyID, bucket, oid)
+	result, err := s.backend.DeleteObject(r.Context(), accessKeyID, bucket, oid, DeleteObjectOptions{
+		BypassGovernanceRetention: bypassGovernanceRetention(r.Header),
+	})
 	if err != nil {
 		return err
 	}
@@ -326,7 +335,9 @@ func (s *s3) deleteObjects(w http.ResponseWriter, r *http.Request, accessKeyID s
 		}
 	}
 
-	res, err := s.backend.DeleteObjects(r.Context(), accessKeyID, bucket, req.Objects)
+	res, err := s.backend.DeleteObjects(r.Context(), accessKeyID, bucket, req.Objects, DeleteObjectOptions{
+		BypassGovernanceRetention: bypassGovernanceRetention(r.Header),
+	})
 	if err != nil {
 		return err
 	}

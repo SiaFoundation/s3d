@@ -322,6 +322,7 @@ type (
 	ErrorResult struct {
 		XMLName   xml.Name `xml:"Error"`
 		Key       string   `xml:"Key,omitempty"`
+		VersionID string   `xml:"VersionId,omitempty"`
 		Code      string   `xml:"Code,omitempty"`
 		Message   string   `xml:"Message,omitempty"`
 		Resource  string   `xml:"Resource,omitempty"`

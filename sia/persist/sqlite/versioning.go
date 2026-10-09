@@ -74,7 +74,7 @@ func putObject(tx *txn, bid int64, name string, status string, contentMD5 [16]by
 	)
 	if status == s3.VersioningStatusEnabled {
 		version = newDBVersion()
-	} else if old, replacedOld, err = deleteObject(tx, bid, name, nullVersion); err != nil {
+	} else if old, replacedOld, err = deleteObject(tx, bid, name, nullVersion, false); err != nil {
 		return objectMutationResult{}, fmt.Errorf("failed to delete null version: %w", err)
 	}
 
@@ -156,7 +156,7 @@ func deleteCurrentObject(tx *txn, bid int64, name string, status string, objectI
 			return objectMutationResult{}, err
 		}
 		var orphan objects.OrphanedFile
-		row, found, err := deleteObject(tx, bid, name, nullVersion)
+		row, found, err := deleteObject(tx, bid, name, nullVersion, false)
 		if err != nil {
 			return objectMutationResult{}, fmt.Errorf("failed to delete null version: %w", err)
 		}
@@ -176,7 +176,7 @@ func deleteCurrentObject(tx *txn, bid int64, name string, status string, objectI
 		}, nil
 
 	default: // unversioned: permanently delete the null version
-		res, err := deleteSpecificVersion(tx, bid, name, nullVersion, objectID)
+		res, err := deleteSpecificVersion(tx, bid, name, nullVersion, objectID, false)
 		if err != nil {
 			return objectMutationResult{}, err
 		}
@@ -189,7 +189,7 @@ func deleteCurrentObject(tx *txn, bid int64, name string, status string, objectI
 // checking objectID's preconditions, then orphans its backing data. Returns
 // sql.ErrNoRows if no such row exists. A named version is there to delete, so
 // its preconditions are matched against it.
-func deleteSpecificVersion(tx *txn, bid int64, name string, version string, objectID s3.ObjectID) (objectMutationResult, error) {
+func deleteSpecificVersion(tx *txn, bid int64, name string, version string, objectID s3.ObjectID, bypass bool) (objectMutationResult, error) {
 	if objectID.HasPreconditions() {
 		attrs, found, err := versionObjectAttrs(tx, bid, name, version)
 		if err != nil {
@@ -201,7 +201,7 @@ func deleteSpecificVersion(tx *txn, bid int64, name string, version string, obje
 		}
 	}
 
-	row, found, err := deleteObject(tx, bid, name, version)
+	row, found, err := deleteObject(tx, bid, name, version, bypass)
 	if err != nil {
 		return objectMutationResult{}, fmt.Errorf("failed to delete version: %w", err)
 	} else if !found {

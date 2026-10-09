@@ -98,7 +98,7 @@ func TestSnapshots(t *testing.T) {
 	}
 
 	// delete the object while the first snapshot still references it
-	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "a"}); err != nil {
+	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "a"}, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -241,9 +241,9 @@ func TestSnapshots(t *testing.T) {
 	// withheld, the one that predates it and the one created during it may
 	// both be captured in the backup
 	bID := addObject("b")
-	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "b"}); err != nil {
+	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "b"}, false); err != nil {
 		t.Fatal(err)
-	} else if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "a2"}); err != nil {
+	} else if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "a2"}, false); err != nil {
 		t.Fatal(err)
 	}
 	if orphans, err := store.OrphanedObjects(100); err != nil {
@@ -272,7 +272,7 @@ func TestSnapshots(t *testing.T) {
 	// an object created after the snapshot completed is provably absent from
 	// its backup, deleting it releases it immediately
 	cID := addObject("c")
-	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "c"}); err != nil {
+	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "c"}, false); err != nil {
 		t.Fatal(err)
 	}
 	if orphans, err := store.OrphanedObjects(100); err != nil {
@@ -298,9 +298,9 @@ func TestSnapshots(t *testing.T) {
 	if _, _, err := store.CopyObject(testAccessKeyID, bucket, "d", s3.NoVersion(), bucket, "d-copy", s3.CopyObjectOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "d"}); err != nil {
+	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "d"}, false); err != nil {
 		t.Fatal(err)
-	} else if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "d-copy"}); err != nil {
+	} else if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "d-copy"}, false); err != nil {
 		t.Fatal(err)
 	}
 	if orphans, err := store.OrphanedObjects(100); err != nil {
@@ -316,7 +316,7 @@ func TestSnapshots(t *testing.T) {
 		t.Fatal(err)
 	}
 	eID := addObject("e")
-	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "e"}); err != nil {
+	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "e"}, false); err != nil {
 		t.Fatal(err)
 	}
 	if orphans, err := store.OrphanedObjects(100); err != nil {
@@ -351,7 +351,7 @@ func TestSnapshots(t *testing.T) {
 	if _, err := store.UpdateSiaObjects([]objects.SiaObject{{ID: fSealed.ID(), Sealed: fSealed}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "f"}); err != nil {
+	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "f"}, false); err != nil {
 		t.Fatal(err)
 	}
 	if orphans, err := store.OrphanedObjects(100); err != nil {

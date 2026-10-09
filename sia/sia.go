@@ -222,7 +222,7 @@ type Store interface {
 	CopyObject(accessKeyID, srcBucket, srcName string, srcVersion s3.VersionRequest, dstBucket, dstName string, opts s3.CopyObjectOptions) (*s3.CopyObjectResult, objects.OrphanedFile, error)
 	CreateBucket(accessKeyID, bucket string, objectLock bool) error
 	DeleteBucket(accessKeyID, bucket string) error
-	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (string, bool, objects.OrphanedFile, error)
+	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID, bypass bool) (string, bool, objects.OrphanedFile, error)
 	GetObject(accessKeyID *string, bucket, object string, version s3.VersionRequest, partNumber *int32, action s3.PolicyActions) (*objects.Object, error)
 	DiskUsage() (uint64, error)
 	HeadBucket(accessKeyID *string, bucket string) error
