@@ -491,6 +491,16 @@ func TestPostObjectRejections(t *testing.T) {
 	upload.fields = [][2]string{{"content-md5", base64.StdEncoding.EncodeToString(make([]byte, 16))}}
 	assertRejected(upload, s3errs.ErrBadDigest)
 
+	// a content-md5 that decodes to more than a 16 byte digest
+	upload = newPostUpload(bucket, "rejected")
+	upload.fields = [][2]string{{"content-md5", base64.StdEncoding.EncodeToString(make([]byte, 32))}}
+	assertRejected(upload, s3errs.ErrInvalidDigest)
+
+	// a field that pushes everything preceding the file past its bound
+	upload = newPostUpload(bucket, "rejected")
+	upload.unsigned = [][2]string{{"x-ignore-padding", strings.Repeat("a", 80*1024)}}
+	assertRejected(upload, s3errs.ErrMaxPostPreDataLengthExceededError)
+
 	// a form that is also signed with an Authorization header
 	upload = newPostUpload(bucket, "rejected")
 	upload.signHeader = true
