@@ -745,6 +745,8 @@ func TestObjectLockEnforcement(t *testing.T) {
 			t.Fatalf("expected version %q on the failed entry, got %v", locked, res.Errors[0].VersionId)
 		} else if *res.Errors[0].Code != "AccessDenied" {
 			t.Fatalf("expected AccessDenied, got %q", *res.Errors[0].Code)
+		} else if res.Errors[0].Message == nil || *res.Errors[0].Message != s3errs.ErrAccessDenied.Description {
+			t.Fatalf("expected the canonical message, got %v", res.Errors[0].Message)
 		}
 
 		// the rest of the batch still deletes
