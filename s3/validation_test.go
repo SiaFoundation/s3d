@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -103,9 +104,11 @@ func TestMetadataHeaders(t *testing.T) {
 		"X-Amz-Acl",
 		"X-Amz-Storage-Class",
 		"X-Amz-Tagging",
+		"X-Amz-Website-Redirect-Location",
+		// stored as object lock state on the version, never as metadata
 		"X-Amz-Object-Lock-Mode",
 		"X-Amz-Object-Lock-Retain-Until-Date",
-		"X-Amz-Website-Redirect-Location",
+		"X-Amz-Object-Lock-Legal-Hold",
 		// encryption
 		"X-Amz-Server-Side-Encryption",
 		"X-Amz-Server-Side-Encryption-Aws-Kms-Key-Id",
@@ -177,5 +180,109 @@ func TestWriteGetOrHeadObjectHeaders(t *testing.T) {
 	}
 	if got := w.Header().Get("Content-Type"); got != "text/plain" {
 		t.Fatal("mismatch", got)
+	}
+}
+
+// TestRequestObjectLock checks the per version lock headers a write may carry.
+func TestRequestObjectLock(t *testing.T) {
+	futureTime := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	future := futureTime.Format(time.RFC3339Nano)
+	past := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)
+
+	tests := []struct {
+		name    string
+		headers map[string]string
+		err     *s3errs.Error
+		want    *ObjectLockState
+	}{
+		{name: "None"},
+		{
+			name:    "Governance",
+			headers: map[string]string{HeaderObjectLockMode: ObjectLockModeGovernance, HeaderObjectLockRetainUntilDate: future},
+			want:    &ObjectLockState{Mode: ObjectLockModeGovernance, RetainUntil: futureTime},
+		},
+		{
+			name:    "Compliance",
+			headers: map[string]string{HeaderObjectLockMode: ObjectLockModeCompliance, HeaderObjectLockRetainUntilDate: future},
+			want:    &ObjectLockState{Mode: ObjectLockModeCompliance, RetainUntil: futureTime},
+		},
+		{
+			name:    "LegalHoldAlone",
+			headers: map[string]string{HeaderObjectLockLegalHold: LegalHoldOn},
+			want:    &ObjectLockState{LegalHold: LegalHoldOn},
+		},
+		{
+			name:    "LegalHoldOff",
+			headers: map[string]string{HeaderObjectLockLegalHold: LegalHoldOff},
+			want:    &ObjectLockState{LegalHold: LegalHoldOff},
+		},
+		{
+			name:    "ModeWithoutDate",
+			headers: map[string]string{HeaderObjectLockMode: ObjectLockModeGovernance},
+			err:     &s3errs.ErrInvalidRequest,
+		},
+		{
+			name:    "DateWithoutMode",
+			headers: map[string]string{HeaderObjectLockRetainUntilDate: future},
+			err:     &s3errs.ErrInvalidRequest,
+		},
+		{
+			name:    "UnknownMode",
+			headers: map[string]string{HeaderObjectLockMode: "governance", HeaderObjectLockRetainUntilDate: future},
+			err:     &s3errs.ErrInvalidRequest,
+		},
+		{
+			name:    "DateInThePast",
+			headers: map[string]string{HeaderObjectLockMode: ObjectLockModeGovernance, HeaderObjectLockRetainUntilDate: past},
+			err:     &s3errs.ErrInvalidRequest,
+		},
+		{
+			name:    "UnparseableDate",
+			headers: map[string]string{HeaderObjectLockMode: ObjectLockModeGovernance, HeaderObjectLockRetainUntilDate: "2030-01-01"},
+			err:     &s3errs.ErrInvalidRequest,
+		},
+		{
+			name:    "UnknownLegalHold",
+			headers: map[string]string{HeaderObjectLockLegalHold: "on"},
+			err:     &s3errs.ErrInvalidRequest,
+		},
+		{
+			name:    "EventHold",
+			headers: map[string]string{HeaderObjectLockEventHold: "ON"},
+			err:     &s3errs.ErrNotImplemented,
+		},
+		{
+			name:    "EventHoldDurationDays",
+			headers: map[string]string{HeaderObjectLockEventHoldDurationDays: "1"},
+			err:     &s3errs.ErrNotImplemented,
+		},
+		{
+			name:    "EventHoldDurationYears",
+			headers: map[string]string{HeaderObjectLockEventHoldDurationYears: "1"},
+			err:     &s3errs.ErrNotImplemented,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := http.Header{}
+			for k, v := range tt.headers {
+				h.Set(k, v)
+			}
+
+			got, err := requestObjectLock(h)
+			if tt.err != nil {
+				if !errors.Is(err, *tt.err) {
+					t.Fatalf("expected %v, got %v", tt.err, err)
+				}
+				return
+			} else if err != nil {
+				t.Fatal(err)
+			}
+
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("expected %+v, got %+v", tt.want, got)
+			}
+		})
 	}
 }

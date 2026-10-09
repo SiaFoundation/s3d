@@ -200,6 +200,11 @@ func (s *Store) GetObject(accessKeyID *string, bucket, name string, version s3.V
 			return s3errs.ErrAccessDenied
 		}
 		obj.Versioned = b.versioning != ""
+		if !b.isOwner {
+			// AWS gates the lock headers on s3:GetObjectRetention and
+			// s3:GetObjectLegalHold, which s3d policies do not carry
+			obj.ObjectLock = nil
+		}
 		return nil
 	}); errors.Is(err, sql.ErrNoRows) {
 		if !mayList {
@@ -222,27 +227,29 @@ func (s *Store) GetObject(accessKeyID *string, bucket, name string, version s3.V
 func getObject(tx *txn, obj *objects.Object, bid int64, name string, version s3.VersionRequest, partNumber *int32) error {
 	// resolve the target version and read its parts count and delete-marker flag
 	var versionID string
+	var lock objectLock
 	if !version.Specified {
 		err := tx.QueryRow(`
-			SELECT version_id, parts_count, is_delete_marker
+			SELECT version_id, parts_count, is_delete_marker, object_lock_mode, object_lock_retain_until, object_lock_legal_hold
 			FROM objects
 			WHERE bucket_id = $1 AND name = $2 AND is_latest = TRUE
-		`, bid, name).Scan(&versionID, &obj.PartsCount, &obj.IsDeleteMarker)
+		`, bid, name).Scan(&versionID, &obj.PartsCount, &obj.IsDeleteMarker, &lock.Mode, &lock.RetainUntil, &lock.LegalHold)
 		if err != nil {
 			return err
 		}
 	} else {
 		versionID = version.ID
 		err := tx.QueryRow(`
-			SELECT parts_count, is_delete_marker
+			SELECT parts_count, is_delete_marker, object_lock_mode, object_lock_retain_until, object_lock_legal_hold
 			FROM objects
 			WHERE bucket_id = $1 AND name = $2 AND version_id = $3
-		`, bid, name, versionID).Scan(&obj.PartsCount, &obj.IsDeleteMarker)
+		`, bid, name, versionID).Scan(&obj.PartsCount, &obj.IsDeleteMarker, &lock.Mode, &lock.RetainUntil, &lock.LegalHold)
 		if err != nil {
 			return err
 		}
 	}
 	obj.VersionID = versionID
+	obj.ObjectLock = storedObjectLock(lock)
 
 	// return full object if no part specified, or this is a delete marker
 	if partNumber == nil || obj.PartsCount == 0 || obj.IsDeleteMarker {
@@ -315,7 +322,11 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, opts objects.PutOpti
 		if err := checkWritePreconditions(tx, bid, name, opts.Preconditions); err != nil {
 			return err
 		}
-		res, err := putObject(tx, bid, name, status, opts.ContentMD5, opts.Meta, opts.Length, 0, opts.FileName, nil)
+		lock, err := effectiveObjectLock(tx, bid, opts.ObjectLock)
+		if err != nil {
+			return err
+		}
+		res, err := putObject(tx, bid, name, status, opts.ContentMD5, opts.Meta, opts.Length, 0, opts.FileName, nil, lock)
 		versionID, orphan = res.reportVersionID, res.orphanFile
 		return err
 	})
@@ -709,6 +720,11 @@ func (s *Store) CopyObject(accessKeyID, srcBucket, srcName string, srcVersion s3
 			return err
 		}
 
+		lock, err := effectiveObjectLock(tx, dstBid, opts.ObjectLock)
+		if err != nil {
+			return err
+		}
+
 		// a self-copy onto the same null version rewrites the row in place to
 		// preserve its object_parts and avoid orphaning. Refresh seq too so a
 		// suspended-bucket restore of versionId=null makes it current again.
@@ -729,7 +745,7 @@ func (s *Store) CopyObject(accessKeyID, srcBucket, srcName string, srcVersion s3
 			return err
 		}
 
-		res, err := putObject(tx, dstBid, dstName, dstStatus, obj.ContentMD5, obj.Meta, obj.Length, obj.PartsCount, obj.FileName, obj.SiaObject)
+		res, err := putObject(tx, dstBid, dstName, dstStatus, obj.ContentMD5, obj.Meta, obj.Length, obj.PartsCount, obj.FileName, obj.SiaObject, lock)
 		if err != nil {
 			return err
 		}

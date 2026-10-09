@@ -14,7 +14,7 @@ import (
 )
 
 // CreateMultipartUpload persists metadata for a new multipart upload.
-func (s *Store) CreateMultipartUpload(accessKeyID, bucket, name string, uploadID s3.UploadID, meta map[string]string) error {
+func (s *Store) CreateMultipartUpload(accessKeyID, bucket, name string, uploadID s3.UploadID, meta map[string]string, lock *s3.ObjectLockState) error {
 	if meta == nil {
 		meta = make(map[string]string) // force '{}' instead of 'null' in JSON
 	}
@@ -25,10 +25,20 @@ func (s *Store) CreateMultipartUpload(accessKeyID, bucket, name string, uploadID
 			return err
 		}
 
+		if lock != nil {
+			enabled, err := bucketObjectLockEnabled(tx, bid)
+			if err != nil {
+				return err
+			} else if !enabled {
+				return errObjectLockNotEnabled
+			}
+		}
+		stored := objectLockColumns(lock)
+
 		if _, err := tx.Exec(`
-				INSERT INTO multipart_uploads (upload_id, bucket_id, name, metadata, created_at)
-				VALUES ($1, $2, $3, $4, $5)
-			`, sqlUploadID(uploadID), bid, name, sqlMetaJSON(meta), sqlTime(time.Now())); err != nil {
+				INSERT INTO multipart_uploads (upload_id, bucket_id, name, metadata, created_at, object_lock_mode, object_lock_retain_until, object_lock_legal_hold)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			`, sqlUploadID(uploadID), bid, name, sqlMetaJSON(meta), sqlTime(time.Now()), stored.Mode, stored.RetainUntil, stored.LegalHold); err != nil {
 			return fmt.Errorf("failed to insert multipart upload: %w", err)
 		}
 		return incrementStat(tx, statMultipartUploads, 1)
@@ -97,12 +107,17 @@ func (s *Store) CompleteMultipartUpload(accessKeyID, bucket, name string, upload
 		// upload_id serves as the filename, since the assembled parts live under
 		// the upload directory until the object is uploaded to Sia.
 		var meta map[string]string
-		if err := tx.QueryRow(`SELECT metadata FROM multipart_uploads WHERE upload_id = $1`,
-			sqlUploadID(uploadID)).Scan((*sqlMetaJSON)(&meta)); err != nil {
+		var stored objectLock
+		if err := tx.QueryRow(`SELECT metadata, object_lock_mode, object_lock_retain_until, object_lock_legal_hold FROM multipart_uploads WHERE upload_id = $1`,
+			sqlUploadID(uploadID)).Scan((*sqlMetaJSON)(&meta), &stored.Mode, &stored.RetainUntil, &stored.LegalHold); err != nil {
+			return err
+		}
+		lock, err := effectiveObjectLock(tx, bid, storedObjectLock(stored))
+		if err != nil {
 			return err
 		}
 		filename := uploadID.String()
-		res, err := putObject(tx, bid, name, status, contentMD5, meta, contentLength, int32(partCount), &filename, nil)
+		res, err := putObject(tx, bid, name, status, contentMD5, meta, contentLength, int32(partCount), &filename, nil, lock)
 		if err != nil {
 			return err
 		}

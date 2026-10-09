@@ -68,7 +68,7 @@ func TestDeleteOrphanedUploads(t *testing.T) {
 	createMultipart := func(uid s3.UploadID, referenced bool) {
 		t.Helper()
 		if referenced {
-			if err := store.CreateMultipartUpload(testutil.AccessKeyID, "bucket", uid.String(), uid, nil); err != nil {
+			if err := store.CreateMultipartUpload(testutil.AccessKeyID, "bucket", uid.String(), uid, nil, nil); err != nil {
 				t.Fatal(err)
 			}
 		}
