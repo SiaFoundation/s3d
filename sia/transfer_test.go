@@ -89,9 +89,7 @@ func TestActiveUploadProgress(t *testing.T) {
 
 	snap := stats.snapshot()
 	uploads := snap.ActiveUploads
-	if snap.UploadBytes != 768 {
-		t.Fatalf("expected 768 bytes handed to the uploader, got %d", snap.UploadBytes)
-	} else if len(uploads) != 2 {
+	if len(uploads) != 2 {
 		t.Fatalf("expected 2 reported uploads, got %d", len(uploads))
 	}
 

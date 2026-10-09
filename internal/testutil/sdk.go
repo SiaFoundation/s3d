@@ -205,7 +205,7 @@ func (s *MemorySDK) Pinned(id types.Hash256) bool {
 // Upload stages the object's data in memory keyed by its ID and records its
 // metadata. Like the production SDK the object is only stored once it is
 // pinned. It implements the sia.SDK interface.
-func (s *MemorySDK) Upload(_ context.Context, obj *sdk.Object, r io.Reader) error {
+func (s *MemorySDK) Upload(_ context.Context, obj *sdk.Object, r io.Reader, _ ...sdk.UploadOption) error {
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return err
@@ -277,7 +277,7 @@ func (s *MemorySDK) SetFailUploads(fail bool) {
 }
 
 // UploadPacked creates a new packed upload.
-func (s *MemorySDK) UploadPacked() (sia.PackedUpload, error) {
+func (s *MemorySDK) UploadPacked(_ ...sdk.UploadOption) (sia.PackedUpload, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.failUploads {

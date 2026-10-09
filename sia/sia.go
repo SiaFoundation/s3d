@@ -191,8 +191,8 @@ type SDK interface {
 	Download(obj sdk.Object, rnge *s3.ObjectRange) (io.ReadCloser, error)
 	ObjectEvents(ctx context.Context, cursor slabs.Cursor, limit int) ([]sdk.ObjectEvent, error)
 	OptimalDataSize() (int64, error)
-	Upload(ctx context.Context, obj *sdk.Object, r io.Reader) error
-	UploadPacked() (PackedUpload, error)
+	Upload(ctx context.Context, obj *sdk.Object, r io.Reader, opts ...sdk.UploadOption) error
+	UploadPacked(opts ...sdk.UploadOption) (PackedUpload, error)
 	PinObject(ctx context.Context, obj sdk.Object) error
 	PruneSlabs(ctx context.Context, opts ...api.URLQueryParameterOption) error
 	SealObject(obj sdk.Object) sdk.SealedObject
@@ -462,7 +462,7 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 
 	obj := sdk.NewEmptyObject()
 	obj.UpdateMetadata(meta)
-	if err := s.sdk.Upload(ctx, &obj, pr); err != nil {
+	if err := s.sdk.Upload(ctx, &obj, pr, sdk.WithUploadProgress(s.shardProgress)); err != nil {
 		return s3.Snapshot{}, fmt.Errorf("failed to upload snapshot: %w", err)
 	}
 

@@ -308,7 +308,7 @@ func (s *Sia) UploadStats(_ context.Context) (s3.UploadStats, error) {
 }
 
 func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
-	upload, err := s.sdk.UploadPacked()
+	upload, err := s.sdk.UploadPacked(sdk.WithUploadProgress(s.shardProgress))
 	if err != nil {
 		s.logger.Error("failed to create packed upload", zap.Error(err))
 		return fmt.Errorf("failed to create packed upload: %w", err)

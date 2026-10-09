@@ -152,11 +152,11 @@ components:
         uploadBytes:
           type: integer
           format: int64
-          description: Bytes handed to the Sia uploader since the process started. A retried upload is counted again.
+          description: Bytes written to Sia hosts since the process started. A retried upload is counted again.
         uploadRate:
           type: integer
           format: int64
-          description: Bytes per second handed to the Sia uploader.
+          description: Bytes per second written to Sia hosts.
         activeUploads:
           type: array
           description: Upload groups currently streaming to Sia, in the order they started. Omitted when none are in flight.
