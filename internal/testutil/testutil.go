@@ -640,6 +640,59 @@ func (t *S3Tester) GetObjectLockConfiguration(ctx context.Context, bucket string
 	return resp.ObjectLockConfiguration, nil
 }
 
+// PutObjectRetention is a convenience wrapper around the AWS SDK's
+// PutObjectRetention API.
+func (t *S3Tester) PutObjectRetention(ctx context.Context, bucket, object string, versionID *string, retention *types.ObjectLockRetention, bypass bool) error {
+	_, err := t.client.PutObjectRetention(ctx, &service.PutObjectRetentionInput{
+		Bucket:                    aws.String(bucket),
+		Key:                       aws.String(object),
+		VersionId:                 versionID,
+		Retention:                 retention,
+		BypassGovernanceRetention: aws.Bool(bypass),
+	})
+	return err
+}
+
+// GetObjectRetention is a convenience wrapper around the AWS SDK's
+// GetObjectRetention API.
+func (t *S3Tester) GetObjectRetention(ctx context.Context, bucket, object string, versionID *string) (*types.ObjectLockRetention, error) {
+	resp, err := t.client.GetObjectRetention(ctx, &service.GetObjectRetentionInput{
+		Bucket:    aws.String(bucket),
+		Key:       aws.String(object),
+		VersionId: versionID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Retention, nil
+}
+
+// PutObjectLegalHold is a convenience wrapper around the AWS SDK's
+// PutObjectLegalHold API.
+func (t *S3Tester) PutObjectLegalHold(ctx context.Context, bucket, object string, versionID *string, status types.ObjectLockLegalHoldStatus) error {
+	_, err := t.client.PutObjectLegalHold(ctx, &service.PutObjectLegalHoldInput{
+		Bucket:    aws.String(bucket),
+		Key:       aws.String(object),
+		VersionId: versionID,
+		LegalHold: &types.ObjectLockLegalHold{Status: status},
+	})
+	return err
+}
+
+// GetObjectLegalHold is a convenience wrapper around the AWS SDK's
+// GetObjectLegalHold API.
+func (t *S3Tester) GetObjectLegalHold(ctx context.Context, bucket, object string, versionID *string) (types.ObjectLockLegalHoldStatus, error) {
+	resp, err := t.client.GetObjectLegalHold(ctx, &service.GetObjectLegalHoldInput{
+		Bucket:    aws.String(bucket),
+		Key:       aws.String(object),
+		VersionId: versionID,
+	})
+	if err != nil {
+		return "", err
+	}
+	return resp.LegalHold.Status, nil
+}
+
 // PutBucketVersioning sets the versioning status of a bucket.
 func (t *S3Tester) PutBucketVersioning(ctx context.Context, bucket string, status types.BucketVersioningStatus) error {
 	_, err := t.client.PutBucketVersioning(ctx, &service.PutBucketVersioningInput{

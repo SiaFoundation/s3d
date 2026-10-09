@@ -1,6 +1,8 @@
 package sqlite
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -151,5 +153,153 @@ func bucketObjectLock(tx *txn, bid int64) (enabled bool, mode string, days *int,
 // bucketObjectLockEnabled reports whether the bucket has object lock turned on.
 func bucketObjectLockEnabled(tx *txn, bid int64) (enabled bool, err error) {
 	err = tx.QueryRow(`SELECT object_lock_enabled FROM buckets WHERE id = $1`, bid).Scan(&enabled)
+	return
+}
+
+// objectLockRow reads the lock state of the addressed version, resolving the
+// current version when the request addresses none.
+func objectLockRow(tx *txn, bid int64, name string, version s3.VersionRequest) (versionID, mode string, retainUntil *int64, legalHold string, err error) {
+	var isDeleteMarker bool
+	if version.Specified {
+		versionID = version.ID
+		err = tx.QueryRow(`SELECT is_delete_marker, object_lock_mode, object_lock_retain_until, object_lock_legal_hold
+			FROM objects WHERE bucket_id = $1 AND name = $2 AND version_id = $3`,
+			bid, name, versionID).Scan(&isDeleteMarker, &mode, &retainUntil, &legalHold)
+	} else {
+		err = tx.QueryRow(`SELECT version_id, is_delete_marker, object_lock_mode, object_lock_retain_until, object_lock_legal_hold
+			FROM objects WHERE bucket_id = $1 AND name = $2 AND is_latest = TRUE`,
+			bid, name).Scan(&versionID, &isDeleteMarker, &mode, &retainUntil, &legalHold)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		if version.Specified {
+			return "", "", nil, "", s3errs.ErrNoSuchVersion
+		}
+		return "", "", nil, "", s3errs.ErrNoSuchKey
+	} else if err != nil {
+		return "", "", nil, "", err
+	}
+
+	if isDeleteMarker {
+		if version.Specified {
+			return "", "", nil, "", s3errs.ErrMethodNotAllowed
+		}
+		return "", "", nil, "", s3errs.ErrNoSuchKey
+	}
+	return versionID, mode, retainUntil, legalHold, nil
+}
+
+// lockedBucketID resolves a bucket the caller owns and which has object lock
+// enabled.
+func lockedBucketID(tx *txn, accessKeyID, bucket string) (int64, error) {
+	bid, err := bucketID(tx, accessKeyID, bucket)
+	if err != nil {
+		return 0, err
+	} else if enabled, err := bucketObjectLockEnabled(tx, bid); err != nil {
+		return 0, err
+	} else if !enabled {
+		return 0, errObjectLockNotEnabled
+	}
+	return bid, nil
+}
+
+// checkRetentionTransition reports whether a version's retention may move to
+// next.
+func checkRetentionTransition(mode string, retainUntil *int64, next s3.ObjectLockState, bypass bool) error {
+	if mode == "" {
+		return nil
+	}
+	current := time.UnixMilli(*retainUntil)
+	if current.Before(time.Now()) {
+		return nil
+	}
+	if next.Mode == mode && !next.RetainUntil.Before(current) {
+		return nil
+	}
+
+	if mode == s3.ObjectLockModeCompliance {
+		return fmt.Errorf("a COMPLIANCE retention cannot be shortened, cleared or changed: %w", s3errs.ErrAccessDenied)
+	} else if !bypass {
+		return fmt.Errorf("weakening a GOVERNANCE retention requires bypass: %w", s3errs.ErrAccessDenied)
+	}
+	return nil
+}
+
+// PutObjectRetention replaces the retention on the addressed version. A zero
+// retention clears it.
+func (s *Store) PutObjectRetention(accessKeyID, bucket, name string, version s3.VersionRequest, retention s3.ObjectLockState, bypass bool) error {
+	return s.transaction(func(tx *txn) error {
+		bid, err := lockedBucketID(tx, accessKeyID, bucket)
+		if err != nil {
+			return err
+		}
+
+		versionID, mode, retainUntil, _, err := objectLockRow(tx, bid, name, version)
+		if err != nil {
+			return err
+		} else if err := checkRetentionTransition(mode, retainUntil, retention, bypass); err != nil {
+			return err
+		}
+
+		next := objectLockColumns(&retention)
+		_, err = tx.Exec(`UPDATE objects SET object_lock_mode = $1, object_lock_retain_until = $2
+			WHERE bucket_id = $3 AND name = $4 AND version_id = $5`, next.Mode, next.RetainUntil, bid, name, versionID)
+		return err
+	})
+}
+
+// GetObjectRetention returns the retention on the addressed version.
+func (s *Store) GetObjectRetention(accessKeyID, bucket, name string, version s3.VersionRequest) (state s3.ObjectLockState, err error) {
+	err = s.transaction(func(tx *txn) error {
+		state = s3.ObjectLockState{} // reset if the transaction retries
+
+		bid, err := lockedBucketID(tx, accessKeyID, bucket)
+		if err != nil {
+			return err
+		}
+
+		_, mode, retainUntil, _, err := objectLockRow(tx, bid, name, version)
+		if err != nil {
+			return err
+		} else if mode == "" {
+			return s3errs.ErrNoSuchObjectLockConfiguration
+		}
+		state = s3.ObjectLockState{Mode: mode, RetainUntil: time.UnixMilli(*retainUntil).UTC()}
+		return nil
+	})
+	return
+}
+
+// PutObjectLegalHold turns the legal hold on the addressed version on or off.
+func (s *Store) PutObjectLegalHold(accessKeyID, bucket, name string, version s3.VersionRequest, status string) error {
+	return s.transaction(func(tx *txn) error {
+		bid, err := lockedBucketID(tx, accessKeyID, bucket)
+		if err != nil {
+			return err
+		}
+
+		versionID, _, _, _, err := objectLockRow(tx, bid, name, version)
+		if err != nil {
+			return err
+		}
+
+		_, err = tx.Exec(`UPDATE objects SET object_lock_legal_hold = $1
+			WHERE bucket_id = $2 AND name = $3 AND version_id = $4`, status, bid, name, versionID)
+		return err
+	})
+}
+
+// GetObjectLegalHold returns the legal hold on the addressed version, or "" when
+// none was ever applied.
+func (s *Store) GetObjectLegalHold(accessKeyID, bucket, name string, version s3.VersionRequest) (status string, err error) {
+	err = s.transaction(func(tx *txn) error {
+		status = "" // reset if the transaction retries
+
+		bid, err := lockedBucketID(tx, accessKeyID, bucket)
+		if err != nil {
+			return err
+		}
+		_, _, _, status, err = objectLockRow(tx, bid, name, version)
+		return err
+	})
 	return
 }

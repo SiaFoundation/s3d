@@ -231,6 +231,10 @@ type Store interface {
 	PutBucketVersioning(accessKeyID, bucket, status string) error
 	GetBucketObjectLockConfiguration(accessKeyID, bucket string) (s3.ObjectLockConfiguration, error)
 	PutBucketObjectLockConfiguration(accessKeyID, bucket string, config s3.ObjectLockConfiguration) error
+	GetObjectLegalHold(accessKeyID, bucket, name string, version s3.VersionRequest) (string, error)
+	GetObjectRetention(accessKeyID, bucket, name string, version s3.VersionRequest) (s3.ObjectLockState, error)
+	PutObjectLegalHold(accessKeyID, bucket, name string, version s3.VersionRequest, status string) error
+	PutObjectRetention(accessKeyID, bucket, name string, version s3.VersionRequest, retention s3.ObjectLockState, bypass bool) error
 	GetBucketPolicy(accessKeyID, bucket string) (s3.BucketPolicy, error)
 	PutBucketPolicy(accessKeyID, bucket string, policy s3.BucketPolicy) error
 	DeleteBucketPolicy(accessKeyID, bucket string) error
