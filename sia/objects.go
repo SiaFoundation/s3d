@@ -517,28 +517,33 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 		if err != nil {
 			_ = f.Close()
 			return nil, fmt.Errorf("failed to store object: %w", err)
+		}
+
+		// the size is settled before the file is synced, so a body that cannot
+		// be stored is not fsynced on its way to being unlinked
+		if opts.ContentLength >= 0 && opts.ContentLength != size {
+			_ = f.Close()
+			return nil, s3errs.ErrIncompleteBody
+		} else if size > reserved {
+			_ = f.Close()
+			return nil, s3errs.ErrEntityTooLarge
+		}
+
+		if size == 0 {
+			// an undeclared length is only known to be empty after the read, so
+			// the file it wrote is dropped to store the object the same way a
+			// declared empty one is
+			_ = f.Close()
+			s.cleanupOrphan(objPath, 0)
+			objPath, fileName = "", nil
 		} else if err := f.Sync(); err != nil {
 			_ = f.Close()
 			return nil, fmt.Errorf("failed to sync object to disk: %w", err)
 		} else if err := f.Close(); err != nil {
 			return nil, fmt.Errorf("failed to close object file: %w", err)
 		}
-
-		// an undeclared length is only known to be empty after the read, so the
-		// file it wrote is dropped to store the object the same way a declared
-		// empty one is
-		if size == 0 {
-			s.cleanupOrphan(objPath, 0)
-			objPath, fileName = "", nil
-		}
 	}
 
-	// check content length
-	if opts.ContentLength >= 0 && opts.ContentLength != size {
-		return nil, s3errs.ErrIncompleteBody
-	} else if size > reserved {
-		return nil, s3errs.ErrEntityTooLarge
-	}
 	if reserved > size {
 		s.releaseDiskUsage(reserved - size)
 	}
