@@ -26,7 +26,10 @@ func stageUpload(t *testing.T, memSDK *testutil.MemorySDK, store *sqlite.Store, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	sealed := memSDK.SealObject(siaObj)
+	sealed, err := memSDK.SealObject(siaObj)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	fn := name + ".upload"
 	md5 := frand.Entropy128()
