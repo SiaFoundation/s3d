@@ -42,12 +42,18 @@ func TestS3(t *testing.T) {
 	cluster.WaitForContracts(t)
 
 	// create the SDK client
-	builder := sdk.NewBuilder(cluster.Indexer.AppURL, sdk.AppMetadata{
-		ID:          types.HashBytes([]byte("s3d-tox")),
+	builder, err := sdk.NewBuilder(cluster.Indexer.AppURL, sdk.AppMetadata{
+		AppID:       types.HashBytes([]byte("s3d-tox")),
 		Name:        "s3d tox tests",
 		Description: "S3 compatibility tests for s3d",
 	})
-	sdkClient, err := builder.SDK(sk, sdk.WithLogger(log.Named("sdk")))
+	if err != nil {
+		t.Fatalf("failed to create SDK builder: %v", err)
+	}
+	// The SDK's logger is process-wide rather than per-instance, so it is
+	// installed once here instead of being passed as a construction option.
+	sdk.SetLogger(log.Named("sdk"))
+	sdkClient, err := builder.Connect(t.Context(), sk)
 	if err != nil {
 		t.Fatalf("failed to create SDK: %v", err)
 	}
