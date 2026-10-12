@@ -324,7 +324,7 @@ func policyIPPrefix(value string) (netip.Prefix, error) {
 
 // policyNumberSyntax is a plain decimal number. Hex floats and digit
 // separators are excluded, and the exponent is bounded by policyNumber.
-var policyNumberSyntax = regexp.MustCompile(`^[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]{1,4})?$`)
+var policyNumberSyntax = regexp.MustCompile(`^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d{1,4})?$`)
 
 // policyNumber parses a numeric condition value. Bounding the exponent keeps
 // an attacker-controlled value from forcing huge big.Rat allocations.
