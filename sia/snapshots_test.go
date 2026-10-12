@@ -66,9 +66,8 @@ func snapshotEvent(t *testing.T, memSDK *testutil.MemorySDK, id types.Hash256, a
 	if !ok {
 		t.Fatal("snapshot object not found")
 	}
-	obj := sdk.NewEmptyObject()
-	obj.UpdateMetadata(raw)
-	return sdk.ObjectEvent{Key: id, UpdatedAt: at, Object: &obj}
+	obj := sdk.NewEmptyObject().WithMetadata(raw)
+	return sdk.ObjectEvent{ID: id, UpdatedAt: at, Object: obj}
 }
 
 func TestCreateSnapshot(t *testing.T) {
@@ -185,8 +184,8 @@ func TestCreateSnapshotSyncRace(t *testing.T) {
 	backend, store := testutil.NewBackend(t, testutil.WithSDK(memSDK))
 
 	// the sync loop observes the pin before CreateSnapshot resumes
-	memSDK.SetPinHook(func(obj sdk.Object) {
-		memSDK.SetEvents([]sdk.ObjectEvent{snapshotEvent(t, memSDK, obj.ID(), time.Now())})
+	memSDK.SetPinHook(func(obj *sdk.Object) {
+		memSDK.SetEvents([]sdk.ObjectEvent{snapshotEvent(t, memSDK, memSDK.ObjectID(obj), time.Now())})
 		backend.SyncMetadata(t.Context())
 	})
 
@@ -297,14 +296,15 @@ func pinSnapshotObject(t *testing.T, memSDK *testutil.MemorySDK, store *sqlite.S
 	if err != nil {
 		t.Fatal(err)
 	}
-	obj := sdk.NewEmptyObject()
-	obj.UpdateMetadata(meta)
-	if err := memSDK.Upload(t.Context(), &obj, bytes.NewReader([]byte("backup"))); err != nil {
-		t.Fatal(err)
-	} else if err := memSDK.PinObject(t.Context(), obj); err != nil {
+	obj, err := memSDK.Upload(t.Context(), sdk.NewEmptyObject().WithMetadata(meta),
+		bytes.NewReader([]byte("backup")))
+	if err != nil {
 		t.Fatal(err)
 	}
-	return obj.ID()
+	if err := memSDK.PinObject(t.Context(), obj); err != nil {
+		t.Fatal(err)
+	}
+	return memSDK.ObjectID(obj)
 }
 
 // openBackend opens the store and backend in dir. Reusing a directory
@@ -478,7 +478,7 @@ func TestSnapshotRecovery(t *testing.T) {
 	// the sync replays the first snapshot's deletion and adopts the second
 	// and third from the network
 	events := []sdk.ObjectEvent{
-		{Key: snap1.SiaObjectID, UpdatedAt: eventTime.Add(2 * time.Second), Deleted: true},
+		{ID: snap1.SiaObjectID, UpdatedAt: eventTime.Add(2 * time.Second), Deleted: true},
 		snapshotEvent(t, memSDK, snap2.SiaObjectID, eventTime.Add(3*time.Second)),
 		snapshotEvent(t, memSDK, snap3.SiaObjectID, eventTime.Add(4*time.Second)),
 	}

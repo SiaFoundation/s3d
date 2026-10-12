@@ -39,10 +39,10 @@ const (
 
 // PackedUpload defines the interface for a packed upload.
 type PackedUpload interface {
-	Add(ctx context.Context, r io.Reader) (int64, error)
+	Add(r io.Reader) (int64, error)
 	Length() int64
 	Remaining() int64
-	Finalize(ctx context.Context) ([]sdk.Object, error)
+	Finalize() ([]*sdk.Object, error)
 	Close() error
 }
 
@@ -308,7 +308,7 @@ func (s *Sia) UploadStats(_ context.Context) (s3.UploadStats, error) {
 }
 
 func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
-	upload, err := s.sdk.UploadPacked(sdk.WithUploadProgress(s.shardProgress))
+	upload, err := s.sdk.UploadPacked(ctx, sdk.WithUploadProgress(s.shardProgress))
 	if err != nil {
 		s.logger.Error("failed to create packed upload", zap.Error(err))
 		return fmt.Errorf("failed to create packed upload: %w", err)
@@ -332,7 +332,7 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 			errs = append(errs, fmt.Errorf("failed to open upload for %s/%s: %w", obj.Bucket, obj.Name, err))
 			continue
 		}
-		n, err := upload.Add(ctx, s.transfer.trackUpload(rc, active))
+		n, err := upload.Add(s.transfer.trackUpload(rc, active))
 		if err != nil {
 			s.failedUploads.Add(1)
 			s.logger.Error("failed to add object to upload",
@@ -360,7 +360,7 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 
 	// finalize upload
 	active.finalize()
-	results, err := upload.Finalize(ctx)
+	results, err := upload.Finalize()
 	if err != nil {
 		s.failedUploads.Add(int64(len(objIdx)))
 		s.logger.Error("failed to finalize upload", zap.Error(err))
@@ -385,9 +385,18 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 		}
 	}()
 
-	for i, obj := range results {
+	for i := range results {
 		uploadObj := group.objects[objIdx[i]]
-		if err := s.store.MarkObjectUploaded(uploadObj.Bucket, uploadObj.Name, uploadObj.VersionID, uploadObj.ContentMD5, s.sdk.SealObject(obj), pinBefore); err != nil {
+		sealed, err := s.sdk.SealObject(results[i])
+		if err != nil {
+			s.failedUploads.Add(1)
+			s.logger.Error("failed to seal object",
+				zap.String("bucket", uploadObj.Bucket),
+				zap.String("name", uploadObj.Name),
+				zap.Error(err))
+			continue
+		}
+		if err := s.store.MarkObjectUploaded(uploadObj.Bucket, uploadObj.Name, uploadObj.VersionID, uploadObj.ContentMD5, sealed, pinBefore); err != nil {
 			if errors.Is(err, objects.ErrObjectNotFound) {
 				s.logger.Warn("object was deleted during upload, skipping",
 					zap.String("bucket", uploadObj.Bucket),
