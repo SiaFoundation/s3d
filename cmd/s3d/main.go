@@ -299,8 +299,14 @@ func main() {
 	} else if err != nil {
 		checkFatalError("failed to get app key from database", err)
 	}
-	builder := newSDKBuilder(indexerURL)
-	sdkClient, err := builder.SDK(appKey, sdk.WithLogger(log.Named("sdk")))
+	builder, err := newSDKBuilder(indexerURL)
+	if err != nil {
+		checkFatalError("failed to create SDK builder", err)
+	}
+	// The SDK's logger is process-wide rather than per-instance, so it is
+	// installed once here instead of being passed as a construction option.
+	sdk.SetLogger(log.Named("sdk"))
+	sdkClient, err := builder.Connect(ctx, appKey)
 	if err != nil {
 		checkFatalError("failed to create SDK client", err)
 	}
