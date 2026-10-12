@@ -4,11 +4,10 @@ import (
 	"context"
 	"io"
 	"slices"
+	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
 	"go.sia.tech/core/types"
-	"go.sia.tech/indexd/api"
-	"go.sia.tech/indexd/api/app"
 	"go.sia.tech/indexd/slabs"
 	sdk "go.sia.tech/siastorage"
 )
@@ -52,22 +51,22 @@ func NewSDK(sdk *sdk.SDK, opts ...SDKOption) *IndexdSDK {
 }
 
 // Account retrieves account information for the connected app key.
-func (s *IndexdSDK) Account(ctx context.Context) (app.AccountResponse, error) {
+func (s *IndexdSDK) Account(ctx context.Context) (sdk.Account, error) {
 	return s.inner.Account(ctx)
 }
 
 // Download downloads an object from indexd.
-func (s *IndexdSDK) Download(obj sdk.Object, rnge *s3.ObjectRange) (io.ReadCloser, error) {
+func (s *IndexdSDK) Download(ctx context.Context, obj *sdk.Object, rnge *s3.ObjectRange) (io.ReadCloser, error) {
 	opts := slices.Clone(s.dlOpts)
 	if rnge != nil {
 		opts = append(opts, sdk.WithDownloadRange(uint64(rnge.Start), uint64(rnge.Length)))
 	}
-	return s.inner.Download(obj, opts...)
+	return s.inner.Download(ctx, obj, opts...)
 }
 
 // OptimalDataSize returns the optimal data size.
 func (s *IndexdSDK) OptimalDataSize() (int64, error) {
-	pu, err := s.inner.UploadPacked(s.ulOpts...)
+	pu, err := s.inner.UploadPacked(context.Background(), s.ulOpts...)
 	if err != nil {
 		return 0, err
 	}
@@ -75,19 +74,31 @@ func (s *IndexdSDK) OptimalDataSize() (int64, error) {
 	return pu.OptimalDataSize(), nil
 }
 
-// Upload uploads the object's data to Sia, appending slab metadata to obj. The
-// caller must call PinObject afterwards to persist the object.
-func (s *IndexdSDK) Upload(ctx context.Context, obj *sdk.Object, r io.Reader, opts ...sdk.UploadOption) error {
-	return s.inner.Upload(ctx, obj, r, append(slices.Clone(s.ulOpts), opts...)...)
+// Upload streams r into a new object carrying obj's metadata and returns it.
+// Pin it with PinObject to persist it.
+//
+// obj supplies the metadata only. The SDK returns a different object once the
+// transfer finishes, since the slabs are not known until then.
+func (s *IndexdSDK) Upload(ctx context.Context, obj *sdk.Object, r io.Reader, opts ...sdk.UploadOption) (*sdk.Object, error) {
+	up, err := s.inner.Upload(ctx, obj, append(slices.Clone(s.ulOpts), opts...)...)
+	if err != nil {
+		return nil, err
+	}
+	// Close is a no op after Finish, so this only covers the copy failing.
+	defer up.Close()
+	if _, err := io.Copy(up, r); err != nil {
+		return nil, err
+	}
+	return up.Finish()
 }
 
 // UploadPacked creates a new packed upload.
-func (s *IndexdSDK) UploadPacked(opts ...sdk.UploadOption) (PackedUpload, error) {
-	return s.inner.UploadPacked(append(slices.Clone(s.ulOpts), opts...)...)
+func (s *IndexdSDK) UploadPacked(ctx context.Context, opts ...sdk.UploadOption) (PackedUpload, error) {
+	return s.inner.UploadPacked(ctx, append(slices.Clone(s.ulOpts), opts...)...)
 }
 
 // PinObject pins the given object in the indexer.
-func (s *IndexdSDK) PinObject(ctx context.Context, obj sdk.Object) error {
+func (s *IndexdSDK) PinObject(ctx context.Context, obj *sdk.Object) error {
 	return s.inner.PinObject(ctx, obj)
 }
 
@@ -99,20 +110,25 @@ func (s *IndexdSDK) DeleteObject(ctx context.Context, id types.Hash256) error {
 // ObjectEvents returns object events from the indexer, starting from the
 // given cursor, up to the given limit.
 func (s *IndexdSDK) ObjectEvents(ctx context.Context, cursor slabs.Cursor, limit int) ([]sdk.ObjectEvent, error) {
-	return s.inner.ObjectEvents(ctx, cursor, limit)
+	after := sdk.EventCursor{After: cursor.After, AfterID: cursor.Key}
+	return s.inner.ObjectEvents(ctx, after, limit)
 }
 
-// PruneSlabs prunes slabs not associated with an object from the indexer.
-func (s *IndexdSDK) PruneSlabs(ctx context.Context, opts ...api.URLQueryParameterOption) error {
-	return s.inner.PruneSlabs(ctx, opts...)
+// PruneSlabs releases the slabs no remaining object references, which frees
+// the pinned storage a deleted object was using. Only slabs pinned before
+// before are released.
+//
+// A zero before leaves the cutoff to the indexer.
+func (s *IndexdSDK) PruneSlabs(ctx context.Context, before time.Time) error {
+	return s.inner.PruneSlabs(ctx, before)
 }
 
 // SealObject seals the object using the app key.
-func (s *IndexdSDK) SealObject(obj sdk.Object) sdk.SealedObject {
-	return obj.Seal(s.inner.AppKey())
+func (s *IndexdSDK) SealObject(obj *sdk.Object) (sdk.SealedObject, error) {
+	return s.inner.SealObject(obj)
 }
 
 // UnsealObject unseals an object using the app key.
-func (s *IndexdSDK) UnsealObject(sealed sdk.SealedObject) (sdk.Object, error) {
-	return sealed.Open(s.inner.AppKey())
+func (s *IndexdSDK) UnsealObject(sealed sdk.SealedObject) (*sdk.Object, error) {
+	return s.inner.ObjectFromSealed(sealed)
 }

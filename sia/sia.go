@@ -21,8 +21,6 @@ import (
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.sia.tech/core/types"
 	"go.sia.tech/coreutils/threadgroup"
-	"go.sia.tech/indexd/api"
-	"go.sia.tech/indexd/api/app"
 	"go.sia.tech/indexd/slabs"
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
@@ -186,17 +184,17 @@ type Sia struct {
 
 // SDK describes the SDK used to interact with Sia.
 type SDK interface {
-	Account(ctx context.Context) (app.AccountResponse, error)
+	Account(ctx context.Context) (sdk.Account, error)
 	DeleteObject(ctx context.Context, id types.Hash256) error
-	Download(obj sdk.Object, rnge *s3.ObjectRange) (io.ReadCloser, error)
+	Download(ctx context.Context, obj *sdk.Object, rnge *s3.ObjectRange) (io.ReadCloser, error)
 	ObjectEvents(ctx context.Context, cursor slabs.Cursor, limit int) ([]sdk.ObjectEvent, error)
 	OptimalDataSize() (int64, error)
-	Upload(ctx context.Context, obj *sdk.Object, r io.Reader, opts ...sdk.UploadOption) error
-	UploadPacked(opts ...sdk.UploadOption) (PackedUpload, error)
-	PinObject(ctx context.Context, obj sdk.Object) error
-	PruneSlabs(ctx context.Context, opts ...api.URLQueryParameterOption) error
-	SealObject(obj sdk.Object) sdk.SealedObject
-	UnsealObject(sealed sdk.SealedObject) (sdk.Object, error)
+	Upload(ctx context.Context, obj *sdk.Object, r io.Reader, opts ...sdk.UploadOption) (*sdk.Object, error)
+	UploadPacked(ctx context.Context, opts ...sdk.UploadOption) (PackedUpload, error)
+	PinObject(ctx context.Context, obj *sdk.Object) error
+	PruneSlabs(ctx context.Context, before time.Time) error
+	SealObject(obj *sdk.Object) (sdk.SealedObject, error)
+	UnsealObject(sealed sdk.SealedObject) (*sdk.Object, error)
 }
 
 // AccessKeyInfo contains metadata about an access key.
@@ -460,25 +458,34 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 	// closing the read side unblocks the compressor if the upload aborts early
 	defer pr.Close()
 
-	obj := sdk.NewEmptyObject()
-	obj.UpdateMetadata(meta)
-	if err := s.sdk.Upload(ctx, &obj, pr, sdk.WithUploadProgress(s.shardProgress)); err != nil {
+	obj, err := s.sdk.Upload(ctx, sdk.NewEmptyObject().WithMetadata(meta), pr,
+		sdk.WithUploadProgress(s.shardProgress))
+	if err != nil {
 		return s3.Snapshot{}, fmt.Errorf("failed to upload snapshot: %w", err)
 	}
 
+	// An id is a hash of the object's slabs, which the sealed form carries, so
+	// sealing is how the id is read back. The sealed object itself is not kept:
+	// the sync loop stores one when it sees the pin.
+	sealed, err := s.sdk.SealObject(obj)
+	if err != nil {
+		return s3.Snapshot{}, fmt.Errorf("failed to seal snapshot object: %w", err)
+	}
+	objectID := sealed.ID()
+
 	// record the object before the pin can reach the indexer, so a crash
 	// during the pin leaves a record claiming it
-	if err := s.store.MarkSnapshotPinning(snap.ID, obj.ID()); err != nil {
+	if err := s.store.MarkSnapshotPinning(snap.ID, objectID); err != nil {
 		return s3.Snapshot{}, fmt.Errorf("failed to record snapshot object: %w", err)
 	}
 	if err := s.sdk.PinObject(ctx, obj); err != nil {
 		return s3.Snapshot{}, fmt.Errorf("failed to pin snapshot: %w", err)
 	}
 	// the sync loop may have observed the pin and completed the snapshot already
-	if err := s.store.MarkSnapshotPinned(obj.ID()); err != nil && !errors.Is(err, objects.ErrSnapshotNotFound) {
+	if err := s.store.MarkSnapshotPinned(objectID); err != nil && !errors.Is(err, objects.ErrSnapshotNotFound) {
 		return s3.Snapshot{}, fmt.Errorf("failed to mark snapshot pinned: %w", err)
 	}
-	snap.SiaObjectID = obj.ID()
+	snap.SiaObjectID = objectID
 	return snap, nil
 }
 
@@ -531,7 +538,7 @@ func (s *Sia) pruneSlabsLoop(ctx context.Context) {
 		start := time.Now()
 		// slabs are pinned before their object, so anything newer than
 		// pinDeadline may still belong to an upload that is retrying its pin
-		if err := s.sdk.PruneSlabs(ctx, api.WithBefore(time.Now().Add(-pinDeadline))); err != nil {
+		if err := s.sdk.PruneSlabs(ctx, time.Now().Add(-pinDeadline)); err != nil {
 			s.logger.Error("failed to prune slabs", zap.Error(err))
 		} else {
 			s.logger.Info("finished pruning orphaned slabs from Sia network", zap.Duration("elapsed", time.Since(start)))
@@ -772,27 +779,31 @@ func (s *Sia) syncBatch(ctx context.Context, cursor slabs.Cursor) (slabs.Cursor,
 		if ev.Deleted {
 			// drop snapshots whose backup object was deleted on the
 			// indexer so they stop withholding orphans
-			if n, err := s.store.DeleteSnapshotsBySiaObject(ev.Key); err != nil {
-				s.syncFailed("failed to delete snapshot for deleted object", zap.Stringer("objectID", &ev.Key), zap.Error(err))
+			if n, err := s.store.DeleteSnapshotsBySiaObject(ev.ID); err != nil {
+				s.syncFailed("failed to delete snapshot for deleted object", zap.Stringer("objectID", &ev.ID), zap.Error(err))
 				break
 			} else if n > 0 {
-				s.logger.Info("deleted snapshot for deleted object", zap.Stringer("objectID", &ev.Key))
+				s.logger.Info("deleted snapshot for deleted object", zap.Stringer("objectID", &ev.ID))
 			}
 			processed++
 			continue
 		} else if ev.Object == nil {
-			s.logger.Warn("skipping event with nil object", zap.Stringer("objectID", &ev.Key))
+			s.logger.Warn("skipping event with nil object", zap.Stringer("objectID", &ev.ID))
 			processed++
 			continue
 		} else if meta, ok := snapshotMetadata(ev.Object); ok {
-			if !s.handleSnapshotObject(ev.Key, meta) {
+			if !s.handleSnapshotObject(ev.ID, meta) {
 				break
 			}
 			processed++
 			continue
 		}
 
-		sealed := s.sdk.SealObject(*ev.Object)
+		sealed, err := s.sdk.SealObject(ev.Object)
+		if err != nil {
+			s.syncFailed("failed to seal object", zap.Stringer("objectID", &ev.ID), zap.Error(err))
+			break
+		}
 		batch = append(batch, objects.SiaObject{ID: sealed.ID(), Sealed: sealed})
 		processed++
 	}
@@ -812,7 +823,7 @@ func (s *Sia) syncBatch(ctx context.Context, cursor slabs.Cursor) (slabs.Cursor,
 		return cursor, synced, false
 	}
 	last := events[processed-1]
-	cursor = slabs.Cursor{After: last.UpdatedAt, Key: last.Key}
+	cursor = slabs.Cursor{After: last.UpdatedAt, Key: last.ID}
 	if err := s.store.SetObjectsCursor(cursor); err != nil {
 		s.syncFailed("failed to update objects cursor", zap.Error(err))
 		return cursor, synced, false
