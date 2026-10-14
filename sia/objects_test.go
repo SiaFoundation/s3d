@@ -1836,7 +1836,7 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := store.DeleteObject(bucket, s3.ObjectID{Key: "C"}); err != nil {
+	if _, _, _, err := store.DeleteObject(bucket, "", s3.ObjectID{Key: "C"}); err != nil {
 		t.Fatal(err)
 	}
 	siaBackend.ProcessOrphans(t.Context())
@@ -1869,7 +1869,7 @@ func TestProcessOrphansGatedOnSync(t *testing.T) {
 	if err := backend.PinObjects(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := store.DeleteObject(bucket, s3.ObjectID{Key: "a"}); err != nil {
+	if _, _, _, err := store.DeleteObject(bucket, "", s3.ObjectID{Key: "a"}); err != nil {
 		t.Fatal(err)
 	}
 

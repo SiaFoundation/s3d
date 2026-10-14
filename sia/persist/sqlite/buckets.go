@@ -109,11 +109,13 @@ func (s *Store) GetBucketVersioning(bucket string) (status string, err error) {
 }
 
 // PutBucketVersioning sets the versioning status of the bucket to status, which
-// must be "Enabled" or "Suspended".
-func (s *Store) PutBucketVersioning(bucket, status string) error {
+// must be "Enabled" or "Suspended". owner is checked by [assertBucketOwner].
+func (s *Store) PutBucketVersioning(bucket, owner, status string) error {
 	return s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
+			return err
+		} else if err := assertBucketOwner(tx, bid, owner); err != nil {
 			return err
 		}
 		_, err = tx.Exec(`UPDATE buckets SET versioning_status = $1 WHERE id = $2`, status, bid)
@@ -133,11 +135,13 @@ func bucketIDAndVersioning(tx *txn, bucket string) (bid int64, status string, er
 }
 
 // PutBucketPolicy stores the bucket's policy document, replacing any existing
-// one.
-func (s *Store) PutBucketPolicy(bucket, document string) error {
+// one. owner is checked by [assertBucketOwner].
+func (s *Store) PutBucketPolicy(bucket, owner, document string) error {
 	return s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
+			return err
+		} else if err := assertBucketOwner(tx, bid, owner); err != nil {
 			return err
 		}
 		_, err = tx.Exec(`UPDATE buckets SET policy = $1 WHERE id = $2`, document, bid)
@@ -185,4 +189,22 @@ func bucketID(t *txn, bucket string) (bid int64, err error) {
 		err = s3errs.ErrNoSuchBucket
 	}
 	return
+}
+
+// assertBucketOwner returns [s3errs.ErrNoSuchBucket] unless owner is "" or the
+// name of the bucket's owner. Requests authorized before their body is read
+// pass the owner they were authorized against, since the bucket may have been
+// deleted and recreated by another user in the meantime.
+func assertBucketOwner(tx *txn, bid int64, owner string) error {
+	if owner == "" {
+		return nil
+	}
+	var name string
+	err := tx.QueryRow(`SELECT u.name FROM buckets b INNER JOIN users u ON u.id = b.user_id WHERE b.id = $1`, bid).Scan(&name)
+	if err != nil {
+		return err
+	} else if name != owner {
+		return s3errs.ErrNoSuchBucket
+	}
+	return nil
 }

@@ -372,7 +372,7 @@ func (s *s3) putBucketPolicy(w http.ResponseWriter, r *http.Request, access *buc
 	} else if _, err := parseBucketPolicy(access.bucket, document); err != nil {
 		return err
 	}
-	if err := s.backend.PutBucketPolicy(r.Context(), access.bucket, document); err != nil {
+	if err := s.backend.PutBucketPolicy(r.Context(), access.bucket, access.owner.ID, document); err != nil {
 		return err
 	}
 	w.WriteHeader(http.StatusNoContent)

@@ -222,13 +222,13 @@ type Store interface {
 	CopyObject(srcBucket, srcName string, srcVersion s3.VersionRequest, dstBucket, dstName string, opts s3.CopyObjectOptions) (*s3.CopyObjectResult, objects.OrphanedFile, error)
 	CreateBucket(accessKeyID, bucket string) error
 	DeleteBucket(bucket string) error
-	DeleteObject(bucket string, objectID s3.ObjectID) (string, bool, objects.OrphanedFile, error)
+	DeleteObject(bucket, owner string, objectID s3.ObjectID) (string, bool, objects.OrphanedFile, error)
 	GetObject(bucket, object string, version s3.VersionRequest, partNumber *int32) (*objects.Object, error)
 	DiskUsage() (uint64, error)
 	BucketAccessInfo(bucket string) (s3.BucketAccessInfo, error)
 	GetBucketVersioning(bucket string) (string, error)
-	PutBucketVersioning(bucket, status string) error
-	PutBucketPolicy(bucket, document string) error
+	PutBucketVersioning(bucket, owner, status string) error
+	PutBucketPolicy(bucket, owner, document string) error
 	DeleteBucketPolicy(bucket string) error
 	ObjectsCursor() (slabs.Cursor, error)
 	SetObjectsCursor(cursor slabs.Cursor) error
@@ -257,7 +257,7 @@ type Store interface {
 	MultipartParts(bucket, name string, uploadID s3.UploadID) ([]objects.Part, error)
 	UploadStats() (s3.UploadStats, error)
 
-	PutBucketLifecycleConfiguration(bucket, config string) error
+	PutBucketLifecycleConfiguration(bucket, owner, config string) error
 	GetBucketLifecycleConfiguration(bucket string) (string, error)
 	DeleteBucketLifecycleConfiguration(bucket string) error
 	AllBucketLifecycleConfigurations() ([]BucketLifecycleConfiguration, error)

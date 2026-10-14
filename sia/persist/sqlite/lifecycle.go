@@ -14,11 +14,14 @@ import (
 )
 
 // PutBucketLifecycleConfiguration stores the serialized lifecycle configuration
-// for a bucket, replacing any existing configuration.
-func (s *Store) PutBucketLifecycleConfiguration(bucket, config string) error {
+// for a bucket, replacing any existing configuration. owner is checked by
+// [assertBucketOwner].
+func (s *Store) PutBucketLifecycleConfiguration(bucket, owner, config string) error {
 	return s.transaction(func(tx *txn) error {
 		bid, err := bucketID(tx, bucket)
 		if err != nil {
+			return err
+		} else if err := assertBucketOwner(tx, bid, owner); err != nil {
 			return err
 		}
 		_, err = tx.Exec(`
