@@ -1,6 +1,7 @@
 package s3
 
 import (
+	"bytes"
 	"encoding/base64"
 	"net/netip"
 	"slices"
@@ -186,17 +187,17 @@ func (p bucketPolicy) allows(caller *auth.Caller, requestContext policyContext, 
 
 // compare applies the operator to one request value and one policy value,
 // ignoring negation.
-func (op conditionOperator) compare(actual, expected string) bool {
-	switch op.base {
-	case "StringEquals", "StringNotEquals":
-		return actual == expected
-	case "StringEqualsIgnoreCase", "StringNotEqualsIgnoreCase":
-		return strings.EqualFold(actual, expected)
-	case "StringLike", "StringNotLike":
-		return matchGlob(expected, actual, true)
-	case "ArnEquals", "ArnNotEquals", "ArnLike", "ArnNotLike":
-		actualParts, expectedParts := strings.SplitN(actual, ":", 6), strings.SplitN(expected, ":", 6)
-		if expected == policyWildcard {
+func (op conditionOperator) compare(actual string, expected conditionValue) bool {
+	switch op.kind {
+	case compareString:
+		return actual == expected.text
+	case compareStringIgnoreCase:
+		return strings.EqualFold(actual, expected.text)
+	case compareStringLike:
+		return matchGlob(expected.text, actual, true)
+	case compareArn:
+		actualParts, expectedParts := strings.SplitN(actual, ":", 6), strings.SplitN(expected.text, ":", 6)
+		if expected.text == policyWildcard {
 			return len(actualParts) == 6
 		}
 		if len(actualParts) != 6 || len(expectedParts) != 6 {
@@ -208,63 +209,30 @@ func (op conditionOperator) compare(actual, expected string) bool {
 			}
 		}
 		return true
-	case "Bool":
-		return (actual == "true" || actual == "false") && actual == expected
-	case "IpAddress", "NotIpAddress":
+	case compareBool:
+		return (actual == "true" || actual == "false") && actual == expected.text
+	case compareIP:
 		ip, err := netip.ParseAddr(actual)
-		if err != nil {
-			return false
-		}
-		prefix, err := policyIPPrefix(expected)
-		return err == nil && prefix.Contains(ip.Unmap())
-	case "BinaryEquals":
+		return err == nil && expected.prefix.Contains(ip.Unmap())
+	case compareBinary:
 		a, err := base64.StdEncoding.DecodeString(actual)
-		if err != nil {
-			return false
-		}
-		b, err := base64.StdEncoding.DecodeString(expected)
-		return err == nil && string(a) == string(b)
-	}
-	var cmp int
-	switch {
-	case strings.HasPrefix(op.base, "Numeric"):
-		a, okA := policyNumber(actual)
-		b, okB := policyNumber(expected)
-		if !okA || !okB {
-			return false
-		}
-		cmp = a.Cmp(b)
-	case strings.HasPrefix(op.base, "Date"):
-		a, okA := policyDate(actual)
-		b, okB := policyDate(expected)
-		if !okA || !okB {
-			return false
-		}
-		cmp = a.Compare(b)
-	default:
-		return false
-	}
-	switch strings.TrimPrefix(strings.TrimPrefix(op.base, "Numeric"), "Date") {
-	case "Equals", "NotEquals":
-		return cmp == 0
-	case "LessThan":
-		return cmp < 0
-	case "LessThanEquals":
-		return cmp <= 0
-	case "GreaterThan":
-		return cmp > 0
-	case "GreaterThanEquals":
-		return cmp >= 0
+		return err == nil && bytes.Equal(a, expected.binary)
+	case compareNumeric:
+		a, ok := policyNumber(actual)
+		return ok && op.order(a.Cmp(expected.number))
+	case compareDate:
+		a, ok := policyDate(actual)
+		return ok && op.order(a.Compare(expected.date))
 	}
 	return false
 }
 
 // matches applies the operator, including negation, IfExists and set
 // qualifiers, to a key's request values.
-func (op conditionOperator) matches(actual []string, expected []string) bool {
-	if op.base == "Null" {
+func (op conditionOperator) matches(actual []string, expected []conditionValue) bool {
+	if op.kind == compareNull {
 		for _, value := range expected {
-			if (value == "true") == (len(actual) == 0) {
+			if (value.text == "true") == (len(actual) == 0) {
 				return true
 			}
 		}
@@ -309,13 +277,17 @@ func (op conditionOperator) matches(actual []string, expected []string) bool {
 // matches reports whether every condition in the set holds for requestContext.
 func (set conditionSet) matches(requestContext policyContext, variables bool) bool {
 	for _, c := range set {
-		expanded := make([]string, 0, len(c.values))
-		for _, value := range c.values {
-			if v, ok := expandValue(value, requestContext, variables, c.pattern); ok {
-				expanded = append(expanded, v)
+		// only string values can hold variables; the rest were parsed up front
+		expected := c.values
+		if c.op.textual() {
+			expected = make([]conditionValue, 0, len(c.values))
+			for _, value := range c.values {
+				if v, ok := expandValue(value.text, requestContext, variables, c.op.pattern()); ok {
+					expected = append(expected, conditionValue{text: v})
+				}
 			}
 		}
-		if !c.op.matches(requestContext[c.key], expanded) {
+		if !c.op.matches(requestContext[c.key], expected) {
 			return false
 		}
 	}
@@ -354,10 +326,12 @@ func (set conditionSet) nonPublic(variables bool) bool {
 // fixesCallers reports whether c, if it must hold, limits a statement to fixed
 // callers.
 func (c condition) fixesCallers(variables bool) bool {
-	if c.key == "aws:sourceip" && c.op.base == "IpAddress" {
+	if c.op.negative {
+		return false
+	}
+	if c.key == "aws:sourceip" && c.op.kind == compareIP {
 		for _, value := range c.values {
-			prefix, err := policyIPPrefix(value)
-			if err != nil || (prefix.Addr().Is4() && prefix.Bits() < 8) || (prefix.Addr().Is6() && prefix.Bits() < 32) {
+			if prefix := value.prefix; (prefix.Addr().Is4() && prefix.Bits() < 8) || (prefix.Addr().Is6() && prefix.Bits() < 32) {
 				return false
 			}
 		}
@@ -368,13 +342,13 @@ func (c condition) fixesCallers(variables bool) bool {
 	default:
 		return false
 	}
-	switch c.op.base {
-	case "StringEquals", "StringLike", "ArnEquals", "ArnLike":
+	switch c.op.kind {
+	case compareString, compareStringLike, compareArn:
 	default:
 		return false
 	}
 	for _, value := range c.values {
-		if !fixedPublicCondition(c.key, value, variables) {
+		if !fixedPublicCondition(c.key, value.text, variables) {
 			return false
 		}
 	}
@@ -384,7 +358,7 @@ func (c condition) fixesCallers(variables bool) bool {
 // requiresKey reports whether the set requires key to be present.
 func (set conditionSet) requiresKey(key string) bool {
 	for _, c := range set {
-		if c.op.base == "Null" && c.key == key && len(c.values) == 1 && c.values[0] == "false" {
+		if c.op.kind == compareNull && c.key == key && len(c.values) == 1 && c.values[0].text == "false" {
 			return true
 		}
 	}

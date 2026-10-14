@@ -144,7 +144,15 @@ func TestPolicyConditions(t *testing.T) {
 			if !ok {
 				t.Fatal("invalid operator")
 			}
-			if got := op.matches(test.actual, test.expected); got != test.want {
+			var expected []conditionValue
+			for _, value := range test.expected {
+				v, ok := op.parseValue(value)
+				if !ok {
+					t.Fatalf("invalid value %q", value)
+				}
+				expected = append(expected, v)
+			}
+			if got := op.matches(test.actual, expected); got != test.want {
 				t.Fatalf("expected %v, got %v", test.want, got)
 			}
 		})

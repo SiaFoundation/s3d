@@ -283,35 +283,125 @@ func (p *policyValue) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 // policyConditions is the Condition element: operator to key to values.
 type policyConditions map[string]map[string]policyValues
 
+// comparison is how a condition operator compares values.
+type comparison uint8
+
+const (
+	compareString comparison = iota
+	compareStringIgnoreCase
+	compareStringLike
+	compareArn
+	compareNumeric
+	compareDate
+	compareBool
+	compareIP
+	compareBinary
+	compareNull
+)
+
+// The results of a Cmp or Compare call numeric and date operators accept.
+func cmpLess(cmp int) bool         { return cmp < 0 }
+func cmpLessEqual(cmp int) bool    { return cmp <= 0 }
+func cmpEqual(cmp int) bool        { return cmp == 0 }
+func cmpGreater(cmp int) bool      { return cmp > 0 }
+func cmpGreaterEqual(cmp int) bool { return cmp >= 0 }
+
 // conditionOperator is a parsed condition operator name.
 type conditionOperator struct {
-	base, set          string
+	kind               comparison
+	order              func(cmp int) bool // numeric and date operators only
+	set                string
 	ifExists, negative bool
+}
+
+// conditionOperators are the base condition operators, without set qualifiers
+// or IfExists.
+var conditionOperators = map[string]conditionOperator{
+	"StringEquals":              {kind: compareString},
+	"StringNotEquals":           {kind: compareString, negative: true},
+	"StringEqualsIgnoreCase":    {kind: compareStringIgnoreCase},
+	"StringNotEqualsIgnoreCase": {kind: compareStringIgnoreCase, negative: true},
+	"StringLike":                {kind: compareStringLike},
+	"StringNotLike":             {kind: compareStringLike, negative: true},
+	"NumericEquals":             {kind: compareNumeric, order: cmpEqual},
+	"NumericNotEquals":          {kind: compareNumeric, order: cmpEqual, negative: true},
+	"NumericLessThan":           {kind: compareNumeric, order: cmpLess},
+	"NumericLessThanEquals":     {kind: compareNumeric, order: cmpLessEqual},
+	"NumericGreaterThan":        {kind: compareNumeric, order: cmpGreater},
+	"NumericGreaterThanEquals":  {kind: compareNumeric, order: cmpGreaterEqual},
+	"DateEquals":                {kind: compareDate, order: cmpEqual},
+	"DateNotEquals":             {kind: compareDate, order: cmpEqual, negative: true},
+	"DateLessThan":              {kind: compareDate, order: cmpLess},
+	"DateLessThanEquals":        {kind: compareDate, order: cmpLessEqual},
+	"DateGreaterThan":           {kind: compareDate, order: cmpGreater},
+	"DateGreaterThanEquals":     {kind: compareDate, order: cmpGreaterEqual},
+	"Bool":                      {kind: compareBool},
+	"IpAddress":                 {kind: compareIP},
+	"NotIpAddress":              {kind: compareIP, negative: true},
+	"ArnEquals":                 {kind: compareArn},
+	"ArnNotEquals":              {kind: compareArn, negative: true},
+	"ArnLike":                   {kind: compareArn},
+	"ArnNotLike":                {kind: compareArn, negative: true},
+	"BinaryEquals":              {kind: compareBinary},
+	"Null":                      {kind: compareNull},
 }
 
 // parseConditionOperator splits an operator name into its set qualifier, base
 // operator and IfExists suffix.
-func parseConditionOperator(name string) (op conditionOperator, ok bool) {
-	if set, base, found := strings.Cut(name, ":"); found {
-		if set != conditionForAllValues && set != conditionForAnyValue {
-			return op, false
+func parseConditionOperator(name string) (conditionOperator, bool) {
+	var set string
+	if qualifier, base, found := strings.Cut(name, ":"); found {
+		if qualifier != conditionForAllValues && qualifier != conditionForAnyValue {
+			return conditionOperator{}, false
 		}
-		op.set, name = set, base
+		set, name = qualifier, base
 	}
-	op.ifExists = strings.HasSuffix(name, "IfExists")
-	op.base = strings.TrimSuffix(name, "IfExists")
-	switch op.base {
-	case "StringNotEquals", "StringNotEqualsIgnoreCase", "StringNotLike", "NumericNotEquals", "DateNotEquals", "NotIpAddress", "ArnNotEquals", "ArnNotLike":
-		op.negative = true
-	case "StringEquals", "StringEqualsIgnoreCase", "StringLike", "NumericEquals", "NumericLessThan", "NumericLessThanEquals", "NumericGreaterThan", "NumericGreaterThanEquals", "DateEquals", "DateLessThan", "DateLessThanEquals", "DateGreaterThan", "DateGreaterThanEquals", "Bool", "IpAddress", "ArnEquals", "ArnLike", "BinaryEquals":
-	case "Null":
-		if op.ifExists || op.set != "" {
-			return op, false
-		}
-	default:
-		return op, false
+	base, ifExists := strings.CutSuffix(name, "IfExists")
+	op, ok := conditionOperators[base]
+	if !ok || (op.kind == compareNull && (ifExists || set != "")) {
+		return conditionOperator{}, false
 	}
+	op.set, op.ifExists = set, ifExists
 	return op, true
+}
+
+// textual reports whether op compares strings, the only values that may
+// contain policy variables.
+func (op conditionOperator) textual() bool {
+	switch op.kind {
+	case compareString, compareStringIgnoreCase, compareStringLike, compareArn:
+		return true
+	}
+	return false
+}
+
+// pattern reports whether op reads its values as wildcard patterns.
+func (op conditionOperator) pattern() bool {
+	return op.kind == compareStringLike || op.kind == compareArn
+}
+
+// parseValue parses a policy value for comparison by op.
+func (op conditionOperator) parseValue(value string) (v conditionValue, ok bool) {
+	v.text = value
+	switch op.kind {
+	case compareNull, compareBool:
+		return v, value == "true" || value == "false"
+	case compareIP:
+		var err error
+		v.prefix, err = policyIPPrefix(value)
+		return v, err == nil
+	case compareNumeric:
+		v.number, ok = policyNumber(value)
+		return v, ok
+	case compareDate:
+		v.date, ok = policyDate(value)
+		return v, ok
+	case compareBinary:
+		var err error
+		v.binary, err = base64.StdEncoding.DecodeString(value)
+		return v, err == nil
+	}
+	return v, true
 }
 
 // policyIPPrefix parses an IP address or CIDR.
@@ -357,12 +447,21 @@ func policyDate(value string) (time.Time, bool) {
 	return time.Unix(int64(whole), int64(fraction*1e9)), true
 }
 
+// conditionValue is a condition's policy value, parsed for its operator unless
+// it contains variables, which are resolved during evaluation.
+type conditionValue struct {
+	text   string
+	number *big.Rat
+	date   time.Time
+	prefix netip.Prefix
+	binary []byte
+}
+
 // condition is a single operator and key test of a Condition element.
 type condition struct {
-	op      conditionOperator
-	key     string // lowercase, like policyContext
-	values  []string
-	pattern bool // values are wildcard patterns
+	op     conditionOperator
+	key    string // lowercase, like policyContext
+	values []conditionValue
 }
 
 // conditionSet is a parsed Condition element; every condition must match.
@@ -388,40 +487,23 @@ func (c policyConditions) parse(variables bool) (conditionSet, error) {
 			} else if len(values) == 0 {
 				return nil, fmt.Errorf("condition key %q has no values: %w", key, s3errs.ErrMalformedPolicy)
 			}
-			c := condition{
-				op:      op,
-				key:     strings.ToLower(key),
-				pattern: op.base == "StringLike" || op.base == "StringNotLike" || strings.HasPrefix(op.base, "Arn"),
-			}
+			c := condition{op: op, key: strings.ToLower(key)}
 			for _, value := range values {
 				value := string(value)
-				c.values = append(c.values, value)
 				// variables are resolved during evaluation. As in IAM, a missing
 				// one matches nothing, so negated operators match it.
 				if variables && strings.Contains(value, "${") {
-					if (!strings.HasPrefix(op.base, "String") && !strings.HasPrefix(op.base, "Arn")) || !validVariables(value) {
+					if !op.textual() || !validVariables(value) {
 						return nil, fmt.Errorf("invalid policy variable in %q: %w", value, s3errs.ErrMalformedPolicy)
 					}
+					c.values = append(c.values, conditionValue{text: value})
 					continue
 				}
-				valid := true
-				switch {
-				case op.base == "Null" || op.base == "Bool":
-					valid = value == "true" || value == "false"
-				case strings.Contains(op.base, "IpAddress"):
-					_, err := policyIPPrefix(value)
-					valid = err == nil
-				case strings.HasPrefix(op.base, "Numeric"):
-					_, valid = policyNumber(value)
-				case strings.HasPrefix(op.base, "Date"):
-					_, valid = policyDate(value)
-				case op.base == "BinaryEquals":
-					_, err := base64.StdEncoding.DecodeString(value)
-					valid = err == nil
+				parsed, ok := op.parseValue(value)
+				if !ok {
+					return nil, fmt.Errorf("invalid %s value %q: %w", name, value, s3errs.ErrMalformedPolicy)
 				}
-				if !valid {
-					return nil, fmt.Errorf("invalid %s value %q: %w", op.base, value, s3errs.ErrMalformedPolicy)
-				}
+				c.values = append(c.values, parsed)
 			}
 			set = append(set, c)
 		}
