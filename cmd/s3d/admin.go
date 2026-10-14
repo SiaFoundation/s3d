@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 )
 
 // requireAdminConfig exits if the admin API address or password are unset.
@@ -16,11 +19,11 @@ func requireAdminConfig() {
 	}
 }
 
-// postAdmin POSTs to the admin API route. Cancellation is driven by ctx alone,
-// with no client timeout, since some operations (e.g. flushing objects) can
-// block for a long time.
-func postAdmin(ctx context.Context, addr, password, route string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+addr+route, nil)
+// adminRequest sends a request to the admin API route and decodes the JSON
+// response into out when out is not nil. Cancellation is driven by ctx alone,
+// with no client timeout, since some operations can block for a long time.
+func adminRequest(ctx context.Context, method, addr, password, route string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, method, "http://"+addr+route, nil)
 	if err != nil {
 		return fmt.Errorf("failed to build request: %w", err)
 	}
@@ -32,13 +35,27 @@ func postAdmin(ctx context.Context, addr, password, route string) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		buf := make([]byte, 8<<10)
-		n, _ := resp.Body.Read(buf)
-		if n > 0 {
-			return fmt.Errorf("unexpected status %s: %s", resp.Status, buf[:n])
-		}
-		return fmt.Errorf("unexpected status %s", resp.Status)
+	if err := adminResponseError(resp); err != nil {
+		return err
+	} else if out == nil {
+		return nil
+	}
+
+	if err := json.UnmarshalRead(resp.Body, out); err != nil {
+		return fmt.Errorf("failed to decode response: %w", err)
 	}
 	return nil
+}
+
+// adminResponseError returns an error describing an admin API response whose
+// status is not 200, including the response body when the server provided one.
+func adminResponseError(resp *http.Response) error {
+	if resp.StatusCode == http.StatusOK {
+		return nil
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10)) // 8 KiB
+	if len(body) > 0 {
+		return fmt.Errorf("unexpected status %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	return fmt.Errorf("unexpected status %s", resp.Status)
 }
