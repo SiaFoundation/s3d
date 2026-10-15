@@ -110,13 +110,14 @@ type PutOptions struct {
 
 // ObjectForUpload contains the fields needed to upload an object.
 type ObjectForUpload struct {
-	Bucket     string
-	Name       string
-	VersionID  string
-	Filename   string
-	ContentMD5 [16]byte
-	Length     int64
-	Multipart  bool
+	Bucket       string
+	Name         string
+	VersionID    string
+	Filename     string
+	ContentMD5   [16]byte
+	Length       int64
+	Multipart    bool
+	LastModified time.Time
 }
 
 // Part represents a single part of a multipart upload.

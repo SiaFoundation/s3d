@@ -141,6 +141,14 @@ func WithUploadThreads(n int) Option {
 	}
 }
 
+// WithUploadDeadline sets how long after a pending object was last modified its
+// group is uploaded regardless of wasted space. Zero disables the deadline.
+func WithUploadDeadline(d time.Duration) Option {
+	return func(s *Sia) {
+		s.uploadDeadline = d
+	}
+}
+
 // Sia implements the s3.Backend interface for storing data on Sia.
 type Sia struct {
 	sdk   SDK
@@ -161,6 +169,7 @@ type Sia struct {
 	uploadOptimalSize int64
 	uploadWastePct    float64
 	uploadThreads     int
+	uploadDeadline    time.Duration
 
 	lifecycleLoopInterval time.Duration
 	lifecycleDayDuration  time.Duration
@@ -292,6 +301,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		directory:             directory,
 		uploadWastePct:        DefaultUploadWastePct,
 		uploadThreads:         DefaultUploadThreads,
+		uploadDeadline:        DefaultUploadDeadline,
 		lifecycleLoopInterval: defaultLifecycleLoopInterval,
 		lifecycleDayDuration:  defaultLifecycleDayDuration,
 		diskUsageTimeout:      defaultDiskUsageTimeout,
@@ -310,6 +320,8 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		return nil, errors.New("upload waste percentage must be greater than 0")
 	} else if sia.uploadThreads < 0 {
 		return nil, fmt.Errorf("upload threads must not be negative, got %d", sia.uploadThreads)
+	} else if sia.uploadDeadline < 0 {
+		return nil, fmt.Errorf("upload deadline must not be negative, got %s", sia.uploadDeadline)
 	}
 	if sia.uploadThreads == 0 {
 		sia.uploadThreads = DefaultUploadThreads

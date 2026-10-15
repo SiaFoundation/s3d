@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"slices"
 	"sync"
 	"time"
 
@@ -35,6 +36,10 @@ const (
 	// DefaultUploadThreads is the default number of object groups uploaded
 	// to Sia concurrently by the background upload loop.
 	DefaultUploadThreads = 4
+
+	// DefaultUploadDeadline is how long after a pending object was last
+	// modified its group is uploaded regardless of wasted space.
+	DefaultUploadDeadline = 24 * time.Hour
 )
 
 // PackedUpload defines the interface for a packed upload.
@@ -131,9 +136,9 @@ func (s *Sia) newUploadGroup(initial objects.ObjectForUpload) uploadGroup {
 
 // prepareUploads groups pending objects into upload groups. Unless flush is
 // set, groups whose wasted space exceeds the configured threshold are held
-// back so they can be batched with future objects. When flush is set every
-// pending object is uploaded regardless of padding.
-func (s *Sia) prepareUploads(flush bool) []uploadGroup {
+// back until one of their objects passes the upload deadline relative to now.
+// When flush is set every pending object is uploaded regardless of padding.
+func (s *Sia) prepareUploads(now time.Time, flush bool) []uploadGroup {
 	candidates, err := s.store.ObjectsForUpload()
 	if err != nil {
 		s.logger.Error("failed to fetch objects for upload", zap.Error(err))
@@ -165,13 +170,18 @@ func (s *Sia) prepareUploads(flush bool) []uploadGroup {
 		}
 	}
 
-	// filter groups that meet the waste threshold, unless flushing in which
-	// case every pending object is uploaded regardless of padding
+	// filter groups that meet the waste threshold or contain an object last
+	// modified at or before the cutoff, unless flushing in which case every
+	// pending object is uploaded regardless of padding
 	filtered := groups
 	if !flush {
+		cutoff := now.Add(-s.uploadDeadline)
+		expired := func(obj objects.ObjectForUpload) bool {
+			return !obj.LastModified.After(cutoff)
+		}
 		filtered = groups[:0]
 		for _, g := range groups {
-			if g.wastePct() < s.uploadWastePct {
+			if g.wastePct() < s.uploadWastePct || (s.uploadDeadline > 0 && slices.ContainsFunc(g.objects, expired)) {
 				filtered = append(filtered, g)
 			}
 		}
@@ -230,7 +240,7 @@ func (s *Sia) uploadObjects(ctx context.Context, flush bool) error { //nolint:re
 	defer s.uploadMu.Unlock()
 
 	// fetch and prepare objects for upload
-	groups := s.prepareUploads(flush)
+	groups := s.prepareUploads(time.Now(), flush)
 	if len(groups) == 0 {
 		s.logger.Debug("not enough objects for upload")
 		return nil

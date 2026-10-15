@@ -78,6 +78,7 @@ var cfg = Config{
 	Sia: Sia{
 		DiskUsageLimit: 10 * (1 << 30), // 10 GiB
 		UploadThreads:  sia.DefaultUploadThreads,
+		UploadDeadline: sia.DefaultUploadDeadline,
 		DataShards:     10,
 		ParityShards:   20,
 	},
@@ -310,6 +311,7 @@ func main() {
 	backend, err := sia.New(ctx, indexdSDK, store, cfg.Directory,
 		sia.WithDiskUsageLimit(cfg.Sia.DiskUsageLimit),
 		sia.WithUploadThreads(cfg.Sia.UploadThreads),
+		sia.WithUploadDeadline(cfg.Sia.UploadDeadline),
 		sia.WithLogger(log.Named("backend")))
 	if err != nil {
 		checkFatalError("failed to create Sia backend", err)

@@ -924,7 +924,7 @@ func (s *Store) ObjectsForUpload() ([]objects.ObjectForUpload, error) {
 	if err := s.transaction(func(tx *txn) error {
 		objs = objs[:0] // reuse same slice if transaction retries
 		rows, err := tx.Query(`
-			SELECT b.name, o.name, o.version_id, o.filename, o.content_md5, o.size, o.parts_count > 0 AS has_parts
+			SELECT b.name, o.name, o.version_id, o.filename, o.content_md5, o.size, o.parts_count > 0 AS has_parts, o.updated_at
 			FROM objects o
 			JOIN buckets b ON b.id = o.bucket_id
 			WHERE o.filename IS NOT NULL AND o.sia_object_id IS NULL
@@ -937,7 +937,7 @@ func (s *Store) ObjectsForUpload() ([]objects.ObjectForUpload, error) {
 
 		for rows.Next() {
 			var obj objects.ObjectForUpload
-			if err := rows.Scan(&obj.Bucket, &obj.Name, &obj.VersionID, &obj.Filename, (*sqlMD5)(&obj.ContentMD5), &obj.Length, &obj.Multipart); err != nil {
+			if err := rows.Scan(&obj.Bucket, &obj.Name, &obj.VersionID, &obj.Filename, (*sqlMD5)(&obj.ContentMD5), &obj.Length, &obj.Multipart, (*sqlTime)(&obj.LastModified)); err != nil {
 				return err
 			}
 			objs = append(objs, obj)
