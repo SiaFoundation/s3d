@@ -258,8 +258,8 @@ func (s *MemorySDK) ObjectCount() int {
 	return len(s.objects)
 }
 
-// Upload stores an object in memory. It is not part of the SDK interface but
-// used by tests to simulate the background upload to Sia.
+// Upload stores an object in memory, staged rather than pinned, the way the
+// real SDK leaves an uploaded object until PinObject.
 func (s *MemorySDK) Upload(_ context.Context, obj *sdk.Object, r io.Reader, _ ...sdk.UploadOption) (*sdk.Object, error) {
 	data, err := io.ReadAll(r)
 	if err != nil {
