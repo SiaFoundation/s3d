@@ -152,7 +152,7 @@ func TestPrepareUploads(t *testing.T) {
 }
 
 func TestPrepareUploadsDeadline(t *testing.T) {
-	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
+	now := time.Now()
 
 	tests := []struct {
 		name     string
