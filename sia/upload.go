@@ -394,6 +394,7 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 				zap.String("bucket", uploadObj.Bucket),
 				zap.String("name", uploadObj.Name),
 				zap.Error(err))
+			errs = append(errs, fmt.Errorf("failed to seal %s/%s: %w", uploadObj.Bucket, uploadObj.Name, err))
 			continue
 		}
 		if err := s.store.MarkObjectUploaded(uploadObj.Bucket, uploadObj.Name, uploadObj.VersionID, uploadObj.ContentMD5, sealed, pinBefore); err != nil {
