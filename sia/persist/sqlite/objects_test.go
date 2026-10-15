@@ -1605,6 +1605,12 @@ func TestObjectsForUpload(t *testing.T) {
 		if obj.Filename == "" {
 			t.Fatalf("expected non-empty filename for %s", obj.Name)
 		}
+		stored, err := store.GetObject(aws.String(accessKeyID), bucket, obj.Name, s3.NoVersion(), nil, s3.ActionGetObject)
+		if err != nil {
+			t.Fatal(err)
+		} else if !obj.LastModified.Equal(stored.LastModified) {
+			t.Fatalf("expected last modified %v for %s, got %v", stored.LastModified, obj.Name, obj.LastModified)
+		}
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/SiaFoundation/s3d/sia"
 	"go.uber.org/zap"
@@ -52,6 +53,10 @@ type (
 		// UploadThreads is the number of object groups uploaded to Sia
 		// concurrently by the background upload loop.
 		UploadThreads int `yaml:"uploadThreads"`
+		// UploadDeadline is how long after a pending object was last modified
+		// its group is uploaded regardless of wasted space. Zero disables the
+		// deadline.
+		UploadDeadline time.Duration `yaml:"uploadDeadline"`
 		// DataShards is the number of shards each slab is split into.
 		DataShards uint8 `yaml:"dataShards"`
 		// ParityShards is the number of recovery shards added to each slab.

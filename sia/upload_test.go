@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.uber.org/zap"
@@ -122,7 +123,7 @@ func TestPrepareUploads(t *testing.T) {
 		logger:            zaptest.NewLogger(t),
 	}
 
-	ready := s.prepareUploads(false)
+	ready := s.prepareUploads(time.Now(), false)
 
 	if len(ready) != 1 {
 		t.Fatalf("expected 1 ready group, got %d", len(ready))
@@ -136,7 +137,7 @@ func TestPrepareUploads(t *testing.T) {
 
 	// flushing uploads every pending object regardless of padding, so the
 	// "c"(42) object that was held back is now included
-	flushed := s.prepareUploads(true)
+	flushed := s.prepareUploads(time.Now(), true)
 	var flushedObjects, flushedSize int64
 	for _, g := range flushed {
 		flushedObjects += int64(len(g.objects))
@@ -147,6 +148,48 @@ func TestPrepareUploads(t *testing.T) {
 	}
 	if flushedSize != 242 {
 		t.Fatalf("expected flushed size 242, got %d", flushedSize)
+	}
+}
+
+func TestPrepareUploadsDeadline(t *testing.T) {
+	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name     string
+		deadline time.Duration
+		age      time.Duration
+		want     int // objects uploaded
+	}{
+		{"recent", DefaultUploadDeadline, DefaultUploadDeadline - time.Second, 0},
+		{"expired", DefaultUploadDeadline, DefaultUploadDeadline, 2},
+		{"disabled", 0, 48 * time.Hour, 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// the group wastes too much space to upload on its own, so only
+			// the expired object can release it
+			store := &uploadStore{
+				objects: []objects.ObjectForUpload{
+					{Name: "recent", Length: 20, LastModified: now},
+					{Name: "older", Length: 10, LastModified: now.Add(-tc.age)},
+				},
+			}
+			s := Sia{
+				store:             store,
+				uploadOptimalSize: 100,
+				uploadWastePct:    0.10,
+				uploadDeadline:    tc.deadline,
+				logger:            zaptest.NewLogger(t),
+			}
+			// an expired object uploads its entire group
+			var uploaded int
+			for _, g := range s.prepareUploads(now, false) {
+				uploaded += len(g.objects)
+			}
+			if uploaded != tc.want {
+				t.Fatalf("expected %d objects to upload, got %d", tc.want, uploaded)
+			}
+		})
 	}
 }
 
