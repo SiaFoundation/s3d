@@ -64,6 +64,7 @@ func runLoginCmd(ctx context.Context, configPath string) {
 
 	builder, err := newSDKBuilder(indexerURL)
 	checkFatalError("failed to create SDK builder", err)
+	defer builder.Close()
 
 	respURL, err := builder.RequestConnection(ctx)
 	checkFatalError("failed to request app connection", err)
@@ -81,6 +82,7 @@ func runLoginCmd(ctx context.Context, configPath string) {
 
 	sdkClient, err := builder.Register(ctx, phrase)
 	checkFatalError("failed to register app", err)
+	defer sdkClient.Close()
 
 	checkFatalError("failed to store app key", store.SetAppKey(sdkClient.AppKey(), indexerURL))
 

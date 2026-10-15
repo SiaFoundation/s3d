@@ -122,6 +122,7 @@ func TestS3(t *testing.T) {
 		server.Close()
 		backend.Close()
 		sdkClient.Close()
+		builder.Close()
 		store.Close()
 		if err := <-errCh; err != nil {
 			t.Errorf("server error: %v", err)

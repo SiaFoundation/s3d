@@ -303,6 +303,7 @@ func main() {
 	if err != nil {
 		checkFatalError("failed to create SDK builder", err)
 	}
+	defer builder.Close()
 	// The SDK's logger is process-wide rather than per-instance, so it is
 	// installed once here instead of being passed as a construction option.
 	sdk.SetLogger(log.Named("sdk"))
@@ -310,6 +311,9 @@ func main() {
 	if err != nil {
 		checkFatalError("failed to create SDK client", err)
 	}
+	// Deferred before the backend, so it closes after everything that
+	// uploads through it.
+	defer sdkClient.Close()
 
 	indexdSDK := sia.NewSDK(sdkClient, sia.WithUploadOptions(sdk.WithRedundancy(cfg.Sia.DataShards, cfg.Sia.ParityShards)))
 
