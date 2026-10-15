@@ -188,6 +188,7 @@ type SDK interface {
 	DeleteObject(ctx context.Context, id types.Hash256) error
 	Download(ctx context.Context, obj *sdk.Object, rnge *s3.ObjectRange) (io.ReadCloser, error)
 	ObjectEvents(ctx context.Context, cursor slabs.Cursor, limit int) ([]sdk.ObjectEvent, error)
+	ObjectID(obj *sdk.Object) types.Hash256
 	OptimalDataSize() (int64, error)
 	Upload(ctx context.Context, obj *sdk.Object, r io.Reader, opts ...sdk.UploadOption) (*sdk.Object, error)
 	UploadPacked(ctx context.Context, opts ...sdk.UploadOption) (PackedUpload, error)
@@ -464,14 +465,7 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 		return s3.Snapshot{}, fmt.Errorf("failed to upload snapshot: %w", err)
 	}
 
-	// An id is a hash of the object's slabs, which the sealed form carries, so
-	// sealing is how the id is read back. The sealed object itself is not kept:
-	// the sync loop stores one when it sees the pin.
-	sealed, err := s.sdk.SealObject(obj)
-	if err != nil {
-		return s3.Snapshot{}, fmt.Errorf("failed to seal snapshot object: %w", err)
-	}
-	objectID := sealed.ID()
+	objectID := s.sdk.ObjectID(obj)
 
 	// record the object before the pin can reach the indexer, so a crash
 	// during the pin leaves a record claiming it

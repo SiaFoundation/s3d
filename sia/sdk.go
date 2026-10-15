@@ -123,6 +123,13 @@ func (s *IndexdSDK) PruneSlabs(ctx context.Context, before time.Time) error {
 	return s.inner.PruneSlabs(ctx, before)
 }
 
+// ObjectID returns the object's id, which is a hash of its slabs. It is on
+// the SDK interface rather than read from the object directly because the
+// test fake hands out blank objects and keeps its own mapping.
+func (s *IndexdSDK) ObjectID(obj *sdk.Object) types.Hash256 {
+	return obj.ID()
+}
+
 // SealObject seals the object using the app key.
 func (s *IndexdSDK) SealObject(obj *sdk.Object) (sdk.SealedObject, error) {
 	return s.inner.SealObject(obj)
