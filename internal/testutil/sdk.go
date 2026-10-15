@@ -448,7 +448,11 @@ func (s *MemorySDK) UnsealObject(sealed sdk.SealedObject) (*sdk.Object, error) {
 	id := sealed.ID()
 	uploaded, ok := s.objects[id]
 	if !ok {
-		return nil, fmt.Errorf("unseal failed: %w: %v", errObjectNotFound, id)
+		// the real ObjectFromSealed runs locally and does not check pin
+		// state, so a staged object unseals the same as a pinned one
+		if uploaded, ok = s.staged[id]; !ok {
+			return nil, fmt.Errorf("unseal failed: %w: %v", errObjectNotFound, id)
+		}
 	}
 	return s.handle(uploaded), nil
 }
