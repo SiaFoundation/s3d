@@ -2567,9 +2567,8 @@ func TestListObjectVersions(t *testing.T) {
 
 // sealedObject builds the sealed form the store persists. The SDK's objects
 // cannot be built from Go, so the store only ever sees the sealed struct, which
-// can. The encrypted
-// fields are random bytes rather than real ciphertext, since nothing in the
-// store reads them.
+// can. The encrypted fields are random bytes rather than real ciphertext,
+// since nothing in the store reads them.
 func sealedObject(ss ...slabs.SlabSlice) sdk.SealedObject {
 	now := time.Now().UTC().Truncate(time.Second)
 	return sdk.SealedObject{
