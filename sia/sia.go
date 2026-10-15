@@ -795,6 +795,9 @@ func (s *Sia) syncBatch(ctx context.Context, cursor slabs.Cursor) (slabs.Cursor,
 
 		sealed, err := s.sdk.SealObject(ev.Object)
 		if err != nil {
+			// Breaking leaves the cursor on this event, so the sync retries it
+			// rather than moving past it. Sealing can only fail when the bridge
+			// to the native side is down, so the next object would fail too.
 			s.syncFailed("failed to seal object", zap.Stringer("objectID", &ev.ID), zap.Error(err))
 			break
 		}
