@@ -337,3 +337,67 @@ func TestIndexdSDKObjectEvents(t *testing.T) {
 		}
 	}
 }
+
+// TestIndexdSDKUpload drives the streaming upload CreateSnapshot takes, which
+// the packed path does not cover. It is also the only caller that sets
+// metadata on the object it uploads, so this is the one test where the sealed
+// form carries encrypted metadata and it has to survive the seal to be
+// readable when a snapshot is restored.
+func TestIndexdSDKUpload(t *testing.T) {
+	s := mockSDK(t)
+	ctx := t.Context()
+
+	meta := []byte(`{"bucket":"bucket","name":"obj"}`)
+	data := frand.Bytes(2 << 20)
+
+	obj, err := s.Upload(ctx, sdk.NewEmptyObject().WithMetadata(meta), bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+	if got := obj.Metadata(); !bytes.Equal(got, meta) {
+		t.Fatalf("uploaded object carries metadata %s, wanted %s", got, meta)
+	}
+	if obj.Size() != uint64(len(data)) {
+		t.Fatalf("uploaded object is %d bytes, wrote %d", obj.Size(), len(data))
+	}
+
+	sealed, err := s.SealObject(obj)
+	if err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	assertSealed(t, sealed)
+	if len(sealed.EncryptedMetadata) == 0 {
+		t.Fatal("encryptedMetadata is empty")
+	}
+	if len(sealed.EncryptedMetadataKey) == 0 {
+		t.Fatal("encryptedMetadataKey is empty")
+	}
+	if sealed.ID() != obj.ID() {
+		t.Fatalf("sealed ID %v, object ID %v", sealed.ID(), obj.ID())
+	}
+
+	reopened, err := s.UnsealObject(sealed)
+	if err != nil {
+		t.Fatalf("unseal: %v", err)
+	}
+	if got := reopened.Metadata(); !bytes.Equal(got, meta) {
+		t.Fatalf("metadata did not survive the seal: %s", got)
+	}
+
+	if err := s.PinObject(ctx, reopened); err != nil {
+		t.Fatalf("pin: %v", err)
+	}
+
+	rc, err := s.Download(ctx, reopened, nil)
+	if err != nil {
+		t.Fatalf("download: %v", err)
+	}
+	got, err := io.ReadAll(rc)
+	rc.Close()
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatal("the object did not round trip")
+	}
+}
