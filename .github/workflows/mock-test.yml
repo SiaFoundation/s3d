@@ -1,0 +1,76 @@
+name: Mock SDK Tests
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CGO_ENABLED: 1
+
+jobs:
+  test:
+    name: Mock
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # The archive has to come from the version go.mod pins, or these tests
+      # exercise an ABI s3d does not link. A pseudo-version carries the commit
+      # as its last field; a released version is a tag.
+      - name: Resolve the sia-storage-go revision
+        id: storage
+        run: |
+          v=$(go list -m -f '{{.Version}}' go.sia.tech/siastorage)
+          if printf '%s' "$v" | grep -qE '[0-9]{14}-[0-9a-f]{12}$'; then
+            echo "ref=${v##*-}" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=$v" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: SiaFoundation/sia-storage-go
+          ref: ${{ steps.storage.outputs.ref }}
+          path: sia-storage-go
+
+      # PROVENANCE records the revision the committed archives were built from,
+      # so a mock built here exports the ABI those archives do.
+      - name: Resolve the sia-sdk-rs revision
+        id: provenance
+        run: echo "sha=$(awk '/^sia-sdk-rs:/ {print $2}' sia-storage-go/ffi/lib/PROVENANCE)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: SiaFoundation/sia-sdk-rs
+          ref: ${{ steps.provenance.outputs.sha }}
+          path: sia-sdk-rs
+
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      # The revision moves only when go.mod is bumped, so most runs hit the
+      # cache and skip the release build.
+      - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
+        with:
+          workspaces: sia-sdk-rs
+
+      # The mock archive swaps the host transport for an in-memory one. It is
+      # never committed or published, so it is built here.
+      - name: Build the mock archive
+        working-directory: sia-storage-go
+        run: make testlib SIA_SDK_RS=../sia-sdk-rs
+
+      # Written here rather than committed: it points at a checkout that only
+      # exists inside this job, and a committed one would break every build.
+      - name: Point the build at the checkout
+        run: go work init . sia-storage-go
+
+      - name: Test against the mock network
+        run: go test -race -failfast -timeout 20m -tags siastorage_mock ./sia
