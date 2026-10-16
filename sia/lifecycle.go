@@ -104,7 +104,8 @@ func (s *Sia) applyLifecycleRules(ctx context.Context, now time.Time) {
 				s.abortIncompleteUploads(ctx, bc, prefix, rule.AbortIncompleteMultipartUpload.AbortCutoff(now, s.lifecycleDayDuration))
 			}
 			if cutoff, ok := rule.Expiration.ExpiryCutoff(now, s.lifecycleDayDuration); ok {
-				s.expireObjects(ctx, bc, prefix, cutoff)
+				sizeGreaterThan, sizeLessThan := rule.EffectiveSizeRange()
+				s.expireObjects(ctx, bc, prefix, sizeGreaterThan, sizeLessThan, cutoff)
 			}
 		}
 	}
@@ -136,14 +137,14 @@ func (s *Sia) abortIncompleteUploads(ctx context.Context, bc BucketLifecycleConf
 	}
 }
 
-// expireObjects deletes objects matching prefix in the given bucket that were
-// last modified at or before the cutoff.
-func (s *Sia) expireObjects(ctx context.Context, bc BucketLifecycleConfiguration, prefix string, before time.Time) {
+// expireObjects deletes objects matching the prefix and size bounds in the
+// given bucket that were last modified at or before the cutoff.
+func (s *Sia) expireObjects(ctx context.Context, bc BucketLifecycleConfiguration, prefix string, sizeGreaterThan, sizeLessThan *int64, before time.Time) {
 	// batchSize bounds how many objects are expired per store transaction.
 	const batchSize = 100
 	var expired int
 	for ctx.Err() == nil {
-		deleted, orphans, err := s.store.ExpireObjects(bc.Bucket, prefix, before, batchSize)
+		deleted, orphans, err := s.store.ExpireObjects(bc.Bucket, prefix, sizeGreaterThan, sizeLessThan, before, batchSize)
 		if err != nil {
 			s.logger.Error("failed to expire objects", zap.String("bucket", bc.Bucket), zap.Error(err))
 			return
