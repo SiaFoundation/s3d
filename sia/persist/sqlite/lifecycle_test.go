@@ -161,7 +161,7 @@ func TestExpireObjects(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deleted, orphans, err := store.ExpireObjects(bucket, "logs/", cutoff, 100)
+	deleted, orphans, err := store.ExpireObjects(bucket, "logs/", nil, nil, cutoff, 100)
 	if err != nil {
 		t.Fatal(err)
 	} else if deleted != 1 {
@@ -170,6 +170,39 @@ func TestExpireObjects(t *testing.T) {
 		t.Fatalf("unexpected orphans: %+v", orphans)
 	}
 	store.assertCount(2, "objects")
+
+	// backdate what survived so only the size bounds decide the rest
+	if _, err := store.db.Exec("UPDATE objects SET updated_at = ?", sqlTime(time.Now().Add(-48*time.Hour))); err != nil {
+		t.Fatal(err)
+	}
+
+	// the bounds exclude their own value, so a lower bound of 200 skips the
+	// 200 byte object and takes the 300 byte one
+	size := func(n int64) *int64 { return &n }
+	deleted, orphans, err = store.ExpireObjects(bucket, "", size(200), nil, cutoff, 100)
+	if err != nil {
+		t.Fatal(err)
+	} else if deleted != 1 {
+		t.Fatalf("expected 1 deleted object, got %d", deleted)
+	} else if len(orphans) != 1 || orphans[0].Filename != otherFile {
+		t.Fatalf("unexpected orphans: %+v", orphans)
+	}
+	store.assertCount(1, "objects")
+
+	// an upper bound of 200 excludes the 200 byte object as well
+	if deleted, _, err := store.ExpireObjects(bucket, "", nil, size(200), cutoff, 100); err != nil {
+		t.Fatal(err)
+	} else if deleted != 0 {
+		t.Fatalf("expected no deleted objects, got %d", deleted)
+	}
+	store.assertCount(1, "objects")
+
+	if deleted, _, err := store.ExpireObjects(bucket, "", nil, size(201), cutoff, 100); err != nil {
+		t.Fatal(err)
+	} else if deleted != 1 {
+		t.Fatalf("expected 1 deleted object, got %d", deleted)
+	}
+	store.assertCount(0, "objects")
 }
 
 func TestExpireObjectsVersions(t *testing.T) {
@@ -201,7 +234,7 @@ func TestExpireObjectsVersions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deleted, orphans, err := store.ExpireObjects(bucket, "logs/", cutoff, 100)
+	deleted, orphans, err := store.ExpireObjects(bucket, "logs/", nil, nil, cutoff, 100)
 	if err != nil {
 		t.Fatal(err)
 	} else if deleted != 0 {

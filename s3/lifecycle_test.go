@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -269,6 +270,18 @@ func TestLifecycleConfigurationValidate(t *testing.T) {
 		{"tag filter", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{Tag: &s3.LifecycleTag{Key: "k", Value: "v"}}, Expiration: &s3.LifecycleExpiration{Days: 1}}), s3errs.ErrNotImplemented},
 		{"filter prefix and and", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{Prefix: aws.String("a/"), And: &s3.LifecycleAndOperator{Prefix: aws.String("b/")}}, Expiration: &s3.LifecycleExpiration{Days: 1}}), s3errs.ErrMalformedXML},
 		{"empty and filter", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{And: &s3.LifecycleAndOperator{}}, Expiration: &s3.LifecycleExpiration{Days: 1}}), s3errs.ErrMalformedXML},
+		{"size greater than filter", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{ObjectSizeGreaterThan: aws.Int64(128)}, Expiration: &s3.LifecycleExpiration{Days: 1}}), nil},
+		{"size less than filter", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{ObjectSizeLessThan: aws.Int64(1024)}, Expiration: &s3.LifecycleExpiration{Days: 1}}), nil},
+		{"and size bound only", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{And: &s3.LifecycleAndOperator{ObjectSizeGreaterThan: aws.Int64(128)}}, Expiration: &s3.LifecycleExpiration{Days: 1}}), nil},
+		{"and prefix and size range", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{And: &s3.LifecycleAndOperator{Prefix: aws.String("logs/"), ObjectSizeGreaterThan: aws.Int64(128), ObjectSizeLessThan: aws.Int64(1024)}}, Expiration: &s3.LifecycleExpiration{Days: 1}}), nil},
+		{"size range without and", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{ObjectSizeGreaterThan: aws.Int64(128), ObjectSizeLessThan: aws.Int64(1024)}, Expiration: &s3.LifecycleExpiration{Days: 1}}), s3errs.ErrMalformedXML},
+		{"prefix and size without and", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{Prefix: aws.String("logs/"), ObjectSizeGreaterThan: aws.Int64(128)}, Expiration: &s3.LifecycleExpiration{Days: 1}}), s3errs.ErrMalformedXML},
+		{"empty prefix and size without and", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{Prefix: aws.String(""), ObjectSizeGreaterThan: aws.Int64(2000)}, Expiration: &s3.LifecycleExpiration{Days: 1}}), nil},
+		{"empty prefix and size range without and", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{Prefix: aws.String(""), ObjectSizeGreaterThan: aws.Int64(128), ObjectSizeLessThan: aws.Int64(1024)}, Expiration: &s3.LifecycleExpiration{Days: 1}}), s3errs.ErrMalformedXML},
+		{"inverted size range", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{And: &s3.LifecycleAndOperator{ObjectSizeGreaterThan: aws.Int64(1024), ObjectSizeLessThan: aws.Int64(128)}}, Expiration: &s3.LifecycleExpiration{Days: 1}}), s3errs.ErrInvalidArgument},
+		{"empty size range", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{And: &s3.LifecycleAndOperator{ObjectSizeGreaterThan: aws.Int64(128), ObjectSizeLessThan: aws.Int64(128)}}, Expiration: &s3.LifecycleExpiration{Days: 1}}), s3errs.ErrInvalidArgument},
+		{"negative size bound", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{ObjectSizeGreaterThan: aws.Int64(-1)}, Expiration: &s3.LifecycleExpiration{Days: 1}}), s3errs.ErrInvalidArgument},
+		{"and tag filter", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{And: &s3.LifecycleAndOperator{Prefix: aws.String("logs/"), Tags: []s3.LifecycleTag{{Key: "k", Value: "v"}}}}, Expiration: &s3.LifecycleExpiration{Days: 1}}), s3errs.ErrNotImplemented},
 		{"transition action", enabled(s3.LifecycleRule{Expiration: &s3.LifecycleExpiration{Days: 1}, Transitions: []s3.LifecycleUnsupportedAction{{}}}), s3errs.ErrNotImplemented},
 		{"noncurrent version expiration action", enabled(s3.LifecycleRule{Expiration: &s3.LifecycleExpiration{Days: 1}, NoncurrentVersionExpiration: &s3.LifecycleUnsupportedAction{}}), s3errs.ErrNotImplemented},
 	}
@@ -295,13 +308,28 @@ func TestLifecycleExpirationHeader(t *testing.T) {
 	// the soonest applicable enabled rule wins: 2026-06-11 09:30 + 3 days =
 	// 2026-06-14 09:30, rounded up to the next midnight = 2026-06-15.
 	want := `expiry-date="Mon, 15 Jun 2026 00:00:00 GMT", rule-id="soon"`
-	if got := config.ExpirationHeader("logs/app.log", mod); got != want {
+	if got := config.ExpirationHeader("logs/app.log", 512, mod); got != want {
 		t.Fatalf("expected %q, got %q", want, got)
 	}
 
 	// no rule matches a different prefix
-	if got := config.ExpirationHeader("data/app.log", mod); got != "" {
+	if got := config.ExpirationHeader("data/app.log", 512, mod); got != "" {
 		t.Fatalf("expected no header, got %q", got)
+	}
+
+	// a rule bounding size is reported only for an object the bounds admit,
+	// and never when the size is unknown
+	sized := s3.LifecycleConfiguration{Rules: []s3.LifecycleRule{
+		{ID: "big", Status: s3.LifecycleStatusEnabled, Filter: &s3.LifecycleFilter{ObjectSizeGreaterThan: aws.Int64(1024)}, Expiration: &s3.LifecycleExpiration{Days: 3}},
+	}}
+	if got := sized.ExpirationHeader("logs/app.log", 2048, mod); got == "" {
+		t.Fatal("expected a header for an object above the lower bound")
+	}
+	if got := sized.ExpirationHeader("logs/app.log", 1024, mod); got != "" {
+		t.Fatalf("expected no header at the excluded bound, got %q", got)
+	}
+	if got := sized.ExpirationHeader("logs/app.log", -1, mod); got != "" {
+		t.Fatalf("expected no header for an unknown size, got %q", got)
 	}
 }
 
@@ -320,6 +348,29 @@ func TestLifecycleEffectivePrefix(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := tc.rule.EffectivePrefix(); got != tc.want {
 				t.Fatalf("expected %q, got %q", tc.want, got)
+			}
+		})
+	}
+}
+
+func TestLifecycleEffectiveSizeRange(t *testing.T) {
+	tests := []struct {
+		name   string
+		rule   s3.LifecycleRule
+		wantGT *int64
+		wantLT *int64
+	}{
+		{"none", s3.LifecycleRule{}, nil, nil},
+		{"rule prefix only", s3.LifecycleRule{Prefix: aws.String("a/")}, nil, nil},
+		{"filter bounds", s3.LifecycleRule{Filter: &s3.LifecycleFilter{ObjectSizeGreaterThan: aws.Int64(128)}}, aws.Int64(128), nil},
+		{"and bounds", s3.LifecycleRule{Filter: &s3.LifecycleFilter{And: &s3.LifecycleAndOperator{ObjectSizeGreaterThan: aws.Int64(128), ObjectSizeLessThan: aws.Int64(1024)}}}, aws.Int64(128), aws.Int64(1024)},
+		{"and wins over filter", s3.LifecycleRule{Filter: &s3.LifecycleFilter{ObjectSizeLessThan: aws.Int64(1), And: &s3.LifecycleAndOperator{ObjectSizeLessThan: aws.Int64(1024)}}}, nil, aws.Int64(1024)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gt, lt := tc.rule.EffectiveSizeRange()
+			if !reflect.DeepEqual(gt, tc.wantGT) || !reflect.DeepEqual(lt, tc.wantLT) {
+				t.Fatalf("expected (%v, %v), got (%v, %v)", tc.wantGT, tc.wantLT, gt, lt)
 			}
 		})
 	}
