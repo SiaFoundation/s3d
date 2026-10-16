@@ -345,7 +345,7 @@ func (s *MemorySDK) SetSlabSize(size int64) {
 }
 
 // OptimalDataSize returns the optimal data size.
-func (s *MemorySDK) OptimalDataSize() (int64, error) {
+func (s *MemorySDK) OptimalDataSize(_ context.Context) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.slabSize, nil

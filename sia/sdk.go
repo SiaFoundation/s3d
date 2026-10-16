@@ -68,8 +68,8 @@ func (s *IndexdSDK) Download(ctx context.Context, obj *sdk.Object, rnge *s3.Obje
 }
 
 // OptimalDataSize returns the optimal data size.
-func (s *IndexdSDK) OptimalDataSize() (int64, error) {
-	pu, err := s.inner.UploadPacked(context.Background(), s.ulOpts...)
+func (s *IndexdSDK) OptimalDataSize(ctx context.Context) (int64, error) {
+	pu, err := s.inner.UploadPacked(ctx, s.ulOpts...)
 	if err != nil {
 		return 0, err
 	}

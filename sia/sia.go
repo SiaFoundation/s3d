@@ -189,7 +189,7 @@ type SDK interface {
 	Download(ctx context.Context, obj *sdk.Object, rnge *s3.ObjectRange) (io.ReadCloser, error)
 	ObjectEvents(ctx context.Context, cursor slabs.Cursor, limit int) ([]sdk.ObjectEvent, error)
 	ObjectID(obj *sdk.Object) types.Hash256
-	OptimalDataSize() (int64, error)
+	OptimalDataSize(ctx context.Context) (int64, error)
 	Upload(ctx context.Context, obj *sdk.Object, r io.Reader, opts ...sdk.UploadOption) (*sdk.Object, error)
 	UploadPacked(ctx context.Context, opts ...sdk.UploadOption) (PackedUpload, error)
 	PinObject(ctx context.Context, obj *sdk.Object) error
@@ -323,7 +323,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 	sia.diskUsage = diskUsage
 
 	// initialize optimal upload size
-	optimalSize, err := sia.sdk.OptimalDataSize()
+	optimalSize, err := sia.sdk.OptimalDataSize(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to determine optimal upload size: %w", err)
 	}

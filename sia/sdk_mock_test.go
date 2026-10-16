@@ -131,7 +131,7 @@ func TestIndexdSDKObjectRoundTrip(t *testing.T) {
 	if _, err := s.Account(ctx); err != nil {
 		t.Fatalf("account: %v", err)
 	}
-	if size, err := s.OptimalDataSize(); err != nil {
+	if size, err := s.OptimalDataSize(ctx); err != nil {
 		t.Fatalf("optimal data size: %v", err)
 	} else if size <= 0 {
 		t.Fatalf("optimal data size is %d", size)
