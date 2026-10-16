@@ -98,6 +98,10 @@ type PutOptions struct {
 	FileName *string
 
 	Preconditions s3.ObjectPreconditions
+
+	// BucketOwner, if set, is the name of the user that must still own the
+	// bucket when the object is stored.
+	BucketOwner string
 }
 
 // ObjectForUpload contains the fields needed to upload an object.

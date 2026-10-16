@@ -6,7 +6,6 @@ import (
 
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia"
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"go.uber.org/zap/zaptest"
 )
 
@@ -112,15 +111,17 @@ func TestAccessKeysCRUD(t *testing.T) {
 	}
 
 	// load secret
-	secret, err := store.LoadSecret("AKID1")
+	secret, userName, err := store.LoadSecret("AKID1")
 	if err != nil {
 		t.Fatal(err)
 	} else if secret != "secret1" {
 		t.Fatal("unexpected secret", secret)
+	} else if userName != "alice" {
+		t.Fatal("unexpected user", userName)
 	}
 
 	// load unknown secret fails
-	if _, err := store.LoadSecret("AKID_UNKNOWN"); err == nil {
+	if _, _, err := store.LoadSecret("AKID_UNKNOWN"); err == nil {
 		t.Fatal("expected error for unknown key")
 	}
 
@@ -186,19 +187,11 @@ func TestBucketOwnership(t *testing.T) {
 		t.Fatal("expected ErrBucketAlreadyExists", err)
 	}
 
-	// alice can head her bucket
-	if err := store.HeadBucket(aws.String("ALICE_KEY"), "shared-name"); err != nil {
+	// alice owns the bucket
+	if info, err := store.BucketAccessInfo("shared-name"); err != nil {
 		t.Fatal(err)
-	}
-
-	// bob gets access denied on head
-	if err := store.HeadBucket(aws.String("BOB_KEY"), "shared-name"); !errors.Is(err, s3errs.ErrAccessDenied) {
-		t.Fatal("expected ErrAccessDenied", err)
-	}
-
-	// bob gets access denied on delete
-	if err := store.DeleteBucket("BOB_KEY", "shared-name"); !errors.Is(err, s3errs.ErrAccessDenied) {
-		t.Fatal("expected ErrAccessDenied", err)
+	} else if info.Owner.ID != "alice" {
+		t.Fatal("expected alice to own the bucket, got", info.Owner.ID)
 	}
 
 	// list: alice sees the bucket, bob does not
@@ -222,12 +215,12 @@ func TestBucketOwnership(t *testing.T) {
 	}
 
 	// alice can delete her bucket
-	if err := store.DeleteBucket("ALICE_KEY", "shared-name"); err != nil {
+	if err := store.DeleteBucket("shared-name"); err != nil {
 		t.Fatal(err)
 	}
 
 	// verify it is gone
-	if err := store.HeadBucket(aws.String("ALICE_KEY"), "shared-name"); !errors.Is(err, s3errs.ErrNoSuchBucket) {
+	if _, err := store.BucketAccessInfo("shared-name"); !errors.Is(err, s3errs.ErrNoSuchBucket) {
 		t.Fatal("expected ErrNoSuchBucket", err)
 	}
 }

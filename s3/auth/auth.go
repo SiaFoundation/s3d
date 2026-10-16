@@ -88,25 +88,25 @@ const (
 	ContentStreamingAWS4ECDSAP256SHA256PayloadTrailer = "STREAMING-AWS4-ECDSA-P256-SHA256-PAYLOAD-TRAILER"
 )
 
-// AuthenticatedHandler is like http.Handler but includes the access key ID of
-// the authenticated user.
+// AuthenticatedHandler is like http.Handler but includes the caller that
+// signed the request, or nil for an anonymous request.
 type AuthenticatedHandler interface {
-	ServeHTTP(w http.ResponseWriter, req *http.Request, accessKeyID *string)
+	ServeHTTP(w http.ResponseWriter, req *http.Request, caller *Caller)
 }
 
 // AuthenticatedHandlerFunc is an adapter to allow the use of ordinary functions
 // as authenticated handlers. If f is a function with the appropriate signature,
 // authenticatedHandlerFunc(f) is an authenticated handler that calls f.
-type AuthenticatedHandlerFunc func(http.ResponseWriter, *http.Request, *string)
+type AuthenticatedHandlerFunc func(http.ResponseWriter, *http.Request, *Caller)
 
-// ServeHTTP calls f(w, r, accessKeyID).
-func (f AuthenticatedHandlerFunc) ServeHTTP(w http.ResponseWriter, r *http.Request, accessKeyID *string) {
-	f(w, r, accessKeyID)
+// ServeHTTP calls f(w, r, caller).
+func (f AuthenticatedHandlerFunc) ServeHTTP(w http.ResponseWriter, r *http.Request, caller *Caller) {
+	f(w, r, caller)
 }
 
 // HandleAuth inspects the request to determine the authentication type, verifies
-// the signature and returns the used access key ID. It is nil for an anonymous
-// request. A request that carries both the Authorization header and the
+// the signature and returns the caller that signed it. It is nil for an
+// anonymous request. A request that carries both the Authorization header and the
 // presigned query parameters is rejected. A raw ';' in the query string is
 // escaped so that req.URL.Query() returns the parameters that were verified.
 //
@@ -114,7 +114,7 @@ func (f AuthenticatedHandlerFunc) ServeHTTP(w http.ResponseWriter, r *http.Reque
 // - 'region' is the AWS region the request is targeted to. If the region is an
 // empty string, every region is allowed. Otherwise, authentication fails if the
 // region doesn't match the provided one.
-func HandleAuth(req *http.Request, store KeyStore, region string, now time.Time) (*string, error) {
+func HandleAuth(req *http.Request, store KeyStore, region string, now time.Time) (*Caller, error) {
 	// S3 accepts a raw ';' in the query string, which url.ParseQuery rejects,
 	// and presigned URLs like "?X-Amz-SignedHeaders=content-length;host" rely
 	// on it
@@ -158,7 +158,7 @@ func isPresigned(query url.Values) bool {
 }
 
 // handleAuthV4 handles AWS Signature Version 4 authentication using HMAC.
-func handleAuthV4(req *http.Request, query url.Values, store KeyStore, region string, now time.Time) (*string, error) {
+func handleAuthV4(req *http.Request, query url.Values, store KeyStore, region string, now time.Time) (*Caller, error) {
 	// verify the signed request first
 	result, err := verifyV4SignedRequest(req, query, store, region, now)
 	if err != nil {
@@ -170,7 +170,7 @@ func handleAuthV4(req *http.Request, query url.Values, store KeyStore, region st
 	if err := handleAuthV4Payload(req, req.Header.Get(HeaderXAMZContentSHA256), result); err != nil {
 		return nil, err
 	}
-	return &result.AccessKeyID, nil
+	return &result.Caller, nil
 }
 
 // handleAuthV4Payload handles the payload of a verified request. It clears
@@ -192,7 +192,7 @@ func handleAuthV4Payload(req *http.Request, payloadHash string, result *v4SignRe
 }
 
 // handleAuthV4a handles AWS Signature Version 4A authentication using ECDSA.
-func handleAuthV4a(_ *http.Request) (*string, error) {
+func handleAuthV4a(_ *http.Request) (*Caller, error) {
 	return nil, s3errs.ErrNotImplemented // Signature Version 4A is not implemented
 }
 

@@ -14,11 +14,14 @@ import (
 )
 
 // PutBucketLifecycleConfiguration stores the serialized lifecycle configuration
-// for a bucket, replacing any existing configuration.
-func (s *Store) PutBucketLifecycleConfiguration(accessKeyID, bucket, config string) error {
+// for a bucket, replacing any existing configuration. owner is checked by
+// [assertBucketOwner].
+func (s *Store) PutBucketLifecycleConfiguration(bucket, owner, config string) error {
 	return s.transaction(func(tx *txn) error {
-		bid, err := bucketID(tx, accessKeyID, bucket)
+		bid, err := bucketID(tx, bucket)
 		if err != nil {
+			return err
+		} else if err := assertBucketOwner(tx, bid, owner); err != nil {
 			return err
 		}
 		_, err = tx.Exec(`
@@ -33,9 +36,9 @@ func (s *Store) PutBucketLifecycleConfiguration(accessKeyID, bucket, config stri
 
 // GetBucketLifecycleConfiguration returns the serialized lifecycle
 // configuration for a bucket, or ErrNoSuchLifecycleConfiguration if none is set.
-func (s *Store) GetBucketLifecycleConfiguration(accessKeyID, bucket string) (config string, err error) {
+func (s *Store) GetBucketLifecycleConfiguration(bucket string) (config string, err error) {
 	err = s.transaction(func(tx *txn) error {
-		bid, err := bucketID(tx, accessKeyID, bucket)
+		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
@@ -50,9 +53,9 @@ func (s *Store) GetBucketLifecycleConfiguration(accessKeyID, bucket string) (con
 
 // DeleteBucketLifecycleConfiguration removes the lifecycle configuration for a
 // bucket. It is not an error if no configuration exists.
-func (s *Store) DeleteBucketLifecycleConfiguration(accessKeyID, bucket string) error {
+func (s *Store) DeleteBucketLifecycleConfiguration(bucket string) error {
 	return s.transaction(func(tx *txn) error {
-		bid, err := bucketID(tx, accessKeyID, bucket)
+		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
@@ -96,7 +99,7 @@ func (s *Store) AbortMultipartUploads(bucket string, prefix string, before time.
 	err = s.transaction(func(tx *txn) error {
 		aborted = nil
 
-		bid, err := bucketIDByName(tx, bucket)
+		bid, err := bucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
@@ -162,11 +165,7 @@ func (s *Store) ExpireObjects(bucket string, prefix string, before time.Time, li
 		deleted = 0
 		orphans = nil
 
-		bid, err := bucketIDByName(tx, bucket)
-		if err != nil {
-			return err
-		}
-		status, err := bucketVersioning(tx, bid)
+		bid, status, err := bucketIDAndVersioning(tx, bucket)
 		if err != nil {
 			return err
 		}

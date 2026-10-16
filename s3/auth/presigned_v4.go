@@ -92,7 +92,7 @@ func parsePresignedAuth(query url.Values) (*parsedPresignedAuth, error) {
 
 // handleAuthV4Presigned handles AWS Signature Version 4 authentication using
 // query parameters, i.e. a presigned URL.
-func handleAuthV4Presigned(req *http.Request, query url.Values, store KeyStore, region string, now time.Time) (*string, error) {
+func handleAuthV4Presigned(req *http.Request, query url.Values, store KeyStore, region string, now time.Time) (*Caller, error) {
 	params, err := parsePresignedAuth(query)
 	if err != nil {
 		return nil, err
@@ -129,7 +129,7 @@ func handleAuthV4Presigned(req *http.Request, query url.Values, store KeyStore, 
 	if err := handleAuthV4Payload(req, payloadHash, result); err != nil {
 		return nil, err
 	}
-	return &result.AccessKeyID, nil
+	return &result.Caller, nil
 }
 
 // presignedPayloadHash returns the payload hash a presigned request was signed

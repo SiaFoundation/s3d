@@ -27,12 +27,17 @@ import (
 
 type mockKeyStore map[string]SecretAccessKey
 
-func (s mockKeyStore) LoadSecret(_ context.Context, id string) (SecretAccessKey, error) {
+// mockUserID is the user mockKeyStore reports an access key belongs to.
+func mockUserID(accessKeyID string) string {
+	return "user-" + accessKeyID
+}
+
+func (s mockKeyStore) LoadSecret(_ context.Context, id string) (SecretAccessKey, string, error) {
 	v, ok := s[id]
 	if !ok {
-		return nil, s3errs.ErrInvalidAccessKeyId
+		return nil, "", s3errs.ErrInvalidAccessKeyId
 	}
-	return slices.Clone(v), nil
+	return slices.Clone(v), mockUserID(id), nil
 }
 
 // The following constants are taken from the AWS SigV4 documentation examples.
@@ -221,13 +226,13 @@ func TestHandleAuthV4(t *testing.T) {
 
 	t.Run("valid", func(t *testing.T) {
 		req := signedRequest(http.MethodPut, exampleRegion, exampleScope, headerList, exampleHeaders())
-		accessKeyID, err := HandleAuth(req, store, exampleRegion, exampleTime)
+		caller, err := HandleAuth(req, store, exampleRegion, exampleTime)
 		if err != nil {
 			t.Fatal(err)
-		} else if accessKeyID == nil {
+		} else if caller == nil {
 			t.Fatal("expected access key ID, got anonymous")
-		} else if *accessKeyID != exampleAccessKey {
-			t.Fatalf("expected access key ID %q, got %q", exampleAccessKey, *accessKeyID)
+		} else if want := (Caller{AccessKeyID: exampleAccessKey, UserID: mockUserID(exampleAccessKey)}); *caller != want {
+			t.Fatalf("expected caller %+v, got %+v", want, *caller)
 		}
 	})
 
@@ -285,11 +290,11 @@ func TestHandleAuthV4(t *testing.T) {
 	t.Run("anonymous", func(t *testing.T) {
 		// the query string is normalized and validated for the handlers
 		req := httptest.NewRequest(http.MethodGet, "https://host/bucket/key?versionId=v;1", nil)
-		accessKeyID, err := HandleAuth(req, store, exampleRegion, exampleTime)
+		caller, err := HandleAuth(req, store, exampleRegion, exampleTime)
 		if err != nil {
 			t.Fatal(err)
-		} else if accessKeyID != nil {
-			t.Fatalf("expected anonymous request, got access key ID %q", *accessKeyID)
+		} else if caller != nil {
+			t.Fatalf("expected anonymous request, got caller %+v", *caller)
 		} else if got := req.URL.Query().Get("versionId"); got != "v;1" {
 			t.Fatalf("expected versionId %q, got %q", "v;1", got)
 		}
@@ -312,11 +317,11 @@ func TestHandleAuthV4PayloadClearsSigningKey(t *testing.T) {
 
 	key := bytes.Repeat([]byte{0xAB}, sha256.Size)
 	result := &v4SignResult{
-		AccessKeyID: exampleAccessKey,
-		SigningKey:  key,
-		Scope:       exampleScope,
-		Timestamp:   exampleTime.Format(layoutISO8601),
-		SeedSig:     strings.Repeat("0", 64),
+		Caller:     Caller{AccessKeyID: exampleAccessKey},
+		SigningKey: key,
+		Scope:      exampleScope,
+		Timestamp:  exampleTime.Format(layoutISO8601),
+		SeedSig:    strings.Repeat("0", 64),
 	}
 	if err := handleAuthV4Payload(req, payloadHash, result); err != nil {
 		t.Fatal(err)
@@ -647,8 +652,8 @@ func TestStreamingSignEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	} else if gotKey == nil {
 		t.Fatal("expected access key ID, got anonymous")
-	} else if *gotKey != accessKey {
-		t.Fatal("access key ID mismatch:", *gotKey)
+	} else if gotKey.AccessKeyID != accessKey {
+		t.Fatal("access key ID mismatch:", gotKey.AccessKeyID)
 	}
 
 	got, err := io.ReadAll(req.Body)
