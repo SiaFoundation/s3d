@@ -279,7 +279,7 @@ type Store interface {
 	DeleteBucketLifecycleConfiguration(accessKeyID, bucket string) error
 	AllBucketLifecycleConfigurations() ([]BucketLifecycleConfiguration, error)
 	AbortMultipartUploads(bucket string, prefix string, before time.Time, limit int) ([]AbortedUpload, error)
-	ExpireObjects(bucket string, prefix string, before time.Time, limit int) (int, []objects.OrphanedFile, error)
+	ExpireObjects(bucket string, prefix string, sizeGreaterThan, sizeLessThan *int64, before time.Time, limit int) (int, []objects.OrphanedFile, error)
 
 	Backup(ctx context.Context, destPath string) error
 	DBVersion() int64

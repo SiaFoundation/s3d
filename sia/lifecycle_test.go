@@ -35,6 +35,17 @@ func TestApplyLifecycleRules(t *testing.T) {
 	// object expired by a Days rule once the rule's window has elapsed
 	put("days/obj")
 
+	// two objects under one prefix, separated only by size, so a rule bounding
+	// size must take the large one and leave the small one
+	putSized := func(object string, size int) {
+		t.Helper()
+		if _, err := backend.PutObject(ctx, testutil.AccessKeyID, bucket, object, bytes.NewReader(make([]byte, size)), s3.PutObjectOptions{ContentLength: int64(size)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	putSized("sized/small", 10)
+	putSized("sized/big", 100)
+
 	// incomplete multipart upload with an on-disk part, aborted once the
 	// rule's window has elapsed
 	upload, err := backend.CreateMultipartUpload(ctx, testutil.AccessKeyID, bucket, "uploads/u", s3.CreateMultipartUploadOptions{})
@@ -68,6 +79,11 @@ func TestApplyLifecycleRules(t *testing.T) {
 				Filter:     &s3.LifecycleFilter{Prefix: aws.String("data/")},
 				Expiration: &s3.LifecycleExpiration{Date: "2020-01-01T00:00:00.000Z"},
 			},
+			{
+				Status:     s3.LifecycleStatusEnabled,
+				Filter:     &s3.LifecycleFilter{And: &s3.LifecycleAndOperator{Prefix: aws.String("sized/"), ObjectSizeGreaterThan: aws.Int64(50)}},
+				Expiration: &s3.LifecycleExpiration{Date: "2020-01-01T00:00:00.000Z"},
+			},
 		},
 	}
 	if err := backend.PutBucketLifecycleConfiguration(ctx, testutil.AccessKeyID, bucket, config); err != nil {
@@ -90,6 +106,17 @@ func TestApplyLifecycleRules(t *testing.T) {
 	if _, err := backend.ListParts(ctx, testutil.AccessKeyID, bucket, "uploads/u", upload.UploadID, s3.ListPartsPage{MaxParts: 10}); err != nil {
 		t.Fatalf("expected fresh upload to survive, got %v", err)
 	}
+
+	// the rule survived the trip through the stored XML and took only the
+	// object above its lower bound
+	if _, err := backend.GetObject(ctx, &accessKeyID, bucket, "sized/big", s3.NoVersion(), nil, nil); !errors.Is(err, s3errs.ErrNoSuchKey) {
+		t.Fatalf("expected sized/big to be expired, got %v", err)
+	}
+	obj, err = backend.GetObject(ctx, &accessKeyID, bucket, "sized/small", s3.NoVersion(), nil, nil)
+	if err != nil {
+		t.Fatalf("expected sized/small to survive, got %v", err)
+	}
+	obj.Body.Close()
 
 	// applying the rules well past both windows must expire days/obj and
 	// abort the upload, but still skip the disabled rule

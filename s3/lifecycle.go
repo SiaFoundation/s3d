@@ -40,6 +40,31 @@ func (r LifecycleRule) EffectivePrefix() string {
 	return ""
 }
 
+// EffectiveSizeRange returns the object size bounds the rule applies to, drawn
+// from either the filter or its And operator. Both bounds are exclusive, and a
+// nil bound is unbounded.
+func (r LifecycleRule) EffectiveSizeRange() (greaterThan, lessThan *int64) {
+	if r.Filter == nil {
+		return nil, nil
+	} else if r.Filter.And != nil {
+		return r.Filter.And.ObjectSizeGreaterThan, r.Filter.And.ObjectSizeLessThan
+	}
+	return r.Filter.ObjectSizeGreaterThan, r.Filter.ObjectSizeLessThan
+}
+
+// matchesSize reports whether an object of the given size falls within the
+// rule's exclusive size bounds. A negative size is unknown and matches only a
+// rule carrying no size bound.
+func (r LifecycleRule) matchesSize(size int64) bool {
+	greaterThan, lessThan := r.EffectiveSizeRange()
+	if greaterThan == nil && lessThan == nil {
+		return true
+	} else if size < 0 {
+		return false
+	}
+	return (greaterThan == nil || size > *greaterThan) && (lessThan == nil || size < *lessThan)
+}
+
 // ExpiryCutoff returns the cutoff time for current-version expiration relative
 // to now. Objects last modified at or before the cutoff are expired. ok is false when
 // the expiration is not currently active (e.g. a future Date, or a rule that
@@ -127,17 +152,17 @@ func ceilToMidnightUTC(t time.Time) time.Time {
 }
 
 // ExpirationHeader returns the x-amz-expiration response header value for an
-// object with the given key and last-modified time, or "" if no enabled
+// object with the given key, size and last-modified time, or "" if no enabled
 // expiration rule applies. When several rules match, the soonest expiration
 // wins.
-func (c LifecycleConfiguration) ExpirationHeader(objectKey string, lastModified time.Time) string {
+func (c LifecycleConfiguration) ExpirationHeader(objectKey string, size int64, lastModified time.Time) string {
 	var (
 		soonest time.Time
 		ruleID  string
 		found   bool
 	)
 	for _, rule := range c.Rules {
-		if !rule.Enabled() || !strings.HasPrefix(objectKey, rule.EffectivePrefix()) {
+		if !rule.Enabled() || !strings.HasPrefix(objectKey, rule.EffectivePrefix()) || !rule.matchesSize(size) {
 			continue
 		}
 		expiry, ok := rule.Expiration.expiryDate(lastModified)
@@ -243,36 +268,76 @@ func (r LifecycleRule) validate() error {
 			return fmt.Errorf("expiration Days must be a positive integer: %w", s3errs.ErrInvalidArgument)
 		}
 	}
-	if a := r.AbortIncompleteMultipartUpload; a != nil && a.DaysAfterInitiation <= 0 {
-		return fmt.Errorf("DaysAfterInitiation must be a positive integer: %w", s3errs.ErrMalformedXML)
+	if a := r.AbortIncompleteMultipartUpload; a != nil {
+		if a.DaysAfterInitiation <= 0 {
+			return fmt.Errorf("DaysAfterInitiation must be a positive integer: %w", s3errs.ErrMalformedXML)
+		} else if r.Filter.hasSizeBounds() {
+			return fmt.Errorf("object size filters are not supported with AbortIncompleteMultipartUpload: %w", s3errs.ErrNotImplemented)
+		}
 	}
 	return nil
 }
 
+// hasSizeBounds reports whether the filter carries an object size bound.
+func (f *LifecycleFilter) hasSizeBounds() bool {
+	if f == nil {
+		return false
+	} else if f.ObjectSizeGreaterThan != nil || f.ObjectSizeLessThan != nil {
+		return true
+	}
+	return f.And != nil && (f.And.ObjectSizeGreaterThan != nil || f.And.ObjectSizeLessThan != nil)
+}
+
 // validate rejects filter predicates that this server cannot honor. Filtering
-// by tag or object size is unsupported; silently ignoring such predicates would
-// cause a rule to match more objects than intended, so we reject them outright.
+// by tag is unsupported, and silently ignoring such a predicate would cause a
+// rule to match more objects than intended, so we reject it outright.
 func (f *LifecycleFilter) validate() error {
 	if f == nil {
 		return nil
-	} else if f.Tag != nil || f.ObjectSizeGreaterThan != nil || f.ObjectSizeLessThan != nil {
-		return fmt.Errorf("tag and object-size lifecycle filters are not supported: %w", s3errs.ErrNotImplemented)
-	} else if f.And != nil && (len(f.And.Tags) > 0 || f.And.ObjectSizeGreaterThan != nil || f.And.ObjectSizeLessThan != nil) {
-		return fmt.Errorf("tag and object-size lifecycle filters are not supported: %w", s3errs.ErrNotImplemented)
+	} else if f.Tag != nil {
+		return fmt.Errorf("tag lifecycle filters are not supported: %w", s3errs.ErrNotImplemented)
+	} else if f.And != nil && len(f.And.Tags) > 0 {
+		return fmt.Errorf("tag lifecycle filters are not supported: %w", s3errs.ErrNotImplemented)
+	}
+
+	if f.Prefix != nil && f.And != nil {
+		return fmt.Errorf("lifecycle filter may not specify both Prefix and And: %w", s3errs.ErrMalformedXML)
 	}
 
 	predicates := 0
-	if f.Prefix != nil {
+	if f.Prefix != nil && *f.Prefix != "" {
+		predicates++
+	}
+	if f.ObjectSizeGreaterThan != nil {
+		predicates++
+	}
+	if f.ObjectSizeLessThan != nil {
 		predicates++
 	}
 	if f.And != nil {
 		predicates++
-		if f.And.Prefix == nil {
+		if f.And.Prefix == nil && f.And.ObjectSizeGreaterThan == nil && f.And.ObjectSizeLessThan == nil {
 			return fmt.Errorf("lifecycle And filter must contain a supported predicate: %w", s3errs.ErrMalformedXML)
+		}
+		if err := validateSizeRange(f.And.ObjectSizeGreaterThan, f.And.ObjectSizeLessThan); err != nil {
+			return err
 		}
 	}
 	if predicates > 1 {
 		return fmt.Errorf("lifecycle filter may specify only one predicate: %w", s3errs.ErrMalformedXML)
+	}
+	return validateSizeRange(f.ObjectSizeGreaterThan, f.ObjectSizeLessThan)
+}
+
+// validateSizeRange checks a pair of object size bounds, which exclude their
+// own values.
+func validateSizeRange(greaterThan, lessThan *int64) error {
+	if greaterThan != nil && *greaterThan < 0 {
+		return fmt.Errorf("ObjectSizeGreaterThan must not be negative: %w", s3errs.ErrInvalidArgument)
+	} else if lessThan != nil && *lessThan < 0 {
+		return fmt.Errorf("ObjectSizeLessThan must not be negative: %w", s3errs.ErrInvalidArgument)
+	} else if greaterThan != nil && lessThan != nil && *greaterThan >= *lessThan {
+		return fmt.Errorf("ObjectSizeGreaterThan must be less than ObjectSizeLessThan: %w", s3errs.ErrInvalidArgument)
 	}
 	return nil
 }
