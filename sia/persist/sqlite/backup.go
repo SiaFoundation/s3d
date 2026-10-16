@@ -96,7 +96,7 @@ func (s *Store) removeBufferedObjects() (remaining int64, err error) {
 		}
 
 		for _, obj := range buffered {
-			row, _, err := deleteObjectRow(tx, obj.bid, obj.name, obj.version)
+			row, _, err := deleteObjectRow(tx, obj.bid, obj.name, obj.version, true)
 			if err != nil {
 				return err
 			} else if _, err := orphanDeleted(tx, row); err != nil {
