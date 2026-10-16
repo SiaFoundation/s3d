@@ -589,4 +589,15 @@ ALTER TABLE multipart_parts ADD COLUMN checksum BLOB;
 ALTER TABLE object_parts ADD COLUMN checksum BLOB;`)
 		return err
 	},
+	// record when each version stopped being current
+	func(tx *txn, _ *zap.Logger) error {
+		_, err := tx.Exec(`
+ALTER TABLE objects ADD COLUMN noncurrent_at INTEGER;
+UPDATE objects SET noncurrent_at = COALESCE((
+	SELECT nxt.updated_at FROM objects nxt
+	WHERE nxt.bucket_id = objects.bucket_id AND nxt.name = objects.name AND nxt.seq > objects.seq
+	ORDER BY nxt.seq LIMIT 1
+), updated_at) WHERE is_latest = FALSE;`)
+		return err
+	},
 }

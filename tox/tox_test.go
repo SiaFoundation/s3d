@@ -165,11 +165,17 @@ func TestS3(t *testing.T) {
 			// the two policy-status tests with _acl in their names only use bucket
 			// policies, so they are kept despite the general ACL exclusion
 			// the lifecycle exclusions drop tests for unimplemented features,
-			// namely tag filters, noncurrent-version and delete-marker actions,
-			// and transitions. lifecycle_expiration_versioned is one of these
-			// despite its name, since it relies on object tagging. Plain
-			// expiration on a versioned bucket is supported and runs, as are
-			// the object-size filters.
+			// namely tag filters and transitions. two are excluded despite
+			// their names reading otherwise, since lifecycle_expiration_tags
+			// and lifecycle_expiration_versioned both rely on object tagging,
+			// and noncur_tags reaches it through a helper. Object size filters,
+			// noncurrent version expiration and delete marker expiration are
+			// all supported and run.
+			//
+			// the two delete_marker_* tests are excluded because check_delete_marker
+			// reads an x-amz-delete-marker header off the 404, which s3d does not
+			// report. Neither turns on lifecycle behavior that the deletemarker
+			// tests do not already cover.
 			//
 			// bucket_list_return_data_versioning is excluded because it calls
 			// get_object_acl, which s3d does not implement (the test name has no
@@ -191,7 +197,7 @@ func TestS3(t *testing.T) {
 			// use_cksum_helper and checksum_object_attributes read the stored
 			// checksums back through GetObjectAttributes, which s3d does not
 			// implement yet.
-			"-k", "(not _acl or publicpolicy_acl_bucket_policy_status or nonpublicpolicy_acl_bucket_policy_status) and not multipart_reupload_checksum and not use_cksum_helper and not checksum_object_attributes and not post_object and not _torrent and not cors and not notification and not replication and not website and not _select and not lifecycle_expiration_tags and not lifecycle_expiration_versioned and not tags_head and not noncur and not deletemarker and not delete_marker_nonversioned and not delete_marker_expiration and not lifecycle_set_filter and not lifecycle_set_empty_filter and not lifecycle_transition_set_invalid_date and not bucket_list_return_data_versioning and not bucket_recreate_not_overriding and not versioning_concurrent_multi_object_delete",
+			"-k", "(not _acl or publicpolicy_acl_bucket_policy_status or nonpublicpolicy_acl_bucket_policy_status) and not multipart_reupload_checksum and not use_cksum_helper and not checksum_object_attributes and not post_object and not _torrent and not cors and not notification and not replication and not website and not _select and not lifecycle_expiration_tags and not lifecycle_expiration_versioned and not tags_head and not noncur_tags and not delete_marker_nonversioned and not delete_marker_expiration and not lifecycle_transition_set_invalid_date and not bucket_list_return_data_versioning and not bucket_recreate_not_overriding and not versioning_concurrent_multi_object_delete",
 		)
 	})
 
