@@ -27,14 +27,14 @@ type AbortedUpload struct {
 
 // PutBucketLifecycleConfiguration stores the lifecycle configuration for a
 // bucket, replacing any existing configuration.
-func (s *Sia) PutBucketLifecycleConfiguration(_ context.Context, bucket string, config s3.LifecycleConfiguration) error {
+func (s *Sia) PutBucketLifecycleConfiguration(_ context.Context, bucket, owner string, config s3.LifecycleConfiguration) error {
 	// the namespace attribute is added when the configuration is read back
 	config.Xmlns = ""
 	buf, err := xml.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal lifecycle configuration: %w", err)
 	}
-	return s.store.PutBucketLifecycleConfiguration(bucket, string(buf))
+	return s.store.PutBucketLifecycleConfiguration(bucket, owner, string(buf))
 }
 
 // GetBucketLifecycleConfiguration returns the lifecycle configuration for a

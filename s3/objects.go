@@ -353,7 +353,7 @@ func (s *s3) deleteObjects(w http.ResponseWriter, r *http.Request, access *bucke
 	res := &ObjectsDeleteResult{}
 	if len(allowed) > 0 {
 		var err error
-		res, err = s.backend.DeleteObjects(r.Context(), bucket, allowed)
+		res, err = s.backend.DeleteObjects(r.Context(), bucket, access.owner.ID, allowed)
 		if err != nil {
 			return err
 		}

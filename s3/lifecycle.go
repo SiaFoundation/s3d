@@ -307,7 +307,7 @@ func (s *s3) putBucketLifecycle(w http.ResponseWriter, r *http.Request, access *
 	}
 	config.assignRuleIDs()
 
-	return s.backend.PutBucketLifecycleConfiguration(r.Context(), access.bucket, config)
+	return s.backend.PutBucketLifecycleConfiguration(r.Context(), access.bucket, access.owner.ID, config)
 }
 
 // getBucketLifecycle handles GET Bucket lifecycle requests.

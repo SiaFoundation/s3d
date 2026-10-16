@@ -220,19 +220,18 @@ type Store interface {
 	DeleteAccessKey(accessKeyID string) error
 	ListAccessKeys(userName *string) ([]AccessKeyInfo, error)
 	LoadSecret(accessKeyID string) (secret, userName string, err error)
-	UserNameForAccessKey(accessKeyID string) (string, error)
 
 	AllFilenames() ([]string, error)
 	CopyObject(srcBucket, srcName string, srcVersion s3.VersionRequest, dstBucket, dstName string, opts s3.CopyObjectOptions) (*s3.CopyObjectResult, objects.OrphanedFile, error)
 	CreateBucket(accessKeyID, bucket string) error
 	DeleteBucket(bucket string) error
-	DeleteObject(bucket string, objectID s3.ObjectID) (string, bool, objects.OrphanedFile, error)
+	DeleteObject(bucket, owner string, objectID s3.ObjectID) (string, bool, objects.OrphanedFile, error)
 	GetObject(bucket, object string, version s3.VersionRequest, partNumber *int32) (*objects.Object, error)
 	DiskUsage() (uint64, error)
 	BucketAccessInfo(bucket string) (s3.BucketAccessInfo, error)
 	GetBucketVersioning(bucket string) (string, error)
-	PutBucketVersioning(bucket, status string) error
-	PutBucketPolicy(bucket, document string) error
+	PutBucketVersioning(bucket, owner, status string) error
+	PutBucketPolicy(bucket, owner, document string) error
 	DeleteBucketPolicy(bucket string) error
 	ObjectsCursor() (slabs.Cursor, error)
 	SetObjectsCursor(cursor slabs.Cursor) error
@@ -261,7 +260,7 @@ type Store interface {
 	MultipartParts(bucket, name string, uploadID s3.UploadID) ([]objects.Part, error)
 	UploadStats() (s3.UploadStats, error)
 
-	PutBucketLifecycleConfiguration(bucket, config string) error
+	PutBucketLifecycleConfiguration(bucket, owner, config string) error
 	GetBucketLifecycleConfiguration(bucket string) (string, error)
 	DeleteBucketLifecycleConfiguration(bucket string) error
 	AllBucketLifecycleConfigurations() ([]BucketLifecycleConfiguration, error)
@@ -637,20 +636,8 @@ func (s *Sia) ProcessOrphans(ctx context.Context) {
 	}
 }
 
-// UserInfo returns user information for the given access key ID.
-func (s *Sia) UserInfo(_ context.Context, accessKeyID string) (*s3.UserInfo, error) {
-	name, err := s.store.UserNameForAccessKey(accessKeyID)
-	if err != nil {
-		return nil, err
-	}
-	return &s3.UserInfo{
-		ID:          name,
-		DisplayName: name,
-	}, nil
-}
-
-// LoadSecret loads the secret key for the given access key ID and the user it
-// belongs to, whose name is the ID [Sia.UserInfo] reports.
+// LoadSecret loads the secret key for the given access key ID and the name of
+// the user it belongs to, which is the user's S3 owner ID.
 func (s *Sia) LoadSecret(_ context.Context, accessKeyID string) (auth.SecretAccessKey, string, error) {
 	secret, userName, err := s.store.LoadSecret(accessKeyID)
 	if err != nil {

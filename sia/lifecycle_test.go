@@ -70,7 +70,7 @@ func TestApplyLifecycleRules(t *testing.T) {
 			},
 		},
 	}
-	if err := backend.PutBucketLifecycleConfiguration(ctx, bucket, config); err != nil {
+	if err := backend.PutBucketLifecycleConfiguration(ctx, bucket, "", config); err != nil {
 		t.Fatal(err)
 	}
 

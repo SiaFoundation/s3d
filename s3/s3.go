@@ -25,9 +25,6 @@ import (
 type Backend interface {
 	auth.KeyStore
 
-	// UserInfo returns user information for the given access key ID.
-	UserInfo(ctx context.Context, accessKeyID string) (*UserInfo, error)
-
 	// CopyObject copies an object from the source bucket and object key to the
 	// destination bucket and object key. opts.Meta contains any metadata that
 	// should either be merged into the copied object or replace the metadata
@@ -96,7 +93,11 @@ type Backend interface {
 	// - Each object carries the same preconditions as DeleteObject, with the
 	//   same outcomes, except that a failed precondition fails only that object,
 	//   which is reported in the result's Error list.
-	DeleteObjects(ctx context.Context, bucket string, objects []ObjectID) (*ObjectsDeleteResult, error)
+	//
+	// - If owner is no longer the bucket's [UserInfo.ID], see
+	//   [PutObjectOptions.BucketOwner], [ErrNoSuchBucket] must be returned for
+	//   each object.
+	DeleteObjects(ctx context.Context, bucket, owner string, objects []ObjectID) (*ObjectsDeleteResult, error)
 
 	// GetObject retrieves the object with the given key from the specified
 	// bucket. The provided range is either nil if no range was requested, or
@@ -246,8 +247,10 @@ type Backend interface {
 	// PutBucketLifecycleConfiguration sets the lifecycle configuration for the
 	// specified bucket, replacing any existing configuration.
 	//
-	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
-	PutBucketLifecycleConfiguration(ctx context.Context, bucket string, config LifecycleConfiguration) error
+	// - If the bucket does not exist, or owner is no longer its [UserInfo.ID]
+	//   (see [PutObjectOptions.BucketOwner]), [ErrNoSuchBucket] must be
+	//   returned.
+	PutBucketLifecycleConfiguration(ctx context.Context, bucket, owner string, config LifecycleConfiguration) error
 
 	// GetBucketLifecycleConfiguration returns the lifecycle configuration for
 	// the specified bucket.
@@ -268,8 +271,10 @@ type Backend interface {
 	// existing policy. The document is already validated; the backend stores it
 	// verbatim.
 	//
-	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
-	PutBucketPolicy(ctx context.Context, bucket, document string) error
+	// - If the bucket does not exist, or owner is no longer its [UserInfo.ID]
+	//   (see [PutObjectOptions.BucketOwner]), [ErrNoSuchBucket] must be
+	//   returned.
+	PutBucketPolicy(ctx context.Context, bucket, owner, document string) error
 
 	// DeleteBucketPolicy removes the policy of the specified bucket, revoking
 	// any anonymous access. It is not an error if no policy exists.
@@ -280,8 +285,10 @@ type Backend interface {
 	// PutBucketVersioning sets the versioning state of the specified bucket.
 	// status is either "Enabled" or "Suspended".
 	//
-	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
-	PutBucketVersioning(ctx context.Context, bucket, status string) error
+	// - If the bucket does not exist, or owner is no longer its [UserInfo.ID]
+	//   (see [PutObjectOptions.BucketOwner]), [ErrNoSuchBucket] must be
+	//   returned.
+	PutBucketVersioning(ctx context.Context, bucket, owner, status string) error
 
 	// GetBucketVersioning returns the versioning state of the specified
 	// bucket. The status is "" if the bucket has never been configured,

@@ -29,8 +29,8 @@ func (s *Sia) BucketAccessInfo(ctx context.Context, bucket string) (s3.BucketAcc
 }
 
 // PutBucketPolicy sets the policy of the bucket, replacing any existing one.
-func (s *Sia) PutBucketPolicy(ctx context.Context, bucket, document string) error {
-	return s.store.PutBucketPolicy(bucket, document)
+func (s *Sia) PutBucketPolicy(ctx context.Context, bucket, owner, document string) error {
+	return s.store.PutBucketPolicy(bucket, owner, document)
 }
 
 // DeleteBucketPolicy removes the policy of the bucket.
@@ -39,8 +39,8 @@ func (s *Sia) DeleteBucketPolicy(ctx context.Context, bucket string) error {
 }
 
 // PutBucketVersioning sets the versioning state of the bucket.
-func (s *Sia) PutBucketVersioning(ctx context.Context, bucket, status string) error {
-	return s.store.PutBucketVersioning(bucket, status)
+func (s *Sia) PutBucketVersioning(ctx context.Context, bucket, owner, status string) error {
+	return s.store.PutBucketVersioning(bucket, owner, status)
 }
 
 // GetBucketVersioning returns the versioning state of the bucket.

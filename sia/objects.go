@@ -258,7 +258,7 @@ func (s *Sia) CopyObject(ctx context.Context, srcBucket, srcObject string, srcVe
 // DeleteObject deletes the object with the given key from the specified
 // bucket.
 func (s *Sia) DeleteObject(ctx context.Context, bucket string, object s3.ObjectID) (*s3.DeleteObjectResult, error) {
-	versionID, isDeleteMarker, orphan, err := s.store.DeleteObject(bucket, object)
+	versionID, isDeleteMarker, orphan, err := s.store.DeleteObject(bucket, "", object)
 	if err != nil {
 		return nil, err
 	}
@@ -271,11 +271,11 @@ func (s *Sia) DeleteObject(ctx context.Context, bucket string, object s3.ObjectI
 }
 
 // DeleteObjects deletes multiple objects from the specified bucket.
-func (s *Sia) DeleteObjects(ctx context.Context, bucket string, objects []s3.ObjectID) (*s3.ObjectsDeleteResult, error) {
+func (s *Sia) DeleteObjects(ctx context.Context, bucket, owner string, objects []s3.ObjectID) (*s3.ObjectsDeleteResult, error) {
 	var result s3.ObjectsDeleteResult
 
 	for _, obj := range objects {
-		versionID, isDeleteMarker, orphan, err := s.store.DeleteObject(bucket, obj)
+		versionID, isDeleteMarker, orphan, err := s.store.DeleteObject(bucket, owner, obj)
 		if err == nil {
 			s.cleanupOrphanFile(orphan)
 		}

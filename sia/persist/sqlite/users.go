@@ -172,21 +172,6 @@ func (s *Store) ListAccessKeys(userName *string) ([]sia.AccessKeyInfo, error) {
 	return keys, err
 }
 
-// UserNameForAccessKey returns the user name associated with the given access
-// key ID.
-func (s *Store) UserNameForAccessKey(accessKeyID string) (name string, err error) {
-	err = s.transaction(func(tx *txn) error {
-		return tx.QueryRow(`
-			SELECT u.name FROM users u
-			INNER JOIN access_keys ak ON ak.user_id = u.id
-			WHERE ak.access_key_id = $1`, accessKeyID).Scan(&name)
-	})
-	if errors.Is(err, sql.ErrNoRows) {
-		err = s3errs.ErrInvalidAccessKeyId
-	}
-	return
-}
-
 // LoadSecret returns the secret key for the given access key ID and the name
 // of the user it belongs to.
 func (s *Store) LoadSecret(accessKeyID string) (secret, userName string, err error) {

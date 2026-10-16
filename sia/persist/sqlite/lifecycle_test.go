@@ -27,13 +27,13 @@ func TestBucketLifecycleConfiguration(t *testing.T) {
 	// bucket returns ErrNoSuchBucket
 	if _, err := store.GetBucketLifecycleConfiguration(bucket); !errors.Is(err, s3errs.ErrNoSuchLifecycleConfiguration) {
 		t.Fatalf("expected ErrNoSuchLifecycleConfiguration, got %v", err)
-	} else if err := store.PutBucketLifecycleConfiguration("nope", "<x/>"); !errors.Is(err, s3errs.ErrNoSuchBucket) {
+	} else if err := store.PutBucketLifecycleConfiguration("nope", "", "<x/>"); !errors.Is(err, s3errs.ErrNoSuchBucket) {
 		t.Fatalf("expected ErrNoSuchBucket, got %v", err)
 	}
 
 	// store and read back
 	const config = "<LifecycleConfiguration></LifecycleConfiguration>"
-	if err := store.PutBucketLifecycleConfiguration(bucket, config); err != nil {
+	if err := store.PutBucketLifecycleConfiguration(bucket, "", config); err != nil {
 		t.Fatal(err)
 	} else if got, err := store.GetBucketLifecycleConfiguration(bucket); err != nil {
 		t.Fatal(err)
@@ -43,7 +43,7 @@ func TestBucketLifecycleConfiguration(t *testing.T) {
 
 	// overwrite replaces the configuration
 	const updated = "<LifecycleConfiguration><Rule/></LifecycleConfiguration>"
-	if err := store.PutBucketLifecycleConfiguration(bucket, updated); err != nil {
+	if err := store.PutBucketLifecycleConfiguration(bucket, "", updated); err != nil {
 		t.Fatal(err)
 	}
 	store.assertCount(1, "bucket_lifecycle_configurations")
@@ -181,7 +181,7 @@ func TestExpireObjectsVersions(t *testing.T) {
 	store := initTestDB(t, zap.NewNop())
 	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
 		t.Fatal(err)
-	} else if err := store.PutBucketVersioning(bucket, s3.VersioningStatusEnabled); err != nil {
+	} else if err := store.PutBucketVersioning(bucket, "", s3.VersioningStatusEnabled); err != nil {
 		t.Fatal(err)
 	}
 

@@ -57,13 +57,16 @@ func (s *Store) DiskUsage() (usage uint64, err error) {
 // ("" is the null version); otherwise an enabled bucket inserts a delete
 // marker, a suspended bucket replaces the null version with a null delete
 // marker, and an unversioned bucket deletes outright. A removed object's
-// filename is returned for cleanup if no longer referenced.
-func (s *Store) DeleteObject(bucket string, objectID s3.ObjectID) (versionID string, isDeleteMarker bool, orphan objects.OrphanedFile, _ error) {
+// filename is returned for cleanup if no longer referenced. owner is checked by
+// [assertBucketOwner].
+func (s *Store) DeleteObject(bucket, owner string, objectID s3.ObjectID) (versionID string, isDeleteMarker bool, orphan objects.OrphanedFile, _ error) {
 	err := s.transaction(func(tx *txn) error {
 		versionID, isDeleteMarker, orphan = "", false, objects.OrphanedFile{} // reset per attempt
 
 		bid, status, err := bucketIDAndVersioning(tx, bucket)
 		if err != nil {
+			return err
+		} else if err := assertBucketOwner(tx, bid, owner); err != nil {
 			return err
 		}
 
@@ -294,15 +297,8 @@ func (s *Store) PutObject(bucket, name string, opts objects.PutOptions) (version
 		if err != nil {
 			return err
 		}
-		if opts.BucketOwner != "" {
-			var owner string
-			err := tx.QueryRow(`SELECT u.name FROM buckets b INNER JOIN users u ON u.id = b.user_id WHERE b.id = $1`, bid).Scan(&owner)
-			if err != nil {
-				return err
-			} else if owner != opts.BucketOwner {
-				// the bucket was deleted and recreated by another user
-				return s3errs.ErrNoSuchBucket
-			}
+		if err := assertBucketOwner(tx, bid, opts.BucketOwner); err != nil {
+			return err
 		}
 		if err := checkWritePreconditions(tx, bid, name, opts.Preconditions); err != nil {
 			return err

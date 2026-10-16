@@ -1082,7 +1082,7 @@ func TestOrphanedObjects(t *testing.T) {
 	}
 
 	// delete first object - references still exist, nothing orphaned
-	if _, _, _, err := store.DeleteObject(bucket, s3.ObjectID{Key: "a"}); err != nil {
+	if _, _, _, err := store.DeleteObject(bucket, "", s3.ObjectID{Key: "a"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1102,7 +1102,7 @@ func TestOrphanedObjects(t *testing.T) {
 
 	// delete the last reference, orphaning the object at the snapshot's
 	// generation so the snapshot withholds it from unpinning
-	if _, _, _, err := store.DeleteObject(bucket, s3.ObjectID{Key: "b"}); err != nil {
+	if _, _, _, err := store.DeleteObject(bucket, "", s3.ObjectID{Key: "b"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1406,7 +1406,7 @@ func TestUpdateSiaObjects(t *testing.T) {
 	}
 
 	// delete the first object
-	if _, _, _, err := store.DeleteObject(bucket, s3.ObjectID{Key: "obj1"}); err != nil {
+	if _, _, _, err := store.DeleteObject(bucket, "", s3.ObjectID{Key: "obj1"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1692,7 +1692,7 @@ func TestUploadStats(t *testing.T) {
 	})
 
 	// delete uploaded object to create an orphan
-	if _, _, _, err := store.DeleteObject(bucket, s3.ObjectID{Key: "obj3"}); err != nil {
+	if _, _, _, err := store.DeleteObject(bucket, "", s3.ObjectID{Key: "obj3"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1748,7 +1748,7 @@ func TestUploadStats(t *testing.T) {
 	})
 
 	// delete a pending object
-	if _, _, _, err := store.DeleteObject(bucket, s3.ObjectID{Key: "obj1"}); err != nil {
+	if _, _, _, err := store.DeleteObject(bucket, "", s3.ObjectID{Key: "obj1"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1872,7 +1872,7 @@ func TestMarkObjectPinned(t *testing.T) {
 	if err := store.MarkObjectUploaded(bucket, "c", "", md5C, sealedC, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := store.DeleteObject(bucket, s3.ObjectID{Key: "c"}); err != nil {
+	if _, _, _, err := store.DeleteObject(bucket, "", s3.ObjectID{Key: "c"}); err != nil {
 		t.Fatal(err)
 	}
 	if orphans, err := store.MarkObjectPinned(sealedC.ID()); err != nil {
@@ -2104,7 +2104,7 @@ func TestScheduleObjectForReupload(t *testing.T) {
 	if err := store.MarkObjectUploaded(bucket, "obj2", "", md52, sealed2, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := store.DeleteObject(bucket, s3.ObjectID{Key: "obj2"}); err != nil {
+	if _, _, _, err := store.DeleteObject(bucket, "", s3.ObjectID{Key: "obj2"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.ScheduleObjectForReupload(sealed2.ID()); !errors.Is(err, objects.ErrObjectNotFound) {
@@ -2139,7 +2139,7 @@ func TestVersioning(t *testing.T) {
 
 		// status round-trips through put/get
 		for _, want := range []string{s3.VersioningStatusEnabled, s3.VersioningStatusSuspended} {
-			if err := store.PutBucketVersioning(bucket, want); err != nil {
+			if err := store.PutBucketVersioning(bucket, "", want); err != nil {
 				t.Fatal(err)
 			}
 			if got, err := store.GetBucketVersioning(bucket); err != nil {
@@ -2157,7 +2157,7 @@ func TestVersioning(t *testing.T) {
 		)
 		if err := store.CreateBucket(accessKeyID, bucket); err != nil {
 			t.Fatal(err)
-		} else if err := store.PutBucketVersioning(bucket, s3.VersioningStatusEnabled); err != nil {
+		} else if err := store.PutBucketVersioning(bucket, "", s3.VersioningStatusEnabled); err != nil {
 			t.Fatal(err)
 		}
 
@@ -2201,7 +2201,7 @@ func TestVersioning(t *testing.T) {
 		}
 
 		// a simple delete inserts a delete marker that becomes the current version
-		marker, isDeleteMarker, _, err := store.DeleteObject(bucket, s3.ObjectID{Key: key})
+		marker, isDeleteMarker, _, err := store.DeleteObject(bucket, "", s3.ObjectID{Key: key})
 		if err != nil {
 			t.Fatal(err)
 		} else if !isDeleteMarker {
@@ -2216,7 +2216,7 @@ func TestVersioning(t *testing.T) {
 		}
 
 		// deleting the delete marker by version restores the previous version
-		if _, _, _, err := store.DeleteObject(bucket, s3.ObjectID{Key: key, VersionID: &marker}); err != nil {
+		if _, _, _, err := store.DeleteObject(bucket, "", s3.ObjectID{Key: key, VersionID: &marker}); err != nil {
 			t.Fatal(err)
 		}
 		if obj, err := store.GetObject(bucket, key, s3.NoVersion(), nil); err != nil {
@@ -2228,7 +2228,7 @@ func TestVersioning(t *testing.T) {
 		}
 
 		// permanently deleting a specific version removes only that version
-		if _, _, _, err := store.DeleteObject(bucket, s3.ObjectID{Key: key, VersionID: &v1}); err != nil {
+		if _, _, _, err := store.DeleteObject(bucket, "", s3.ObjectID{Key: key, VersionID: &v1}); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := store.GetObject(bucket, key, s3.SpecificVersion(v1), nil); !errors.Is(err, s3errs.ErrNoSuchVersion) {
@@ -2251,7 +2251,7 @@ func TestVersioning(t *testing.T) {
 		}
 
 		// create a non-null version while enabled
-		if err := store.PutBucketVersioning(bucket, s3.VersioningStatusEnabled); err != nil {
+		if err := store.PutBucketVersioning(bucket, "", s3.VersioningStatusEnabled); err != nil {
 			t.Fatal(err)
 		}
 		v1, _, err := store.PutObject(bucket, key, objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 1, FileName: new(string)})
@@ -2262,7 +2262,7 @@ func TestVersioning(t *testing.T) {
 		}
 
 		// suspended writes report no version and reuse the null version in place
-		if err := store.PutBucketVersioning(bucket, s3.VersioningStatusSuspended); err != nil {
+		if err := store.PutBucketVersioning(bucket, "", s3.VersioningStatusSuspended); err != nil {
 			t.Fatal(err)
 		}
 		if v, _, err := store.PutObject(bucket, key, objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 1, FileName: new(string)}); err != nil {
@@ -2318,7 +2318,7 @@ func TestListObjectVersions(t *testing.T) {
 	store := initTestDB(t, zaptest.NewLogger(t))
 	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
 		t.Fatal(err)
-	} else if err := store.PutBucketVersioning(bucket, s3.VersioningStatusEnabled); err != nil {
+	} else if err := store.PutBucketVersioning(bucket, "", s3.VersioningStatusEnabled); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2398,7 +2398,7 @@ func TestListObjectVersions(t *testing.T) {
 		)
 		if err := store.CreateBucket(accessKeyID, bucket); err != nil {
 			t.Fatal(err)
-		} else if err := store.PutBucketVersioning(bucket, s3.VersioningStatusEnabled); err != nil {
+		} else if err := store.PutBucketVersioning(bucket, "", s3.VersioningStatusEnabled); err != nil {
 			t.Fatal(err)
 		}
 		put := func(key string) string {
@@ -2415,7 +2415,7 @@ func TestListObjectVersions(t *testing.T) {
 		ov1 := put("other")
 
 		// simulate a first page ending at kv2, then kv2 deleted before resume
-		if _, _, _, err := store.DeleteObject(bucket, s3.ObjectID{Key: key, VersionID: &kv2}); err != nil {
+		if _, _, _, err := store.DeleteObject(bucket, "", s3.ObjectID{Key: key, VersionID: &kv2}); err != nil {
 			t.Fatal(err)
 		}
 
@@ -2447,14 +2447,14 @@ func TestListObjectVersions(t *testing.T) {
 		)
 		if err := store.CreateBucket(accessKeyID, bucket); err != nil {
 			t.Fatal(err)
-		} else if err := store.PutBucketVersioning(bucket, s3.VersioningStatusEnabled); err != nil {
+		} else if err := store.PutBucketVersioning(bucket, "", s3.VersioningStatusEnabled); err != nil {
 			t.Fatal(err)
 		}
 		v1, _, err := store.PutObject(bucket, key, objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 1, FileName: new(string)})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := store.PutBucketVersioning(bucket, s3.VersioningStatusSuspended); err != nil {
+		if err := store.PutBucketVersioning(bucket, "", s3.VersioningStatusSuspended); err != nil {
 			t.Fatal(err)
 		}
 		if v, _, err := store.PutObject(bucket, key, objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 1, FileName: new(string)}); err != nil {
@@ -2541,14 +2541,14 @@ func TestListObjectVersions(t *testing.T) {
 		const bucket = "delete-marker"
 		if err := store.CreateBucket(accessKeyID, bucket); err != nil {
 			t.Fatal(err)
-		} else if err := store.PutBucketVersioning(bucket, s3.VersioningStatusEnabled); err != nil {
+		} else if err := store.PutBucketVersioning(bucket, "", s3.VersioningStatusEnabled); err != nil {
 			t.Fatal(err)
 		}
 		v, _, err := store.PutObject(bucket, "k", objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 1, FileName: new(string)})
 		if err != nil {
 			t.Fatal(err)
 		}
-		marker, _, _, err := store.DeleteObject(bucket, s3.ObjectID{Key: "k"})
+		marker, _, _, err := store.DeleteObject(bucket, "", s3.ObjectID{Key: "k"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2572,7 +2572,7 @@ func TestListObjectVersions(t *testing.T) {
 		const bucket = "delimiter"
 		if err := store.CreateBucket(accessKeyID, bucket); err != nil {
 			t.Fatal(err)
-		} else if err := store.PutBucketVersioning(bucket, s3.VersioningStatusEnabled); err != nil {
+		} else if err := store.PutBucketVersioning(bucket, "", s3.VersioningStatusEnabled); err != nil {
 			t.Fatal(err)
 		}
 		for _, k := range []string{"dir/a", "dir/b", "top"} {
