@@ -958,7 +958,10 @@ func TestSyncMetadata(t *testing.T) {
 	} else if obj.FileName == nil {
 		t.Fatal("expected pending upload to have a filename")
 	}
-	sealed := memSDK.SealObject(siaObj)
+	sealed, err := memSDK.SealObject(siaObj)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := store.MarkObjectUploaded(bucket, "obj", "", obj.ContentMD5, sealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -985,14 +988,14 @@ func TestSyncMetadata(t *testing.T) {
 
 	memSDK.SetEvents([]sdk.ObjectEvent{
 		{
-			Key:       deletedKey,
+			ID:        deletedKey,
 			Deleted:   true,
 			UpdatedAt: eventTime,
 		},
 		{
-			Key:       sealed.ID(),
+			ID:        sealed.ID(),
 			UpdatedAt: eventTime.Add(time.Second),
-			Object:    &siaObj,
+			Object:    siaObj,
 		},
 	})
 	siaBackend.SyncMetadata(t.Context())
@@ -1040,17 +1043,18 @@ func TestSyncMetadata(t *testing.T) {
 
 	// uploads and pins an object tagged as a snapshot backup to the SDK
 	// without recording it locally
-	uploadSnapshotObject := func(meta objects.SnapshotMetadata) sdk.Object {
+	uploadSnapshotObject := func(meta objects.SnapshotMetadata) *sdk.Object {
 		t.Helper()
 		raw, err := json.Marshal(meta)
 		if err != nil {
 			t.Fatal(err)
 		}
-		obj := sdk.NewEmptyObject()
-		obj.UpdateMetadata(raw)
-		if err := memSDK.Upload(t.Context(), &obj, bytes.NewReader(frand.Bytes(8))); err != nil {
+		obj, err := memSDK.Upload(t.Context(), sdk.NewEmptyObject().WithMetadata(raw),
+			bytes.NewReader(frand.Bytes(8)))
+		if err != nil {
 			t.Fatal(err)
-		} else if err := memSDK.PinObject(t.Context(), obj); err != nil {
+		}
+		if err := memSDK.PinObject(t.Context(), obj); err != nil {
 			t.Fatal(err)
 		}
 		return obj
@@ -1067,9 +1071,9 @@ func TestSyncMetadata(t *testing.T) {
 	recorded := uploadSnapshotObject(snapMeta)
 	if rec, _, err := store.CreateSnapshot(); err != nil {
 		t.Fatal(err)
-	} else if err := store.MarkSnapshotPinning(rec.ID, recorded.ID()); err != nil {
+	} else if err := store.MarkSnapshotPinning(rec.ID, memSDK.ObjectID(recorded)); err != nil {
 		t.Fatal(err)
-	} else if err := store.MarkSnapshotPinned(recorded.ID()); err != nil {
+	} else if err := store.MarkSnapshotPinned(memSDK.ObjectID(recorded)); err != nil {
 		t.Fatal(err)
 	}
 	leaked := uploadSnapshotObject(snapMeta)
@@ -1077,20 +1081,20 @@ func TestSyncMetadata(t *testing.T) {
 	// the sync leaves both objects pinned and adopts the leaked one, an object
 	// without a local record may be a backup made by a previous database
 	memSDK.SetEvents([]sdk.ObjectEvent{
-		{Key: recorded.ID(), UpdatedAt: eventTime.Add(2 * time.Second), Object: &recorded},
-		{Key: leaked.ID(), UpdatedAt: eventTime.Add(3 * time.Second), Object: &leaked},
+		{ID: memSDK.ObjectID(recorded), UpdatedAt: eventTime.Add(2 * time.Second), Object: recorded},
+		{ID: memSDK.ObjectID(leaked), UpdatedAt: eventTime.Add(3 * time.Second), Object: leaked},
 	})
 	siaBackend.SyncMetadata(t.Context())
-	if !memSDK.Pinned(leaked.ID()) {
+	if !memSDK.Pinned(memSDK.ObjectID(leaked)) {
 		t.Fatal("expected leaked snapshot object to stay pinned")
-	} else if !memSDK.Pinned(recorded.ID()) {
+	} else if !memSDK.Pinned(memSDK.ObjectID(recorded)) {
 		t.Fatal("expected recorded snapshot object to stay pinned")
 	}
 	if snapshots, err := store.ListSnapshots(); err != nil {
 		t.Fatal(err)
 	} else if len(snapshots) != 2 {
 		t.Fatal("unexpected", len(snapshots))
-	} else if snapshots[1].SiaObjectID != leaked.ID() {
+	} else if snapshots[1].SiaObjectID != memSDK.ObjectID(leaked) {
 		t.Fatal("mismatch", snapshots[1].SiaObjectID)
 	}
 
@@ -1102,18 +1106,18 @@ func TestSyncMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	memSDK.SetEvents([]sdk.ObjectEvent{
-		{Key: recorded.ID(), UpdatedAt: eventTime.Add(4 * time.Second), Object: &recorded},
-		{Key: foreign.ID(), UpdatedAt: eventTime.Add(5 * time.Second), Object: &foreign},
+		{ID: memSDK.ObjectID(recorded), UpdatedAt: eventTime.Add(4 * time.Second), Object: recorded},
+		{ID: memSDK.ObjectID(foreign), UpdatedAt: eventTime.Add(5 * time.Second), Object: foreign},
 	})
 	siaBackend.SyncMetadata(t.Context())
-	if !memSDK.Pinned(foreign.ID()) {
+	if !memSDK.Pinned(memSDK.ObjectID(foreign)) {
 		t.Fatal("expected unknown snapshot object to stay pinned")
 	}
 	if snapshots, err := store.ListSnapshots(); err != nil {
 		t.Fatal(err)
 	} else if len(snapshots) != 3 {
 		t.Fatal("unexpected", len(snapshots))
-	} else if snapshots[2].SiaObjectID != foreign.ID() {
+	} else if snapshots[2].SiaObjectID != memSDK.ObjectID(foreign) {
 		t.Fatal("mismatch", snapshots[2].SiaObjectID)
 	}
 	if cursor, err := store.ObjectsCursor(); err != nil {
@@ -1125,11 +1129,11 @@ func TestSyncMetadata(t *testing.T) {
 	// the in-flight record carries its object's ID and completes from the
 	// object's event
 	pendingObj := uploadSnapshotObject(snapMeta)
-	if err := store.MarkSnapshotPinning(pending.ID, pendingObj.ID()); err != nil {
+	if err := store.MarkSnapshotPinning(pending.ID, memSDK.ObjectID(pendingObj)); err != nil {
 		t.Fatal(err)
 	}
 	memSDK.SetEvents([]sdk.ObjectEvent{
-		{Key: pendingObj.ID(), UpdatedAt: eventTime.Add(6 * time.Second), Object: &pendingObj},
+		{ID: memSDK.ObjectID(pendingObj), UpdatedAt: eventTime.Add(6 * time.Second), Object: pendingObj},
 	})
 	siaBackend.SyncMetadata(t.Context())
 	if snapshots, err := store.ListSnapshots(); err != nil {
@@ -1138,7 +1142,7 @@ func TestSyncMetadata(t *testing.T) {
 		t.Fatal("unexpected", len(snapshots))
 	} else if snapshots[2].ID != pending.ID {
 		t.Fatal("mismatch", snapshots[2].ID)
-	} else if snapshots[2].SiaObjectID != pendingObj.ID() {
+	} else if snapshots[2].SiaObjectID != memSDK.ObjectID(pendingObj) {
 		t.Fatal("mismatch", snapshots[2].SiaObjectID)
 	}
 
@@ -1146,10 +1150,10 @@ func TestSyncMetadata(t *testing.T) {
 	// instead of adopted, and the cursor still advances past it
 	malformed := uploadSnapshotObject(objects.SnapshotMetadata{Type: objects.SnapshotType})
 	memSDK.SetEvents([]sdk.ObjectEvent{
-		{Key: malformed.ID(), UpdatedAt: eventTime.Add(7 * time.Second), Object: &malformed},
+		{ID: memSDK.ObjectID(malformed), UpdatedAt: eventTime.Add(7 * time.Second), Object: malformed},
 	})
 	siaBackend.SyncMetadata(t.Context())
-	if !memSDK.Pinned(malformed.ID()) {
+	if !memSDK.Pinned(memSDK.ObjectID(malformed)) {
 		t.Fatal("expected malformed snapshot object to stay pinned")
 	}
 	if snapshots, err := store.ListSnapshots(); err != nil {
@@ -1169,10 +1173,10 @@ func TestSyncMetadata(t *testing.T) {
 	overflowMeta.Generation = math.MaxInt64
 	overflow := uploadSnapshotObject(overflowMeta)
 	memSDK.SetEvents([]sdk.ObjectEvent{
-		{Key: overflow.ID(), UpdatedAt: eventTime.Add(8 * time.Second), Object: &overflow},
+		{ID: memSDK.ObjectID(overflow), UpdatedAt: eventTime.Add(8 * time.Second), Object: overflow},
 	})
 	siaBackend.SyncMetadata(t.Context())
-	if !memSDK.Pinned(overflow.ID()) {
+	if !memSDK.Pinned(memSDK.ObjectID(overflow)) {
 		t.Fatal("expected overflow snapshot object to stay pinned")
 	}
 	if snapshots, err := store.ListSnapshots(); err != nil {

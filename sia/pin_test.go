@@ -3,6 +3,7 @@ package sia_test
 import (
 	"bytes"
 	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	sdk "go.sia.tech/siastorage"
 	"lukechampine.com/frand"
 )
 
@@ -26,7 +28,10 @@ func stageUpload(t *testing.T, memSDK *testutil.MemorySDK, store *sqlite.Store, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	sealed := memSDK.SealObject(siaObj)
+	sealed, err := memSDK.SealObject(siaObj)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	fn := name + ".upload"
 	md5 := frand.Entropy128()
@@ -198,5 +203,39 @@ func TestPinLoopPinsCopyAfterSourceDeleted(t *testing.T) {
 		t.Fatal("expected dst sia_object to remain set")
 	} else if dst.FileName != nil {
 		t.Fatalf("expected dst filename to be cleared after pin, got %q", *dst.FileName)
+	}
+}
+
+// TestUnsealStagedObject checks that an object unseals between the upload and
+// the pin, which is the window the pin loop works in. The fixtures above seed
+// through AddObject, which lands in the pinned map and never exercises it.
+func TestUnsealStagedObject(t *testing.T) {
+	memSDK := testutil.NewMemorySDK()
+	data := frand.Bytes(16)
+
+	obj, err := memSDK.Upload(t.Context(), sdk.NewEmptyObject(), bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := memSDK.SealObject(obj)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	unsealed, err := memSDK.UnsealObject(sealed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := memSDK.Download(t.Context(), unsealed, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatal("unsealed object returned different data")
 	}
 }

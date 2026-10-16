@@ -275,7 +275,7 @@ func TestMigrationSiaObjectNormalization(t *testing.T) {
 
 	// the sealed objects round-trip through the normalized tables
 	for _, legacy := range []legacySealedObject{sealed1, sealed2, sealed3} {
-		want := sdk.SealedObject{SealedObject: legacy.convert()}
+		want := legacy.convert()
 		var got sdk.SealedObject
 		err := store.transaction(func(tx *txn) (err error) {
 			got, err = siaObject(tx, want.ID())

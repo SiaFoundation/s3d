@@ -1,0 +1,138 @@
+{
+  "encryptedDataKey": "8yAgml48nBJrwBa+dc92nREnxEme1FEDJJry8hLXYp7Ax2zv3Hx3JYrnaaqajxUGwfh+Pi4gP0kDuolhv0/Vnv48eBY8kfx5",
+  "slabs": [
+    {
+      "version": 1,
+      "encryptionKey": "/wT9KtFWxwcPag2PezG7GH6VbCwLh3eRbmsrwf/Vy04=",
+      "minShards": 10,
+      "sectors": [
+        {
+          "root": "cbf2ec364ddc3eae1dc50b9697f0d34acc21d6e7bada0414e1e42f701ada3062",
+          "hostKey": "ed25519:792b8d69d0eed91536cf3eb79aaa9945a97857d79b337024105e6a064e5fbb84"
+        },
+        {
+          "root": "f30ca0dc075ab902617332caff6bf45c10e233077aa8fa81d728ee02d83f4f66",
+          "hostKey": "ed25519:c8e3f4ec7d4ecdb0abc0368dd4856ff4bcfd0cec9cd97ae532019caac54bae7b"
+        },
+        {
+          "root": "92fa7226be1f229653e0f2563d34a469de891d4cb060a0353d2abce06960540f",
+          "hostKey": "ed25519:1ddc6b38f23afef85a84606fdc9c5a313e14d1eaf3de20d49f849b7e24bff52d"
+        },
+        {
+          "root": "4edf7167d855fe8fac31a3afcda3321ccb70663026b88e9c6f12d9266cbf69e8",
+          "hostKey": "ed25519:5a9ffdd613e6cb8b99457448e6cc6aa0601ac0a95bf44c36bbdfdaeaf1d7433a"
+        },
+        {
+          "root": "f653cb3894e238d40761e7b5f7bcc991aa31a4bb843e0827924b9f54ec71f8d6",
+          "hostKey": "ed25519:cc745c67bde59a68a303f215d6b1badd35dd02da2cbbf161369a8440e25ef6d9"
+        },
+        {
+          "root": "10843b205777724b64e461ccc8ed9bde067f8855c425ad9c951ac0537f6e3f81",
+          "hostKey": "ed25519:116c3e10502a5993d3e9e0455c8505fb83b3615653719a4e1f0af6b7df93b98a"
+        },
+        {
+          "root": "3c9b1956d3acd76e3ee8ee77b20157d3727446ebeb8982a7fd230b16d284c5ba",
+          "hostKey": "ed25519:c75e5fd633f048e7f85de7f16a560778c6cb170a3f1653f401f474e391fe04ab"
+        },
+        {
+          "root": "417e3cd9dd59f162c7486aa9bbda9d0f28b6e0caf9eb88dcbde470d471cdefd8",
+          "hostKey": "ed25519:692d5f4990937098abd387d9deebbf6d3c6ebdf32bbd1f6c4c1de2649ddbae28"
+        },
+        {
+          "root": "6b2f38686b19d7640c28371b4d7174263e84e6c0c2d02ae7d0732d5798733cf3",
+          "hostKey": "ed25519:db2b903ea642fea0dda106f6572794c8b7f8f229f60c97e537b07a329d06ad95"
+        },
+        {
+          "root": "274b654a10b6a344441fbb4cc72c9ba058d8387522629e4a856628c7ecc124fb",
+          "hostKey": "ed25519:04fbc022827d55f797beb3842880fb7692bb11233feff0e6d65f4d8e6746c47e"
+        },
+        {
+          "root": "d569055757677c60683bd01649295c3d2cd45be43919a0b08178c04cfc3badbb",
+          "hostKey": "ed25519:69fc10578968b34243f424173ef0e9648d847bf4aa1182f75cc5f836f17c9769"
+        },
+        {
+          "root": "23f68d665cd5676b90ad8426388c7a8ccff0f6919068fcc6a15672d68df3bebf",
+          "hostKey": "ed25519:51cf53f76ce2ad71de30d4f7abb023a47191c3b8c8d1a30b8311ccb35e365d16"
+        },
+        {
+          "root": "0fe5ebd353aa930d1af20d9d3b87980f4784ba512f60a7e203d49850d553869d",
+          "hostKey": "ed25519:7c1a832a7386f95d21b949b1f844161ec6361e3e7aee34bb18745a28f28f0177"
+        },
+        {
+          "root": "83d6d8fd0e968b59ae8538d96a2b882a6993deb85d4516fb92600f2bbd86623d",
+          "hostKey": "ed25519:97958f078db78da7ded3839eee06851b56a393566cff10ca6cba5b91fca47b2b"
+        },
+        {
+          "root": "1fbaf114ed5ae27c134b650d3f32a234ddee1fefd3ae5b10d43f51903b9ce50a",
+          "hostKey": "ed25519:23e11f4815a1ec5ed639cd91083aaebc08b5d6ebf6117c3d4eb08d5382d9f610"
+        },
+        {
+          "root": "374b728c5bd27101b020ec9848fa3a17d926c754f49fd2a22b13b1e7d14652a0",
+          "hostKey": "ed25519:920fe5f0bbcc343af3479199f9f693d35bb968b1fcec55b31f0ab4dd89a05de4"
+        },
+        {
+          "root": "e8fb35443a94c241b944053ce862a1331fd4010e90bde08d80da422d3bbf5098",
+          "hostKey": "ed25519:36e68a76d214cdd6f68d6e5a1a99d631ff5e6ce61a676c79d4ac6d88acf6ea4c"
+        },
+        {
+          "root": "325f403752acf80885fab896b01c7f20eae45dfd36a0fc9b3443e3159a2b4d7b",
+          "hostKey": "ed25519:4df99add754e7249d2d40f864143a7ef0e586da8f42e10e90853c9cd6e264d3b"
+        },
+        {
+          "root": "8785e9deadf98d27c99c8dca0fd0a77aa9e45709d2378d864b165698dc3256e3",
+          "hostKey": "ed25519:6685457026dc400b4c630524a5b11fbc8a92f1edc8c62aa4ad294a783479a4c9"
+        },
+        {
+          "root": "346ec974a99b5d2f8afa469d069b9a121a5b1360839842f1d78477cab8de3cb7",
+          "hostKey": "ed25519:e74c2c04a01526378d43545c07bf159a0960029f911feabc0106b88b31d176c9"
+        },
+        {
+          "root": "bc3d62747954fa05c0a9c5c61a19a81a20357c47103fb0bbfc8c03ef578c1cfe",
+          "hostKey": "ed25519:67a83b80c6e05f449012e5dc2953fd90ada5901e77b55d0b1a85265e5faff571"
+        },
+        {
+          "root": "cd1e48d37116f8822f8729530cbac68915d3a53a2156f588775c5ab6cf9887c6",
+          "hostKey": "ed25519:0837074c56fed822f6b733b87a070c42cb939f8c9b96dd8365223d635db3e10f"
+        },
+        {
+          "root": "be9540f0e96c7c1e59bc935115b597ea6491c2c6c912fd778af7e8ab879856e3",
+          "hostKey": "ed25519:6234c4775d41239e1ae70c487305dd1d62204a2ed944d260c304517fd68d722b"
+        },
+        {
+          "root": "8f202a0176c2e9b4ac868419c104b1d6842b511683fd33a831acd5369695fbf9",
+          "hostKey": "ed25519:bfd5f5753e44ac029dc5efaef8b829509cdfa652cbd5d3c5847038968769897a"
+        },
+        {
+          "root": "898065112f924371f642296925aee2029291b1ef70b3acbc9aa79d1835958ed6",
+          "hostKey": "ed25519:3a40f3c84b6c9f471cc96189457e725b50f0e3d447ec79077b85a6900e308a4c"
+        },
+        {
+          "root": "02812d6950fb5c5c875d40b258c8b719e8937166e5913edea56980ad06f23a72",
+          "hostKey": "ed25519:9e01a0eede3d673e47a82d26dbaebdf5e2a5dfee0c50bca98e404fb58312cd50"
+        },
+        {
+          "root": "0a0addf7802f2bba82bb11f1f5d1037dfe1895e29662b70e12ab55f15e5f20ee",
+          "hostKey": "ed25519:eefe99a5a27ff8cfe563b375c78666da7b2e6df013c8413fd4d2cc8d63373db4"
+        },
+        {
+          "root": "96b982fddc950365330e04702a448ea509b09ac183d2cc760ec74863c2340937",
+          "hostKey": "ed25519:c71e1597042f47ab8bf33f008db8c40e19bc3b9a9f6e6d7aea7e79fdc342a90c"
+        },
+        {
+          "root": "2d964dc4a1f4c8efe3e5bdbd7ad86cf62e5ac00e76485b09b13fc66866323582",
+          "hostKey": "ed25519:95989d8a7b5e55012c3a7ab45ff11441aef9f7aa616e63fa02b19c7c66748fac"
+        },
+        {
+          "root": "53a5f5eaf748cece0ef97e19994ae8cec2f7f18b0ee26a3d976fec133ea6b060",
+          "hostKey": "ed25519:14f2c8531cdb7d5a6e8037d5be9503d6d800dc85b9893dd5a3082748dc08c07c"
+        }
+      ],
+      "offset": 0,
+      "length": 1048576
+    }
+  ],
+  "dataSignature": "876673fe1b37fc9b6b83320de09b53b62bcf3d35ff76dea7a17954fe6c891d260539d3ed396b1bf7f8577a81a47fa5b93300d3313f79c6f33ada839d4bfae10f",
+  "metadataSignature": "f24be82876221e7c4f1a13aa76c1b441fb8c0b6dc5a729edfd76d49125f1937eae77dfecac5d386669b30d0af73b9d26c71d5df01c9e161148c0bb64b758890e",
+  "createdAt": "2026-10-15T20:09:54.316264Z",
+  "updatedAt": "2026-10-15T20:09:54.316264Z"
+}
