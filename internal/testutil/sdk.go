@@ -93,15 +93,16 @@ func (o *uploadedObject) id() types.Hash256 {
 	return slabs.ObjectID(o.slabs)
 }
 
-// seal returns the object's sealed form. The encrypted fields are random, so
-// two seals of the same object differ while sharing an ID, as they do when the
-// real SDK re-encrypts under a fresh nonce.
-func (o *uploadedObject) seal() sdk.SealedObject {
+// seal returns the object's sealed form, carrying the metadata of the handle
+// being sealed. The encrypted fields are random, so two seals of the same
+// object differ while sharing an ID, as they do when the real SDK re-encrypts
+// under a fresh nonce.
+func (o *uploadedObject) seal(metadata []byte) sdk.SealedObject {
 	now := time.Now().UTC()
 	return sdk.SealedObject{
 		EncryptedDataKey:  frand.Bytes(32),
 		Slabs:             o.slabs,
-		EncryptedMetadata: o.metadata,
+		EncryptedMetadata: metadata,
 		CreatedAt:         now,
 		UpdatedAt:         now,
 	}
@@ -437,8 +438,7 @@ func (s *MemorySDK) SealObject(obj *sdk.Object) (sdk.SealedObject, error) {
 	if err != nil {
 		return sdk.SealedObject{}, fmt.Errorf("seal failed: %w", err)
 	}
-	uploaded.metadata = metadata
-	return uploaded.seal(), nil
+	return uploaded.seal(metadata), nil
 }
 
 // UnsealObject returns the object the sealed form stands for.
