@@ -322,6 +322,7 @@ type (
 	ErrorResult struct {
 		XMLName   xml.Name `xml:"Error"`
 		Key       string   `xml:"Key,omitempty"`
+		VersionID string   `xml:"VersionId,omitempty"`
 		Code      string   `xml:"Code,omitempty"`
 		Message   string   `xml:"Message,omitempty"`
 		Resource  string   `xml:"Resource,omitempty"`
@@ -518,7 +519,8 @@ type (
 	PolicyStatus struct {
 		XMLName xml.Name `xml:"PolicyStatus"`
 		Xmlns   string   `xml:"xmlns,attr,omitempty"`
-		// IsPublic is true when the policy grants anonymous callers access.
+		// IsPublic is true when the policy grants access to callers not
+		// limited to fixed principals or conditions, as S3 classifies it.
 		IsPublic bool `xml:"IsPublic"`
 	}
 

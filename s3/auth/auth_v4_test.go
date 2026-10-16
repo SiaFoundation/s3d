@@ -231,7 +231,7 @@ func TestHandleAuthV4(t *testing.T) {
 			t.Fatal(err)
 		} else if caller == nil {
 			t.Fatal("expected access key ID, got anonymous")
-		} else if want := (Caller{AccessKeyID: exampleAccessKey, UserID: mockUserID(exampleAccessKey)}); *caller != want {
+		} else if want := (Caller{AccessKeyID: exampleAccessKey, UserID: mockUserID(exampleAccessKey), Region: exampleRegion, SignedAt: exampleTime}); *caller != want {
 			t.Fatalf("expected caller %+v, got %+v", want, *caller)
 		}
 	})

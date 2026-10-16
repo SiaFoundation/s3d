@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia"
 )
@@ -22,6 +23,10 @@ func userIDForAccessKey(tx *txn, accessKeyID string) (int64, error) {
 
 // CreateUser creates a new user with the given name.
 func (s *Store) CreateUser(name string) error {
+	// a user's name is its S3 user ID
+	if name == s3.AnonymousUserID {
+		return sia.ErrReservedUserName
+	}
 	return s.transaction(func(tx *txn) error {
 		res, err := tx.Exec("INSERT INTO users (name) VALUES ($1) ON CONFLICT (name) DO NOTHING", name)
 		if err != nil {

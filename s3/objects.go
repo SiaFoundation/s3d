@@ -258,7 +258,7 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, dst *bucketAcces
 		DestinationPreconditions: requestPreconditions(r.Header),
 	})
 	if err != nil {
-		return src.hideMissingSource(err)
+		return src.hideMissingSource(err, srcObject)
 	}
 
 	if result.VersionID != "" {
@@ -334,8 +334,18 @@ func (s *s3) deleteObjects(w http.ResponseWriter, r *http.Request, access *bucke
 		if obj.VersionID != nil {
 			version = SpecificVersion(*obj.VersionID)
 		}
-		if err := access.assertObjectAllowed(deleteAction(version), obj.Key); err != nil {
-			denied = append(denied, ErrorResult{Key: obj.Key, Code: s3errs.ErrorCode(err), Message: err.Error()})
+		var extra policyContext
+		if obj.ETag != nil && !version.Specified {
+			// an object's ETag element is its If-Match, which S3 only
+			// supplies to DeleteObject
+			extra = policyContext{"s3:if-match": {*obj.ETag}}
+		}
+		if err := access.assertVersionAllowed(deleteAction(version), obj.Key, version, extra); err != nil {
+			errResult := ErrorResult{Key: obj.Key, Code: s3errs.ErrorCode(err), Message: err.Error()}
+			if version.Specified {
+				errResult.VersionID = FormatVersion(version.ID)
+			}
+			denied = append(denied, errResult)
 		} else {
 			allowed = append(allowed, obj)
 		}
@@ -391,7 +401,7 @@ func (s *s3) serveObject(w http.ResponseWriter, r *http.Request, access *bucketA
 		obj, err = s.backend.GetObject(r.Context(), bucket, object, version, rnge, partNumber)
 	}
 	if err != nil {
-		return access.hideMissing(err)
+		return access.hideMissing(err, object)
 	}
 	// the body is only consumed on the successful GET path below; close it on
 	// every other path (HEAD, delete marker, error)
@@ -406,7 +416,7 @@ func (s *s3) serveObject(w http.ResponseWriter, r *http.Request, access *bucketA
 		// a current delete marker proves the key once existed, so it is
 		// hidden like a missing key
 		if !version.Specified {
-			if err := access.assertBucketAllowed(actionListBucket); err != nil {
+			if err := access.assertListAllowed(object); err != nil {
 				return err
 			}
 		}
