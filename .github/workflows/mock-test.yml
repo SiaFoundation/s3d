@@ -28,13 +28,16 @@ jobs:
       # as its last field; a released version is a tag.
       - name: Resolve the sia-storage-go revision
         id: storage
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           v=$(go list -m -f '{{.Version}}' go.sia.tech/siastorage)
           if printf '%s' "$v" | grep -qE '[0-9]{14}-[0-9a-f]{12}$'; then
-            echo "ref=${v##*-}" >> "$GITHUB_OUTPUT"
+            ref=$(gh api repos/SiaFoundation/sia-storage-go/commits/"${v##*-}" --jq .sha)
           else
-            echo "ref=$v" >> "$GITHUB_OUTPUT"
+            ref=$v
           fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
