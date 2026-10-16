@@ -192,3 +192,92 @@ func TestApplyLifecycleRulesSkipsInvalidRule(t *testing.T) {
 		t.Fatalf("expected upload to survive an invalid rule, got %v", err)
 	}
 }
+
+func TestApplyLifecycleRulesVersioned(t *testing.T) {
+	ctx := t.Context()
+	backend, _ := testutil.NewBackend(t)
+
+	const (
+		bucket = "versioned-lifecycle"
+		kept   = "keep/obj"
+		reaped = "reap/obj"
+	)
+	if err := backend.CreateBucket(ctx, testutil.AccessKeyID, bucket, s3.CreateBucketOptions{}); err != nil {
+		t.Fatal(err)
+	} else if err := backend.PutBucketVersioning(ctx, testutil.AccessKeyID, bucket, s3.VersioningStatusEnabled); err != nil {
+		t.Fatal(err)
+	}
+
+	put := func(object string) {
+		t.Helper()
+		if _, err := backend.PutObject(ctx, testutil.AccessKeyID, bucket, object, bytes.NewReader([]byte("data")), s3.PutObjectOptions{ContentLength: 4}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	countVersions := func(object string) int {
+		t.Helper()
+		res, err := backend.ListObjectVersions(ctx, aws.String(testutil.AccessKeyID), bucket, s3.Prefix{HasPrefix: true, Prefix: object}, s3.ListObjectVersionsPage{MaxKeys: 100})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(res.Versions) // delete markers are reported as versions
+	}
+
+	// three versions under each prefix, so one is current and two noncurrent
+	for range 3 {
+		put(kept)
+		put(reaped)
+	}
+
+	// the keep/ prefix is covered by no rule, the reap/ prefix retains a single
+	// noncurrent version
+	config := s3.LifecycleConfiguration{Rules: []s3.LifecycleRule{{
+		Status:                      s3.LifecycleStatusEnabled,
+		Filter:                      &s3.LifecycleFilter{Prefix: aws.String("reap/")},
+		NoncurrentVersionExpiration: &s3.LifecycleNoncurrentVersionExpiration{NewerNoncurrentVersions: aws.Int(1)},
+	}}}
+	if err := backend.PutBucketLifecycleConfiguration(ctx, testutil.AccessKeyID, bucket, config); err != nil {
+		t.Fatal(err)
+	}
+
+	backend.ApplyLifecycleRules(ctx, time.Now())
+
+	if n := countVersions(reaped); n != 2 {
+		t.Fatalf("expected the current version plus one retained noncurrent version, got %d", n)
+	}
+	if n := countVersions(kept); n != 3 {
+		t.Fatalf("expected the unmatched prefix to keep all three versions, got %d", n)
+	}
+
+	// an unversioned delete leaves a marker over the remaining versions, so the
+	// marker only becomes expired once the noncurrent rule has cleared them
+	if _, err := backend.DeleteObject(ctx, testutil.AccessKeyID, bucket, s3.ObjectID{Key: reaped}, s3.DeleteObjectOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	config.Rules[0].Expiration = &s3.LifecycleExpiration{ExpiredObjectDeleteMarker: aws.Bool(true)}
+	config.Rules[0].NoncurrentVersionExpiration = &s3.LifecycleNoncurrentVersionExpiration{NewerNoncurrentVersions: aws.Int(1)}
+	if err := backend.PutBucketLifecycleConfiguration(ctx, testutil.AccessKeyID, bucket, config); err != nil {
+		t.Fatal(err)
+	}
+
+	// the retain bound still holds one noncurrent version back, so the marker
+	// is not yet the last version standing
+	backend.ApplyLifecycleRules(ctx, time.Now())
+	if n := countVersions(reaped); n == 0 {
+		t.Fatal("expected a retained noncurrent version to hold the marker back")
+	}
+
+	// dropping the retain bound clears the last noncurrent version, and the
+	// following pass removes the marker it was holding back
+	config.Rules[0].NoncurrentVersionExpiration = &s3.LifecycleNoncurrentVersionExpiration{NoncurrentDays: 1}
+	if err := backend.PutBucketLifecycleConfiguration(ctx, testutil.AccessKeyID, bucket, config); err != nil {
+		t.Fatal(err)
+	}
+	backend.ApplyLifecycleRules(ctx, time.Now().AddDate(0, 0, 2))
+	if n := countVersions(reaped); n != 0 {
+		t.Fatalf("expected every version and the marker to be gone, got %d", n)
+	}
+	if n := countVersions(kept); n != 3 {
+		t.Fatalf("expected the unmatched prefix to be untouched, got %d", n)
+	}
+}

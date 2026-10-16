@@ -3,6 +3,7 @@ package s3
 import (
 	"encoding/hex"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -87,6 +88,31 @@ func (e *LifecycleExpiration) ExpiryCutoff(now time.Time, dayDuration time.Durat
 	return time.Time{}, false
 }
 
+// NoncurrentCutoff returns the cutoff time for noncurrent version expiration
+// relative to now. Versions that became noncurrent at or before the cutoff are
+// expired. dayDuration is the wall-clock duration treated as a single "day".
+func (e *LifecycleNoncurrentVersionExpiration) NoncurrentCutoff(now time.Time, dayDuration time.Duration) time.Time {
+	if e.NoncurrentDays == 0 {
+		return now
+	}
+	return daysCutoff(now, e.NoncurrentDays, dayDuration)
+}
+
+// Retain returns how many newer noncurrent versions must exist before a version
+// expires, or 0 when the rule bounds only the age.
+func (e *LifecycleNoncurrentVersionExpiration) Retain() int {
+	if e.NewerNoncurrentVersions == nil {
+		return 0
+	}
+	return *e.NewerNoncurrentVersions
+}
+
+// ExpiresDeleteMarkers reports whether the expiration removes delete markers
+// left as the last version of their key.
+func (e *LifecycleExpiration) ExpiresDeleteMarkers() bool {
+	return e != nil && e.ExpiredObjectDeleteMarker != nil && *e.ExpiredObjectDeleteMarker
+}
+
 // AbortCutoff returns the cutoff time for aborting incomplete multipart
 // uploads relative to now. Uploads initiated at or before the cutoff are
 // aborted. dayDuration is the wall-clock duration treated as a single "day".
@@ -99,6 +125,10 @@ func (a *AbortIncompleteMultipartUpload) AbortCutoff(now time.Time, dayDuration 
 // the current UTC day so the full window is honored. A shortened dayDuration
 // (used by tests) drops the calendar anchoring for a flat now-minus-window.
 func daysCutoff(now time.Time, days int, dayDuration time.Duration) time.Time {
+	// an overflowing window wraps to a cutoff in the future, expiring everything
+	if dayDuration <= 0 || int64(days) > int64(math.MaxInt64)/int64(dayDuration) {
+		return time.Time{}
+	}
 	window := time.Duration(days) * dayDuration
 	if dayDuration == 24*time.Hour {
 		return startOfDayUTC(now).Add(-window)
@@ -242,9 +272,9 @@ func (r LifecycleRule) Validate() error {
 		return fmt.Errorf("rule must specify a Prefix or Filter: %w", s3errs.ErrMalformedXML)
 	} else if err := r.Filter.validate(); err != nil {
 		return err
-	} else if len(r.Transitions) > 0 || len(r.NoncurrentVersionTransitions) > 0 || r.NoncurrentVersionExpiration != nil {
-		return fmt.Errorf("transition and noncurrent-version lifecycle actions are not supported: %w", s3errs.ErrNotImplemented)
-	} else if r.Expiration == nil && r.AbortIncompleteMultipartUpload == nil {
+	} else if len(r.Transitions) > 0 || len(r.NoncurrentVersionTransitions) > 0 {
+		return fmt.Errorf("transition lifecycle actions are not supported: %w", s3errs.ErrNotImplemented)
+	} else if r.Expiration == nil && r.AbortIncompleteMultipartUpload == nil && r.NoncurrentVersionExpiration == nil {
 		return fmt.Errorf("rule must specify at least one action: %w", s3errs.ErrMalformedXML)
 	}
 
@@ -263,10 +293,22 @@ func (r LifecycleRule) Validate() error {
 				// S3 requires expiration dates to be at midnight UTC.
 				return fmt.Errorf("expiration Date must be at midnight UTC: %w", s3errs.ErrInvalidArgument)
 			}
-		} else if e.ExpiredObjectDeleteMarker != nil {
-			return fmt.Errorf("ExpiredObjectDeleteMarker lifecycle expiration is not supported: %w", s3errs.ErrNotImplemented)
 		} else if e.Days == 0 && e.ExpiredObjectDeleteMarker == nil {
 			return fmt.Errorf("expiration Days must be a positive integer: %w", s3errs.ErrInvalidArgument)
+		}
+	}
+	if e := r.NoncurrentVersionExpiration; e != nil {
+		if e.NoncurrentDays < 0 {
+			return fmt.Errorf("NoncurrentDays must be a positive integer: %w", s3errs.ErrInvalidArgument)
+		} else if e.NoncurrentDays == 0 && e.NewerNoncurrentVersions == nil {
+			return fmt.Errorf("noncurrent version expiration must specify NoncurrentDays or NewerNoncurrentVersions: %w", s3errs.ErrMalformedXML)
+		} else if v := e.NewerNoncurrentVersions; v != nil {
+			if *v < 1 || *v > NewerNoncurrentVersionsLimit {
+				return fmt.Errorf("NewerNoncurrentVersions must be between 1 and %d: %w", NewerNoncurrentVersionsLimit, s3errs.ErrInvalidArgument)
+			} else if r.Filter == nil {
+				// S3 requires a Filter whenever a version count is retained.
+				return fmt.Errorf("NewerNoncurrentVersions requires a Filter: %w", s3errs.ErrInvalidRequest)
+			}
 		}
 	}
 	if a := r.AbortIncompleteMultipartUpload; a != nil {

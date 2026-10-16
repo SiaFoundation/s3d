@@ -24,7 +24,8 @@ func claimCurrentSeq(tx *txn, bid int64, name string) (seq int64, err error) {
 	if err != nil {
 		return 0, err
 	}
-	_, err = tx.Exec(`UPDATE objects SET is_latest = FALSE WHERE bucket_id = $1 AND name = $2 AND is_latest = TRUE`, bid, name)
+	_, err = tx.Exec(`UPDATE objects SET is_latest = FALSE, noncurrent_at = $1 WHERE bucket_id = $2 AND name = $3 AND is_latest = TRUE`,
+		sqlTime(time.Now()), bid, name)
 	return seq, err
 }
 
@@ -737,7 +738,7 @@ func (s *Store) CopyObject(accessKeyID, srcBucket, srcName string, srcVersion s3
 				return err
 			}
 			_, err = tx.Exec(`
-				UPDATE objects SET seq = $1, metadata = $2, updated_at = $3, is_latest = TRUE
+				UPDATE objects SET seq = $1, metadata = $2, updated_at = $3, is_latest = TRUE, noncurrent_at = NULL
 				WHERE bucket_id = $4 AND name = $5 AND version_id = $6
 			`, seq, sqlMetaJSON(obj.Meta), sqlTime(time.Now()), dstBid, dstName, srcInternalVersion)
 			obj.VersionID = srcInternalVersion
@@ -980,11 +981,24 @@ type deletedRow struct {
 // deleted row. found is false when no such row exists (the returned row is
 // then the zero value). It does not orphan the row's data; callers pass the
 // returned row to orphanDeleted for that.
-func deleteObject(tx *txn, bid int64, name string, version string, bypass bool) (row deletedRow, found bool, _ error) {
+func deleteObject(tx *txn, bid int64, name string, version string, bypass bool) (deletedRow, bool, error) {
 	if err := checkObjectLock(tx, bid, name, version, bypass); err != nil {
 		return deletedRow{}, false, err
 	}
+	return deleteVersion(tx, bid, name, version, true)
+}
 
+// deleteNullVersion deletes the null version of (bid, name) for a caller that
+// writes its replacement in the same transaction, leaving the preceding
+// version noncurrent rather than promoting it.
+func deleteNullVersion(tx *txn, bid int64, name string) (deletedRow, bool, error) {
+	if err := checkObjectLock(tx, bid, name, nullVersion, false); err != nil {
+		return deletedRow{}, false, err
+	}
+	return deleteVersion(tx, bid, name, nullVersion, false)
+}
+
+func deleteVersion(tx *txn, bid int64, name string, version string, promote bool) (row deletedRow, found bool, _ error) {
 	var id sql.Null[sqlHash256]
 	var wasLatest bool
 	err := tx.QueryRow(`
@@ -998,9 +1012,9 @@ func deleteObject(tx *txn, bid int64, name string, version string, bypass bool) 
 	}
 	// removing the current version promotes the next-highest seq to current
 	// (a no-op when no versions remain).
-	if wasLatest {
+	if promote && wasLatest {
 		if _, err := tx.Exec(`
-			UPDATE objects SET is_latest = TRUE
+			UPDATE objects SET is_latest = TRUE, noncurrent_at = NULL
 			WHERE bucket_id = $1 AND name = $2
 			  AND seq = (SELECT MAX(seq) FROM objects WHERE bucket_id = $3 AND name = $4)`,
 			bid, name, bid, name); err != nil {
