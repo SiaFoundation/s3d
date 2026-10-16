@@ -10,6 +10,7 @@ import (
 	"hash"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"time"
@@ -478,14 +479,20 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	r, ingressDone := s.transfer.trackIngress(r)
 	defer ingressDone()
 
-	if err := s.addDiskUsage(ctx, opts.ContentLength, nil); err != nil {
+	// an undeclared length reserves its bound instead, and gives back whatever
+	// it did not use once the body has been read
+	reserved := opts.ContentLength
+	if opts.ContentLength < 0 {
+		reserved = opts.MaxContentLength
+	}
+	if err := s.addDiskUsage(ctx, reserved, nil); err != nil {
 		return nil, err
 	}
 
 	var objPath string
 	defer func() {
 		if err != nil {
-			s.cleanupOrphan(objPath, opts.ContentLength)
+			s.cleanupOrphan(objPath, reserved)
 		}
 	}()
 
@@ -526,10 +533,36 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 		if err != nil {
 			return nil, fmt.Errorf("failed to create temporary file: %w", err)
 		}
-		size, err = io.Copy(f, io.LimitReader(r, opts.ContentLength))
+		// an undeclared length still reads one byte past what it reserved, so
+		// exceeding it is caught here rather than trusted to the caller. the
+		// bound saturates rather than wrapping to a limit that reads nothing
+		bound := reserved
+		if opts.ContentLength < 0 && bound < math.MaxInt64 {
+			bound++
+		}
+		size, err = io.Copy(f, io.LimitReader(r, bound))
 		if err != nil {
 			_ = f.Close()
 			return nil, fmt.Errorf("failed to store object: %w", err)
+		}
+
+		// the size is settled before the file is synced, so a body that cannot
+		// be stored is not fsynced on its way to being unlinked
+		if opts.ContentLength >= 0 && opts.ContentLength != size {
+			_ = f.Close()
+			return nil, s3errs.ErrIncompleteBody
+		} else if size > reserved {
+			_ = f.Close()
+			return nil, s3errs.ErrEntityTooLarge
+		}
+
+		if size == 0 {
+			// an undeclared length is only known to be empty after the read, so
+			// the file it wrote is dropped to store the object the same way a
+			// declared empty one is
+			_ = f.Close()
+			s.cleanupOrphan(objPath, 0)
+			objPath, fileName = "", nil
 		} else if err := f.Sync(); err != nil {
 			_ = f.Close()
 			return nil, fmt.Errorf("failed to sync object to disk: %w", err)
@@ -540,10 +573,10 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 		}
 	}
 
-	// check content length
-	if opts.ContentLength != size {
-		return nil, s3errs.ErrIncompleteBody
+	if reserved > size {
+		s.releaseDiskUsage(reserved - size)
 	}
+	reserved = size
 
 	// verify checksums
 	var contentMD5 [16]byte

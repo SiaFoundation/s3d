@@ -1,7 +1,6 @@
 package s3
 
 import (
-	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"net/http"
@@ -412,10 +411,11 @@ func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, accessKeyID, 
 	// extract Content-MD5 header
 	var contentMD5 *[16]byte
 	if md5Header := r.Header.Get("Content-Md5"); md5Header != "" {
-		contentMD5 = new([16]byte)
-		if n, err := base64.StdEncoding.Decode(contentMD5[:], []byte(md5Header)); err != nil || n != len(contentMD5) {
-			return s3errs.ErrInvalidDigest
+		digest, err := parseContentMD5(md5Header)
+		if err != nil {
+			return err
 		}
+		contentMD5 = digest
 	}
 
 	// extract SHA256 checksum from "X-Amz-Content-Sha256" header if present
@@ -527,25 +527,13 @@ func (s *s3) completeMultipartUpload(w http.ResponseWriter, r *http.Request, acc
 		return err
 	}
 
-	protocol := "http"
-	if r.TLS != nil {
-		protocol = "https"
-	}
-
-	var location string
-	if _, ok := s.bucketFromHost(r.Host); ok {
-		location = fmt.Sprintf("%s://%s/%s", protocol, r.Host, object)
-	} else {
-		location = fmt.Sprintf("%s://%s/%s/%s", protocol, r.Host, bucket, object)
-	}
-
 	w.Header().Set("ETag", res.ETag)
 	if res.VersionID != "" {
 		w.Header().Set("x-amz-version-id", res.VersionID)
 	}
 	return writeXMLResponse(w, http.StatusOK, CompleteMultipartUploadResponse{
 		Xmlns:    "http://s3.amazonaws.com/doc/2006-03-01/",
-		Location: location,
+		Location: s.objectLocation(r, bucket, object),
 		Bucket:   bucket,
 		Key:      object,
 		ETag:     res.ETag,
