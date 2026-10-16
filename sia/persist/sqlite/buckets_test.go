@@ -60,7 +60,7 @@ func TestBucketAccessInfo(t *testing.T) {
 	if err := store.CreateBucket(testAccessKeyID, bucket); err != nil {
 		t.Fatal(err)
 	}
-	owner, err := store.UserNameForAccessKey(testAccessKeyID)
+	_, owner, err := store.LoadSecret(testAccessKeyID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestPutObjectBucketOwner(t *testing.T) {
 	} else if err := store.CreateAccessKey("bob", "BOB_KEY", "secret"); err != nil {
 		t.Fatal(err)
 	}
-	owner, err := store.UserNameForAccessKey(testAccessKeyID)
+	_, owner, err := store.LoadSecret(testAccessKeyID)
 	if err != nil {
 		t.Fatal(err)
 	}

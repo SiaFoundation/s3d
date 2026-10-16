@@ -216,7 +216,6 @@ type Store interface {
 	DeleteAccessKey(accessKeyID string) error
 	ListAccessKeys(userName *string) ([]AccessKeyInfo, error)
 	LoadSecret(accessKeyID string) (secret, userName string, err error)
-	UserNameForAccessKey(accessKeyID string) (string, error)
 
 	AllFilenames() ([]string, error)
 	CopyObject(srcBucket, srcName string, srcVersion s3.VersionRequest, dstBucket, dstName string, opts s3.CopyObjectOptions) (*s3.CopyObjectResult, objects.OrphanedFile, error)
@@ -633,20 +632,8 @@ func (s *Sia) ProcessOrphans(ctx context.Context) {
 	}
 }
 
-// UserInfo returns user information for the given access key ID.
-func (s *Sia) UserInfo(_ context.Context, accessKeyID string) (*s3.UserInfo, error) {
-	name, err := s.store.UserNameForAccessKey(accessKeyID)
-	if err != nil {
-		return nil, err
-	}
-	return &s3.UserInfo{
-		ID:          name,
-		DisplayName: name,
-	}, nil
-}
-
-// LoadSecret loads the secret key for the given access key ID and the user it
-// belongs to, whose name is the ID [Sia.UserInfo] reports.
+// LoadSecret loads the secret key for the given access key ID and the name of
+// the user it belongs to, which is the user's S3 owner ID.
 func (s *Sia) LoadSecret(_ context.Context, accessKeyID string) (auth.SecretAccessKey, string, error) {
 	secret, userName, err := s.store.LoadSecret(accessKeyID)
 	if err != nil {
