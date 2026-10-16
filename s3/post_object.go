@@ -2,7 +2,8 @@ package s3
 
 import (
 	"encoding/base64"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"io"
 	"math"
@@ -210,8 +211,8 @@ func parsePostPolicy(encoded string) (postPolicy, error) {
 	}
 
 	var document struct {
-		Expiration string            `json:"expiration"`
-		Conditions []json.RawMessage `json:"conditions"`
+		Expiration string           `json:"expiration"`
+		Conditions []jsontext.Value `json:"conditions"`
 	}
 	if err := json.Unmarshal(decoded, &document); err != nil {
 		return postPolicy{}, s3errs.ErrMalformedPolicy
@@ -231,7 +232,7 @@ func parsePostPolicy(encoded string) (postPolicy, error) {
 
 // addCondition adds one condition of a policy document, which is either an
 // object naming a single field or a three element array naming an operator.
-func (p *postPolicy) addCondition(condition json.RawMessage) error {
+func (p *postPolicy) addCondition(condition jsontext.Value) error {
 	var exact map[string]string
 	if err := json.Unmarshal(condition, &exact); err == nil {
 		for field, value := range exact {
@@ -245,7 +246,7 @@ func (p *postPolicy) addCondition(condition json.RawMessage) error {
 
 	// the operator form mixes strings and numbers, so its elements are decoded
 	// one at a time
-	var elements []json.RawMessage
+	var elements []jsontext.Value
 	var operator string
 	if err := json.Unmarshal(condition, &elements); err != nil || len(elements) != 3 {
 		return s3errs.ErrMalformedPolicy
@@ -289,17 +290,11 @@ func (p *postPolicy) addCondition(condition json.RawMessage) error {
 
 // parsePostSize decodes a content-length-range bound, which S3 accepts as
 // either a number or a string holding one.
-func parsePostSize(element json.RawMessage) (int64, error) {
-	var number json.Number
-	if err := json.Unmarshal(element, &number); err != nil {
-		var text string
-		if err := json.Unmarshal(element, &text); err != nil {
-			return 0, s3errs.ErrMalformedPolicy
-		}
-		number = json.Number(text)
-	}
-	size, err := number.Int64()
-	if err != nil {
+func parsePostSize(element jsontext.Value) (int64, error) {
+	var size int64
+	if err := json.Unmarshal(element, &size); err == nil {
+		return size, nil
+	} else if err := json.Unmarshal(element, &size, json.StringifyNumbers(true)); err != nil {
 		return 0, s3errs.ErrMalformedPolicy
 	}
 	return size, nil

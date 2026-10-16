@@ -467,6 +467,22 @@ func TestPostObjectRejections(t *testing.T) {
 	upload.policy = "not base64!"
 	assertRejected(upload, s3errs.ErrMalformedPolicy)
 
+	// a policy document spells its members in lowercase and S3 matches them
+	// exactly, so an uppercase expiration is not read and what remains is a
+	// document without one
+	expires := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
+	upload = newPostUpload(bucket, "rejected")
+	upload.policy = base64.StdEncoding.EncodeToString(
+		[]byte(`{"Expiration":"` + expires + `","conditions":[]}`))
+	assertRejected(upload, s3errs.ErrMalformedPolicy)
+
+	// an uppercase conditions member is skipped the same way, which leaves the
+	// operator it holds unread and every field of the form unnamed
+	upload = newPostUpload(bucket, "rejected")
+	upload.policy = base64.StdEncoding.EncodeToString(
+		[]byte(`{"expiration":"` + expires + `","CONDITIONS":[["bogus","$key",""]]}`))
+	assertRejected(upload, s3errs.ErrInvalidPolicyDocument)
+
 	// an empty key
 	upload = newPostUpload(bucket, "")
 	assertRejected(upload, s3errs.ErrUserKeyMustBeSpecified)
