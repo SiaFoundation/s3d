@@ -317,6 +317,11 @@ taken before a retention was applied is one way through it. This is the same
 shape as an AWS `COMPLIANCE` retention being bounded by the AWS account
 continuing to exist.
 
+Browser form uploads via `POST Object` are signed with SigV4, like every other
+request. The legacy SigV2 form fields `AWSAccessKeyId` and `signature` are not
+accepted. A form may carry `acl`, which is matched against the policy and then
+ignored, since ACLs are unimplemented.
+
 Bucket policies are supported only to grant read access to everyone.
 `PutBucketPolicy` accepts `Allow` statements whose principal is `*` and whose
 actions are drawn from this set:
@@ -412,6 +417,7 @@ delete with nothing to delete is a no-op, as an unconditional one is.
 | PutObjectLockConfiguration | ◐ | `DefaultEventHold` is rejected |
 | **Objects** | | |
 | PutObject | ✓ | |
+| POST Object | ◐ | SigV4 signed forms only, the SigV2 form fields are not accepted |
 | GetObject | ✓ | |
 | HeadObject | ✓ | |
 | DeleteObject | ✓ | |
