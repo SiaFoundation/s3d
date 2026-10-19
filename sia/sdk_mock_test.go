@@ -401,3 +401,84 @@ func TestIndexdSDKUpload(t *testing.T) {
 		t.Fatal("the object did not round trip")
 	}
 }
+
+// TestIndexdSDKDeleteObject covers the delete the orphan loop performs, and
+// the event the metadata sync reads it back as.
+func TestIndexdSDKDeleteObject(t *testing.T) {
+	s := mockSDK(t)
+	ctx := t.Context()
+
+	obj := uploadObject(t, s, frand.Bytes(1<<20))
+	if err := s.PinObject(ctx, obj); err != nil {
+		t.Fatalf("pin: %v", err)
+	}
+	id := s.ObjectID(obj)
+
+	if err := s.DeleteObject(ctx, id); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	events, err := s.ObjectEvents(ctx, slabs.Cursor{}, 100)
+	if err != nil {
+		t.Fatalf("events: %v", err)
+	}
+	var found *sdk.ObjectEvent
+	for i := range events {
+		if events[i].ID == id {
+			found = &events[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("the deleted object is absent from %d events", len(events))
+	}
+	if !found.Deleted {
+		t.Fatal("the deletion was not reported as one")
+	}
+	// syncBatch takes the deleted branch before it looks at the object, and a
+	// deletion carries none
+	if found.Object != nil {
+		t.Fatal("a deletion carried an object")
+	}
+}
+
+// TestIndexdSDKPruneSlabs covers what the prune loop is for: deleting an
+// object leaves its slabs pinned, and only a prune releases the storage.
+func TestIndexdSDKPruneSlabs(t *testing.T) {
+	s := mockSDK(t)
+	ctx := t.Context()
+
+	obj := uploadObject(t, s, frand.Bytes(1<<20))
+	if err := s.PinObject(ctx, obj); err != nil {
+		t.Fatalf("pin: %v", err)
+	}
+
+	pinned, err := s.Account(ctx)
+	if err != nil {
+		t.Fatalf("account: %v", err)
+	}
+	if pinned.PinnedSize == 0 {
+		t.Fatal("the pinned object is not counted against the account")
+	}
+
+	if err := s.DeleteObject(ctx, s.ObjectID(obj)); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	deleted, err := s.Account(ctx)
+	if err != nil {
+		t.Fatalf("account after delete: %v", err)
+	}
+	if deleted.PinnedSize != pinned.PinnedSize {
+		t.Fatalf("deleting released storage on its own: %d, was %d", deleted.PinnedSize, pinned.PinnedSize)
+	}
+
+	if err := s.PruneSlabs(ctx, time.Now()); err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	pruned, err := s.Account(ctx)
+	if err != nil {
+		t.Fatalf("account after prune: %v", err)
+	}
+	if pruned.PinnedSize != 0 {
+		t.Fatalf("pinned size is %d after pruning, was %d", pruned.PinnedSize, pinned.PinnedSize)
+	}
+}
