@@ -61,18 +61,24 @@ func (f postForm) get(name string) string {
 	return f.fields[name]
 }
 
+// header returns the form's fields spelled as request headers, which lets the
+// object handlers read a field the way they read a header.
+func (f postForm) header() http.Header {
+	headers := make(http.Header, len(f.fields))
+	for name, value := range f.fields {
+		headers.Set(name, value)
+	}
+	return headers
+}
+
 // metadata returns the object metadata the form describes. The fields that
 // authenticate the request describe the request rather than the object, so they
 // are left out.
 func (f postForm) metadata() (map[string]string, error) {
-	headers := make(map[string][]string, len(f.fields))
-	for name, value := range f.fields {
-		switch name {
-		case postFieldAlgorithm, postFieldCredential, postFieldDate,
-			postFieldSignature, postFieldToken:
-			continue
-		}
-		headers[name] = []string{value}
+	headers := f.header()
+	for _, name := range []string{postFieldAlgorithm, postFieldCredential,
+		postFieldDate, postFieldSignature, postFieldToken} {
+		headers.Del(name)
 	}
 	return metadataHeaders(headers, MetadataSizeLimit)
 }
@@ -426,6 +432,11 @@ func (s *s3) postObject(w http.ResponseWriter, r *http.Request, headerKeyID *str
 		contentMD5 = digest
 	}
 
+	checksum, err := requestChecksum(form.header())
+	if err != nil {
+		return err
+	}
+
 	// the redirect is resolved before the upload, so nothing that can fail is
 	// left to run after the object has been stored
 	var redirect *url.URL
@@ -446,6 +457,7 @@ func (s *s3) postObject(w http.ResponseWriter, r *http.Request, headerKeyID *str
 		ContentLength:    -1,
 		MaxContentLength: maxSize,
 		ContentMD5:       contentMD5,
+		Checksum:         checksum,
 		Meta:             meta,
 	})
 	if err != nil {
