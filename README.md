@@ -1,4 +1,4 @@
-# [![S3d](https://sia.tech/api/media/file/banner-s3d.png)](https://sia.tech)
+# [![S3d](.github/assets/banner.png)](https://sia.tech)
 
 [![GoDoc](https://pkg.go.dev/badge/github.com/SiaFoundation/s3d)](https://pkg.go.dev/github.com/SiaFoundation/s3d)
 
