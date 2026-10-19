@@ -253,9 +253,11 @@ func TestPostObjectSDKForms(t *testing.T) {
 
 	// boto3 spells the fields in lowercase and sends no bucket field
 	upload := newPostUpload(bucket, "boto3/photo.txt")
+	sum := sha256.Sum256(upload.file)
 	upload.fields = [][2]string{
 		{"Content-Type", "text/plain"},
 		{"x-amz-meta-origin", "form"},
+		{"x-amz-checksum-sha256", base64.StdEncoding.EncodeToString(sum[:])},
 	}
 	assertUpload(upload)
 
@@ -482,6 +484,18 @@ func TestPostObjectRejections(t *testing.T) {
 	upload.policy = base64.StdEncoding.EncodeToString(
 		[]byte(`{"expiration":"` + expires + `","CONDITIONS":[["bogus","$key",""]]}`))
 	assertRejected(upload, s3errs.ErrInvalidPolicyDocument)
+
+	// a checksum field that does not decode to a digest of the right length
+	upload = newPostUpload(bucket, "rejected")
+	upload.fields = [][2]string{{"x-amz-checksum-sha256", "sailorjerry"}}
+	assertRejected(upload, s3errs.ErrInvalidRequest)
+
+	// a well formed checksum field the file does not match
+	upload = newPostUpload(bucket, "rejected")
+	upload.fields = [][2]string{
+		{"x-amz-checksum-sha256", base64.StdEncoding.EncodeToString(make([]byte, sha256.Size))},
+	}
+	assertRejected(upload, s3errs.ErrBadDigest)
 
 	// an empty key
 	upload = newPostUpload(bucket, "")
