@@ -38,6 +38,15 @@ func TestStoredSealedObjectFixture(t *testing.T) {
 	if sealed.DataSignature == (types.Signature{}) {
 		t.Error("dataSignature is zero")
 	}
+	if len(sealed.EncryptedMetadataKey) == 0 {
+		t.Error("encryptedMetadataKey is empty")
+	}
+	if len(sealed.EncryptedMetadata) == 0 {
+		t.Error("encryptedMetadata is empty")
+	}
+	if sealed.MetadataSignature == (types.Signature{}) {
+		t.Error("metadataSignature is zero")
+	}
 	if sealed.CreatedAt.IsZero() {
 		t.Error("createdAt is zero")
 	}
