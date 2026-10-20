@@ -58,6 +58,10 @@ type Object struct {
 	Size           int64
 	ContentMD5     [16]byte
 	LastModified   time.Time
+
+	// ObjectLock is the version's lock state, nil when it carries none or the
+	// reader does not own the bucket.
+	ObjectLock *s3.ObjectLockState
 }
 
 // SiaObject pairs a Sia object ID with its sealed metadata.
@@ -98,17 +102,22 @@ type PutOptions struct {
 	FileName *string
 
 	Preconditions s3.ObjectPreconditions
+
+	// ObjectLock is the lock to stamp on the new version, overriding the
+	// bucket's default retention.
+	ObjectLock *s3.ObjectLockState
 }
 
 // ObjectForUpload contains the fields needed to upload an object.
 type ObjectForUpload struct {
-	Bucket     string
-	Name       string
-	VersionID  string
-	Filename   string
-	ContentMD5 [16]byte
-	Length     int64
-	Multipart  bool
+	Bucket       string
+	Name         string
+	VersionID    string
+	Filename     string
+	ContentMD5   [16]byte
+	Length       int64
+	Multipart    bool
+	LastModified time.Time
 }
 
 // Part represents a single part of a multipart upload.

@@ -139,6 +139,14 @@ func WithUploadThreads(n int) Option {
 	}
 }
 
+// WithUploadDeadline sets how long after a pending object was last modified its
+// group is uploaded regardless of wasted space. Zero disables the deadline.
+func WithUploadDeadline(d time.Duration) Option {
+	return func(s *Sia) {
+		s.uploadDeadline = d
+	}
+}
+
 // Sia implements the s3.Backend interface for storing data on Sia.
 type Sia struct {
 	sdk   SDK
@@ -159,6 +167,7 @@ type Sia struct {
 	uploadOptimalSize int64
 	uploadWastePct    float64
 	uploadThreads     int
+	uploadDeadline    time.Duration
 
 	lifecycleLoopInterval time.Duration
 	lifecycleDayDuration  time.Duration
@@ -219,7 +228,7 @@ type Store interface {
 
 	AllFilenames() ([]string, error)
 	CopyObject(accessKeyID, srcBucket, srcName string, srcVersion s3.VersionRequest, dstBucket, dstName string, opts s3.CopyObjectOptions) (*s3.CopyObjectResult, objects.OrphanedFile, error)
-	CreateBucket(accessKeyID, bucket string) error
+	CreateBucket(accessKeyID, bucket string, objectLock bool) error
 	DeleteBucket(accessKeyID, bucket string) error
 	DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (string, bool, objects.OrphanedFile, error)
 	GetObject(accessKeyID *string, bucket, object string, version s3.VersionRequest, partNumber *int32, action s3.PolicyActions) (*objects.Object, error)
@@ -228,6 +237,8 @@ type Store interface {
 	AssertBucketOwner(accessKeyID, bucket string) error
 	GetBucketVersioning(accessKeyID, bucket string) (string, error)
 	PutBucketVersioning(accessKeyID, bucket, status string) error
+	GetBucketObjectLockConfiguration(accessKeyID, bucket string) (s3.ObjectLockConfiguration, error)
+	PutBucketObjectLockConfiguration(accessKeyID, bucket string, config s3.ObjectLockConfiguration) error
 	GetBucketPolicy(accessKeyID, bucket string) (s3.BucketPolicy, error)
 	PutBucketPolicy(accessKeyID, bucket string, policy s3.BucketPolicy) error
 	DeleteBucketPolicy(accessKeyID, bucket string) error
@@ -250,7 +261,7 @@ type Store interface {
 	RemoveOrphanedObject(objectID types.Hash256) error
 	AbortMultipartUpload(accessKeyID, bucket, name string, uploadID s3.UploadID) (int64, error)
 	AddMultipartPart(accessKeyID, bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (string, int64, error)
-	CreateMultipartUpload(accessKeyID, bucket, name string, uploadID s3.UploadID, meta map[string]string) error
+	CreateMultipartUpload(accessKeyID, bucket, name string, uploadID s3.UploadID, meta map[string]string, lock *s3.ObjectLockState) error
 	CompleteMultipartUpload(accessKeyID, bucket, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64, preconditions s3.ObjectPreconditions) (string, objects.OrphanedFile, error)
 	HasMultipartUpload(accessKeyID, bucket, name string, uploadID s3.UploadID) (hasParts bool, err error)
 	ListMultipartUploads(accessKeyID, bucket string, prefix s3.Prefix, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error)
@@ -289,6 +300,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		directory:             directory,
 		uploadWastePct:        DefaultUploadWastePct,
 		uploadThreads:         DefaultUploadThreads,
+		uploadDeadline:        DefaultUploadDeadline,
 		lifecycleLoopInterval: defaultLifecycleLoopInterval,
 		lifecycleDayDuration:  defaultLifecycleDayDuration,
 		diskUsageTimeout:      defaultDiskUsageTimeout,
@@ -307,6 +319,8 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		return nil, errors.New("upload waste percentage must be greater than 0")
 	} else if sia.uploadThreads < 0 {
 		return nil, fmt.Errorf("upload threads must not be negative, got %d", sia.uploadThreads)
+	} else if sia.uploadDeadline < 0 {
+		return nil, fmt.Errorf("upload deadline must not be negative, got %s", sia.uploadDeadline)
 	}
 	if sia.uploadThreads == 0 {
 		sia.uploadThreads = DefaultUploadThreads

@@ -15,9 +15,9 @@ func TestBackup(t *testing.T) {
 
 	// add some data to the database on top of the user and access key created
 	// by initTestDB
-	if err := store.CreateBucket(testAccessKeyID, "bucket-one"); err != nil {
+	if err := store.CreateBucket(testAccessKeyID, "bucket-one", false); err != nil {
 		t.Fatal(err)
-	} else if err := store.CreateBucket(testAccessKeyID, "bucket-two"); err != nil {
+	} else if err := store.CreateBucket(testAccessKeyID, "bucket-two", false); err != nil {
 		t.Fatal(err)
 	}
 

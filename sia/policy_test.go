@@ -536,7 +536,7 @@ func TestBucketPolicyListAuthorizesEmptyPage(t *testing.T) {
 	)
 
 	backend, _ := testutil.NewBackend(t, testutil.WithKeyPair("other", otherAccessKeyID, otherSecretKey))
-	if err := backend.CreateBucket(t.Context(), testutil.AccessKeyID, bucket); err != nil {
+	if err := backend.CreateBucket(t.Context(), testutil.AccessKeyID, bucket, s3.CreateBucketOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := backend.PutObject(t.Context(), testutil.AccessKeyID, bucket, object,

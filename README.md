@@ -1,4 +1,4 @@
-# [![S3d](https://sia.tech/api/media/file/banner-s3d.png)](https://sia.tech)
+# [![S3d](.github/assets/banner.png)](https://sia.tech)
 
 [![GoDoc](https://pkg.go.dev/badge/github.com/SiaFoundation/s3d)](https://pkg.go.dev/github.com/SiaFoundation/s3d)
 
@@ -135,6 +135,11 @@ loop periodically collects pending objects and groups them together using a
 bin-packing algorithm. A group is uploaded to Sia once its waste falls below the
 configured threshold (default 10%). This ensures objects are packed efficiently
 into slabs regardless of size, minimizing wasted space on the network.
+
+A group is also uploaded, regardless of wasted space, once any of its objects
+was last modified at least `sia.uploadDeadline` ago (default `24h`). The
+deadline is a Go duration such as `6h` or `30m`, and `0s` disables it.
+`s3d flush` uploads every pending object immediately.
 
 The erasure coding scheme is applied when a group is uploaded, not when an
 object is received. Changing `sia.dataShards` or `sia.parityShards` takes
@@ -410,6 +415,7 @@ log:
 sia:
   diskUsageLimit: 10737418240 # max bytes buffered on disk pending upload (0 disables the limit, default 10 GiB)
   uploadThreads: 1 # object groups uploaded to Sia concurrently by the background upload loop (default 4)
+  uploadDeadline: 24h # upload a group regardless of waste once an object was last modified this long ago (0s disables the deadline, default 24h)
   dataShards: 10 # shards each slab is split into (default 10)
   parityShards: 20 # recovery shards added to each slab (default 20)
 s3:

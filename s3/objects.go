@@ -44,6 +44,9 @@ type Object struct {
 	// PartsCount will be set for objects that are multipart uploads, but only
 	// if a multipart part number is specified.
 	PartsCount *int32
+
+	// ObjectLock is the version's lock state, nil when it carries none.
+	ObjectLock *ObjectLockState
 }
 
 // CopyObjectResult contains information about the result of a CopyObject
@@ -141,6 +144,10 @@ type PutObjectOptions struct {
 	ContentSHA256 *[32]byte
 	Checksum      *RequestChecksum
 	Preconditions ObjectPreconditions
+
+	// ObjectLock is the lock to stamp on the new version, overriding the
+	// bucket's default retention. Nil applies the default, if any.
+	ObjectLock *ObjectLockState
 }
 
 // RequestChecksum is an additional checksum a client asked to have validated,
@@ -169,6 +176,10 @@ type CopyObjectOptions struct {
 	Replace                  bool
 	SourcePreconditions      ObjectPreconditions
 	DestinationPreconditions ObjectPreconditions
+
+	// ObjectLock is the lock to stamp on the copy, overriding the destination
+	// bucket's default retention. A copy never inherits the source's lock.
+	ObjectLock *ObjectLockState
 }
 
 var unsupportedObjectSubresources = map[string]struct{}{
@@ -217,7 +228,7 @@ func (s *s3) routeObject(w http.ResponseWriter, r *http.Request, accessKeyID *st
 	}
 }
 
-func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, accessKeyID, dstBucket, dstObject string, meta map[string]string) error {
+func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, accessKeyID, dstBucket, dstObject string, meta map[string]string, lock *ObjectLockState) error {
 	source := r.Header.Get("X-Amz-Copy-Source")
 	log := s.logger.With(zap.String("dstBucket", dstBucket),
 		zap.String("dstObject", dstObject),
@@ -247,6 +258,7 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, accessKeyID, dst
 		Replace:                  replace,
 		SourcePreconditions:      copySourcePreconditions(r.Header),
 		DestinationPreconditions: requestPreconditions(r.Header),
+		ObjectLock:               lock,
 	})
 	if err != nil {
 		return err
@@ -764,8 +776,13 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID strin
 		return err
 	}
 
+	lock, err := requestObjectLock(r.Header)
+	if err != nil {
+		return err
+	}
+
 	if _, ok := r.Header["X-Amz-Copy-Source"]; ok {
-		return s.copyObject(w, r, accessKeyID, bucket, object, meta)
+		return s.copyObject(w, r, accessKeyID, bucket, object, meta, lock)
 	}
 
 	// content length is mandatory
@@ -795,6 +812,11 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID strin
 		return err
 	}
 
+	// AWS requires a body checksum on an upload that carries a retention
+	if lock.Retained() && contentMD5 == nil && checksum == nil && !declaresTrailingChecksum(r.Header) {
+		return fmt.Errorf("a retention requires Content-MD5 or a checksum: %w", s3errs.ErrInvalidRequest)
+	}
+
 	res, err := s.backend.PutObject(r.Context(), accessKeyID, bucket, object, r.Body, PutObjectOptions{
 		ContentLength: r.ContentLength,
 		ContentMD5:    contentMD5,
@@ -802,6 +824,7 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID strin
 		Checksum:      checksum,
 		Meta:          meta,
 		Preconditions: requestPreconditions(r.Header),
+		ObjectLock:    lock,
 	})
 	if err != nil {
 		return err
@@ -857,6 +880,18 @@ func requestChecksum(headers http.Header) (*RequestChecksum, error) {
 	}
 
 	return found, nil
+}
+
+// declaresTrailingChecksum reports whether the request declares a trailing
+// checksum the backend can compute. The auth layer validates it after the body.
+func declaresTrailingChecksum(headers http.Header) bool {
+	for h := range strings.SplitSeq(headers.Get(auth.HeaderXAMZTrailer), ",") {
+		suffix, ok := strings.CutPrefix(textproto.CanonicalMIMEHeaderKey(strings.TrimSpace(h)), checksumPrefix)
+		if ok && auth.NewChecksumHash(suffix) != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // FormatETag formats the given hash as an S3 ETag string.
@@ -1415,6 +1450,8 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 		}
 		w.Header().Set("x-amz-mp-parts-count", fmt.Sprintf("%d", partsCount))
 	}
+
+	writeObjectLockHeaders(w.Header(), obj.ObjectLock)
 
 	w.Header().Set("Accept-Ranges", "bytes")
 	if obj.Range != nil {
