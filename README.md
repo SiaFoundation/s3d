@@ -206,8 +206,7 @@ call blocks for as long as that upload takes. Objects that fail to flush are
 logged and the snapshot is taken without them.
 
 Each snapshot is identified by its Sia object ID, printed on creation and by
-`s3d snapshots list`. It is the only identifier that survives losing the
-database, so keep it somewhere outside the data directory.
+`s3d snapshots list`.
 
 Snapshots assume one `s3d` instance owns the app key, see the
 [Overview](#overview).
