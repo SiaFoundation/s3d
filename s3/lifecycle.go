@@ -220,14 +220,15 @@ func (c LifecycleConfiguration) Validate() error {
 			}
 			seen[rule.ID] = true
 		}
-		if err := rule.validate(); err != nil {
+		if err := rule.Validate(); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (r LifecycleRule) validate() error {
+// Validate checks the rule against the features this server supports.
+func (r LifecycleRule) Validate() error {
 	if len(r.ID) > LifecycleRuleIDSizeLimit {
 		return fmt.Errorf("lifecycle rule ID exceeds %d characters: %w", LifecycleRuleIDSizeLimit, s3errs.ErrInvalidArgument)
 	} else if r.Status != LifecycleStatusEnabled && r.Status != LifecycleStatusDisabled {

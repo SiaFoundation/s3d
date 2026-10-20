@@ -98,6 +98,13 @@ func (s *Sia) applyLifecycleRules(ctx context.Context, now time.Time) {
 			if !rule.Enabled() {
 				continue
 			}
+			// configurations are validated on write, but a stored document
+			// outlives the validator that accepted it, so check again before
+			// acting on a rule.
+			if err := rule.Validate(); err != nil {
+				s.logger.Error("skipping invalid lifecycle rule", zap.String("bucket", bc.Bucket), zap.String("rule", rule.ID), zap.Error(err))
+				continue
+			}
 			prefix := rule.EffectivePrefix()
 
 			if rule.AbortIncompleteMultipartUpload != nil {
