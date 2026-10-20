@@ -15,14 +15,28 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
-    uses: SiaFoundation/workflows/.github/workflows/go-publish.yml@b42741de5798fcb1881143d714a923501ec4ff89 # master
+  test:
+    uses: SiaFoundation/workflows/.github/workflows/go-test.yml@95130e8c532eb275d3e359b4c4ae97083ae96c8f # master
+    with:
+      go-version: "1.27"
+  build:
+    needs:
+      - test
+    uses: SiaFoundation/workflows/.github/workflows/go-build.yml@95130e8c532eb275d3e359b4c4ae97083ae96c8f # master
     secrets: inherit
     with:
       linux-build-args: -tags='netgo timetzdata' -trimpath -a -ldflags '-s -w -linkmode external -extldflags "-static"'
       windows-build-args: -tags='netgo timetzdata' -trimpath -a -ldflags '-s -w -linkmode external -extldflags "-static"'
       macos-build-args: -tags='netgo timetzdata' -trimpath -a -ldflags '-s -w'
       cgo-enabled: 1
+      project: s3d
+  homebrew: # only runs for stable release tags (no '-')
+    if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
+    needs:
+      - build
+    uses: SiaFoundation/workflows/.github/workflows/homebrew-dispatch.yml@95130e8c532eb275d3e359b4c4ae97083ae96c8f # master
+    secrets: inherit
+    with:
       project: s3d
       project-desc: "s3d: An S3-compatible gateway for Sia"
       version-tag: ${{ github.ref_name }}
