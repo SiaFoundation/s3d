@@ -321,14 +321,8 @@ func checkObjectLock(tx *txn, bid int64, name, version string, bypass bool) erro
 
 	if legalHold == s3.LegalHoldOn {
 		return fmt.Errorf("version is under a legal hold: %w", s3errs.ErrAccessDenied)
-	}
-	if mode == "" || retainUntil == nil || time.UnixMilli(*retainUntil).Before(time.Now()) {
-		return nil
-	}
-	if mode == s3.ObjectLockModeCompliance {
-		return fmt.Errorf("version is under a COMPLIANCE retention: %w", s3errs.ErrAccessDenied)
-	} else if !bypass {
-		return fmt.Errorf("version is under a GOVERNANCE retention: %w", s3errs.ErrAccessDenied)
+	} else if err := checkRetentionTransition(mode, retainUntil, s3.ObjectLockState{}, bypass); err != nil {
+		return fmt.Errorf("version is under retention: %w", err)
 	}
 	return nil
 }
