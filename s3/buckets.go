@@ -86,6 +86,9 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *st
 	case http.MethodDelete:
 		return s.deleteBucket(w, r, validatedKey, bucket)
 	case http.MethodPost:
+		if !q.Has("delete") {
+			return s3errs.ErrNotImplemented
+		}
 		return s.deleteObjects(w, r, validatedKey, bucket)
 	default:
 		return s3errs.ErrMethodNotAllowed
