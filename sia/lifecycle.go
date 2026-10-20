@@ -111,18 +111,20 @@ func (s *Sia) applyLifecycleRules(ctx context.Context, now time.Time) {
 			if rule.AbortIncompleteMultipartUpload != nil {
 				s.abortIncompleteUploads(ctx, bc, prefix, rule.AbortIncompleteMultipartUpload.AbortCutoff(now, s.lifecycleDayDuration))
 			}
-			if cutoff, ok := rule.Expiration.ExpiryCutoff(now, s.lifecycleDayDuration); ok {
+			cutoff, expires := rule.Expiration.ExpiryCutoff(now, s.lifecycleDayDuration)
+			if expires {
 				s.expireObjects(ctx, bc, prefix, sizeGreaterThan, sizeLessThan, cutoff)
 			}
 			if e := rule.NoncurrentVersionExpiration; e != nil {
 				s.expireNoncurrentVersions(ctx, bc, prefix, sizeGreaterThan, sizeLessThan, e.Retain(), e.NoncurrentCutoff(now, s.lifecycleDayDuration))
 			}
 			// S3 also reaps expired delete markers for a Days or Date
-			// expiration, without being asked.
+			// expiration, without being asked. A marker holds no data, so the
+			// rule's object size bounds never apply to it.
 			if rule.Expiration.ExpiresDeleteMarkers() {
-				s.expireDeleteMarkers(ctx, bc, prefix, sizeGreaterThan, sizeLessThan, now)
-			} else if cutoff, ok := rule.Expiration.ExpiryCutoff(now, s.lifecycleDayDuration); ok {
-				s.expireDeleteMarkers(ctx, bc, prefix, sizeGreaterThan, sizeLessThan, cutoff)
+				s.expireDeleteMarkers(ctx, bc, prefix, now)
+			} else if expires {
+				s.expireDeleteMarkers(ctx, bc, prefix, cutoff)
 			}
 		}
 	}
@@ -207,15 +209,15 @@ func (s *Sia) expireNoncurrentVersions(ctx context.Context, bc BucketLifecycleCo
 	}
 }
 
-// expireDeleteMarkers removes delete markers matching the prefix and size
-// bounds in the given bucket that were created at or before the cutoff and are
-// the last remaining version of their key.
-func (s *Sia) expireDeleteMarkers(ctx context.Context, bc BucketLifecycleConfiguration, prefix string, sizeGreaterThan, sizeLessThan *int64, before time.Time) {
+// expireDeleteMarkers removes delete markers matching the prefix in the given
+// bucket that were created at or before the cutoff and are the last remaining
+// version of their key.
+func (s *Sia) expireDeleteMarkers(ctx context.Context, bc BucketLifecycleConfiguration, prefix string, before time.Time) {
 	// batchSize bounds how many markers are removed per store transaction.
 	const batchSize = 100
 	var expired int
 	for ctx.Err() == nil {
-		deleted, orphans, err := s.store.ExpireDeleteMarkers(bc.Bucket, prefix, sizeGreaterThan, sizeLessThan, before, batchSize)
+		deleted, orphans, err := s.store.ExpireDeleteMarkers(bc.Bucket, prefix, before, batchSize)
 		if err != nil {
 			s.logger.Error("failed to expire delete markers", zap.String("bucket", bc.Bucket), zap.Error(err))
 			return

@@ -294,10 +294,10 @@ func (s *Store) ExpireNoncurrentVersions(bucket string, prefix string, sizeGreat
 }
 
 // ExpireDeleteMarkers removes up to limit delete markers in bucket whose key
-// matches the prefix and size bounds, that were created at or before the
-// cutoff, and that are the last remaining version of their key. Returns the
-// number removed and performs no ownership checks.
-func (s *Store) ExpireDeleteMarkers(bucket string, prefix string, sizeGreaterThan, sizeLessThan *int64, before time.Time, limit int) (deleted int, orphans []objects.OrphanedFile, err error) {
+// matches the prefix, that were created at or before the cutoff, and that are
+// the last remaining version of their key. Returns the number removed and
+// performs no ownership checks.
+func (s *Store) ExpireDeleteMarkers(bucket string, prefix string, before time.Time, limit int) (deleted int, orphans []objects.OrphanedFile, err error) {
 	err = s.transaction(func(tx *txn) error {
 		deleted = 0
 		orphans = nil
@@ -320,14 +320,6 @@ func (s *Store) ExpireDeleteMarkers(bucket string, prefix string, sizeGreaterTha
 		if prefix != "" {
 			where = append(where, "o.name >= ? AND o.name < ?")
 			args = append(args, prefix, prefix+"\xFF")
-		}
-		if sizeGreaterThan != nil {
-			where = append(where, "o.size > ?")
-			args = append(args, *sizeGreaterThan)
-		}
-		if sizeLessThan != nil {
-			where = append(where, "o.size < ?")
-			args = append(args, *sizeLessThan)
 		}
 		args = append(args, limit)
 
