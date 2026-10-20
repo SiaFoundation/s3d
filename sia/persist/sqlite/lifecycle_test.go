@@ -417,7 +417,7 @@ func TestExpireDeleteMarkers(t *testing.T) {
 	}
 
 	// the marker is not expired while another version of the key survives
-	if deleted, _, err := store.ExpireDeleteMarkers(bid, "logs/", nil, nil, time.Now(), 100); err != nil {
+	if deleted, _, err := store.ExpireDeleteMarkers(bid, "logs/", time.Now(), 100); err != nil {
 		t.Fatal(err)
 	} else if deleted != 0 {
 		t.Fatalf("expected the marker to survive alongside another version, got %d", deleted)
@@ -428,12 +428,12 @@ func TestExpireDeleteMarkers(t *testing.T) {
 		t.Fatal(err)
 	}
 	// a cutoff before the marker was created holds it back
-	if deleted, _, err := store.ExpireDeleteMarkers(bid, "logs/", nil, nil, time.Now().Add(-time.Hour), 100); err != nil {
+	if deleted, _, err := store.ExpireDeleteMarkers(bid, "logs/", time.Now().Add(-time.Hour), 100); err != nil {
 		t.Fatal(err)
 	} else if deleted != 0 {
 		t.Fatalf("expected the marker to survive a cutoff before its creation, got %d", deleted)
 	}
-	if deleted, _, err := store.ExpireDeleteMarkers(bid, "logs/", nil, nil, time.Now(), 100); err != nil {
+	if deleted, _, err := store.ExpireDeleteMarkers(bid, "logs/", time.Now(), 100); err != nil {
 		t.Fatal(err)
 	} else if deleted != 1 {
 		t.Fatalf("expected the marker to be removed, got %d", deleted)
