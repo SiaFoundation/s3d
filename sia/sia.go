@@ -287,7 +287,7 @@ type Store interface {
 	AbortMultipartUploads(bucket s3.BucketID, prefix string, before time.Time, limit int) ([]AbortedUpload, error)
 	ExpireObjects(bucket s3.BucketID, prefix string, sizeGreaterThan, sizeLessThan *int64, before time.Time, limit int) (int, []objects.OrphanedFile, error)
 	ExpireNoncurrentVersions(bucket s3.BucketID, prefix string, sizeGreaterThan, sizeLessThan *int64, retain int, before time.Time, limit int) (int, []objects.OrphanedFile, error)
-	ExpireDeleteMarkers(bucket s3.BucketID, prefix string, sizeGreaterThan, sizeLessThan *int64, before time.Time, limit int) (int, []objects.OrphanedFile, error)
+	ExpireDeleteMarkers(bucket s3.BucketID, prefix string, before time.Time, limit int) (int, []objects.OrphanedFile, error)
 
 	Backup(ctx context.Context, destPath string) (int64, error)
 	DBVersion() int64
