@@ -184,7 +184,7 @@ func (s *Sia) expireObjects(ctx context.Context, bc BucketLifecycleConfiguration
 
 // expireNoncurrentVersions deletes noncurrent versions matching the prefix and
 // size bounds in the given bucket that became noncurrent at or before the
-// cutoff and sit behind more than retain newer noncurrent versions.
+// cutoff and sit behind at least retain newer noncurrent versions.
 func (s *Sia) expireNoncurrentVersions(ctx context.Context, bc BucketLifecycleConfiguration, prefix string, sizeGreaterThan, sizeLessThan *int64, retain int, before time.Time) {
 	// batchSize bounds how many versions are expired per store transaction.
 	const batchSize = 100

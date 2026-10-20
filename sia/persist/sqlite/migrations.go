@@ -511,7 +511,9 @@ UPDATE objects SET noncurrent_at = COALESCE((
 	SELECT nxt.updated_at FROM objects nxt
 	WHERE nxt.bucket_id = objects.bucket_id AND nxt.name = objects.name AND nxt.seq > objects.seq
 	ORDER BY nxt.seq LIMIT 1
-), updated_at) WHERE is_latest = FALSE;`)
+), updated_at) WHERE is_latest = FALSE;
+CREATE INDEX objects_noncurrent_at_idx ON objects(bucket_id, noncurrent_at) WHERE is_latest = FALSE;
+CREATE INDEX objects_delete_marker_updated_at_idx ON objects(bucket_id, updated_at) WHERE is_latest = TRUE AND is_delete_marker = TRUE;`)
 		return err
 	},
 }

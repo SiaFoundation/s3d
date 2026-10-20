@@ -102,6 +102,8 @@ CREATE INDEX objects_filename_idx ON objects(filename) WHERE filename IS NOT NUL
 CREATE INDEX objects_bucket_id_updated_at_idx ON objects(bucket_id, updated_at);
 CREATE INDEX objects_bucket_name_seq_idx ON objects(bucket_id, name, seq DESC);
 CREATE UNIQUE INDEX objects_is_latest_idx ON objects(bucket_id, name) WHERE is_latest = TRUE;
+CREATE INDEX objects_noncurrent_at_idx ON objects(bucket_id, noncurrent_at) WHERE is_latest = FALSE;
+CREATE INDEX objects_delete_marker_updated_at_idx ON objects(bucket_id, updated_at) WHERE is_latest = TRUE AND is_delete_marker = TRUE;
 
 CREATE TABLE unpinned_objects (
     sia_object_id BLOB PRIMARY KEY,

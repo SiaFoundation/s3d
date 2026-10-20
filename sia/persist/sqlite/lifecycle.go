@@ -241,7 +241,7 @@ func (s *Store) ExpireObjects(bucket string, prefix string, sizeGreaterThan, siz
 
 // ExpireNoncurrentVersions expires up to limit noncurrent versions in bucket
 // whose key matches the prefix, whose size matches the bounds, that became
-// noncurrent at or before the cutoff, and that sit behind more than retain
+// noncurrent at or before the cutoff, and that sit behind at least retain
 // newer noncurrent versions of the same key. A retain of 0 applies no such
 // bound. Returns the number of versions expired and performs no ownership
 // checks.
@@ -255,34 +255,30 @@ func (s *Store) ExpireNoncurrentVersions(bucket string, prefix string, sizeGreat
 			return err
 		}
 
-		// the ranking spans every noncurrent version of a matching key, so
-		// retain counts versions the cutoff and size bounds exclude
-		inner := []string{"o.bucket_id = ?", "o.is_latest = FALSE"}
-		args := []any{bid}
+		where := []string{"o.bucket_id = ?", "o.is_latest = FALSE", "o.noncurrent_at <= ?"}
+		args := []any{bid, sqlTime(before)}
 		if prefix != "" {
-			inner = append(inner, "o.name >= ? AND o.name < ?")
+			where = append(where, "o.name >= ? AND o.name < ?")
 			args = append(args, prefix, prefix+"\xFF")
 		}
-
-		outer := []string{"rn > ?", "noncurrent_at <= ?"}
-		args = append(args, retain, sqlTime(before))
 		if sizeGreaterThan != nil {
-			outer = append(outer, "size > ?")
+			where = append(where, "o.size > ?")
 			args = append(args, *sizeGreaterThan)
 		}
 		if sizeLessThan != nil {
-			outer = append(outer, "size < ?")
+			where = append(where, "o.size < ?")
 			args = append(args, *sizeLessThan)
+		}
+		if retain > 0 {
+			// the count spans every newer noncurrent version of the key, so
+			// retain counts versions the cutoff and size bounds exclude
+			where = append(where, `(SELECT COUNT(*) FROM objects n
+				WHERE n.bucket_id = o.bucket_id AND n.name = o.name AND n.seq > o.seq AND n.is_latest = FALSE) >= ?`)
+			args = append(args, retain)
 		}
 		args = append(args, limit)
 
-		query := fmt.Sprintf(`
-			SELECT name, version_id FROM (
-				SELECT o.name, o.version_id, o.size, o.noncurrent_at,
-					ROW_NUMBER() OVER (PARTITION BY o.bucket_id, o.name ORDER BY o.seq DESC) AS rn
-				FROM objects o WHERE %s
-			) WHERE %s
-			LIMIT ?`, strings.Join(inner, " AND "), strings.Join(outer, " AND "))
+		query := fmt.Sprintf(`SELECT o.name, o.version_id FROM objects o WHERE %s LIMIT ?`, strings.Join(where, " AND "))
 
 		versions, err := selectExpiringVersions(tx, query, args...)
 		if err != nil {
