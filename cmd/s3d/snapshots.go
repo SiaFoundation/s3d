@@ -56,7 +56,6 @@ func runSnapshotsCreate(ctx context.Context, cmd *flag.FlagSet) {
 	checkFatalError("failed to create snapshot", err)
 
 	fmt.Printf("Created snapshot %s with %d objects.\n", snapshot.SiaObjectID, snapshot.ObjectCount)
-	fmt.Println("Keep this ID, it is the only one that survives losing the database.")
 }
 
 func runSnapshotsList(ctx context.Context, cmd *flag.FlagSet) {
