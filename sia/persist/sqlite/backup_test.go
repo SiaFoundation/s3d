@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -62,6 +63,12 @@ func TestBackup(t *testing.T) {
 		} else if !reflect.DeepEqual(buckets, restored) {
 			t.Fatalf("expected buckets %v, got %v", buckets, restored)
 		}
+
+		if restored, err := backup.Restored(); err != nil {
+			t.Fatal(err)
+		} else if !restored {
+			t.Fatal("expected the backup to be flagged restored")
+		}
 	}
 
 	t.Run("Backup", func(t *testing.T) {
@@ -70,6 +77,17 @@ func TestBackup(t *testing.T) {
 			t.Fatal(err)
 		}
 		checkDatabase(t, destPath)
+
+		// only the copy is flagged and no journal is left next to it
+		if restored, err := store.Restored(); err != nil {
+			t.Fatal(err)
+		} else if restored {
+			t.Fatal("expected the source not to be flagged restored")
+		} else if entries, err := os.ReadDir(filepath.Dir(destPath)); err != nil {
+			t.Fatal(err)
+		} else if len(entries) != 1 {
+			t.Fatal("unexpected files", entries)
+		}
 	})
 
 	t.Run("EmptyDestination", func(t *testing.T) {
