@@ -287,12 +287,14 @@ type Store interface {
 	DBVersion() int64
 
 	AdoptSnapshot(objectID types.Hash256, createdAt time.Time, gen, objectCount int64) (s3.Snapshot, error)
+	CompleteRestore(onDisk map[string]struct{}, pinBefore time.Time) (RestoreCleanup, error)
 	CreateSnapshot() (s3.Snapshot, int64, error)
 	DeleteSnapshotsBySiaObject(objectID types.Hash256) (int64, error)
 	HasSnapshotObject(objectID types.Hash256) (bool, error)
 	ListSnapshots() ([]s3.Snapshot, error)
 	MarkSnapshotPinned(objectID types.Hash256) error
 	MarkSnapshotPinning(id int64, objectID types.Hash256) error
+	Restored() (bool, error)
 	RollbackIncompleteSnapshots() (int64, error)
 	RollbackSnapshot(id int64) error
 	SnapshotsForDeletion(before time.Time) ([]types.Hash256, error)
@@ -336,6 +338,9 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 	dir := filepath.Join(sia.directory, UploadsDirectory)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create directory %q: %w", dir, err)
+	}
+	if err := sia.completeRestore(); err != nil {
+		return nil, fmt.Errorf("failed to complete restore: %w", err)
 	}
 	diskUsage, err := sia.store.DiskUsage()
 	if err != nil {
