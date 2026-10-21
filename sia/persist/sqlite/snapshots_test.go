@@ -528,7 +528,7 @@ func TestAdoptSnapshotWithholdsExistingOrphans(t *testing.T) {
 
 	// this history deletes the object before discovering the snapshots still
 	// present on the network
-	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "a"}); err != nil {
+	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "a"}, false); err != nil {
 		t.Fatal(err)
 	}
 
