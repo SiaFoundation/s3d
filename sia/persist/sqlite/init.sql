@@ -23,6 +23,11 @@ CREATE TABLE buckets (
     user_id INTEGER NOT NULL,
     versioning_status TEXT NOT NULL DEFAULT '' CHECK (versioning_status IN ('', 'Enabled', 'Suspended')),
     policy TEXT NOT NULL DEFAULT '',
+    object_lock_enabled INTEGER NOT NULL DEFAULT FALSE CHECK (object_lock_enabled IN (FALSE, TRUE)) CHECK (object_lock_enabled = FALSE OR versioning_status = 'Enabled'),
+    default_retention_mode TEXT NOT NULL DEFAULT '' CHECK (default_retention_mode IN ('', 'GOVERNANCE', 'COMPLIANCE')),
+    default_retention_days INTEGER,
+    -- a default retention is a mode plus exactly one of days or years
+    default_retention_years INTEGER CHECK ((default_retention_mode = '' AND default_retention_days IS NULL AND default_retention_years IS NULL) OR (default_retention_mode != '' AND ((default_retention_days IS NOT NULL) != (default_retention_years IS NOT NULL)))),
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
 CREATE INDEX buckets_user_id_idx ON buckets(user_id);
@@ -81,6 +86,9 @@ CREATE TABLE objects (
     updated_at INTEGER NOT NULL,
     filename TEXT, -- name of file for regular uploads or dir for multipart uploads
     sia_object_id BLOB REFERENCES sia_objects(id),
+    object_lock_mode TEXT NOT NULL DEFAULT '' CHECK (object_lock_mode IN ('', 'GOVERNANCE', 'COMPLIANCE')),
+    object_lock_retain_until INTEGER CHECK ((object_lock_mode = '' AND object_lock_retain_until IS NULL) OR (object_lock_mode != '' AND object_lock_retain_until IS NOT NULL)), -- unix milliseconds
+    object_lock_legal_hold TEXT NOT NULL DEFAULT '' CHECK (object_lock_legal_hold IN ('', 'ON', 'OFF')), -- '' means never set
     -- non-empty objects must have a filename, a sia_object_id, or both (between uploading and pinning)
     CHECK ((size = 0 AND filename IS NULL AND sia_object_id IS NULL) OR (size > 0 AND (filename IS NOT NULL OR sia_object_id IS NOT NULL))),
     CHECK (is_delete_marker IN (FALSE, TRUE)),
@@ -106,6 +114,9 @@ CREATE TABLE multipart_uploads (
     name TEXT NOT NULL,
     metadata TEXT NOT NULL,
     created_at INTEGER NOT NULL,
+    object_lock_mode TEXT NOT NULL DEFAULT '' CHECK (object_lock_mode IN ('', 'GOVERNANCE', 'COMPLIANCE')),
+    object_lock_retain_until INTEGER CHECK ((object_lock_mode = '' AND object_lock_retain_until IS NULL) OR (object_lock_mode != '' AND object_lock_retain_until IS NOT NULL)), -- unix milliseconds
+    object_lock_legal_hold TEXT NOT NULL DEFAULT '' CHECK (object_lock_legal_hold IN ('', 'ON', 'OFF')),
     FOREIGN KEY (bucket_id) REFERENCES buckets(id)
 );
 CREATE INDEX multipart_uploads_bucket_id_name_idx ON multipart_uploads(bucket_id, name);
@@ -146,9 +157,9 @@ CREATE INDEX orphaned_objects_gen_idx ON orphaned_objects(orphaned_at_gen);
 CREATE TABLE snapshots (
     id INTEGER PRIMARY KEY,
     created_at INTEGER NOT NULL,
-    object_count INTEGER NOT NULL, -- uploaded objects captured by the backup
+    object_count INTEGER NOT NULL, -- uploaded objects captured by the snapshot
 
-    sia_object_id BLOB, -- backup object on the network, set before the pin is issued
+    sia_object_id BLOB, -- snapshot object on the network, set before the pin is issued
 
     gen INTEGER NOT NULL, -- generation the snapshot started at
     gen_completed INTEGER, -- generation it completed at, NULL until pinned
@@ -160,7 +171,7 @@ CREATE TABLE snapshots (
 -- serves the orphan guard, both halves probe by completion generation
 CREATE INDEX snapshots_gen_completed_idx ON snapshots(gen_completed, gen);
 
--- one record per backup object
+-- one record per snapshot object
 CREATE UNIQUE INDEX snapshots_sia_object_id_idx ON snapshots(sia_object_id) WHERE sia_object_id IS NOT NULL;
 
 CREATE TABLE bucket_lifecycle_configurations (

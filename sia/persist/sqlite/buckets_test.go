@@ -18,7 +18,7 @@ import (
 func TestSuspendedDeletePreconditionAgainstCurrentVersion(t *testing.T) {
 	const bucket = "test-bucket"
 	store := initTestDB(t, zaptest.NewLogger(t))
-	if err := store.CreateBucket(testAccessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(testAccessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	} else if err := store.PutBucketVersioning(bucket, "", s3.VersioningStatusEnabled); err != nil {
 		t.Fatal(err)
@@ -38,13 +38,13 @@ func TestSuspendedDeletePreconditionAgainstCurrentVersion(t *testing.T) {
 	// checked against the current version.
 	wrongMD5 := frand.Entropy128()
 	wrong := s3.FormatETag(wrongMD5[:], 0)
-	if _, _, _, err := store.DeleteObject(bucket, "", s3.ObjectID{Key: "key", ETag: &wrong}); !errors.Is(err, s3errs.ErrPreconditionFailed) {
+	if _, _, _, err := store.DeleteObject(bucket, "", s3.ObjectID{Key: "key", ETag: &wrong}, false); !errors.Is(err, s3errs.ErrPreconditionFailed) {
 		t.Fatalf("expected ErrPreconditionFailed, got %v", err)
 	}
 
 	// the matching ETag succeeds and inserts a null delete marker
 	correct := s3.FormatETag(md5[:], 0)
-	versionID, isDeleteMarker, _, err := store.DeleteObject(bucket, "", s3.ObjectID{Key: "key", ETag: &correct})
+	versionID, isDeleteMarker, _, err := store.DeleteObject(bucket, "", s3.ObjectID{Key: "key", ETag: &correct}, false)
 	if err != nil {
 		t.Fatal(err)
 	} else if !isDeleteMarker || versionID != s3.Null {
@@ -57,7 +57,7 @@ func TestSuspendedDeletePreconditionAgainstCurrentVersion(t *testing.T) {
 func TestBucketAccessInfo(t *testing.T) {
 	const bucket = "test-bucket"
 	store := initTestDB(t, zaptest.NewLogger(t))
-	if err := store.CreateBucket(testAccessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(testAccessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
 	_, owner, err := store.LoadSecret(testAccessKeyID)
@@ -85,7 +85,7 @@ func TestBucketAccessInfo(t *testing.T) {
 func TestPutObjectBucketOwner(t *testing.T) {
 	const bucket = "test-bucket"
 	store := initTestDB(t, zaptest.NewLogger(t))
-	if err := store.CreateBucket(testAccessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(testAccessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	} else if err := store.CreateUser("bob"); err != nil {
 		t.Fatal(err)
@@ -99,11 +99,11 @@ func TestPutObjectBucketOwner(t *testing.T) {
 
 	if _, _, err := store.PutObject(bucket, "key", objects.PutOptions{BucketOwner: owner}); err != nil {
 		t.Fatal(err)
-	} else if _, _, _, err := store.DeleteObject(bucket, "", s3.ObjectID{Key: "key"}); err != nil {
+	} else if _, _, _, err := store.DeleteObject(bucket, "", s3.ObjectID{Key: "key"}, false); err != nil {
 		t.Fatal(err)
 	} else if err := store.DeleteBucket(bucket); err != nil {
 		t.Fatal(err)
-	} else if err := store.CreateBucket("BOB_KEY", bucket); err != nil {
+	} else if err := store.CreateBucket("BOB_KEY", bucket, false); err != nil {
 		t.Fatal(err)
 	}
 

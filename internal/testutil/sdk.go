@@ -33,6 +33,7 @@ type (
 		staged      map[types.Hash256]uploadedObject
 		events      []sdk.ObjectEvent
 		eventsErr   error // when set, ObjectEvents returns this error
+		deleteErr   error // when set, DeleteObject returns this error
 		slabSize    int64
 		failUploads bool
 
@@ -100,11 +101,22 @@ func (s *MemorySDK) SetRemainingStorage(remaining uint64) {
 func (s *MemorySDK) DeleteObject(_ context.Context, id types.Hash256) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
 	if _, ok := s.objects[id]; !ok {
 		return slabs.ErrObjectNotFound
 	}
 	delete(s.objects, id)
 	return nil
+}
+
+// SetDeleteError configures the error returned by future DeleteObject calls.
+// Pass nil to restore the default behavior.
+func (s *MemorySDK) SetDeleteError(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deleteErr = err
 }
 
 // Download downloads an object.
@@ -205,7 +217,7 @@ func (s *MemorySDK) Pinned(id types.Hash256) bool {
 // Upload stages the object's data in memory keyed by its ID and records its
 // metadata. Like the production SDK the object is only stored once it is
 // pinned. It implements the sia.SDK interface.
-func (s *MemorySDK) Upload(_ context.Context, obj *sdk.Object, r io.Reader) error {
+func (s *MemorySDK) Upload(_ context.Context, obj *sdk.Object, r io.Reader, _ ...sdk.UploadOption) error {
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return err
@@ -255,6 +267,15 @@ func (s *MemorySDK) ObjectMetadata(id types.Hash256) (json.RawMessage, bool) {
 	return o.meta.Metadata(), true
 }
 
+// StoredObject returns the stored object for an id, carrying the slabs and
+// metadata a real object event would.
+func (s *MemorySDK) StoredObject(id types.Hash256) (sdk.Object, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	o, ok := s.objects[id]
+	return o.meta, ok
+}
+
 // SetSlabSize overrides the slab size for testing.
 func (s *MemorySDK) SetSlabSize(size int64) {
 	s.mu.Lock()
@@ -277,7 +298,7 @@ func (s *MemorySDK) SetFailUploads(fail bool) {
 }
 
 // UploadPacked creates a new packed upload.
-func (s *MemorySDK) UploadPacked() (sia.PackedUpload, error) {
+func (s *MemorySDK) UploadPacked(_ ...sdk.UploadOption) (sia.PackedUpload, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.failUploads {

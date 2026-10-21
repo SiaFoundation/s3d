@@ -31,28 +31,35 @@ const (
 // S3 actions that s3d authorizes. A policy may only name those in
 // [supportedPolicyActions].
 const (
-	actionGetObject                  = "s3:GetObject"
-	actionGetObjectVersion           = "s3:GetObjectVersion"
-	actionPutObject                  = "s3:PutObject"
-	actionDeleteObject               = "s3:DeleteObject"
-	actionDeleteObjectVersion        = "s3:DeleteObjectVersion"
-	actionAbortMultipartUpload       = "s3:AbortMultipartUpload"
-	actionListMultipartUploadParts   = "s3:ListMultipartUploadParts"
-	actionListBucket                 = "s3:ListBucket"
-	actionListBucketVersions         = "s3:ListBucketVersions"
-	actionListBucketMultipartUploads = "s3:ListBucketMultipartUploads"
-	actionDeleteBucket               = "s3:DeleteBucket"
-	actionGetBucketLocation          = "s3:GetBucketLocation"
-	actionGetBucketVersioning        = "s3:GetBucketVersioning"
-	actionPutBucketVersioning        = "s3:PutBucketVersioning"
-	actionGetLifecycleConfiguration  = "s3:GetLifecycleConfiguration"
-	actionPutLifecycleConfiguration  = "s3:PutLifecycleConfiguration"
-	actionGetBucketPolicy            = "s3:GetBucketPolicy"
-	actionPutBucketPolicy            = "s3:PutBucketPolicy"
-	actionDeleteBucketPolicy         = "s3:DeleteBucketPolicy"
-	actionGetBucketPolicyStatus      = "s3:GetBucketPolicyStatus"
-	actionCreateBucket               = "s3:CreateBucket"
-	actionListAllMyBuckets           = "s3:ListAllMyBuckets"
+	actionGetObject                        = "s3:GetObject"
+	actionGetObjectVersion                 = "s3:GetObjectVersion"
+	actionPutObject                        = "s3:PutObject"
+	actionDeleteObject                     = "s3:DeleteObject"
+	actionDeleteObjectVersion              = "s3:DeleteObjectVersion"
+	actionAbortMultipartUpload             = "s3:AbortMultipartUpload"
+	actionListMultipartUploadParts         = "s3:ListMultipartUploadParts"
+	actionGetObjectRetention               = "s3:GetObjectRetention"
+	actionPutObjectRetention               = "s3:PutObjectRetention"
+	actionGetObjectLegalHold               = "s3:GetObjectLegalHold"
+	actionPutObjectLegalHold               = "s3:PutObjectLegalHold"
+	actionBypassGovernanceRetention        = "s3:BypassGovernanceRetention"
+	actionListBucket                       = "s3:ListBucket"
+	actionListBucketVersions               = "s3:ListBucketVersions"
+	actionListBucketMultipartUploads       = "s3:ListBucketMultipartUploads"
+	actionDeleteBucket                     = "s3:DeleteBucket"
+	actionGetBucketLocation                = "s3:GetBucketLocation"
+	actionGetBucketVersioning              = "s3:GetBucketVersioning"
+	actionPutBucketVersioning              = "s3:PutBucketVersioning"
+	actionGetLifecycleConfiguration        = "s3:GetLifecycleConfiguration"
+	actionPutLifecycleConfiguration        = "s3:PutLifecycleConfiguration"
+	actionGetBucketPolicy                  = "s3:GetBucketPolicy"
+	actionPutBucketPolicy                  = "s3:PutBucketPolicy"
+	actionDeleteBucketPolicy               = "s3:DeleteBucketPolicy"
+	actionGetBucketPolicyStatus            = "s3:GetBucketPolicyStatus"
+	actionGetBucketObjectLockConfiguration = "s3:GetBucketObjectLockConfiguration"
+	actionPutBucketObjectLockConfiguration = "s3:PutBucketObjectLockConfiguration"
+	actionCreateBucket                     = "s3:CreateBucket"
+	actionListAllMyBuckets                 = "s3:ListAllMyBuckets"
 )
 
 // supportedPolicyActions are the actions a policy may grant, keyed by
@@ -108,7 +115,10 @@ func isObjectAction(action string) bool {
 	switch action {
 	case actionGetObject, actionGetObjectVersion, actionPutObject,
 		actionDeleteObject, actionDeleteObjectVersion,
-		actionAbortMultipartUpload, actionListMultipartUploadParts:
+		actionAbortMultipartUpload, actionListMultipartUploadParts,
+		actionGetObjectRetention, actionPutObjectRetention,
+		actionGetObjectLegalHold, actionPutObjectLegalHold,
+		actionBypassGovernanceRetention:
 		return true
 	}
 	return false

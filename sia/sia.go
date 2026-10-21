@@ -62,7 +62,7 @@ const (
 	UploadsDirectory = "uploads"
 
 	// TmpDirectory is the directory name used for temporary files, e.g.
-	// snapshot backups awaiting upload. It is cleared on startup.
+	// database snapshots awaiting upload. It is cleared on startup.
 	TmpDirectory = "tmp"
 )
 
@@ -141,6 +141,14 @@ func WithUploadThreads(n int) Option {
 	}
 }
 
+// WithUploadDeadline sets how long after a pending object was last modified its
+// group is uploaded regardless of wasted space. Zero disables the deadline.
+func WithUploadDeadline(d time.Duration) Option {
+	return func(s *Sia) {
+		s.uploadDeadline = d
+	}
+}
+
 // Sia implements the s3.Backend interface for storing data on Sia.
 type Sia struct {
 	sdk   SDK
@@ -161,6 +169,7 @@ type Sia struct {
 	uploadOptimalSize int64
 	uploadWastePct    float64
 	uploadThreads     int
+	uploadDeadline    time.Duration
 
 	lifecycleLoopInterval time.Duration
 	lifecycleDayDuration  time.Duration
@@ -191,8 +200,8 @@ type SDK interface {
 	Download(obj sdk.Object, rnge *s3.ObjectRange) (io.ReadCloser, error)
 	ObjectEvents(ctx context.Context, cursor slabs.Cursor, limit int) ([]sdk.ObjectEvent, error)
 	OptimalDataSize() (int64, error)
-	Upload(ctx context.Context, obj *sdk.Object, r io.Reader) error
-	UploadPacked() (PackedUpload, error)
+	Upload(ctx context.Context, obj *sdk.Object, r io.Reader, opts ...sdk.UploadOption) error
+	UploadPacked(opts ...sdk.UploadOption) (PackedUpload, error)
 	PinObject(ctx context.Context, obj sdk.Object) error
 	PruneSlabs(ctx context.Context, opts ...api.URLQueryParameterOption) error
 	SealObject(obj sdk.Object) sdk.SealedObject
@@ -219,14 +228,20 @@ type Store interface {
 
 	AllFilenames() ([]string, error)
 	CopyObject(srcBucket, srcName string, srcVersion s3.VersionRequest, dstBucket, dstName string, opts s3.CopyObjectOptions) (*s3.CopyObjectResult, objects.OrphanedFile, error)
-	CreateBucket(accessKeyID, bucket string) error
+	CreateBucket(accessKeyID, bucket string, objectLock bool) error
 	DeleteBucket(bucket string) error
-	DeleteObject(bucket, owner string, objectID s3.ObjectID) (string, bool, objects.OrphanedFile, error)
+	DeleteObject(bucket, owner string, objectID s3.ObjectID, bypass bool) (string, bool, objects.OrphanedFile, error)
 	GetObject(bucket, object string, version s3.VersionRequest, partNumber *int32) (*objects.Object, error)
 	DiskUsage() (uint64, error)
 	BucketAccessInfo(bucket string) (s3.BucketAccessInfo, error)
 	GetBucketVersioning(bucket string) (string, error)
 	PutBucketVersioning(bucket, owner, status string) error
+	GetBucketObjectLockConfiguration(bucket string) (s3.ObjectLockConfiguration, error)
+	PutBucketObjectLockConfiguration(bucket, owner string, config s3.ObjectLockConfiguration) error
+	GetObjectLegalHold(bucket, name string, version s3.VersionRequest) (string, error)
+	GetObjectRetention(bucket, name string, version s3.VersionRequest) (s3.ObjectLockState, error)
+	PutObjectLegalHold(bucket, owner, name string, version s3.VersionRequest, status string) error
+	PutObjectRetention(bucket, owner, name string, version s3.VersionRequest, retention s3.ObjectLockState, bypass bool) error
 	PutBucketPolicy(bucket, owner, document string) error
 	DeleteBucketPolicy(bucket string) error
 	ObjectsCursor() (slabs.Cursor, error)
@@ -248,7 +263,7 @@ type Store interface {
 	RemoveOrphanedObject(objectID types.Hash256) error
 	AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) (int64, error)
 	AddMultipartPart(bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (string, int64, error)
-	CreateMultipartUpload(bucket, name string, uploadID s3.UploadID, meta map[string]string) error
+	CreateMultipartUpload(bucket, name string, uploadID s3.UploadID, meta map[string]string, lock *s3.ObjectLockState) error
 	CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64, preconditions s3.ObjectPreconditions) (string, objects.OrphanedFile, error)
 	HasMultipartUpload(bucket, name string, uploadID s3.UploadID) (hasParts bool, err error)
 	ListMultipartUploads(bucket string, prefix s3.Prefix, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error)
@@ -287,6 +302,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		directory:             directory,
 		uploadWastePct:        DefaultUploadWastePct,
 		uploadThreads:         DefaultUploadThreads,
+		uploadDeadline:        DefaultUploadDeadline,
 		lifecycleLoopInterval: defaultLifecycleLoopInterval,
 		lifecycleDayDuration:  defaultLifecycleDayDuration,
 		diskUsageTimeout:      defaultDiskUsageTimeout,
@@ -305,6 +321,8 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		return nil, errors.New("upload waste percentage must be greater than 0")
 	} else if sia.uploadThreads < 0 {
 		return nil, fmt.Errorf("upload threads must not be negative, got %d", sia.uploadThreads)
+	} else if sia.uploadDeadline < 0 {
+		return nil, fmt.Errorf("upload deadline must not be negative, got %s", sia.uploadDeadline)
 	}
 	if sia.uploadThreads == 0 {
 		sia.uploadThreads = DefaultUploadThreads
@@ -343,7 +361,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		return nil, fmt.Errorf("failed to create tmp directory: %w", err)
 	}
 
-	// roll back snapshots whose backup was never uploaded. One left awaiting
+	// roll back snapshots whose object was never uploaded. One left awaiting
 	// its pin is completed by the sync loop if the pin landed and reaped by
 	// the deletion pass otherwise
 	if deleted, err := sia.store.RollbackIncompleteSnapshots(); err != nil {
@@ -385,10 +403,28 @@ func (s *Sia) Close() error {
 	return nil
 }
 
-// CreateSnapshot records a snapshot, backs up the database, uploads it gzip
-// compressed to Sia as a tagged snapshot object, pins it, and marks the record
-// pinned. On failure the snapshot is rolled back.
+// CreateSnapshot flushes pending objects to Sia, then records a snapshot,
+// backs up the database, uploads it gzip compressed to Sia as a tagged
+// snapshot object, pins it, and marks the record pinned. On failure the
+// snapshot is rolled back.
 func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
+	// a snapshot backs up the metadata database, which stays worth capturing
+	// when an object cannot be flushed, so a failed flush is reported and the
+	// snapshot continues
+	if err := s.FlushObjects(ctx); err != nil {
+		if ctx.Err() != nil {
+			return s3.Snapshot{}, fmt.Errorf("failed to flush objects before snapshot: %w", err)
+		}
+		s.logger.Warn("failed to flush objects before snapshot", zap.Error(err))
+	}
+	if stats, sErr := s.store.UploadStats(); sErr != nil {
+		s.logger.Warn("failed to read upload stats before snapshot", zap.Error(sErr))
+	} else if stats.PendingObjects > 0 {
+		s.logger.Warn("snapshot does not cover objects still pending upload",
+			zap.Int64("pendingObjects", stats.PendingObjects),
+			zap.Int64("pendingSize", stats.PendingSize))
+	}
+
 	snap, gen, err := s.store.CreateSnapshot()
 	if err != nil {
 		return s3.Snapshot{}, fmt.Errorf("failed to create snapshot: %w", err)
@@ -408,14 +444,28 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 	}()
 
 	tmp := filepath.Join(s.directory, TmpDirectory, fmt.Sprintf("snapshot-%x.tmp", frand.Bytes(8)))
+	backupStart := time.Now()
 	if err := s.store.Backup(ctx, tmp); err != nil {
-		return s3.Snapshot{}, fmt.Errorf("failed to create backup: %w", err)
+		return s3.Snapshot{}, fmt.Errorf("failed to back up database: %w", err)
 	}
 	defer func() {
 		if rErr := os.Remove(tmp); rErr != nil && !errors.Is(rErr, os.ErrNotExist) {
-			s.logger.Warn("failed to remove snapshot backup file", zap.String("path", tmp), zap.Error(rErr))
+			s.logger.Warn("failed to remove snapshot file", zap.String("path", tmp), zap.Error(rErr))
 		}
 	}()
+
+	backupDuration := time.Since(backupStart)
+	var imageSize int64
+	if info, sErr := os.Stat(tmp); sErr != nil {
+		s.logger.Warn("failed to stat snapshot file", zap.Error(sErr))
+	} else {
+		imageSize = info.Size()
+	}
+	s.logger.Info("snapshot backup complete",
+		zap.Int64("snapshotID", snap.ID),
+		zap.Duration("elapsed", backupDuration),
+		zap.Int64("imageSize", imageSize),
+		zap.Int64("objectCount", snap.ObjectCount))
 
 	meta, err := json.Marshal(objects.SnapshotMetadata{
 		Type:        objects.SnapshotType,
@@ -432,20 +482,21 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 
 	f, err := os.Open(tmp)
 	if err != nil {
-		return s3.Snapshot{}, fmt.Errorf("failed to open snapshot backup: %w", err)
+		return s3.Snapshot{}, fmt.Errorf("failed to open snapshot file: %w", err)
 	}
 	defer f.Close()
 
-	// compress the backup during upload since database files compress well
+	// compress the snapshot during upload since database files compress well
 	// and Sia storage is paid per byte
 	pr, pw := io.Pipe()
+	compressed := new(atomic.Int64)
 	go func() {
 		// the compressor emits a few hundred bytes at a time and the pipe has
 		// no buffer of its own, so batch the writes the uploader reads
-		bw := bufio.NewWriterSize(pw, 1<<20)
+		bw := bufio.NewWriterSize(countingWriter{w: pw, n: compressed}, 1<<20)
 		gw := gzip.NewWriter(bw)
 		if _, err := io.Copy(gw, f); err != nil {
-			pw.CloseWithError(fmt.Errorf("failed to compress backup: %w", err))
+			pw.CloseWithError(fmt.Errorf("failed to compress snapshot: %w", err))
 			return
 		}
 		if err := gw.Close(); err != nil {
@@ -459,7 +510,7 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 
 	obj := sdk.NewEmptyObject()
 	obj.UpdateMetadata(meta)
-	if err := s.sdk.Upload(ctx, &obj, pr); err != nil {
+	if err := s.sdk.Upload(ctx, &obj, pr, sdk.WithUploadProgress(s.shardProgress)); err != nil {
 		return s3.Snapshot{}, fmt.Errorf("failed to upload snapshot: %w", err)
 	}
 
@@ -472,11 +523,31 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 		return s3.Snapshot{}, fmt.Errorf("failed to pin snapshot: %w", err)
 	}
 	// the sync loop may have observed the pin and completed the snapshot already
-	if err := s.store.MarkSnapshotPinned(obj.ID()); err != nil && !errors.Is(err, objects.ErrSnapshotNotFound) {
+	if err := s.store.MarkSnapshotPinned(obj.ID()); err != nil && !errors.Is(err, s3.ErrSnapshotNotFound) {
 		return s3.Snapshot{}, fmt.Errorf("failed to mark snapshot pinned: %w", err)
 	}
 	snap.SiaObjectID = obj.ID()
+
+	s.logger.Info("snapshot complete",
+		zap.Int64("snapshotID", snap.ID),
+		zap.Stringer("objectID", &snap.SiaObjectID),
+		zap.Duration("backup", backupDuration),
+		zap.Duration("total", time.Since(backupStart)),
+		zap.Int64("imageSize", imageSize),
+		zap.Int64("uploadedSize", compressed.Load()))
 	return snap, nil
+}
+
+// countingWriter totals the bytes written through it.
+type countingWriter struct {
+	w io.Writer
+	n *atomic.Int64
+}
+
+func (c countingWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.n.Add(int64(n))
+	return n, err
 }
 
 // isObjectNotFound reports whether err indicates the object does not exist on
@@ -492,6 +563,43 @@ func (s *Sia) wakeOrphanLoop() {
 	case s.orphanWake <- struct{}{}:
 	default:
 	}
+}
+
+// DeleteSnapshot unpins a snapshot's Sia object from the network and removes
+// its record, releasing the orphaned objects it was withholding.
+func (s *Sia) DeleteSnapshot(ctx context.Context, objectID types.Hash256) error {
+	// an arbitrary id would unpin live object data
+	if known, err := s.store.HasSnapshotObject(objectID); err != nil {
+		return fmt.Errorf("failed to look up snapshot: %w", err)
+	} else if !known {
+		return s3.ErrSnapshotNotFound
+	}
+
+	// an unreferenced Sia object is never collected
+	if err := s.sdk.DeleteObject(ctx, objectID); err != nil && !isObjectNotFound(err) {
+		return fmt.Errorf("failed to unpin snapshot object: %w", err)
+	}
+
+	// the sync loop may have already removed the record in response to the
+	// unpin above, so a missing row means the delete is done rather than absent
+	if _, err := s.store.DeleteSnapshotsBySiaObject(objectID); err != nil {
+		return fmt.Errorf("failed to delete snapshot: %w", err)
+	}
+	s.logger.Info("deleted snapshot", zap.Stringer("objectID", &objectID))
+
+	s.wakeOrphanLoop()
+	return nil
+}
+
+// ListSnapshots returns the recorded database snapshots and whether the last
+// metadata sync drained the network's event stream.
+func (s *Sia) ListSnapshots(_ context.Context) (s3.SnapshotList, error) {
+	synced := s.synced.Load()
+	snapshots, err := s.store.ListSnapshots()
+	if err != nil {
+		return s3.SnapshotList{}, err
+	}
+	return s3.SnapshotList{Synced: synced, Snapshots: snapshots}, nil
 }
 
 // processOrphansLoop periodically processes orphaned objects.
@@ -756,8 +864,8 @@ func (s *Sia) syncBatch(ctx context.Context, cursor slabs.Cursor) (slabs.Cursor,
 	processed := 0
 	for _, ev := range events {
 		if ev.Deleted {
-			// drop snapshots whose backup object was deleted on the
-			// indexer so they stop withholding orphans
+			// drop snapshots whose object was deleted on the indexer so
+			// they stop withholding orphans
 			if n, err := s.store.DeleteSnapshotsBySiaObject(ev.Key); err != nil {
 				s.syncFailed("failed to delete snapshot for deleted object", zap.Stringer("objectID", &ev.Key), zap.Error(err))
 				break
@@ -807,7 +915,7 @@ func (s *Sia) syncBatch(ctx context.Context, cursor slabs.Cursor) (slabs.Cursor,
 }
 
 // snapshotMetadata parses the object's metadata and reports whether it tags
-// the object as a snapshot backup.
+// the object as a snapshot.
 func snapshotMetadata(obj *sdk.Object) (objects.SnapshotMetadata, bool) {
 	var meta objects.SnapshotMetadata
 	if raw := obj.Metadata(); len(raw) == 0 || json.Unmarshal(raw, &meta) != nil {
@@ -816,7 +924,7 @@ func snapshotMetadata(obj *sdk.Object) (objects.SnapshotMetadata, bool) {
 	return meta, meta.Type == objects.SnapshotType
 }
 
-// handleSnapshotObject checks a snapshot backup object against the local
+// handleSnapshotObject checks a snapshot object against the local
 // records, completes a record a crash left awaiting its pin, and adopts the
 // object when no record exists rather than unpinning it, e.g. after restoring
 // from a backup made by a previous database. It reports whether the event was
@@ -832,7 +940,7 @@ func (s *Sia) handleSnapshotObject(objectID types.Hash256, meta objects.Snapshot
 	if err := s.store.MarkSnapshotPinned(objectID); err == nil {
 		s.logger.Info("completed snapshot", zap.Stringer("objectID", &objectID))
 		return true
-	} else if !errors.Is(err, objects.ErrSnapshotNotFound) {
+	} else if !errors.Is(err, s3.ErrSnapshotNotFound) {
 		s.syncFailed("failed to complete snapshot", zap.Stringer("objectID", &objectID), zap.Error(err))
 		return false
 	}

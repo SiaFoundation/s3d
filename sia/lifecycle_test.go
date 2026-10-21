@@ -18,7 +18,7 @@ func TestApplyLifecycleRules(t *testing.T) {
 	backend, _ := testutil.NewBackend(t)
 
 	const bucket = "lifecycle-bucket"
-	if err := backend.CreateBucket(ctx, testutil.AccessKeyID, bucket); err != nil {
+	if err := backend.CreateBucket(ctx, testutil.AccessKeyID, bucket, s3.CreateBucketOptions{}); err != nil {
 		t.Fatal(err)
 	}
 

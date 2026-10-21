@@ -87,6 +87,7 @@ var (
 	ErrInvalidRange                                   = Error{"InvalidRange", "Requested byte range cannot be satisfied.", http.StatusRequestedRangeNotSatisfiable}
 	ErrInvalidRegion                                  = Error{"InvalidRegion", "Attempted to create a Multi-Region Access Point in a Region you haven't opted in to.", http.StatusForbidden}
 	ErrInvalidRequest                                 = Error{"InvalidRequest", "The request is invalid (see docs for common causes including signature version, pagination, lifecycle, acceleration, conflicts, etc.).", http.StatusBadRequest}
+	ErrInvalidRetentionPeriod                         = Error{"InvalidRetentionPeriod", "The retention period specified is not valid.", http.StatusBadRequest}
 	ErrInvalidSessionException                        = Error{"InvalidSessionException", "Session no longer exists because it timed out or expired.", http.StatusBadRequest}
 	ErrInvalidSignature                               = Error{"InvalidSignature", "Server-calculated signature does not match the provided signature.", http.StatusBadRequest}
 	ErrInvalidSecurity                                = Error{"InvalidSecurity", "Provided security credentials are not valid.", http.StatusForbidden}

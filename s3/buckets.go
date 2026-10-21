@@ -3,6 +3,7 @@ package s3
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"go.uber.org/zap"
@@ -20,7 +21,6 @@ var unsupportedBucketSubresources = map[string]struct{}{
 	"logging":             {},
 	"metrics":             {},
 	"notification":        {},
-	"object-lock":         {},
 	"ownershipControls":   {},
 	"publicAccessBlock":   {},
 	"replication":         {},
@@ -52,6 +52,8 @@ func (s *s3) routeBucket(r *http.Request) (operation, error) {
 			return operation{}, s3errs.ErrMethodNotAllowed
 		}
 		return operation{action: actionGetBucketLocation, serve: s.getBucketLocation}, nil
+	case q.Has("object-lock"):
+		return s.routeBucketObjectLock(r)
 	}
 
 	switch r.Method {
@@ -100,6 +102,12 @@ func (s *s3) getBucketLocation(w http.ResponseWriter, r *http.Request, access *b
 	})
 }
 
+// CreateBucketOptions are the settings a CreateBucket request may carry.
+type CreateBucketOptions struct {
+	// ObjectLockEnabled turns on object lock and versioning.
+	ObjectLockEnabled bool
+}
+
 // createBucket handles PUT Bucket requests.
 //
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateBucket.html
@@ -119,7 +127,18 @@ func (s *s3) createBucket(w http.ResponseWriter, r *http.Request, access *bucket
 	if err != nil {
 		return err
 	}
-	if err := s.backend.CreateBucket(r.Context(), accessKeyID, bucket); err != nil {
+
+	var opts CreateBucketOptions
+	if v := r.Header.Get(HeaderBucketObjectLockEnabled); v != "" {
+		switch {
+		case strings.EqualFold(v, "true"):
+			opts.ObjectLockEnabled = true
+		case strings.EqualFold(v, "false"):
+		default:
+			return fmt.Errorf("object lock enabled must be true or false, got %q: %w", v, s3errs.ErrInvalidRequest)
+		}
+	}
+	if err := s.backend.CreateBucket(r.Context(), accessKeyID, bucket, opts); err != nil {
 		return err
 	}
 

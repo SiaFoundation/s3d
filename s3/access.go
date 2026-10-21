@@ -3,6 +3,7 @@ package s3
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/SiaFoundation/s3d/s3/auth"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
@@ -162,6 +163,50 @@ func (a *bucketAccess) assertAllowedInBucket(actions ...string) error {
 		}
 	}
 	return s3errs.ErrAccessDenied
+}
+
+// assertObjectLockAllowed checks that the caller may stamp lock on a new
+// version of object.
+func (a *bucketAccess) assertObjectLockAllowed(object string, lock *ObjectLockState) error {
+	if lock.Retained() {
+		if err := a.assertObjectAllowed(actionPutObjectRetention, object); err != nil {
+			return err
+		}
+	}
+	if lock != nil && lock.LegalHold != "" {
+		return a.assertObjectAllowed(actionPutObjectLegalHold, object)
+	}
+	return nil
+}
+
+// visibleObjectLock returns the part of a version's lock state the caller may
+// read.
+func (a *bucketAccess) visibleObjectLock(object string, lock *ObjectLockState) *ObjectLockState {
+	if lock == nil {
+		return nil
+	}
+	visible := *lock
+	if a.assertObjectAllowed(actionGetObjectRetention, object) != nil {
+		visible.Mode, visible.RetainUntil = "", time.Time{}
+	}
+	if a.assertObjectAllowed(actionGetObjectLegalHold, object) != nil {
+		visible.LegalHold = ""
+	}
+	return &visible
+}
+
+// bypassGovernanceRetention reports whether the request asked to bypass a
+// GOVERNANCE retention and the caller may bypass it on every one of objects.
+func (a *bucketAccess) bypassGovernanceRetention(h http.Header, objects ...string) bool {
+	if !bypassGovernanceRetention(h) {
+		return false
+	}
+	for _, object := range objects {
+		if a.assertObjectAllowed(actionBypassGovernanceRetention, object) != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // hideMissing hides missing keys and versions from callers that may not
