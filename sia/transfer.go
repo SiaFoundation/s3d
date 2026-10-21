@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
+	sdk "go.sia.tech/siastorage"
 )
 
 const (
@@ -62,8 +63,13 @@ type (
 )
 
 func (c *transferCounter) Write(p []byte) (int, error) {
-	c.total.Add(int64(len(p)))
+	c.add(int64(len(p)))
 	return len(p), nil
+}
+
+// add counts n bytes towards the total.
+func (c *transferCounter) add(n int64) {
+	c.total.Add(n)
 }
 
 func (u *activeUpload) Write(p []byte) (int, error) {
@@ -143,10 +149,14 @@ func (u *activeUpload) finalize() {
 	u.finalizing.Store(true)
 }
 
-// trackUpload wraps r so the bytes read from it count towards both u's
-// progress and the total handed to the Sia uploader.
+// trackUpload wraps r so the bytes read from it count towards u's progress.
 func (t *transferStats) trackUpload(r io.Reader, u *activeUpload) io.Reader {
-	return io.TeeReader(r, io.MultiWriter(&t.upload, u))
+	return io.TeeReader(r, u)
+}
+
+// shardProgress counts a shard the SDK reports as written to a host.
+func (s *Sia) shardProgress(p sdk.ShardProgress) {
+	s.transfer.upload.add(int64(p.ShardSize))
 }
 
 // snapshot returns the transfer stats as they stand, with active uploads in

@@ -106,3 +106,51 @@ func TestRequestChecksum(t *testing.T) {
 		})
 	}
 }
+
+func TestDeclaresTrailingChecksum(t *testing.T) {
+	tests := []struct {
+		name    string
+		headers map[string]string
+		want    bool
+	}{
+		{
+			name:    "no trailer",
+			headers: map[string]string{"Content-Type": "text/plain"},
+		},
+		{
+			name:    "crc32 trailer",
+			headers: map[string]string{"X-Amz-Trailer": "x-amz-checksum-crc32"},
+			want:    true,
+		},
+		{
+			name:    "trailer list with padding",
+			headers: map[string]string{"X-Amz-Trailer": "x-amz-foo, x-amz-checksum-sha256"},
+			want:    true,
+		},
+		{
+			name:    "unknown algorithm",
+			headers: map[string]string{"X-Amz-Trailer": "x-amz-checksum-made-up"},
+		},
+		{
+			name:    "trailer is not a checksum",
+			headers: map[string]string{"X-Amz-Trailer": "x-amz-something"},
+		},
+		{
+			// the algorithm header alone promises a checksum without carrying one
+			name:    "sdk algorithm header only",
+			headers: map[string]string{"X-Amz-Sdk-Checksum-Algorithm": "CRC32"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := make(http.Header)
+			for k, v := range tt.headers {
+				h.Set(k, v)
+			}
+			if got := declaresTrailingChecksum(h); got != tt.want {
+				t.Fatalf("expected %v, got %v", tt.want, got)
+			}
+		})
+	}
+}

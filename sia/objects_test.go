@@ -974,7 +974,7 @@ func TestSyncMetadata(t *testing.T) {
 	eventTime := time.Now().Truncate(time.Second)
 	deletedKey := stypes.Hash256{1, 2, 3}
 
-	// record a snapshot whose backup object matches the deleted event
+	// record a snapshot whose Sia object matches the deleted event
 	if snap, _, err := store.CreateSnapshot(); err != nil {
 		t.Fatal(err)
 	} else if err := store.MarkSnapshotPinning(snap.ID, deletedKey); err != nil {
@@ -1038,8 +1038,8 @@ func TestSyncMetadata(t *testing.T) {
 		t.Fatal("cursor should not change on no-op sync")
 	}
 
-	// uploads and pins an object tagged as a snapshot backup to the SDK
-	// without recording it locally
+	// uploads and pins an object tagged as a snapshot to the SDK without
+	// recording it locally
 	uploadSnapshotObject := func(meta objects.SnapshotMetadata) sdk.Object {
 		t.Helper()
 		raw, err := json.Marshal(meta)
@@ -1075,7 +1075,7 @@ func TestSyncMetadata(t *testing.T) {
 	leaked := uploadSnapshotObject(snapMeta)
 
 	// the sync leaves both objects pinned and adopts the leaked one, an object
-	// without a local record may be a backup made by a previous database
+	// without a local record may be a snapshot made by a previous database
 	memSDK.SetEvents([]sdk.ObjectEvent{
 		{Key: recorded.ID(), UpdatedAt: eventTime.Add(2 * time.Second), Object: &recorded},
 		{Key: leaked.ID(), UpdatedAt: eventTime.Add(3 * time.Second), Object: &leaked},
@@ -1090,6 +1090,8 @@ func TestSyncMetadata(t *testing.T) {
 		t.Fatal(err)
 	} else if len(snapshots) != 2 {
 		t.Fatal("unexpected", len(snapshots))
+	} else if snapshots[0].SiaObjectID != recorded.ID() {
+		t.Fatal("mismatch", snapshots[0].SiaObjectID)
 	} else if snapshots[1].SiaObjectID != leaked.ID() {
 		t.Fatal("mismatch", snapshots[1].SiaObjectID)
 	}
@@ -1109,11 +1111,17 @@ func TestSyncMetadata(t *testing.T) {
 	if !memSDK.Pinned(foreign.ID()) {
 		t.Fatal("expected unknown snapshot object to stay pinned")
 	}
+	// both adopted snapshots share the stamp from their metadata, so they sort
+	// behind the locally recorded one and ties list the later adoption first
 	if snapshots, err := store.ListSnapshots(); err != nil {
 		t.Fatal(err)
 	} else if len(snapshots) != 3 {
 		t.Fatal("unexpected", len(snapshots))
-	} else if snapshots[2].SiaObjectID != foreign.ID() {
+	} else if snapshots[0].SiaObjectID != recorded.ID() {
+		t.Fatal("mismatch", snapshots[0].SiaObjectID)
+	} else if snapshots[1].SiaObjectID != foreign.ID() {
+		t.Fatal("mismatch", snapshots[1].SiaObjectID)
+	} else if snapshots[2].SiaObjectID != leaked.ID() {
 		t.Fatal("mismatch", snapshots[2].SiaObjectID)
 	}
 	if cursor, err := store.ObjectsCursor(); err != nil {
@@ -1136,10 +1144,10 @@ func TestSyncMetadata(t *testing.T) {
 		t.Fatal(err)
 	} else if len(snapshots) != 4 {
 		t.Fatal("unexpected", len(snapshots))
-	} else if snapshots[2].ID != pending.ID {
-		t.Fatal("mismatch", snapshots[2].ID)
-	} else if snapshots[2].SiaObjectID != pendingObj.ID() {
-		t.Fatal("mismatch", snapshots[2].SiaObjectID)
+	} else if snapshots[0].ID != pending.ID {
+		t.Fatal("mismatch", snapshots[0].ID)
+	} else if snapshots[0].SiaObjectID != pendingObj.ID() {
+		t.Fatal("mismatch", snapshots[0].SiaObjectID)
 	}
 
 	// a tagged object with metadata s3d can't have written is left pinned
@@ -1687,8 +1695,8 @@ func TestTransferStats(t *testing.T) {
 	// nothing has moved yet and no limit is configured
 	if st := uploadStats(); st.BufferUsed != 0 || st.BufferLimit != 0 {
 		t.Fatalf("expected an empty unlimited buffer, got %d of %d", st.BufferUsed, st.BufferLimit)
-	} else if st.Transfer.IngressBytes != 0 || st.Transfer.UploadBytes != 0 {
-		t.Fatalf("expected no transferred bytes, got %d ingress and %d upload", st.Transfer.IngressBytes, st.Transfer.UploadBytes)
+	} else if st.Transfer.IngressBytes != 0 {
+		t.Fatalf("expected no transferred bytes, got %d ingress", st.Transfer.IngressBytes)
 	}
 
 	// the request body counts as ingress and the staged file as buffer usage
@@ -1701,16 +1709,11 @@ func TestTransferStats(t *testing.T) {
 		t.Fatalf("expected 100 bytes of ingress, got %d", st.Transfer.IngressBytes)
 	} else if st.Transfer.IngressActive != 0 {
 		t.Fatalf("expected no active ingress streams, got %d", st.Transfer.IngressActive)
-	} else if st.Transfer.UploadBytes != 0 {
-		t.Fatalf("expected no bytes handed to the uploader, got %d", st.Transfer.UploadBytes)
 	}
 
-	// uploading hands the buffered bytes to the Sia uploader
 	backend.UploadObjects(t.Context())
 	if st := uploadStats(); st.BufferUsed != 100 {
 		t.Fatalf("expected 100 bytes still buffered, got %d", st.BufferUsed)
-	} else if st.Transfer.UploadBytes != 100 {
-		t.Fatalf("expected 100 bytes handed to the uploader, got %d", st.Transfer.UploadBytes)
 	} else if st.Transfer.ActiveUploads != nil {
 		t.Fatalf("expected no active uploads, got %d", len(st.Transfer.ActiveUploads))
 	}
@@ -1836,7 +1839,7 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := store.DeleteObject(bucket, "", s3.ObjectID{Key: "C"}); err != nil {
+	if _, _, _, err := store.DeleteObject(bucket, "", s3.ObjectID{Key: "C"}, false); err != nil {
 		t.Fatal(err)
 	}
 	siaBackend.ProcessOrphans(t.Context())
@@ -1860,7 +1863,7 @@ func TestProcessOrphansGatedOnSync(t *testing.T) {
 	backend, store := testutil.NewBackend(t, testutil.WithSDK(memSDK))
 
 	const bucket = "bucket"
-	if err := store.CreateBucket(testutil.AccessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(testutil.AccessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1869,7 +1872,7 @@ func TestProcessOrphansGatedOnSync(t *testing.T) {
 	if err := backend.PinObjects(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := store.DeleteObject(bucket, "", s3.ObjectID{Key: "a"}); err != nil {
+	if _, _, _, err := store.DeleteObject(bucket, "", s3.ObjectID{Key: "a"}, false); err != nil {
 		t.Fatal(err)
 	}
 

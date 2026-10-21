@@ -15,8 +15,8 @@ const (
 	// so recovery can identify snapshots among all account objects.
 	SnapshotType = "s3d-snapshot"
 
-	// SnapshotEncodingGzip is the encoding recorded for snapshots whose backup
-	// is gzip compressed before upload.
+	// SnapshotEncodingGzip is the encoding recorded for snapshots that are
+	// gzip compressed before upload.
 	SnapshotEncodingGzip = "gzip"
 
 	// maxSnapshotGeneration caps the generation accepted from snapshot
@@ -35,10 +35,6 @@ var (
 	// ErrObjectNotFound is returned by MarkObjectUploaded when the pending
 	// object does not exist.
 	ErrObjectNotFound = errors.New("object not found")
-
-	// ErrSnapshotNotFound is returned by snapshot operations when no snapshot
-	// matches the addressed id and expected state.
-	ErrSnapshotNotFound = errors.New("snapshot not found")
 )
 
 // Object represents a stored object with its metadata.
@@ -58,6 +54,9 @@ type Object struct {
 	Size           int64
 	ContentMD5     [16]byte
 	LastModified   time.Time
+
+	// ObjectLock is the version's lock state, nil when it carries none.
+	ObjectLock *s3.ObjectLockState
 }
 
 // SiaObject pairs a Sia object ID with its sealed metadata.
@@ -102,17 +101,22 @@ type PutOptions struct {
 	// BucketOwner, if set, is the name of the user that must still own the
 	// bucket when the object is stored.
 	BucketOwner string
+
+	// ObjectLock is the lock to stamp on the new version, overriding the
+	// bucket's default retention.
+	ObjectLock *s3.ObjectLockState
 }
 
 // ObjectForUpload contains the fields needed to upload an object.
 type ObjectForUpload struct {
-	Bucket     string
-	Name       string
-	VersionID  string
-	Filename   string
-	ContentMD5 [16]byte
-	Length     int64
-	Multipart  bool
+	Bucket       string
+	Name         string
+	VersionID    string
+	Filename     string
+	ContentMD5   [16]byte
+	Length       int64
+	Multipart    bool
+	LastModified time.Time
 }
 
 // Part represents a single part of a multipart upload.

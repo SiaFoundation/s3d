@@ -43,6 +43,9 @@ type Object struct {
 	// PartsCount will be set for objects that are multipart uploads, but only
 	// if a multipart part number is specified.
 	PartsCount *int32
+
+	// ObjectLock is the version's lock state, nil when it carries none.
+	ObjectLock *ObjectLockState
 }
 
 // CopyObjectResult contains information about the result of a CopyObject
@@ -57,6 +60,13 @@ type CopyObjectResult struct {
 	// source bucket is versioned (Enabled or Suspended), else "".
 	SourceVersionID string
 	PartsCount      int32
+}
+
+// DeleteObjectOptions are the request scoped settings a delete may carry.
+type DeleteObjectOptions struct {
+	// BypassGovernanceRetention lets the caller destroy a version held by a
+	// GOVERNANCE retention. It has no effect on COMPLIANCE or a legal hold.
+	BypassGovernanceRetention bool
 }
 
 // DeleteObjectResult contains information about the result of a DeleteObject
@@ -145,6 +155,10 @@ type PutObjectOptions struct {
 	// when the object is stored, since the bucket may be recreated while the
 	// body is read. Otherwise [ErrNoSuchBucket] must be returned.
 	BucketOwner string
+
+	// ObjectLock is the lock to stamp on the new version, overriding the
+	// bucket's default retention. Nil applies the default, if any.
+	ObjectLock *ObjectLockState
 }
 
 // RequestChecksum is an additional checksum a client asked to have validated,
@@ -173,6 +187,10 @@ type CopyObjectOptions struct {
 	Replace                  bool
 	SourcePreconditions      ObjectPreconditions
 	DestinationPreconditions ObjectPreconditions
+
+	// ObjectLock is the lock to stamp on the copy, overriding the destination
+	// bucket's default retention. A copy never inherits the source's lock.
+	ObjectLock *ObjectLockState
 }
 
 // CopySourceError wraps an error about the source of a copy, so the S3 API
@@ -194,10 +212,8 @@ func (e CopySourceError) Unwrap() error {
 var unsupportedObjectSubresources = map[string]struct{}{
 	"acl":          {},
 	"attributes":   {},
-	"legal-hold":   {},
 	"renameObject": {},
 	"restore":      {},
-	"retention":    {},
 	"select":       {},
 	"tagging":      {},
 	"torrent":      {},
@@ -220,7 +236,7 @@ func (s *s3) routeObject(r *http.Request, object string) (operation, error) {
 	return s.routeObjectVersion(r, object, NoVersion())
 }
 
-func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, dst *bucketAccess, dstObject string, meta map[string]string) error {
+func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, dst *bucketAccess, dstObject string, meta map[string]string, lock *ObjectLockState) error {
 	dstBucket := dst.bucket
 	source := r.Header.Get("X-Amz-Copy-Source")
 	log := s.logger.With(zap.String("dstBucket", dstBucket),
@@ -256,6 +272,7 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, dst *bucketAcces
 		Replace:                  replace,
 		SourcePreconditions:      copySourcePreconditions(r.Header),
 		DestinationPreconditions: requestPreconditions(r.Header),
+		ObjectLock:               lock,
 	})
 	if err != nil {
 		return src.hideMissingSource(err, srcObject)
@@ -288,7 +305,9 @@ func (s *s3) deleteObject(w http.ResponseWriter, r *http.Request, access *bucket
 		return err
 	}
 
-	result, err := s.backend.DeleteObject(r.Context(), bucket, oid)
+	result, err := s.backend.DeleteObject(r.Context(), bucket, oid, DeleteObjectOptions{
+		BypassGovernanceRetention: access.bypassGovernanceRetention(r.Header, object),
+	})
 	if err != nil {
 		return err
 	}
@@ -352,8 +371,14 @@ func (s *s3) deleteObjects(w http.ResponseWriter, r *http.Request, access *bucke
 	}
 	res := &ObjectsDeleteResult{}
 	if len(allowed) > 0 {
+		keys := make([]string, len(allowed))
+		for i, obj := range allowed {
+			keys[i] = obj.Key
+		}
 		var err error
-		res, err = s.backend.DeleteObjects(r.Context(), bucket, access.owner.ID, allowed)
+		res, err = s.backend.DeleteObjects(r.Context(), bucket, access.owner.ID, allowed, DeleteObjectOptions{
+			BypassGovernanceRetention: access.bypassGovernanceRetention(r.Header, keys...),
+		})
 		if err != nil {
 			return err
 		}
@@ -426,6 +451,7 @@ func (s *s3) serveObject(w http.ResponseWriter, r *http.Request, access *bucketA
 	// write headers
 	setVersionHeaders(w, obj)
 	s.setLifecycleExpirationHeader(w, r, access, object, obj.LastModified)
+	obj.ObjectLock = access.visibleObjectLock(object, obj.ObjectLock)
 	if err := writeGetOrHeadObjectHeaders(obj, w, r); err != nil {
 		return err
 	}
@@ -817,8 +843,15 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, access *bucketAcc
 		return err
 	}
 
+	lock, err := requestObjectLock(r.Header)
+	if err != nil {
+		return err
+	} else if err := access.assertObjectLockAllowed(object, lock); err != nil {
+		return err
+	}
+
 	if _, ok := r.Header["X-Amz-Copy-Source"]; ok {
-		return s.copyObject(w, r, access, object, meta)
+		return s.copyObject(w, r, access, object, meta, lock)
 	}
 
 	// content length is mandatory
@@ -848,6 +881,11 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, access *bucketAcc
 		return err
 	}
 
+	// AWS requires a body checksum on an upload that carries a retention
+	if lock.Retained() && contentMD5 == nil && checksum == nil && !declaresTrailingChecksum(r.Header) {
+		return fmt.Errorf("a retention requires Content-MD5 or a checksum: %w", s3errs.ErrInvalidRequest)
+	}
+
 	res, err := s.backend.PutObject(r.Context(), bucket, object, r.Body, PutObjectOptions{
 		ContentLength: r.ContentLength,
 		ContentMD5:    contentMD5,
@@ -856,6 +894,7 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, access *bucketAcc
 		Meta:          meta,
 		Preconditions: requestPreconditions(r.Header),
 		BucketOwner:   access.owner.ID,
+		ObjectLock:    lock,
 	})
 	if err != nil {
 		return err
@@ -911,6 +950,18 @@ func requestChecksum(headers http.Header) (*RequestChecksum, error) {
 	}
 
 	return found, nil
+}
+
+// declaresTrailingChecksum reports whether the request declares a trailing
+// checksum the backend can compute. The auth layer validates it after the body.
+func declaresTrailingChecksum(headers http.Header) bool {
+	for h := range strings.SplitSeq(headers.Get(auth.HeaderXAMZTrailer), ",") {
+		suffix, ok := strings.CutPrefix(textproto.CanonicalMIMEHeaderKey(strings.TrimSpace(h)), checksumPrefix)
+		if ok && auth.NewChecksumHash(suffix) != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // FormatETag formats the given hash as an S3 ETag string.
@@ -1466,6 +1517,8 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 		}
 		w.Header().Set("x-amz-mp-parts-count", fmt.Sprintf("%d", partsCount))
 	}
+
+	writeObjectLockHeaders(w.Header(), obj.ObjectLock)
 
 	w.Header().Set("Accept-Ranges", "bytes")
 	if obj.Range != nil {

@@ -257,8 +257,8 @@ func (s *Sia) CopyObject(ctx context.Context, srcBucket, srcObject string, srcVe
 
 // DeleteObject deletes the object with the given key from the specified
 // bucket.
-func (s *Sia) DeleteObject(ctx context.Context, bucket string, object s3.ObjectID) (*s3.DeleteObjectResult, error) {
-	versionID, isDeleteMarker, orphan, err := s.store.DeleteObject(bucket, "", object)
+func (s *Sia) DeleteObject(ctx context.Context, bucket string, object s3.ObjectID, opts s3.DeleteObjectOptions) (*s3.DeleteObjectResult, error) {
+	versionID, isDeleteMarker, orphan, err := s.store.DeleteObject(bucket, "", object, opts.BypassGovernanceRetention)
 	if err != nil {
 		return nil, err
 	}
@@ -271,25 +271,29 @@ func (s *Sia) DeleteObject(ctx context.Context, bucket string, object s3.ObjectI
 }
 
 // DeleteObjects deletes multiple objects from the specified bucket.
-func (s *Sia) DeleteObjects(ctx context.Context, bucket, owner string, objects []s3.ObjectID) (*s3.ObjectsDeleteResult, error) {
+func (s *Sia) DeleteObjects(ctx context.Context, bucket, owner string, objects []s3.ObjectID, opts s3.DeleteObjectOptions) (*s3.ObjectsDeleteResult, error) {
 	var result s3.ObjectsDeleteResult
 
 	for _, obj := range objects {
-		versionID, isDeleteMarker, orphan, err := s.store.DeleteObject(bucket, owner, obj)
+		versionID, isDeleteMarker, orphan, err := s.store.DeleteObject(bucket, owner, obj, opts.BypassGovernanceRetention)
 		if err == nil {
 			s.cleanupOrphanFile(orphan)
 		}
 
 		if err != nil && !errors.Is(err, s3errs.ErrNoSuchKey) {
-			errResult := s3.ErrorResult{
+			var s3err s3errs.Error
+			if !errors.As(err, &s3err) {
+				s3err = s3errs.ErrInternalError
+			}
+			failed := s3.ErrorResult{
 				Key:     obj.Key,
-				Code:    s3errs.ErrorCode(err),
-				Message: err.Error(),
+				Code:    s3err.Code,
+				Message: s3err.Description,
 			}
 			if obj.VersionID != nil {
-				errResult.VersionID = s3.FormatVersion(*obj.VersionID)
+				failed.VersionID = s3.FormatVersion(*obj.VersionID)
 			}
-			result.Error = append(result.Error, errResult)
+			result.Error = append(result.Error, failed)
 			continue
 		}
 
@@ -333,6 +337,7 @@ func (s *Sia) headOrGetObject(ctx context.Context, bucket, object string, versio
 		VersionID:      obj.VersionID,
 		Versioned:      obj.Versioned,
 		IsDeleteMarker: obj.IsDeleteMarker,
+		ObjectLock:     obj.ObjectLock,
 	}
 	switch {
 	case obj.IsDeleteMarker:
@@ -548,6 +553,7 @@ func (s *Sia) PutObject(ctx context.Context, bucket, object string, r io.Reader,
 		FileName:      fileName,
 		Preconditions: opts.Preconditions,
 		BucketOwner:   opts.BucketOwner,
+		ObjectLock:    opts.ObjectLock,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to store object metadata: %w", err)

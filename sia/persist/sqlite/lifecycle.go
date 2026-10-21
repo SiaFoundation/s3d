@@ -215,6 +215,8 @@ func (s *Store) ExpireObjects(bucket string, prefix string, before time.Time, li
 				orphans = append(orphans, res.orphanFile)
 			}
 		}
+		// the candidate count, not the removed count, the caller ends the sweep
+		// when a batch comes back short
 		deleted = len(names)
 		return nil
 	})
