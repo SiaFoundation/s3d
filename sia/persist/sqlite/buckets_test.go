@@ -38,13 +38,13 @@ func TestSuspendedDeletePreconditionAgainstCurrentVersion(t *testing.T) {
 	// checked against the current version.
 	wrongMD5 := frand.Entropy128()
 	wrong := s3.FormatETag(wrongMD5[:], 0)
-	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "key", ETag: &wrong}); !errors.Is(err, s3errs.ErrPreconditionFailed) {
+	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "key", ETag: &wrong}, false); !errors.Is(err, s3errs.ErrPreconditionFailed) {
 		t.Fatalf("expected ErrPreconditionFailed, got %v", err)
 	}
 
 	// the matching ETag succeeds and inserts a null delete marker
 	correct := s3.FormatETag(md5[:], 0)
-	versionID, isDeleteMarker, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "key", ETag: &correct})
+	versionID, isDeleteMarker, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "key", ETag: &correct}, false)
 	if err != nil {
 		t.Fatal(err)
 	} else if !isDeleteMarker || versionID != s3.Null {

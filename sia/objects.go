@@ -257,8 +257,8 @@ func (s *Sia) CopyObject(ctx context.Context, accessKeyID, srcBucket, srcObject 
 
 // DeleteObject deletes the object with the given key from the specified
 // bucket for the user identified by the given access key.
-func (s *Sia) DeleteObject(ctx context.Context, accessKeyID, bucket string, object s3.ObjectID) (*s3.DeleteObjectResult, error) {
-	versionID, isDeleteMarker, orphan, err := s.store.DeleteObject(accessKeyID, bucket, object)
+func (s *Sia) DeleteObject(ctx context.Context, accessKeyID, bucket string, object s3.ObjectID, opts s3.DeleteObjectOptions) (*s3.DeleteObjectResult, error) {
+	versionID, isDeleteMarker, orphan, err := s.store.DeleteObject(accessKeyID, bucket, object, opts.BypassGovernanceRetention)
 	if err != nil {
 		return nil, err
 	}
@@ -272,7 +272,7 @@ func (s *Sia) DeleteObject(ctx context.Context, accessKeyID, bucket string, obje
 
 // DeleteObjects deletes multiple objects from the specified bucket for the
 // user identified by the given access key.
-func (s *Sia) DeleteObjects(ctx context.Context, accessKeyID, bucket string, objects []s3.ObjectID) (*s3.ObjectsDeleteResult, error) {
+func (s *Sia) DeleteObjects(ctx context.Context, accessKeyID, bucket string, objects []s3.ObjectID, opts s3.DeleteObjectOptions) (*s3.ObjectsDeleteResult, error) {
 	// an inaccessible bucket fails the whole request rather than every key
 	if err := s.store.AssertBucketOwner(accessKeyID, bucket); err != nil {
 		return nil, err
@@ -281,17 +281,25 @@ func (s *Sia) DeleteObjects(ctx context.Context, accessKeyID, bucket string, obj
 	var result s3.ObjectsDeleteResult
 
 	for _, obj := range objects {
-		versionID, isDeleteMarker, orphan, err := s.store.DeleteObject(accessKeyID, bucket, obj)
+		versionID, isDeleteMarker, orphan, err := s.store.DeleteObject(accessKeyID, bucket, obj, opts.BypassGovernanceRetention)
 		if err == nil {
 			s.cleanupOrphanFile(orphan)
 		}
 
 		if err != nil && !errors.Is(err, s3errs.ErrNoSuchKey) {
-			result.Error = append(result.Error, s3.ErrorResult{
+			var s3err s3errs.Error
+			if !errors.As(err, &s3err) {
+				s3err = s3errs.ErrInternalError
+			}
+			failed := s3.ErrorResult{
 				Key:     obj.Key,
-				Code:    s3errs.ErrorCode(err),
-				Message: err.Error(),
-			})
+				Code:    s3err.Code,
+				Message: s3err.Description,
+			}
+			if obj.VersionID != nil {
+				failed.VersionID = s3.FormatVersion(*obj.VersionID)
+			}
+			result.Error = append(result.Error, failed)
 			continue
 		}
 

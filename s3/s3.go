@@ -12,6 +12,7 @@ import (
 
 	"github.com/SiaFoundation/s3d/s3/auth"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"go.sia.tech/core/types"
 	"go.sia.tech/jape"
 	"go.uber.org/zap"
 )
@@ -89,7 +90,7 @@ type Backend interface {
 	//   unconditional, reporting no version and no delete marker. That covers a
 	//   key with no versions, a key whose current version is a delete marker,
 	//   and a named version that is not there.
-	DeleteObject(ctx context.Context, accessKeyID, bucket string, object ObjectID) (*DeleteObjectResult, error)
+	DeleteObject(ctx context.Context, accessKeyID, bucket string, object ObjectID, opts DeleteObjectOptions) (*DeleteObjectResult, error)
 
 	// DeleteObjects deletes multiple objects from the specified bucket for the
 	// user identified by the given access key.
@@ -105,7 +106,7 @@ type Backend interface {
 	// - Each object carries the same preconditions as DeleteObject, with the
 	//   same outcomes, except that a failed precondition fails only that object,
 	//   which is reported in the result's Error list.
-	DeleteObjects(ctx context.Context, accessKeyID, bucket string, objects []ObjectID) (*ObjectsDeleteResult, error)
+	DeleteObjects(ctx context.Context, accessKeyID, bucket string, objects []ObjectID, opts DeleteObjectOptions) (*ObjectsDeleteResult, error)
 
 	// GetObject retrieves the object with the given key from the specified
 	// bucket for the user identified by the given access key. The provided
@@ -417,6 +418,71 @@ type Backend interface {
 	//   [ErrObjectLockConfigurationNotFoundError] must be returned.
 	GetBucketObjectLockConfiguration(ctx context.Context, accessKeyID, bucket string) (ObjectLockConfiguration, error)
 
+	// PutObjectRetention replaces the retention on the addressed version. A
+	// zero retention clears it.
+	//
+	// - If the access key does not own the bucket, [ErrAccessDenied] must be
+	//   returned.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	//
+	// - If the bucket does not have object lock enabled, [ErrInvalidRequest]
+	//   must be returned.
+	//
+	// - If the object or version does not exist, [ErrNoSuchKey] or
+	//   [ErrNoSuchVersion] must be returned.
+	//
+	// - If the transition weakens a retention the caller may not weaken,
+	//   [ErrAccessDenied] must be returned.
+	PutObjectRetention(ctx context.Context, accessKeyID, bucket, object string, version VersionRequest, retention ObjectLockState, bypass bool) error
+
+	// GetObjectRetention returns the retention on the addressed version.
+	//
+	// - If the access key does not own the bucket, [ErrAccessDenied] must be
+	//   returned.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	//
+	// - If the bucket does not have object lock enabled, [ErrInvalidRequest]
+	//   must be returned.
+	//
+	// - If the object or version does not exist, [ErrNoSuchKey] or
+	//   [ErrNoSuchVersion] must be returned.
+	//
+	// - If the version carries no retention,
+	//   [ErrNoSuchObjectLockConfiguration] must be returned.
+	GetObjectRetention(ctx context.Context, accessKeyID, bucket, object string, version VersionRequest) (ObjectLockState, error)
+
+	// PutObjectLegalHold turns the legal hold on the addressed version on or
+	// off. A legal hold toggles freely in either retention mode.
+	//
+	// - If the access key does not own the bucket, [ErrAccessDenied] must be
+	//   returned.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	//
+	// - If the bucket does not have object lock enabled, [ErrInvalidRequest]
+	//   must be returned.
+	//
+	// - If the object or version does not exist, [ErrNoSuchKey] or
+	//   [ErrNoSuchVersion] must be returned.
+	PutObjectLegalHold(ctx context.Context, accessKeyID, bucket, object string, version VersionRequest, status string) error
+
+	// GetObjectLegalHold returns the legal hold on the addressed version, or
+	// "" when none was ever applied.
+	//
+	// - If the access key does not own the bucket, [ErrAccessDenied] must be
+	//   returned.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	//
+	// - If the bucket does not have object lock enabled, [ErrInvalidRequest]
+	//   must be returned.
+	//
+	// - If the object or version does not exist, [ErrNoSuchKey] or
+	//   [ErrNoSuchVersion] must be returned.
+	GetObjectLegalHold(ctx context.Context, accessKeyID, bucket, object string, version VersionRequest) (string, error)
+
 	// ListObjectVersions lists all versions (including delete markers) of the
 	// objects in the specified bucket.
 	//
@@ -441,6 +507,16 @@ type Backend interface {
 	// CreateSnapshot backs up the database, uploads it to Sia as a tagged
 	// snapshot object, and records the object ID.
 	CreateSnapshot(ctx context.Context) (Snapshot, error)
+
+	// ListSnapshots returns the recorded database snapshots and whether the
+	// last metadata sync drained the network's event stream.
+	ListSnapshots(ctx context.Context) (SnapshotList, error)
+
+	// DeleteSnapshot unpins a snapshot's Sia object from the network and
+	// removes its record, releasing the orphaned objects it was withholding.
+	//
+	// - If no such snapshot exists, [ErrSnapshotNotFound] must be returned.
+	DeleteSnapshot(ctx context.Context, objectID types.Hash256) error
 }
 
 type s3 struct {
@@ -536,7 +612,8 @@ func corsMiddleware(handler http.Handler) http.Handler {
 // backend. It exposes /prometheus, which serves the background upload stats as
 // Prometheus metrics, /stats/uploads, which serves the same stats as JSON,
 // /objects/flush, which uploads all pending objects regardless of padding,
-// and /snapshots, which backs up the database and uploads it to Sia.
+// and /snapshots and /snapshots/:objectID, which create, list, and delete
+// database snapshots uploaded to Sia.
 func NewAdmin(b Backend, opts ...Option) http.Handler {
 	s3 := &s3{
 		backend: b,
@@ -547,10 +624,12 @@ func NewAdmin(b Backend, opts ...Option) http.Handler {
 	}
 
 	return jape.Mux(map[string]jape.Handler{
-		"GET /prometheus":     s3.handlePrometheus,
-		"GET /stats/uploads":  s3.handleGetUploadStats,
-		"POST /objects/flush": s3.handleFlushObjects,
-		"POST /snapshots":     s3.handleCreateSnapshot,
+		"GET /prometheus":             s3.handlePrometheus,
+		"GET /stats/uploads":          s3.handleGetUploadStats,
+		"POST /objects/flush":         s3.handleFlushObjects,
+		"POST /snapshots":             s3.handleCreateSnapshot,
+		"GET /snapshots":              s3.handleListSnapshots,
+		"DELETE /snapshots/:objectID": s3.handleDeleteSnapshot,
 	})
 }
 
@@ -673,6 +752,10 @@ func (s *s3) routeBase(w http.ResponseWriter, r *http.Request, accessKeyID *stri
 		err = s.routeVersioning(w, r, accessKeyID, bucket)
 	} else if _, ok := query["versions"]; ok {
 		err = s.routeVersions(w, r, accessKeyID, bucket)
+	} else if _, ok := query["retention"]; ok {
+		err = s.routeObjectRetention(w, r, accessKeyID, bucket, object, VersionFromQuery(query["versionId"]))
+	} else if _, ok := query["legal-hold"]; ok {
+		err = s.routeObjectLegalHold(w, r, accessKeyID, bucket, object, VersionFromQuery(query["versionId"]))
 	} else if version := VersionFromQuery(query["versionId"]); version.Specified {
 		err = s.routeVersion(w, r, accessKeyID, bucket, object, version)
 	} else if bucket != "" && object != "" {

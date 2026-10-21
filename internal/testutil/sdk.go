@@ -37,6 +37,7 @@ type (
 		handles     map[*sdk.Object]types.Hash256
 		events      []sdk.ObjectEvent
 		eventsErr   error // when set, ObjectEvents returns this error
+		deleteErr   error // when set, DeleteObject returns this error
 		slabSize    int64
 		failUploads bool
 
@@ -167,11 +168,22 @@ func (s *MemorySDK) SetRemainingStorage(remaining uint64) {
 func (s *MemorySDK) DeleteObject(_ context.Context, id types.Hash256) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
 	if _, ok := s.objects[id]; !ok {
 		return slabs.ErrObjectNotFound
 	}
 	delete(s.objects, id)
 	return nil
+}
+
+// SetDeleteError configures the error returned by future DeleteObject calls.
+// Pass nil to restore the default behavior.
+func (s *MemorySDK) SetDeleteError(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deleteErr = err
 }
 
 // Download downloads an object.

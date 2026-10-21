@@ -138,13 +138,13 @@ func (s *Sia) newUploadGroup(initial objects.ObjectForUpload) uploadGroup {
 // set, groups whose wasted space exceeds the configured threshold are held
 // back until one of their objects passes the upload deadline relative to now.
 // When flush is set every pending object is uploaded regardless of padding.
-func (s *Sia) prepareUploads(now time.Time, flush bool) []uploadGroup {
+func (s *Sia) prepareUploads(now time.Time, flush bool) ([]uploadGroup, error) {
 	candidates, err := s.store.ObjectsForUpload()
 	if err != nil {
 		s.logger.Error("failed to fetch objects for upload", zap.Error(err))
-		return nil
+		return nil, fmt.Errorf("failed to fetch objects for upload: %w", err)
 	} else if len(candidates) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	var totalSize int64
@@ -195,7 +195,7 @@ func (s *Sia) prepareUploads(now time.Time, flush bool) []uploadGroup {
 			zap.String("waste", fmt.Sprintf("%.2f%%", g.wastePct()*100)))
 	}
 
-	return filtered
+	return filtered, nil
 }
 
 func (s *Sia) uploadLoop(ctx context.Context) {
@@ -240,8 +240,10 @@ func (s *Sia) uploadObjects(ctx context.Context, flush bool) error { //nolint:re
 	defer s.uploadMu.Unlock()
 
 	// fetch and prepare objects for upload
-	groups := s.prepareUploads(time.Now(), flush)
-	if len(groups) == 0 {
+	groups, err := s.prepareUploads(time.Now(), flush)
+	if err != nil {
+		return err
+	} else if len(groups) == 0 {
 		s.logger.Debug("not enough objects for upload")
 		return nil
 	}

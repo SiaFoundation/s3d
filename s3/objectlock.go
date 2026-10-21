@@ -3,6 +3,7 @@ package s3
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3/s3errs"
@@ -23,6 +24,10 @@ const (
 const (
 	ObjectLockEnabled             = "Enabled"
 	HeaderBucketObjectLockEnabled = "X-Amz-Bucket-Object-Lock-Enabled"
+
+	// HeaderBypassGovernanceRetention lets a caller weaken or clear a
+	// GOVERNANCE retention. It has no effect on COMPLIANCE.
+	HeaderBypassGovernanceRetention = "X-Amz-Bypass-Governance-Retention"
 
 	maxRetentionDays  = 36500
 	maxRetentionYears = 100
@@ -218,4 +223,156 @@ func (s *s3) getBucketObjectLock(w http.ResponseWriter, r *http.Request, accessK
 	}
 	config.Xmlns = "http://s3.amazonaws.com/doc/2006-03-01/"
 	return writeXMLResponse(w, http.StatusOK, config)
+}
+
+// bypassGovernanceRetention reports whether the request asked to bypass a
+// GOVERNANCE retention.
+func bypassGovernanceRetention(h http.Header) bool {
+	return strings.EqualFold(h.Get(HeaderBypassGovernanceRetention), "true")
+}
+
+// Validate checks a retention document from a PutObjectRetention body. A
+// document with neither a mode nor a date clears the retention.
+func (r ObjectRetention) Validate() error {
+	if r.EventHold != nil || r.EventHoldDuration != nil {
+		return fmt.Errorf("event hold: %w", s3errs.ErrNotImplemented)
+	} else if r.Mode == "" && r.RetainUntilDate == "" {
+		return nil
+	} else if (r.Mode == "") != (r.RetainUntilDate == "") {
+		return fmt.Errorf("a retention needs both a mode and a retain until date: %w", s3errs.ErrInvalidRequest)
+	} else if r.Mode != ObjectLockModeGovernance && r.Mode != ObjectLockModeCompliance {
+		return fmt.Errorf("unknown retention mode %q: %w", r.Mode, s3errs.ErrMalformedXML)
+	}
+	return nil
+}
+
+// state converts a validated retention document into the state to store. The
+// zero value clears the retention.
+func (r ObjectRetention) state() (ObjectLockState, error) {
+	if r.Mode == "" {
+		return ObjectLockState{}, nil
+	}
+	t, err := parseRetainUntilDate(r.RetainUntilDate)
+	if err != nil {
+		return ObjectLockState{}, err
+	}
+	return ObjectLockState{Mode: r.Mode, RetainUntil: t}, nil
+}
+
+// Validate checks a legal hold document from a PutObjectLegalHold body.
+func (l ObjectLegalHold) Validate() error {
+	if l.Status != LegalHoldOn && l.Status != LegalHoldOff {
+		return fmt.Errorf("unknown legal hold status %q: %w", l.Status, s3errs.ErrMalformedXML)
+	}
+	return nil
+}
+
+func (s *s3) routeObjectRetention(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket, object string, version VersionRequest) error {
+	if object == "" {
+		return s3errs.ErrMethodNotAllowed
+	}
+	validatedKey, err := assertAuth(accessKeyID)
+	if err != nil {
+		return err
+	}
+	switch r.Method {
+	case http.MethodPut:
+		return s.putObjectRetention(w, r, validatedKey, bucket, object, version)
+	case http.MethodGet:
+		return s.getObjectRetention(w, r, validatedKey, bucket, object, version)
+	default:
+		return s3errs.ErrMethodNotAllowed
+	}
+}
+
+// putObjectRetention handles PUT Object retention requests.
+//
+// https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObjectRetention.html
+func (s *s3) putObjectRetention(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object string, version VersionRequest) error {
+	s.logger.Debug("putting object retention", zap.String("bucket", bucket), zap.String("object", object))
+
+	var doc ObjectRetention
+	if err := decodeXMLBody(r.Body, &doc); err != nil {
+		return err
+	}
+	if err := doc.Validate(); err != nil {
+		return err
+	}
+	state, err := doc.state()
+	if err != nil {
+		return err
+	}
+
+	return s.backend.PutObjectRetention(r.Context(), accessKeyID, bucket, object, version, state, bypassGovernanceRetention(r.Header))
+}
+
+// getObjectRetention handles GET Object retention requests.
+//
+// https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObjectRetention.html
+func (s *s3) getObjectRetention(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object string, version VersionRequest) error {
+	s.logger.Debug("getting object retention", zap.String("bucket", bucket), zap.String("object", object))
+
+	state, err := s.backend.GetObjectRetention(r.Context(), accessKeyID, bucket, object, version)
+	if err != nil {
+		return err
+	}
+	return writeXMLResponse(w, http.StatusOK, ObjectRetention{
+		Xmlns:           "http://s3.amazonaws.com/doc/2006-03-01/",
+		Mode:            state.Mode,
+		RetainUntilDate: state.RetainUntil.UTC().Format(retainUntilLayout),
+	})
+}
+
+func (s *s3) routeObjectLegalHold(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket, object string, version VersionRequest) error {
+	if object == "" {
+		return s3errs.ErrMethodNotAllowed
+	}
+	validatedKey, err := assertAuth(accessKeyID)
+	if err != nil {
+		return err
+	}
+	switch r.Method {
+	case http.MethodPut:
+		return s.putObjectLegalHold(w, r, validatedKey, bucket, object, version)
+	case http.MethodGet:
+		return s.getObjectLegalHold(w, r, validatedKey, bucket, object, version)
+	default:
+		return s3errs.ErrMethodNotAllowed
+	}
+}
+
+// putObjectLegalHold handles PUT Object legal-hold requests.
+//
+// https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObjectLegalHold.html
+func (s *s3) putObjectLegalHold(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object string, version VersionRequest) error {
+	s.logger.Debug("putting object legal hold", zap.String("bucket", bucket), zap.String("object", object))
+
+	var doc ObjectLegalHold
+	if err := decodeXMLBody(r.Body, &doc); err != nil {
+		return err
+	}
+	if err := doc.Validate(); err != nil {
+		return err
+	}
+
+	return s.backend.PutObjectLegalHold(r.Context(), accessKeyID, bucket, object, version, doc.Status)
+}
+
+// getObjectLegalHold handles GET Object legal-hold requests.
+//
+// https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObjectLegalHold.html
+func (s *s3) getObjectLegalHold(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object string, version VersionRequest) error {
+	s.logger.Debug("getting object legal hold", zap.String("bucket", bucket), zap.String("object", object))
+
+	status, err := s.backend.GetObjectLegalHold(r.Context(), accessKeyID, bucket, object, version)
+	if err != nil {
+		return err
+	}
+	if status == "" {
+		return s3errs.ErrNoSuchObjectLockConfiguration
+	}
+	return writeXMLResponse(w, http.StatusOK, ObjectLegalHold{
+		Xmlns:  "http://s3.amazonaws.com/doc/2006-03-01/",
+		Status: status,
+	})
 }
