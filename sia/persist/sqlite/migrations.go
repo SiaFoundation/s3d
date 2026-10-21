@@ -487,4 +487,20 @@ DROP TABLE global_settings;
 ALTER TABLE global_settings_new RENAME TO global_settings;`)
 		return err
 	},
+	func(tx *txn, _ *zap.Logger) error {
+		_, err := tx.Exec(`
+ALTER TABLE buckets ADD COLUMN object_lock_enabled INTEGER NOT NULL DEFAULT FALSE CHECK (object_lock_enabled IN (FALSE, TRUE)) CHECK (object_lock_enabled = FALSE OR versioning_status = 'Enabled');
+ALTER TABLE buckets ADD COLUMN default_retention_mode TEXT NOT NULL DEFAULT '' CHECK (default_retention_mode IN ('', 'GOVERNANCE', 'COMPLIANCE'));
+ALTER TABLE buckets ADD COLUMN default_retention_days INTEGER;
+ALTER TABLE buckets ADD COLUMN default_retention_years INTEGER CHECK ((default_retention_mode = '' AND default_retention_days IS NULL AND default_retention_years IS NULL) OR (default_retention_mode != '' AND ((default_retention_days IS NOT NULL) != (default_retention_years IS NOT NULL))));
+
+ALTER TABLE objects ADD COLUMN object_lock_mode TEXT NOT NULL DEFAULT '' CHECK (object_lock_mode IN ('', 'GOVERNANCE', 'COMPLIANCE'));
+ALTER TABLE objects ADD COLUMN object_lock_retain_until INTEGER CHECK ((object_lock_mode = '' AND object_lock_retain_until IS NULL) OR (object_lock_mode != '' AND object_lock_retain_until IS NOT NULL));
+ALTER TABLE objects ADD COLUMN object_lock_legal_hold TEXT NOT NULL DEFAULT '' CHECK (object_lock_legal_hold IN ('', 'ON', 'OFF'));
+
+ALTER TABLE multipart_uploads ADD COLUMN object_lock_mode TEXT NOT NULL DEFAULT '' CHECK (object_lock_mode IN ('', 'GOVERNANCE', 'COMPLIANCE'));
+ALTER TABLE multipart_uploads ADD COLUMN object_lock_retain_until INTEGER CHECK ((object_lock_mode = '' AND object_lock_retain_until IS NULL) OR (object_lock_mode != '' AND object_lock_retain_until IS NOT NULL));
+ALTER TABLE multipart_uploads ADD COLUMN object_lock_legal_hold TEXT NOT NULL DEFAULT '' CHECK (object_lock_legal_hold IN ('', 'ON', 'OFF'));`)
+		return err
+	},
 }

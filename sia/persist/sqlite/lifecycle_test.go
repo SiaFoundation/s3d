@@ -20,7 +20,7 @@ func TestBucketLifecycleConfiguration(t *testing.T) {
 	)
 
 	store := initTestDB(t, zap.NewNop())
-	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -81,13 +81,13 @@ func TestAbortMultipartUploads(t *testing.T) {
 	)
 
 	store := initTestDB(t, zap.NewNop())
-	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
 
 	// old upload under the "logs/" prefix with a single part
 	oldUpload := s3.NewUploadID()
-	if err := store.CreateMultipartUpload(accessKeyID, bucket, "logs/a", oldUpload, nil); err != nil {
+	if err := store.CreateMultipartUpload(accessKeyID, bucket, "logs/a", oldUpload, nil, nil); err != nil {
 		t.Fatal(err)
 	} else if _, _, err := store.AddMultipartPart(accessKeyID, bucket, "logs/a", oldUpload, "p1", 1, frand.Entropy128(), 500); err != nil {
 		t.Fatal(err)
@@ -95,13 +95,13 @@ func TestAbortMultipartUploads(t *testing.T) {
 
 	// recent upload under the "logs/" prefix
 	newUpload := s3.NewUploadID()
-	if err := store.CreateMultipartUpload(accessKeyID, bucket, "logs/b", newUpload, nil); err != nil {
+	if err := store.CreateMultipartUpload(accessKeyID, bucket, "logs/b", newUpload, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
 	// upload under a different prefix
 	otherUpload := s3.NewUploadID()
-	if err := store.CreateMultipartUpload(accessKeyID, bucket, "data/c", otherUpload, nil); err != nil {
+	if err := store.CreateMultipartUpload(accessKeyID, bucket, "data/c", otherUpload, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -134,7 +134,7 @@ func TestExpireObjects(t *testing.T) {
 	)
 
 	store := initTestDB(t, zap.NewNop())
-	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -180,7 +180,7 @@ func TestExpireObjectsVersions(t *testing.T) {
 	)
 
 	store := initTestDB(t, zap.NewNop())
-	if err := store.CreateBucket(accessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	} else if err := store.PutBucketVersioning(accessKeyID, bucket, s3.VersioningStatusEnabled); err != nil {
 		t.Fatal(err)

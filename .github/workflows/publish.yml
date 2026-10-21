@@ -17,7 +17,9 @@ jobs:
   test:
     permissions:
       contents: read
-    uses: ./.github/workflows/go-test.yml
+    uses: SiaFoundation/workflows/.github/workflows/go-test.yml@95130e8c532eb275d3e359b4c4ae97083ae96c8f # master
+    with:
+      go-version: "1.27"
   tag:
     name: Tag Release
     needs:

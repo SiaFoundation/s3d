@@ -20,7 +20,8 @@ import (
 // CreateMultipartUploadOptions contains options for initiating a multipart
 // upload.
 type CreateMultipartUploadOptions struct {
-	Meta map[string]string
+	Meta       map[string]string
+	ObjectLock *ObjectLockState
 }
 
 // CreateMultipartUploadResult returns an upload ID for a newly created
@@ -256,8 +257,14 @@ func (s *s3) createMultipartUpload(w http.ResponseWriter, r *http.Request, acces
 		return err
 	}
 
+	lock, err := requestObjectLock(r.Header)
+	if err != nil {
+		return err
+	}
+
 	result, err := s.backend.CreateMultipartUpload(r.Context(), accessKeyID, bucket, object, CreateMultipartUploadOptions{
-		Meta: meta,
+		Meta:       meta,
+		ObjectLock: lock,
 	})
 	if err != nil {
 		return err

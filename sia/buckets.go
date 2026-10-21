@@ -8,8 +8,8 @@ import (
 
 // CreateBucket creates a new bucket with the given name for the user
 // identified by the given access key.
-func (s *Sia) CreateBucket(ctx context.Context, accessKeyID, name string) error {
-	return s.store.CreateBucket(accessKeyID, name)
+func (s *Sia) CreateBucket(ctx context.Context, accessKeyID, name string, opts s3.CreateBucketOptions) error {
+	return s.store.CreateBucket(accessKeyID, name, opts.ObjectLockEnabled)
 }
 
 // DeleteBucket deletes the bucket with the given name for the user

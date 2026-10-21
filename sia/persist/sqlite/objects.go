@@ -58,7 +58,7 @@ func (s *Store) DiskUsage() (usage uint64, err error) {
 // marker, a suspended bucket replaces the null version with a null delete
 // marker, and an unversioned bucket deletes outright. A removed object's
 // filename is returned for cleanup if no longer referenced.
-func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (versionID string, isDeleteMarker bool, orphan objects.OrphanedFile, _ error) {
+func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID, bypass bool) (versionID string, isDeleteMarker bool, orphan objects.OrphanedFile, _ error) {
 	err := s.transaction(func(tx *txn) error {
 		versionID, isDeleteMarker, orphan = "", false, objects.OrphanedFile{} // reset per attempt
 
@@ -71,7 +71,7 @@ func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID) (
 		// independent of the bucket's versioning status.
 		if objectID.VersionID != nil {
 			version := *objectID.VersionID
-			res, err := deleteSpecificVersion(tx, bid, objectID.Key, version, objectID)
+			res, err := deleteSpecificVersion(tx, bid, objectID.Key, version, objectID, bypass)
 			if errors.Is(err, sql.ErrNoRows) {
 				versionID = s3.FormatVersion(version) // idempotent: report as deleted
 				return nil
@@ -200,6 +200,11 @@ func (s *Store) GetObject(accessKeyID *string, bucket, name string, version s3.V
 			return s3errs.ErrAccessDenied
 		}
 		obj.Versioned = b.versioning != ""
+		if !b.isOwner {
+			// AWS gates the lock headers on s3:GetObjectRetention and
+			// s3:GetObjectLegalHold, which s3d policies do not carry
+			obj.ObjectLock = nil
+		}
 		return nil
 	}); errors.Is(err, sql.ErrNoRows) {
 		if !mayList {
@@ -222,27 +227,29 @@ func (s *Store) GetObject(accessKeyID *string, bucket, name string, version s3.V
 func getObject(tx *txn, obj *objects.Object, bid int64, name string, version s3.VersionRequest, partNumber *int32) error {
 	// resolve the target version and read its parts count and delete-marker flag
 	var versionID string
+	var lock objectLock
 	if !version.Specified {
 		err := tx.QueryRow(`
-			SELECT version_id, parts_count, is_delete_marker
+			SELECT version_id, parts_count, is_delete_marker, object_lock_mode, object_lock_retain_until, object_lock_legal_hold
 			FROM objects
 			WHERE bucket_id = $1 AND name = $2 AND is_latest = TRUE
-		`, bid, name).Scan(&versionID, &obj.PartsCount, &obj.IsDeleteMarker)
+		`, bid, name).Scan(&versionID, &obj.PartsCount, &obj.IsDeleteMarker, &lock.Mode, &lock.RetainUntil, &lock.LegalHold)
 		if err != nil {
 			return err
 		}
 	} else {
 		versionID = version.ID
 		err := tx.QueryRow(`
-			SELECT parts_count, is_delete_marker
+			SELECT parts_count, is_delete_marker, object_lock_mode, object_lock_retain_until, object_lock_legal_hold
 			FROM objects
 			WHERE bucket_id = $1 AND name = $2 AND version_id = $3
-		`, bid, name, versionID).Scan(&obj.PartsCount, &obj.IsDeleteMarker)
+		`, bid, name, versionID).Scan(&obj.PartsCount, &obj.IsDeleteMarker, &lock.Mode, &lock.RetainUntil, &lock.LegalHold)
 		if err != nil {
 			return err
 		}
 	}
 	obj.VersionID = versionID
+	obj.ObjectLock = storedObjectLock(lock)
 
 	// return full object if no part specified, or this is a delete marker
 	if partNumber == nil || obj.PartsCount == 0 || obj.IsDeleteMarker {
@@ -315,7 +322,11 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, opts objects.PutOpti
 		if err := checkWritePreconditions(tx, bid, name, opts.Preconditions); err != nil {
 			return err
 		}
-		res, err := putObject(tx, bid, name, status, opts.ContentMD5, opts.Meta, opts.Length, 0, opts.FileName, nil)
+		lock, err := effectiveObjectLock(tx, bid, opts.ObjectLock)
+		if err != nil {
+			return err
+		}
+		res, err := putObject(tx, bid, name, status, opts.ContentMD5, opts.Meta, opts.Length, 0, opts.FileName, nil, lock)
 		versionID, orphan = res.reportVersionID, res.orphanFile
 		return err
 	})
@@ -709,6 +720,11 @@ func (s *Store) CopyObject(accessKeyID, srcBucket, srcName string, srcVersion s3
 			return err
 		}
 
+		lock, err := effectiveObjectLock(tx, dstBid, opts.ObjectLock)
+		if err != nil {
+			return err
+		}
+
 		// a self-copy onto the same null version rewrites the row in place to
 		// preserve its object_parts and avoid orphaning. Refresh seq too so a
 		// suspended-bucket restore of versionId=null makes it current again.
@@ -729,7 +745,7 @@ func (s *Store) CopyObject(accessKeyID, srcBucket, srcName string, srcVersion s3
 			return err
 		}
 
-		res, err := putObject(tx, dstBid, dstName, dstStatus, obj.ContentMD5, obj.Meta, obj.Length, obj.PartsCount, obj.FileName, obj.SiaObject)
+		res, err := putObject(tx, dstBid, dstName, dstStatus, obj.ContentMD5, obj.Meta, obj.Length, obj.PartsCount, obj.FileName, obj.SiaObject, lock)
 		if err != nil {
 			return err
 		}
@@ -908,7 +924,7 @@ func (s *Store) ObjectsForUpload() ([]objects.ObjectForUpload, error) {
 	if err := s.transaction(func(tx *txn) error {
 		objs = objs[:0] // reuse same slice if transaction retries
 		rows, err := tx.Query(`
-			SELECT b.name, o.name, o.version_id, o.filename, o.content_md5, o.size, o.parts_count > 0 AS has_parts
+			SELECT b.name, o.name, o.version_id, o.filename, o.content_md5, o.size, o.parts_count > 0 AS has_parts, o.updated_at
 			FROM objects o
 			JOIN buckets b ON b.id = o.bucket_id
 			WHERE o.filename IS NOT NULL AND o.sia_object_id IS NULL
@@ -921,7 +937,7 @@ func (s *Store) ObjectsForUpload() ([]objects.ObjectForUpload, error) {
 
 		for rows.Next() {
 			var obj objects.ObjectForUpload
-			if err := rows.Scan(&obj.Bucket, &obj.Name, &obj.VersionID, &obj.Filename, (*sqlMD5)(&obj.ContentMD5), &obj.Length, &obj.Multipart); err != nil {
+			if err := rows.Scan(&obj.Bucket, &obj.Name, &obj.VersionID, &obj.Filename, (*sqlMD5)(&obj.ContentMD5), &obj.Length, &obj.Multipart, (*sqlTime)(&obj.LastModified)); err != nil {
 				return err
 			}
 			objs = append(objs, obj)
@@ -964,7 +980,11 @@ type deletedRow struct {
 // deleted row. found is false when no such row exists (the returned row is
 // then the zero value). It does not orphan the row's data; callers pass the
 // returned row to orphanDeleted for that.
-func deleteObject(tx *txn, bid int64, name string, version string) (row deletedRow, found bool, _ error) {
+func deleteObject(tx *txn, bid int64, name string, version string, bypass bool) (row deletedRow, found bool, _ error) {
+	if err := checkObjectLock(tx, bid, name, version, bypass); err != nil {
+		return deletedRow{}, false, err
+	}
+
 	var id sql.Null[sqlHash256]
 	var wasLatest bool
 	err := tx.QueryRow(`
@@ -1028,7 +1048,7 @@ func orphanDeleted(tx *txn, row deletedRow) (objects.OrphanedFile, error) {
 // data that was truly never pinned the unpin is a no-op: the orphan loop
 // treats the indexer's "object not found" as success. The orphan carries over
 // the sealed object's creation stamp so the orphan loop can tell whether a
-// snapshot's backup could still reference it.
+// snapshot could still reference it.
 func insertOrphan(tx *txn, objectID types.Hash256) error {
 	if objectID == (types.Hash256{}) {
 		return nil // skip zero-value (empty objects)

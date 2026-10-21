@@ -50,7 +50,7 @@ func TestPinLoopRetriesOnFailure(t *testing.T) {
 		bucket = "bucket"
 		name   = "obj"
 	)
-	if err := store.CreateBucket(testutil.AccessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(testutil.AccessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
 	stageUpload(t, memSDK, store, bucket, name, time.Now().Add(time.Hour))
@@ -105,7 +105,7 @@ func TestPinLoopDemotesExpiredUploads(t *testing.T) {
 		bucket = "bucket"
 		name   = "obj"
 	)
-	if err := store.CreateBucket(testutil.AccessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(testutil.AccessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
 	stageUpload(t, memSDK, store, bucket, name, time.Now().Add(-time.Minute))
@@ -167,7 +167,7 @@ func TestPinLoopPinsCopyAfterSourceDeleted(t *testing.T) {
 		srcName = "src"
 		dstName = "dst"
 	)
-	if err := store.CreateBucket(testutil.AccessKeyID, bucket); err != nil {
+	if err := store.CreateBucket(testutil.AccessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
 	stageUpload(t, memSDK, store, bucket, srcName, time.Now().Add(time.Hour))
@@ -179,7 +179,7 @@ func TestPinLoopPinsCopyAfterSourceDeleted(t *testing.T) {
 
 	// delete src before the pin loop has a chance to run; src's
 	// unpinned_objects row goes with it via FK cascade
-	if _, _, _, err := store.DeleteObject(testutil.AccessKeyID, bucket, s3.ObjectID{Key: srcName}); err != nil {
+	if _, _, _, err := store.DeleteObject(testutil.AccessKeyID, bucket, s3.ObjectID{Key: srcName}, false); err != nil {
 		t.Fatal(err)
 	}
 

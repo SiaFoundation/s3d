@@ -10,15 +10,22 @@ import (
 )
 
 // CreateBucket creates a new bucket owned by the user associated with the
-// given access key.
-func (s *Store) CreateBucket(accessKeyID, bucket string) error {
+// given access key. objectLock also enables versioning.
+func (s *Store) CreateBucket(accessKeyID, bucket string, objectLock bool) error {
 	return s.transaction(func(tx *txn) error {
 		uid, err := userIDForAccessKey(tx, accessKeyID)
 		if err != nil {
 			return err
 		}
 
-		res, err := tx.Exec("INSERT INTO buckets (name, created_at, user_id) VALUES ($1, $2, $3) ON CONFLICT (name) DO NOTHING", bucket, sqlTime(time.Now()), uid)
+		versioning := ""
+		if objectLock {
+			versioning = s3.VersioningStatusEnabled
+		}
+
+		res, err := tx.Exec(`INSERT INTO buckets (name, created_at, user_id, versioning_status, object_lock_enabled)
+			VALUES ($1, $2, $3, $4, $5) ON CONFLICT (name) DO NOTHING`,
+			bucket, sqlTime(time.Now()), uid, versioning, objectLock)
 		if err != nil {
 			return err
 		}
@@ -135,6 +142,14 @@ func (s *Store) PutBucketVersioning(accessKeyID, bucket, status string) error {
 		if err != nil {
 			return err
 		}
+		if status == s3.VersioningStatusSuspended {
+			locked, err := bucketObjectLockEnabled(tx, bid)
+			if err != nil {
+				return err
+			} else if locked {
+				return s3errs.ErrInvalidBucketState
+			}
+		}
 		_, err = tx.Exec(`UPDATE buckets SET versioning_status = $1 WHERE id = $2`, status, bid)
 		return err
 	})
@@ -212,6 +227,9 @@ type bucketRead struct {
 	owner      string
 	versioning string
 	mayList    bool
+	// isOwner reports whether the caller owns the bucket, which gates the
+	// object lock state a read reports.
+	isOwner bool
 }
 
 // userInfo returns the bucket's owner, which a listing reports in place of the
@@ -248,7 +266,7 @@ func bucketForRead(tx *txn, accessKeyID *string, bucket string, action s3.Policy
 		if err != nil {
 			return bucketRead{}, err
 		} else if ownerID == uid {
-			b.mayList = true // the owner may always list
+			b.mayList, b.isOwner = true, true // the owner may always list
 			return b, nil
 		}
 	}
