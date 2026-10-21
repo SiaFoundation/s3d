@@ -919,34 +919,37 @@ func (s *Store) RemoveOrphanedObject(objectID types.Hash256) error {
 
 // ObjectsForUpload returns all objects stored on disk, ordered by size
 // descending for greedy best-fit slab filling.
-func (s *Store) ObjectsForUpload() ([]objects.ObjectForUpload, error) {
-	var objs []objects.ObjectForUpload
-	if err := s.transaction(func(tx *txn) error {
-		objs = objs[:0] // reuse same slice if transaction retries
-		rows, err := tx.Query(`
-			SELECT b.name, o.name, o.version_id, o.filename, o.content_md5, o.size, o.parts_count > 0 AS has_parts, o.updated_at
-			FROM objects o
-			JOIN buckets b ON b.id = o.bucket_id
-			WHERE o.filename IS NOT NULL AND o.sia_object_id IS NULL
-			ORDER BY o.size DESC
-		`)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
+func (s *Store) ObjectsForUpload() (objs []objects.ObjectForUpload, err error) {
+	err = s.transaction(func(tx *txn) error {
+		var err error
+		objs, err = pendingObjects(tx)
+		return err
+	})
+	return
+}
 
-		for rows.Next() {
-			var obj objects.ObjectForUpload
-			if err := rows.Scan(&obj.Bucket, &obj.Name, &obj.VersionID, &obj.Filename, (*sqlMD5)(&obj.ContentMD5), &obj.Length, &obj.Multipart, (*sqlTime)(&obj.LastModified)); err != nil {
-				return err
-			}
-			objs = append(objs, obj)
-		}
-		return rows.Err()
-	}); err != nil {
+func pendingObjects(tx *txn) ([]objects.ObjectForUpload, error) {
+	rows, err := tx.Query(`
+		SELECT b.name, o.name, o.version_id, o.filename, o.content_md5, o.size, o.parts_count > 0 AS has_parts, o.updated_at
+		FROM objects o
+		JOIN buckets b ON b.id = o.bucket_id
+		WHERE o.filename IS NOT NULL AND o.sia_object_id IS NULL
+		ORDER BY o.size DESC
+	`)
+	if err != nil {
 		return nil, err
 	}
-	return objs, nil
+	defer rows.Close()
+
+	var objs []objects.ObjectForUpload
+	for rows.Next() {
+		var obj objects.ObjectForUpload
+		if err := rows.Scan(&obj.Bucket, &obj.Name, &obj.VersionID, &obj.Filename, (*sqlMD5)(&obj.ContentMD5), &obj.Length, &obj.Multipart, (*sqlTime)(&obj.LastModified)); err != nil {
+			return nil, err
+		}
+		objs = append(objs, obj)
+	}
+	return objs, rows.Err()
 }
 
 // newOrphanedFile returns the orphaned file if the given filename is non-nil

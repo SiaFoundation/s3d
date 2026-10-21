@@ -3,9 +3,14 @@ package sqlite
 import (
 	"database/sql"
 	"errors"
+	"path"
+	"strconv"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
+	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"github.com/SiaFoundation/s3d/sia"
+	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.sia.tech/core/types"
 )
 
@@ -226,6 +231,137 @@ func (s *Store) HasSnapshotObject(objectID types.Hash256) (known bool, err error
 			sqlHash256(objectID)).Scan(&known)
 	})
 	return
+}
+
+// CompleteRestore removes the pending objects, multipart uploads and parts whose buffered data is missing from the
+// uploads directory paths in onDisk, gives every unpinned object until pinBefore to pin and clears the restored flag.
+func (s *Store) CompleteRestore(onDisk map[string]struct{}, pinBefore time.Time) (cleanup sia.RestoreCleanup, err error) {
+	err = s.transaction(func(tx *txn) error {
+		cleanup = sia.RestoreCleanup{} // reset per transaction attempt
+
+		var err error
+		if cleanup.Removed, cleanup.Retained, err = removeLostObjects(tx, onDisk); err != nil {
+			return err
+		} else if cleanup.Aborted, err = removeLostMultipartUploads(tx, onDisk); err != nil {
+			return err
+		} else if cleanup.Parts, err = removeLostMultipartParts(tx, onDisk); err != nil {
+			return err
+		} else if _, err = tx.Exec(`UPDATE unpinned_objects SET pin_before = $1, next_attempt_at = 0`, sqlTime(pinBefore)); err != nil {
+			return err
+		}
+		_, err = tx.Exec(`UPDATE global_settings SET restored = FALSE`)
+		return err
+	})
+	return
+}
+
+func removeLostObjects(tx *txn, onDisk map[string]struct{}) (removed, retained []objects.ObjectForUpload, _ error) {
+	pending, err := pendingObjects(tx)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	bids := make(map[string]int64)
+	for _, obj := range pending {
+		bid, ok := bids[obj.Bucket]
+		if !ok {
+			if bid, err = bucketIDByName(tx, obj.Bucket); err != nil {
+				return nil, nil, err
+			}
+			bids[obj.Bucket] = bid
+		}
+		if lost, err := objectLost(tx, onDisk, bid, obj); err != nil {
+			return nil, nil, err
+		} else if !lost {
+			continue
+		}
+		_, _, err = deleteObject(tx, bid, obj.Name, obj.VersionID, false)
+		if errors.Is(err, s3errs.ErrAccessDenied) {
+			retained = append(retained, obj)
+			continue
+		} else if err != nil {
+			return nil, nil, err
+		}
+		removed = append(removed, obj)
+	}
+	return removed, retained, nil
+}
+
+func objectLost(tx *txn, onDisk map[string]struct{}, bid int64, obj objects.ObjectForUpload) (bool, error) {
+	if _, ok := onDisk[obj.Filename]; !ok {
+		return true, nil
+	} else if !obj.Multipart {
+		return false, nil
+	}
+
+	rows, err := tx.Query(`SELECT part_number, filename FROM object_parts WHERE bucket_id = $1 AND name = $2 AND version_id = $3`,
+		bid, obj.Name, obj.VersionID)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var partNumber int
+		var filename string
+		if err := rows.Scan(&partNumber, &filename); err != nil {
+			return false, err
+		} else if _, ok := onDisk[path.Join(obj.Filename, strconv.Itoa(partNumber), filename)]; !ok {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+func removeLostMultipartUploads(tx *txn, onDisk map[string]struct{}) ([]s3.UploadID, error) {
+	rows, err := tx.Query(`SELECT upload_id FROM multipart_uploads`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var aborted []s3.UploadID
+	for rows.Next() {
+		var id s3.UploadID
+		if err := rows.Scan((*sqlUploadID)(&id)); err != nil {
+			return nil, err
+		} else if _, ok := onDisk[id.String()]; !ok {
+			aborted = append(aborted, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return aborted, deleteMultipartUploads(tx, aborted)
+}
+
+func removeLostMultipartParts(tx *txn, onDisk map[string]struct{}) ([]sia.LostPart, error) {
+	rows, err := tx.Query(`SELECT upload_id, part_number, filename FROM multipart_parts`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var lost []sia.LostPart
+	for rows.Next() {
+		var part sia.LostPart
+		var filename string
+		if err := rows.Scan((*sqlUploadID)(&part.UploadID), &part.PartNumber, &filename); err != nil {
+			return nil, err
+		} else if _, ok := onDisk[path.Join(part.UploadID.String(), strconv.Itoa(part.PartNumber), filename)]; !ok {
+			lost = append(lost, part)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	for _, part := range lost {
+		if _, err := tx.Exec(`DELETE FROM multipart_parts WHERE upload_id = $1 AND part_number = $2`, sqlUploadID(part.UploadID), part.PartNumber); err != nil {
+			return nil, err
+		}
+	}
+	return lost, nil
 }
 
 func bumpSnapshotGen(tx *txn) (gen int64, err error) {

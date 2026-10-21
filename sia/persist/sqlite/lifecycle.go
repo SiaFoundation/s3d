@@ -125,26 +125,21 @@ func (s *Store) AbortMultipartUploads(bucket string, prefix string, before time.
 		defer rows.Close()
 
 		var found []sia.AbortedUpload
+		var ids []s3.UploadID
 		for rows.Next() {
 			var u sia.AbortedUpload
 			if err := rows.Scan((*sqlUploadID)(&u.UploadID), &u.Size); err != nil {
 				return err
 			}
 			found = append(found, u)
+			ids = append(ids, u.UploadID)
 		}
 		if err := rows.Err(); err != nil {
 			return err
 		}
 
-		for _, u := range found {
-			if _, err := tx.Exec(`DELETE FROM multipart_uploads WHERE upload_id = $1`, sqlUploadID(u.UploadID)); err != nil {
-				return err
-			}
-		}
-		if len(found) > 0 {
-			if err := incrementStat(tx, statMultipartUploads, -int64(len(found))); err != nil {
-				return err
-			}
+		if err := deleteMultipartUploads(tx, ids); err != nil {
+			return err
 		}
 		aborted = found
 		return nil

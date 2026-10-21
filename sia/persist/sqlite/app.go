@@ -49,6 +49,15 @@ func ReadAppKey(fp string) (types.PrivateKey, string, error) {
 	return types.PrivateKey(key.V), indexerURL.String, nil
 }
 
+// Restored reports whether the database was written by a restore and startup
+// has not cleaned up after it yet.
+func (s *Store) Restored() (restored bool, err error) {
+	err = s.transaction(func(tx *txn) error {
+		return tx.QueryRow(`SELECT restored FROM global_settings`).Scan(&restored)
+	})
+	return
+}
+
 // SetAppKey sets the application private key and the indexer URL it was
 // registered with.
 func (s *Store) SetAppKey(key types.PrivateKey, indexerURL string) error {

@@ -202,6 +202,9 @@ func runSnapshotsRestore(ctx context.Context, cmd *flag.FlagSet, out string) {
 	fmt.Printf("Restored %d objects from the snapshot taken at %s.\n", snap.Metadata.ObjectCount, snap.Metadata.CreatedAt.Format(time.RFC3339))
 	fmt.Println("Database written to", dbPath)
 	fmt.Println("Run 's3d config' for this directory, then start s3d to reconcile it with the network.")
+	fmt.Println("")
+	fmt.Println(ansiStyle("33", "Objects that were still buffered on disk when the snapshot was taken are removed on the first start."))
+	fmt.Println(ansiStyle("33", "To keep them, copy the old uploads directory into this one before starting s3d."))
 }
 
 // openRestoreSDK builds an SDK client from the app key recorded in the

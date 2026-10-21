@@ -11,8 +11,8 @@ import (
 
 // Backup writes a consistent, compacted copy of the database to destPath
 // using VACUUM INTO on a dedicated readonly connection, so the store keeps
-// serving reads and writes while the backup runs. The copy is verified with
-// an integrity check before it is moved to destPath.
+// serving reads and writes while the backup runs. The copy is flagged as
+// restored and verified with an integrity check before it is moved to destPath.
 func (s *Store) Backup(ctx context.Context, destPath string) (err error) {
 	// prevent overwriting the destination file
 	if destPath == "" {
@@ -42,15 +42,19 @@ func (s *Store) Backup(ctx context.Context, destPath string) (err error) {
 		return fmt.Errorf("failed to vacuum into backup: %w", err)
 	}
 
-	// verify the copy before moving it into place
-	backup, err := sql.Open("sqlite3", "file:"+tmpPath+"?mode=ro")
+	// flag the copy for the first start after a restore and verify it before
+	// moving it into place
+	backup, err := sql.Open("sqlite3", "file:"+tmpPath)
 	if err != nil {
 		return fmt.Errorf("failed to open backup: %w", err)
 	}
+	if _, err := backup.ExecContext(ctx, "UPDATE global_settings SET restored = TRUE"); err != nil {
+		backup.Close()
+		return fmt.Errorf("failed to flag backup as restored: %w", err)
+	}
 	var result string
 	err = backup.QueryRowContext(ctx, "PRAGMA integrity_check").Scan(&result)
-	backup.Close()
-	if err != nil {
+	if err = errors.Join(err, backup.Close()); err != nil {
 		return fmt.Errorf("failed to check backup integrity: %w", err)
 	} else if result != "ok" {
 		return fmt.Errorf("backup failed integrity check: %s", result)

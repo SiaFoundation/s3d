@@ -262,7 +262,12 @@ snapshots it finds there.
 
 A restore brings back the database as it was when the snapshot was taken.
 Objects written after that are not recovered. Objects still buffered on disk at
-the time had not reached Sia, so they stay listed but cannot be read.
+the time had not reached Sia. If the old `uploads` directory survived, copy it
+into the restored directory before the first start, a symlink to it is not
+followed. On that start `s3d` removes every object and multipart upload whose
+buffered data is missing and logs each one. An object under retention or a
+legal hold is kept and logged instead. Objects uploaded but not yet pinned when
+the snapshot was taken are pinned again, no buffered data is needed for that.
 
 ## HTTPS
 

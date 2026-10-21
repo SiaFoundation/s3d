@@ -8,13 +8,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"path/filepath"
 	"slices"
+	"time"
 
+	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/api"
 	"go.sia.tech/indexd/slabs"
 	sdk "go.sia.tech/siastorage"
+	"go.uber.org/zap"
 )
 
 // remoteSnapshotBatchSize is the number of object events fetched per request
@@ -27,6 +32,75 @@ type RemoteSnapshot struct {
 	Metadata objects.SnapshotMetadata
 
 	object sdk.Object
+}
+
+// RestoreCleanup reports what the first start after a restore removed and which lost objects it kept.
+type RestoreCleanup struct {
+	Removed  []objects.ObjectForUpload
+	Retained []objects.ObjectForUpload
+	Aborted  []s3.UploadID
+	Parts    []LostPart
+}
+
+// LostPart identifies a multipart part whose file was not found on disk after a restore.
+type LostPart struct {
+	UploadID   s3.UploadID
+	PartNumber int
+}
+
+func (s *Sia) completeRestore() error {
+	if restored, err := s.store.Restored(); err != nil {
+		return fmt.Errorf("failed to check for a restore: %w", err)
+	} else if !restored {
+		return nil
+	}
+
+	onDisk := make(map[string]struct{})
+	err := filepath.WalkDir(s.uploadDir(), func(path string, _ fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(s.uploadDir(), path)
+		if err != nil {
+			return err
+		}
+		onDisk[filepath.ToSlash(rel)] = struct{}{}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("failed to walk uploads directory: %w", err)
+	}
+
+	cleanup, err := s.store.CompleteRestore(onDisk, time.Now().Add(pinDeadline))
+	if err != nil {
+		return fmt.Errorf("failed to remove lost uploads: %w", err)
+	}
+	for _, obj := range cleanup.Removed {
+		s.logger.Warn("removed object whose data was lost in the restore",
+			zap.String("bucket", obj.Bucket),
+			zap.String("name", obj.Name),
+			zap.String("versionID", s3.FormatVersion(obj.VersionID)))
+	}
+	for _, obj := range cleanup.Retained {
+		s.logger.Warn("kept object whose data was lost in the restore, its lock forbids deletion",
+			zap.String("bucket", obj.Bucket),
+			zap.String("name", obj.Name),
+			zap.String("versionID", s3.FormatVersion(obj.VersionID)))
+	}
+	for _, id := range cleanup.Aborted {
+		s.logger.Warn("aborted multipart upload whose parts were lost in the restore", zap.Stringer("uploadID", id))
+	}
+	for _, part := range cleanup.Parts {
+		s.logger.Warn("removed multipart part whose file was lost in the restore",
+			zap.Stringer("uploadID", part.UploadID),
+			zap.Int("partNumber", part.PartNumber))
+	}
+	s.logger.Info("completed restore",
+		zap.Int("removedObjects", len(cleanup.Removed)),
+		zap.Int("retainedObjects", len(cleanup.Retained)),
+		zap.Int("abortedUploads", len(cleanup.Aborted)),
+		zap.Int("removedParts", len(cleanup.Parts)))
+	return nil
 }
 
 // ListRemoteSnapshots enumerates every object in the account and returns those
