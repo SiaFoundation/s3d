@@ -273,7 +273,7 @@ func (r LifecycleRule) Validate() error {
 		if a.DaysAfterInitiation <= 0 {
 			return fmt.Errorf("DaysAfterInitiation must be a positive integer: %w", s3errs.ErrMalformedXML)
 		} else if r.Filter.hasSizeBounds() {
-			return fmt.Errorf("object size filters are not supported with AbortIncompleteMultipartUpload: %w", s3errs.ErrNotImplemented)
+			return fmt.Errorf("AbortIncompleteMultipartUpload cannot be specified with object size filters: %w", s3errs.ErrInvalidRequest)
 		}
 	}
 	return nil
