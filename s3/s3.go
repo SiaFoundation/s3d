@@ -10,7 +10,6 @@ import (
 	"net/netip"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3/auth"
@@ -54,7 +53,7 @@ type Backend interface {
 	//
 	// - opts.DestinationPreconditions must be evaluated against the current
 	//   version of the destination, via ObjectPreconditions.CheckWrite.
-	CopyObject(ctx context.Context, srcBucket, srcObject string, srcVersion VersionRequest, dstBucket, dstObject string, opts CopyObjectOptions) (*CopyObjectResult, error)
+	CopyObject(ctx context.Context, srcBucket BucketID, srcObject string, srcVersion VersionRequest, dstBucket BucketID, dstObject string, opts CopyObjectOptions) (*CopyObjectResult, error)
 
 	// CreateBucket creates a new bucket owned by the user identified by the
 	// access key. If the bucket exists and is owned by the same user,
@@ -62,12 +61,12 @@ type Backend interface {
 	// user, [ErrBucketAlreadyExists] must be returned.
 	CreateBucket(ctx context.Context, accessKeyID, name string, opts CreateBucketOptions) error
 
-	// DeleteBucket deletes the bucket with the given name.
+	// DeleteBucket deletes the bucket.
 	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
 	//
 	// - If the bucket is not empty, [ErrBucketNotEmpty] must be returned.
-	DeleteBucket(ctx context.Context, name string) error
+	DeleteBucket(ctx context.Context, bucket BucketID) error
 
 	// DeleteObject deletes the object with the given key from the specified
 	// bucket.
@@ -82,7 +81,7 @@ type Backend interface {
 	//   unconditional, reporting no version and no delete marker. That covers a
 	//   key with no versions, a key whose current version is a delete marker,
 	//   and a named version that is not there.
-	DeleteObject(ctx context.Context, bucket string, object ObjectID, opts DeleteObjectOptions) (*DeleteObjectResult, error)
+	DeleteObject(ctx context.Context, bucket BucketID, object ObjectID, opts DeleteObjectOptions) (*DeleteObjectResult, error)
 
 	// DeleteObjects deletes multiple objects from the specified bucket.
 	//
@@ -94,11 +93,7 @@ type Backend interface {
 	// - Each object carries the same preconditions as DeleteObject, with the
 	//   same outcomes, except that a failed precondition fails only that object,
 	//   which is reported in the result's Error list.
-	//
-	// - If owner is no longer the bucket's [UserInfo.ID], see
-	//   [PutObjectOptions.BucketOwner], [ErrNoSuchBucket] must be returned for
-	//   each object.
-	DeleteObjects(ctx context.Context, bucket, owner string, objects []ObjectID, opts DeleteObjectOptions) (*ObjectsDeleteResult, error)
+	DeleteObjects(ctx context.Context, bucket BucketID, objects []ObjectID, opts DeleteObjectOptions) (*ObjectsDeleteResult, error)
 
 	// GetObject retrieves the object with the given key from the specified
 	// bucket. The provided range is either nil if no range was requested, or
@@ -118,17 +113,20 @@ type Backend interface {
 	// - version unspecified returns the current version; a specified request
 	//   returns that exact version ("" is the null version, [ErrNoSuchVersion]
 	//   if absent). The result may be a delete marker (Object.IsDeleteMarker).
-	GetObject(ctx context.Context, bucket, object string, version VersionRequest, rnge *ObjectRangeRequest, partNumber *int32) (*Object, error)
+	GetObject(ctx context.Context, bucket BucketID, object string, version VersionRequest, rnge *ObjectRangeRequest, partNumber *int32) (*Object, error)
 
-	// BucketAccessInfo returns the bucket's owner and policy document. It is
-	// called on every bucket request.
+	// BucketAccessInfo returns the ID, owner and policy document of the bucket
+	// with the given name. It is called on every bucket request.
 	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
-	BucketAccessInfo(ctx context.Context, bucket string) (BucketAccessInfo, error)
+	//
+	// - The ID must never be reused, so a request authorized against a bucket
+	//   cannot act on another one later created under the same name.
+	BucketAccessInfo(ctx context.Context, name string) (BucketAccessInfo, error)
 
 	// HeadObject is like GetObject but only retrieves the metadata of the
 	// object and returns an empty body.
-	HeadObject(ctx context.Context, bucket, object string, version VersionRequest, rnge *ObjectRangeRequest, partNumber *int32) (*Object, error)
+	HeadObject(ctx context.Context, bucket BucketID, object string, version VersionRequest, rnge *ObjectRangeRequest, partNumber *int32) (*Object, error)
 
 	// ListBuckets lists all available buckets for the user identified by the
 	// given access key.
@@ -139,7 +137,7 @@ type Backend interface {
 	// and CommonPrefixes fields of the returned ObjectsListResult.
 	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
-	ListObjects(ctx context.Context, bucket string, prefix Prefix, page ListObjectsPage) (*ObjectsListResult, error)
+	ListObjects(ctx context.Context, bucket BucketID, prefix Prefix, page ListObjectsPage) (*ObjectsListResult, error)
 
 	// PutObject puts an object with the given key into the specified bucket.
 	//
@@ -149,27 +147,30 @@ type Backend interface {
 	//   versions are retained; otherwise (unversioned or suspended) the null
 	//   version is overwritten in place.
 	//
-	// - If the bytes read from 'r' do not match 'contentLength',
-	//   [ErrIncompleteBody] must be returned.
+	// - If opts.ContentLength is negative the length is not known ahead of the
+	//   read, so 'r' is read to EOF and opts.MaxContentLength bounds it.
+	//   [ErrEntityTooLarge] must be returned if 'r' holds more than the bound.
+	//   Otherwise the bytes read from 'r' must match opts.ContentLength and
+	//   [ErrIncompleteBody] must be returned if they do not.
 	//
 	// - If ContentMD5 is set in opts, and the MD5 checksum of the data read
 	//   from 'r' does not match, [ErrBadDigest] must be returned.
 	//
 	// - opts.Preconditions must be evaluated against the current version of the
 	//   object, via ObjectPreconditions.CheckWrite.
-	PutObject(ctx context.Context, bucket, object string, r io.Reader, opts PutObjectOptions) (*PutObjectResult, error)
+	PutObject(ctx context.Context, bucket BucketID, object string, r io.Reader, opts PutObjectOptions) (*PutObjectResult, error)
 
 	// CreateMultipartUpload creates a new multipart upload for the specified
 	// key in the specified bucket.
 	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
-	CreateMultipartUpload(ctx context.Context, bucket, object string, opts CreateMultipartUploadOptions) (*CreateMultipartUploadResult, error)
+	CreateMultipartUpload(ctx context.Context, bucket BucketID, object string, opts CreateMultipartUploadOptions) (*CreateMultipartUploadResult, error)
 
 	// ListMultipartUploads lists in-progress multipart uploads for the given
 	// bucket.
 	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
-	ListMultipartUploads(ctx context.Context, bucket string, opts ListMultipartUploadsOptions, page ListMultipartUploadsPage) (*ListMultipartUploadsResult, error)
+	ListMultipartUploads(ctx context.Context, bucket BucketID, opts ListMultipartUploadsOptions, page ListMultipartUploadsPage) (*ListMultipartUploadsResult, error)
 
 	// AbortMultipartUpload aborts an in-progress multipart upload and
 	// discards any uploaded parts.
@@ -178,7 +179,7 @@ type Backend interface {
 	//
 	// - If the multipart upload ID is not known or no longer active,
 	//   [ErrNoSuchUpload] must be returned.
-	AbortMultipartUpload(ctx context.Context, bucket, object string, uploadID UploadID) error
+	AbortMultipartUpload(ctx context.Context, bucket BucketID, object string, uploadID UploadID) error
 
 	// UploadPart uploads a single part for a previously initiated multipart
 	// upload.
@@ -193,7 +194,7 @@ type Backend interface {
 	//
 	// - If ContentMD5 or ContentSHA256 are set in opts, and the checksums of
 	//   the data read from 'r' do not match, [ErrBadDigest] must be returned.
-	UploadPart(ctx context.Context, bucket, object string, uploadID UploadID, r io.Reader, opts UploadPartOptions) (*UploadPartResult, error)
+	UploadPart(ctx context.Context, bucket BucketID, object string, uploadID UploadID, r io.Reader, opts UploadPartOptions) (*UploadPartResult, error)
 
 	// UploadPartCopy copies a part from an existing object as part of a
 	// multipart upload.
@@ -220,7 +221,7 @@ type Backend interface {
 	// - opts.Range must be resolved against the size of the source object, via
 	//   CopySourceRange.Range. A resolved range larger than
 	//   [MaxUploadPartSize] returns [ErrEntityTooLarge].
-	UploadPartCopy(ctx context.Context, srcBucket, srcObject string, srcVersion VersionRequest, dstBucket, dstObject string, uploadID UploadID, opts UploadPartCopyOptions) (*UploadPartCopyResult, error)
+	UploadPartCopy(ctx context.Context, srcBucket BucketID, srcObject string, srcVersion VersionRequest, dstBucket BucketID, dstObject string, uploadID UploadID, opts UploadPartCopyOptions) (*UploadPartCopyResult, error)
 
 	// ListParts lists uploaded parts for the specified multipart upload.
 	//
@@ -228,7 +229,7 @@ type Backend interface {
 	//
 	// - If the multipart upload ID is not known or no longer active,
 	//   [ErrNoSuchUpload] must be returned.
-	ListParts(ctx context.Context, bucket, object string, uploadID UploadID, page ListPartsPage) (*ListPartsResult, error)
+	ListParts(ctx context.Context, bucket BucketID, object string, uploadID UploadID, page ListPartsPage) (*ListPartsResult, error)
 
 	// CompleteMultipartUpload completes a multipart upload by assembling the
 	// previously uploaded parts into the final object.
@@ -243,15 +244,13 @@ type Backend interface {
 	//
 	// - preconditions must be evaluated against the current version of the
 	//   object, via ObjectPreconditions.CheckWrite.
-	CompleteMultipartUpload(ctx context.Context, bucket, object string, uploadID UploadID, parts []CompleteMultipartPart, preconditions ObjectPreconditions) (*CompleteMultipartUploadResult, error)
+	CompleteMultipartUpload(ctx context.Context, bucket BucketID, object string, uploadID UploadID, parts []CompleteMultipartPart, preconditions ObjectPreconditions) (*CompleteMultipartUploadResult, error)
 
 	// PutBucketLifecycleConfiguration sets the lifecycle configuration for the
 	// specified bucket, replacing any existing configuration.
 	//
-	// - If the bucket does not exist, or owner is no longer its [UserInfo.ID]
-	//   (see [PutObjectOptions.BucketOwner]), [ErrNoSuchBucket] must be
-	//   returned.
-	PutBucketLifecycleConfiguration(ctx context.Context, bucket, owner string, config LifecycleConfiguration) error
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	PutBucketLifecycleConfiguration(ctx context.Context, bucket BucketID, config LifecycleConfiguration) error
 
 	// GetBucketLifecycleConfiguration returns the lifecycle configuration for
 	// the specified bucket.
@@ -260,58 +259,52 @@ type Backend interface {
 	//
 	// - If the bucket has no lifecycle configuration,
 	//   [ErrNoSuchLifecycleConfiguration] must be returned.
-	GetBucketLifecycleConfiguration(ctx context.Context, bucket string) (LifecycleConfiguration, error)
+	GetBucketLifecycleConfiguration(ctx context.Context, bucket BucketID) (LifecycleConfiguration, error)
 
 	// DeleteBucketLifecycleConfiguration removes the lifecycle configuration
 	// for the specified bucket. It is not an error if no configuration exists.
 	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
-	DeleteBucketLifecycleConfiguration(ctx context.Context, bucket string) error
+	DeleteBucketLifecycleConfiguration(ctx context.Context, bucket BucketID) error
 
 	// PutBucketPolicy sets the policy for the specified bucket, replacing any
 	// existing policy. The document is already validated; the backend stores it
 	// verbatim.
 	//
-	// - If the bucket does not exist, or owner is no longer its [UserInfo.ID]
-	//   (see [PutObjectOptions.BucketOwner]), [ErrNoSuchBucket] must be
-	//   returned.
-	PutBucketPolicy(ctx context.Context, bucket, owner, document string) error
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	PutBucketPolicy(ctx context.Context, bucket BucketID, document string) error
 
 	// DeleteBucketPolicy removes the policy of the specified bucket, revoking
 	// any anonymous access. It is not an error if no policy exists.
 	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
-	DeleteBucketPolicy(ctx context.Context, bucket string) error
+	DeleteBucketPolicy(ctx context.Context, bucket BucketID) error
 
 	// PutBucketVersioning sets the versioning state of the specified bucket.
 	// status is either "Enabled" or "Suspended".
 	//
-	// - If the bucket does not exist, or owner is no longer its [UserInfo.ID]
-	//   (see [PutObjectOptions.BucketOwner]), [ErrNoSuchBucket] must be
-	//   returned.
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
 	//
 	// - If the bucket has object lock enabled and status is "Suspended",
 	//   [ErrInvalidBucketState] must be returned.
-	PutBucketVersioning(ctx context.Context, bucket, owner, status string) error
+	PutBucketVersioning(ctx context.Context, bucket BucketID, status string) error
 
 	// GetBucketVersioning returns the versioning state of the specified
 	// bucket. The status is "" if the bucket has never been configured,
 	// otherwise "Enabled" or "Suspended".
 	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
-	GetBucketVersioning(ctx context.Context, bucket string) (status string, err error)
+	GetBucketVersioning(ctx context.Context, bucket BucketID) (status string, err error)
 
 	// PutBucketObjectLockConfiguration turns on object lock for the specified
 	// bucket and replaces its default retention rule. A configuration carrying
 	// no rule clears the default retention.
 	//
-	// - If the bucket does not exist, or owner is no longer its [UserInfo.ID]
-	//   (see [PutObjectOptions.BucketOwner]), [ErrNoSuchBucket] must be
-	//   returned.
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
 	//
 	// - If the bucket's versioning is not enabled, [ErrInvalidBucketState] must
 	//   be returned.
-	PutBucketObjectLockConfiguration(ctx context.Context, bucket, owner string, config ObjectLockConfiguration) error
+	PutBucketObjectLockConfiguration(ctx context.Context, bucket BucketID, config ObjectLockConfiguration) error
 
 	// GetBucketObjectLockConfiguration returns the object lock configuration of
 	// the specified bucket.
@@ -320,7 +313,7 @@ type Backend interface {
 	//
 	// - If the bucket does not have object lock enabled,
 	//   [ErrObjectLockConfigurationNotFoundError] must be returned.
-	GetBucketObjectLockConfiguration(ctx context.Context, bucket string) (ObjectLockConfiguration, error)
+	GetBucketObjectLockConfiguration(ctx context.Context, bucket BucketID) (ObjectLockConfiguration, error)
 
 	// PutObjectRetention replaces the retention on the addressed version. A
 	// zero retention clears it.
@@ -335,7 +328,7 @@ type Backend interface {
 	//
 	// - If the transition weakens a retention the caller may not weaken,
 	//   [ErrAccessDenied] must be returned.
-	PutObjectRetention(ctx context.Context, bucket, owner, object string, version VersionRequest, retention ObjectLockState, bypass bool) error
+	PutObjectRetention(ctx context.Context, bucket BucketID, object string, version VersionRequest, retention ObjectLockState, bypass bool) error
 
 	// GetObjectRetention returns the retention on the addressed version.
 	//
@@ -349,7 +342,7 @@ type Backend interface {
 	//
 	// - If the version carries no retention,
 	//   [ErrNoSuchObjectLockConfiguration] must be returned.
-	GetObjectRetention(ctx context.Context, bucket, object string, version VersionRequest) (ObjectLockState, error)
+	GetObjectRetention(ctx context.Context, bucket BucketID, object string, version VersionRequest) (ObjectLockState, error)
 
 	// PutObjectLegalHold turns the legal hold on the addressed version on or
 	// off. A legal hold toggles freely in either retention mode.
@@ -361,7 +354,7 @@ type Backend interface {
 	//
 	// - If the object or version does not exist, [ErrNoSuchKey] or
 	//   [ErrNoSuchVersion] must be returned.
-	PutObjectLegalHold(ctx context.Context, bucket, owner, object string, version VersionRequest, status string) error
+	PutObjectLegalHold(ctx context.Context, bucket BucketID, object string, version VersionRequest, status string) error
 
 	// GetObjectLegalHold returns the legal hold on the addressed version, or
 	// "" when none was ever applied.
@@ -373,13 +366,13 @@ type Backend interface {
 	//
 	// - If the object or version does not exist, [ErrNoSuchKey] or
 	//   [ErrNoSuchVersion] must be returned.
-	GetObjectLegalHold(ctx context.Context, bucket, object string, version VersionRequest) (string, error)
+	GetObjectLegalHold(ctx context.Context, bucket BucketID, object string, version VersionRequest) (string, error)
 
 	// ListObjectVersions lists all versions (including delete markers) of the
 	// objects in the specified bucket.
 	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
-	ListObjectVersions(ctx context.Context, bucket string, prefix Prefix, page ListObjectVersionsPage) (*ObjectVersionsListResult, error)
+	ListObjectVersions(ctx context.Context, bucket BucketID, prefix Prefix, page ListObjectVersionsPage) (*ObjectVersionsListResult, error)
 
 	// UploadStats returns statistics about the background upload pipeline.
 	UploadStats(ctx context.Context) (UploadStats, error)
@@ -410,10 +403,6 @@ type s3 struct {
 	logger          *zap.Logger
 	region          string
 	trustedProxies  []netip.Prefix
-
-	// policies caches parsed policies by bucket name
-	policyMu sync.Mutex
-	policies map[string]cachedPolicy
 }
 
 // Option is a configuration option for the S3 API handler.

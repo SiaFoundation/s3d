@@ -70,7 +70,7 @@ func (s *s3) routeBucket(r *http.Request) (operation, error) {
 		return operation{action: actionDeleteBucket, serve: s.deleteBucket}, nil
 	case http.MethodPost:
 		if !q.Has("delete") {
-			return operation{}, s3errs.ErrNotImplemented // createObjectBrowserUpload is not implemented
+			return operation{formAuth: true, serve: s.postObject}, nil
 		}
 		return operation{multiObjectDelete: true, serve: s.deleteObjects}, nil
 	default:
@@ -149,7 +149,7 @@ func (s *s3) createBucket(w http.ResponseWriter, r *http.Request, access *bucket
 func (s *s3) deleteBucket(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
 	s.logger.Debug("deleting bucket", zap.String("bucket", access.bucket))
 
-	if err := s.backend.DeleteBucket(r.Context(), access.bucket); err != nil {
+	if err := s.backend.DeleteBucket(r.Context(), access.bucketID); err != nil {
 		return err
 	}
 	w.WriteHeader(http.StatusNoContent)

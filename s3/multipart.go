@@ -1,7 +1,6 @@
 package s3
 
 import (
-	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"net/http"
@@ -232,7 +231,7 @@ func (s *s3) abortMultipartUpload(w http.ResponseWriter, r *http.Request, access
 	)
 	log.Debug("abort multipart upload")
 
-	if err := s.backend.AbortMultipartUpload(r.Context(), bucket, object, uploadID); err != nil {
+	if err := s.backend.AbortMultipartUpload(r.Context(), access.bucketID, object, uploadID); err != nil {
 		return err
 	}
 
@@ -266,7 +265,7 @@ func (s *s3) createMultipartUpload(w http.ResponseWriter, r *http.Request, acces
 		return err
 	}
 
-	result, err := s.backend.CreateMultipartUpload(r.Context(), bucket, object, CreateMultipartUploadOptions{
+	result, err := s.backend.CreateMultipartUpload(r.Context(), access.bucketID, object, CreateMultipartUploadOptions{
 		Meta:       meta,
 		ObjectLock: lock,
 	})
@@ -302,7 +301,7 @@ func (s *s3) listMultipartUploads(w http.ResponseWriter, r *http.Request, access
 		MaxUploads:     maxUploads,
 	}
 
-	result, err := s.backend.ListMultipartUploads(r.Context(), bucket, opts, page)
+	result, err := s.backend.ListMultipartUploads(r.Context(), access.bucketID, opts, page)
 	if err != nil {
 		return err
 	}
@@ -371,7 +370,7 @@ func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, dst *bucketAccess,
 		return err
 	}
 
-	result, err := s.backend.UploadPartCopy(r.Context(), srcBucket, srcObject, srcVersion, dstBucket, dstObject, uploadID, UploadPartCopyOptions{
+	result, err := s.backend.UploadPartCopy(r.Context(), src.bucketID, srcObject, srcVersion, dst.bucketID, dstObject, uploadID, UploadPartCopyOptions{
 		PartNumber:          partNumber,
 		Range:               srcRange,
 		SourcePreconditions: copySourcePreconditions(r.Header),
@@ -424,10 +423,11 @@ func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, access *bucke
 	// extract Content-MD5 header
 	var contentMD5 *[16]byte
 	if md5Header := r.Header.Get("Content-Md5"); md5Header != "" {
-		contentMD5 = new([16]byte)
-		if n, err := base64.StdEncoding.Decode(contentMD5[:], []byte(md5Header)); err != nil || n != len(contentMD5) {
-			return s3errs.ErrInvalidDigest
+		digest, err := parseContentMD5(md5Header)
+		if err != nil {
+			return err
 		}
+		contentMD5 = digest
 	}
 
 	// extract SHA256 checksum from "X-Amz-Content-Sha256" header if present
@@ -436,7 +436,7 @@ func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, access *bucke
 		return err
 	}
 
-	res, err := s.backend.UploadPart(r.Context(), bucket, object, uploadID, r.Body, UploadPartOptions{
+	res, err := s.backend.UploadPart(r.Context(), access.bucketID, object, uploadID, r.Body, UploadPartOptions{
 		PartNumber:    int(*partNumber),
 		ContentLength: r.ContentLength,
 		ContentMD5:    contentMD5,
@@ -466,7 +466,7 @@ func (s *s3) listUploadParts(w http.ResponseWriter, r *http.Request, access *buc
 	}
 
 	// list parts
-	result, err := s.backend.ListParts(r.Context(), bucket, object, uploadID, page)
+	result, err := s.backend.ListParts(r.Context(), access.bucketID, object, uploadID, page)
 	if err != nil {
 		return err
 	}
@@ -532,21 +532,9 @@ func (s *s3) completeMultipartUpload(w http.ResponseWriter, r *http.Request, acc
 		}
 	}
 
-	res, err := s.backend.CompleteMultipartUpload(r.Context(), bucket, object, uploadID, parts, requestPreconditions(r.Header))
+	res, err := s.backend.CompleteMultipartUpload(r.Context(), access.bucketID, object, uploadID, parts, requestPreconditions(r.Header))
 	if err != nil {
 		return err
-	}
-
-	protocol := "http"
-	if r.TLS != nil {
-		protocol = "https"
-	}
-
-	var location string
-	if _, ok := s.bucketFromHost(r.Host); ok {
-		location = fmt.Sprintf("%s://%s/%s", protocol, r.Host, object)
-	} else {
-		location = fmt.Sprintf("%s://%s/%s/%s", protocol, r.Host, bucket, object)
 	}
 
 	w.Header().Set("ETag", res.ETag)
@@ -555,7 +543,7 @@ func (s *s3) completeMultipartUpload(w http.ResponseWriter, r *http.Request, acc
 	}
 	return writeXMLResponse(w, http.StatusOK, CompleteMultipartUploadResponse{
 		Xmlns:    "http://s3.amazonaws.com/doc/2006-03-01/",
-		Location: location,
+		Location: s.objectLocation(r, bucket, object),
 		Bucket:   bucket,
 		Key:      object,
 		ETag:     res.ETag,

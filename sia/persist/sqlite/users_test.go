@@ -188,7 +188,8 @@ func TestBucketOwnership(t *testing.T) {
 	}
 
 	// alice owns the bucket
-	if info, err := store.BucketAccessInfo("shared-name"); err != nil {
+	info, err := store.BucketAccessInfo("shared-name")
+	if err != nil {
 		t.Fatal(err)
 	} else if info.Owner.ID != "alice" {
 		t.Fatal("expected alice to own the bucket, got", info.Owner.ID)
@@ -215,7 +216,7 @@ func TestBucketOwnership(t *testing.T) {
 	}
 
 	// alice can delete her bucket
-	if err := store.DeleteBucket("shared-name"); err != nil {
+	if err := store.DeleteBucket(info.ID); err != nil {
 		t.Fatal(err)
 	}
 

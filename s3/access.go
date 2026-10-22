@@ -2,6 +2,7 @@ package s3
 
 import (
 	"errors"
+	"math"
 	"net/http"
 	"slices"
 	"strconv"
@@ -10,21 +11,22 @@ import (
 	"github.com/SiaFoundation/s3d/s3/auth"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"go.uber.org/zap"
+	"lukechampine.com/frand"
 )
 
-// maxCachedPolicies bounds the parsed policy cache, whose entries outlive
-// deleted buckets and policies.
-const maxCachedPolicies = 1000
+// BucketID identifies a bucket for its lifetime.
+type BucketID int64
 
-// cachedPolicy is a bucket's policy document and its parsed form.
-type cachedPolicy struct {
-	document string
-	policy   bucketPolicy
+// NewBucketID returns a random, positive bucket ID.
+func NewBucketID() BucketID {
+	return BucketID(frand.Uint64n(math.MaxInt64)) + 1
 }
 
 // BucketAccessInfo is what the S3 API handler needs to authorize a request on
 // a bucket, as returned by [Backend.BucketAccessInfo].
 type BucketAccessInfo struct {
+	// ID is the bucket's ID, passed to backend calls instead of its name.
+	ID BucketID
 	// Owner is the bucket's owner. Its ID must be the user ID the backend's
 	// LoadSecret reports for the owner's access keys, see [auth.Caller].
 	Owner *UserInfo
@@ -36,6 +38,7 @@ type BucketAccessInfo struct {
 // request.
 type bucketAccess struct {
 	caller         *auth.Caller
+	bucketID       BucketID
 	bucket         string
 	owner          *UserInfo
 	policyDocument string
@@ -55,7 +58,11 @@ type operation struct {
 	// bodyConditions marks an action whose condition keys are read from the
 	// body, so its handler checks the action once it has read the body.
 	bodyConditions bool
-	serve          func(http.ResponseWriter, *http.Request, *bucketAccess) error
+	// formAuth marks a POST Object request, which authenticates through its
+	// form fields. Its handler authorizes the caller once it has verified
+	// them, so it is not given an action.
+	formAuth bool
+	serve    func(http.ResponseWriter, *http.Request, *bucketAccess) error
 }
 
 // authorize resolves the caller's access to bucket and requires op's action on
@@ -68,6 +75,11 @@ func (s *s3) authorize(r *http.Request, caller *auth.Caller, bucket, object stri
 		if caller == nil {
 			return nil, s3errs.ErrAccessDenied
 		}
+		return &bucketAccess{caller: caller, bucket: bucket}, nil
+	}
+	if op.formAuth {
+		// the bucket is not resolved until the form is verified, so an
+		// anonymous caller cannot probe for bucket names
 		return &bucketAccess{caller: caller, bucket: bucket}, nil
 	}
 
@@ -113,6 +125,7 @@ func (s *s3) bucketAccess(r *http.Request, caller *auth.Caller, bucket string) (
 	}
 	access := &bucketAccess{
 		caller:         caller,
+		bucketID:       info.ID,
 		bucket:         bucket,
 		owner:          info.Owner,
 		policyDocument: info.PolicyDocument,
@@ -295,40 +308,17 @@ func (a *bucketAccess) hideMissingSource(err error, object string) error {
 	return err
 }
 
-// parsedPolicy returns the parsed form of a bucket's policy document, cached
-// until the document changes. A document that no longer parses grants nothing;
-// the error is only logged, so callers cannot tell the bucket has a policy.
+// parsedPolicy returns the parsed form of a bucket's policy document. A
+// document that no longer parses grants nothing; the error is only logged, so
+// callers cannot tell the bucket has a policy.
 func (s *s3) parsedPolicy(bucket, document string) bucketPolicy {
 	if document == "" {
 		return bucketPolicy{}
 	}
-	s.policyMu.Lock()
-	cached, ok := s.policies[bucket]
-	s.policyMu.Unlock()
-	if ok && cached.document == document {
-		return cached.policy
-	}
-
-	// parse outside the lock so a miss does not stall every other request
 	policy, err := parseBucketPolicy(bucket, document)
 	if err != nil {
-		// cached too, so a broken document is only logged once
 		s.logger.Warn("failed to parse stored bucket policy", zap.String("bucket", bucket), zap.Error(err))
-		policy = bucketPolicy{}
+		return bucketPolicy{}
 	}
-
-	s.policyMu.Lock()
-	defer s.policyMu.Unlock()
-	if s.policies == nil {
-		s.policies = make(map[string]cachedPolicy)
-	}
-	if _, ok := s.policies[bucket]; !ok && len(s.policies) >= maxCachedPolicies {
-		// evict an arbitrary entry; a hot bucket is simply parsed again
-		for evict := range s.policies {
-			delete(s.policies, evict)
-			break
-		}
-	}
-	s.policies[bucket] = cachedPolicy{document: document, policy: policy}
 	return policy
 }

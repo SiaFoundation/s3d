@@ -16,11 +16,11 @@ var errObjectLockNotEnabled = fmt.Errorf("bucket does not have object lock enabl
 
 // GetBucketObjectLockConfiguration returns the object lock configuration of the
 // bucket.
-func (s *Store) GetBucketObjectLockConfiguration(bucket string) (config s3.ObjectLockConfiguration, err error) {
+func (s *Store) GetBucketObjectLockConfiguration(bucket s3.BucketID) (config s3.ObjectLockConfiguration, err error) {
 	err = s.transaction(func(tx *txn) error {
 		config = s3.ObjectLockConfiguration{} // reset if the transaction retries
 
-		bid, err := bucketID(tx, bucket)
+		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
@@ -49,13 +49,11 @@ func (s *Store) GetBucketObjectLockConfiguration(bucket string) (config s3.Objec
 
 // PutBucketObjectLockConfiguration turns on object lock for the bucket and
 // replaces its default retention rule. A configuration carrying no rule clears
-// the default retention. owner is checked by [assertBucketOwner].
-func (s *Store) PutBucketObjectLockConfiguration(bucket, owner string, config s3.ObjectLockConfiguration) error {
+// the default retention.
+func (s *Store) PutBucketObjectLockConfiguration(bucket s3.BucketID, config s3.ObjectLockConfiguration) error {
 	return s.transaction(func(tx *txn) error {
 		bid, status, err := bucketIDAndVersioning(tx, bucket)
 		if err != nil {
-			return err
-		} else if err := assertBucketOwner(tx, bid, owner); err != nil {
 			return err
 		} else if status != s3.VersioningStatusEnabled {
 			return s3errs.ErrInvalidBucketState
@@ -190,13 +188,10 @@ func objectLockRow(tx *txn, bid int64, name string, version s3.VersionRequest) (
 	return versionID, mode, retainUntil, legalHold, nil
 }
 
-// lockedBucketID resolves a bucket which has object lock enabled. owner is
-// checked by [assertBucketOwner].
-func lockedBucketID(tx *txn, bucket, owner string) (int64, error) {
-	bid, err := bucketID(tx, bucket)
+// lockedBucketID resolves a bucket which has object lock enabled.
+func lockedBucketID(tx *txn, bucket s3.BucketID) (int64, error) {
+	bid, err := existingBucketID(tx, bucket)
 	if err != nil {
-		return 0, err
-	} else if err := assertBucketOwner(tx, bid, owner); err != nil {
 		return 0, err
 	} else if enabled, err := bucketObjectLockEnabled(tx, bid); err != nil {
 		return 0, err
@@ -229,10 +224,10 @@ func checkRetentionTransition(mode string, retainUntil *int64, next s3.ObjectLoc
 }
 
 // PutObjectRetention replaces the retention on the addressed version. A zero
-// retention clears it. owner is checked by [assertBucketOwner].
-func (s *Store) PutObjectRetention(bucket, owner, name string, version s3.VersionRequest, retention s3.ObjectLockState, bypass bool) error {
+// retention clears it.
+func (s *Store) PutObjectRetention(bucket s3.BucketID, name string, version s3.VersionRequest, retention s3.ObjectLockState, bypass bool) error {
 	return s.transaction(func(tx *txn) error {
-		bid, err := lockedBucketID(tx, bucket, owner)
+		bid, err := lockedBucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
@@ -252,11 +247,11 @@ func (s *Store) PutObjectRetention(bucket, owner, name string, version s3.Versio
 }
 
 // GetObjectRetention returns the retention on the addressed version.
-func (s *Store) GetObjectRetention(bucket, name string, version s3.VersionRequest) (state s3.ObjectLockState, err error) {
+func (s *Store) GetObjectRetention(bucket s3.BucketID, name string, version s3.VersionRequest) (state s3.ObjectLockState, err error) {
 	err = s.transaction(func(tx *txn) error {
 		state = s3.ObjectLockState{} // reset if the transaction retries
 
-		bid, err := lockedBucketID(tx, bucket, "")
+		bid, err := lockedBucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
@@ -274,10 +269,9 @@ func (s *Store) GetObjectRetention(bucket, name string, version s3.VersionReques
 }
 
 // PutObjectLegalHold turns the legal hold on the addressed version on or off.
-// owner is checked by [assertBucketOwner].
-func (s *Store) PutObjectLegalHold(bucket, owner, name string, version s3.VersionRequest, status string) error {
+func (s *Store) PutObjectLegalHold(bucket s3.BucketID, name string, version s3.VersionRequest, status string) error {
 	return s.transaction(func(tx *txn) error {
-		bid, err := lockedBucketID(tx, bucket, owner)
+		bid, err := lockedBucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
@@ -295,11 +289,11 @@ func (s *Store) PutObjectLegalHold(bucket, owner, name string, version s3.Versio
 
 // GetObjectLegalHold returns the legal hold on the addressed version, or "" when
 // none was ever applied.
-func (s *Store) GetObjectLegalHold(bucket, name string, version s3.VersionRequest) (status string, err error) {
+func (s *Store) GetObjectLegalHold(bucket s3.BucketID, name string, version s3.VersionRequest) (status string, err error) {
 	err = s.transaction(func(tx *txn) error {
 		status = "" // reset if the transaction retries
 
-		bid, err := lockedBucketID(tx, bucket, "")
+		bid, err := lockedBucketID(tx, bucket)
 		if err != nil {
 			return err
 		}

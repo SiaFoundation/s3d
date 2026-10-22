@@ -688,7 +688,7 @@ func (s *s3) putBucketPolicy(w http.ResponseWriter, r *http.Request, access *buc
 	} else if _, err := parseBucketPolicy(access.bucket, document); err != nil {
 		return err
 	}
-	if err := s.backend.PutBucketPolicy(r.Context(), access.bucket, access.owner.ID, document); err != nil {
+	if err := s.backend.PutBucketPolicy(r.Context(), access.bucketID, document); err != nil {
 		return err
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -718,7 +718,7 @@ func (s *s3) getBucketPolicy(w http.ResponseWriter, r *http.Request, access *buc
 func (s *s3) deleteBucketPolicy(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
 	s.logger.Debug("deleting bucket policy", zap.String("bucket", access.bucket))
 
-	if err := s.backend.DeleteBucketPolicy(r.Context(), access.bucket); err != nil {
+	if err := s.backend.DeleteBucketPolicy(r.Context(), access.bucketID); err != nil {
 		return err
 	}
 	w.WriteHeader(http.StatusNoContent)

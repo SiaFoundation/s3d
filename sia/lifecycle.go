@@ -14,6 +14,7 @@ import (
 // BucketLifecycleConfiguration pairs a bucket with its serialized lifecycle
 // configuration.
 type BucketLifecycleConfiguration struct {
+	BucketID      s3.BucketID
 	Bucket        string
 	Configuration string
 }
@@ -27,19 +28,19 @@ type AbortedUpload struct {
 
 // PutBucketLifecycleConfiguration stores the lifecycle configuration for a
 // bucket, replacing any existing configuration.
-func (s *Sia) PutBucketLifecycleConfiguration(_ context.Context, bucket, owner string, config s3.LifecycleConfiguration) error {
+func (s *Sia) PutBucketLifecycleConfiguration(_ context.Context, bucket s3.BucketID, config s3.LifecycleConfiguration) error {
 	// the namespace attribute is added when the configuration is read back
 	config.Xmlns = ""
 	buf, err := xml.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal lifecycle configuration: %w", err)
 	}
-	return s.store.PutBucketLifecycleConfiguration(bucket, owner, string(buf))
+	return s.store.PutBucketLifecycleConfiguration(bucket, string(buf))
 }
 
 // GetBucketLifecycleConfiguration returns the lifecycle configuration for a
 // bucket.
-func (s *Sia) GetBucketLifecycleConfiguration(_ context.Context, bucket string) (s3.LifecycleConfiguration, error) {
+func (s *Sia) GetBucketLifecycleConfiguration(_ context.Context, bucket s3.BucketID) (s3.LifecycleConfiguration, error) {
 	raw, err := s.store.GetBucketLifecycleConfiguration(bucket)
 	if err != nil {
 		return s3.LifecycleConfiguration{}, err
@@ -53,7 +54,7 @@ func (s *Sia) GetBucketLifecycleConfiguration(_ context.Context, bucket string) 
 
 // DeleteBucketLifecycleConfiguration removes the lifecycle configuration for a
 // bucket.
-func (s *Sia) DeleteBucketLifecycleConfiguration(_ context.Context, bucket string) error {
+func (s *Sia) DeleteBucketLifecycleConfiguration(_ context.Context, bucket s3.BucketID) error {
 	return s.store.DeleteBucketLifecycleConfiguration(bucket)
 }
 
@@ -117,7 +118,7 @@ func (s *Sia) abortIncompleteUploads(ctx context.Context, bc BucketLifecycleConf
 	const batchSize = 100
 	var aborted int
 	for ctx.Err() == nil {
-		uploads, err := s.store.AbortMultipartUploads(bc.Bucket, prefix, before, batchSize)
+		uploads, err := s.store.AbortMultipartUploads(bc.BucketID, prefix, before, batchSize)
 		if err != nil {
 			s.logger.Error("failed to abort multipart uploads", zap.String("bucket", bc.Bucket), zap.Error(err))
 			return
@@ -143,7 +144,7 @@ func (s *Sia) expireObjects(ctx context.Context, bc BucketLifecycleConfiguration
 	const batchSize = 100
 	var expired int
 	for ctx.Err() == nil {
-		deleted, orphans, err := s.store.ExpireObjects(bc.Bucket, prefix, before, batchSize)
+		deleted, orphans, err := s.store.ExpireObjects(bc.BucketID, prefix, before, batchSize)
 		if err != nil {
 			s.logger.Error("failed to expire objects", zap.String("bucket", bc.Bucket), zap.Error(err))
 			return

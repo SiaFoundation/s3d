@@ -761,7 +761,7 @@ func TestMigrationDropPublicActions(t *testing.T) {
 	} else if info.PolicyDocument != document {
 		t.Fatalf("expected document %q, got %q", document, info.PolicyDocument)
 	}
-	status, err := migrated.GetBucketVersioning("bucket")
+	status, err := migrated.GetBucketVersioning(info.ID)
 	if err != nil {
 		t.Fatal(err)
 	} else if status != "Enabled" {

@@ -98,10 +98,6 @@ type PutOptions struct {
 
 	Preconditions s3.ObjectPreconditions
 
-	// BucketOwner, if set, is the name of the user that must still own the
-	// bucket when the object is stored.
-	BucketOwner string
-
 	// ObjectLock is the lock to stamp on the new version, overriding the
 	// bucket's default retention.
 	ObjectLock *s3.ObjectLockState
@@ -109,6 +105,7 @@ type PutOptions struct {
 
 // ObjectForUpload contains the fields needed to upload an object.
 type ObjectForUpload struct {
+	BucketID     s3.BucketID
 	Bucket       string
 	Name         string
 	VersionID    string

@@ -307,7 +307,7 @@ func (s *s3) putBucketLifecycle(w http.ResponseWriter, r *http.Request, access *
 	}
 	config.assignRuleIDs()
 
-	return s.backend.PutBucketLifecycleConfiguration(r.Context(), access.bucket, access.owner.ID, config)
+	return s.backend.PutBucketLifecycleConfiguration(r.Context(), access.bucketID, config)
 }
 
 // getBucketLifecycle handles GET Bucket lifecycle requests.
@@ -316,7 +316,7 @@ func (s *s3) putBucketLifecycle(w http.ResponseWriter, r *http.Request, access *
 func (s *s3) getBucketLifecycle(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
 	s.logger.Debug("getting bucket lifecycle configuration", zap.String("bucket", access.bucket))
 
-	config, err := s.backend.GetBucketLifecycleConfiguration(r.Context(), access.bucket)
+	config, err := s.backend.GetBucketLifecycleConfiguration(r.Context(), access.bucketID)
 	if err != nil {
 		return err
 	}
@@ -332,7 +332,7 @@ func (s *s3) getBucketLifecycle(w http.ResponseWriter, r *http.Request, access *
 func (s *s3) deleteBucketLifecycle(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
 	s.logger.Debug("deleting bucket lifecycle configuration", zap.String("bucket", access.bucket))
 
-	if err := s.backend.DeleteBucketLifecycleConfiguration(r.Context(), access.bucket); err != nil {
+	if err := s.backend.DeleteBucketLifecycleConfiguration(r.Context(), access.bucketID); err != nil {
 		return err
 	}
 	w.WriteHeader(http.StatusNoContent)

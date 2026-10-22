@@ -26,8 +26,8 @@ type authorizationBackend struct {
 	document string
 }
 
-func (b *authorizationBackend) BucketAccessInfo(_ context.Context, bucket string) (BucketAccessInfo, error) {
-	if bucket != "bucket" {
+func (b *authorizationBackend) BucketAccessInfo(_ context.Context, name string) (BucketAccessInfo, error) {
+	if name != "bucket" {
 		return BucketAccessInfo{}, s3errs.ErrNoSuchBucket
 	}
 	return BucketAccessInfo{Owner: &UserInfo{ID: "owner"}, PolicyDocument: b.document}, nil
@@ -82,7 +82,7 @@ func TestAuthorizeCurrentPolicy(t *testing.T) {
 		}
 	}
 
-	// replacing and deleting a policy must take effect even after a cache hit
+	// replacing and deleting a policy take effect on the next request
 	backend.document = `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Principal":"*","Action":"s3:ListBucket","Resource":"arn:aws:s3:::bucket"}}`
 	if _, err := handler.authorize(req, nil, "bucket", "key", operation{action: actionGetObject}); !errors.Is(err, s3errs.ErrAccessDenied) {
 		t.Fatalf("replaced policy: expected %v, got %v", s3errs.ErrAccessDenied, err)

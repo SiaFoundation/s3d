@@ -10,6 +10,7 @@ import (
 	"hash"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"time"
@@ -160,7 +161,7 @@ func (s *Sia) lockUpload(path string) func() {
 	}
 }
 
-func (s *Sia) openUpload(bucket, name, versionID string, filename *string, multipart bool, r *s3.ObjectRange) (_ io.ReadCloser, err error) {
+func (s *Sia) openUpload(bucket s3.BucketID, name, versionID string, filename *string, multipart bool, r *s3.ObjectRange) (_ io.ReadCloser, err error) {
 	if filename == nil {
 		return nil, os.ErrNotExist
 	}
@@ -246,7 +247,7 @@ func (s *Sia) cleanupOrphanFile(o objects.OrphanedFile) {
 // CopyObject copies an object from the source bucket and object key to the
 // destination bucket and object key. opts.Meta contains any metadata that
 // should be merged into the copied object except for the x-amz-acl header.
-func (s *Sia) CopyObject(ctx context.Context, srcBucket, srcObject string, srcVersion s3.VersionRequest, dstBucket, dstObject string, opts s3.CopyObjectOptions) (*s3.CopyObjectResult, error) {
+func (s *Sia) CopyObject(ctx context.Context, srcBucket s3.BucketID, srcObject string, srcVersion s3.VersionRequest, dstBucket s3.BucketID, dstObject string, opts s3.CopyObjectOptions) (*s3.CopyObjectResult, error) {
 	result, orphan, err := s.store.CopyObject(srcBucket, srcObject, srcVersion, dstBucket, dstObject, opts)
 	if err != nil {
 		return nil, err
@@ -257,8 +258,8 @@ func (s *Sia) CopyObject(ctx context.Context, srcBucket, srcObject string, srcVe
 
 // DeleteObject deletes the object with the given key from the specified
 // bucket.
-func (s *Sia) DeleteObject(ctx context.Context, bucket string, object s3.ObjectID, opts s3.DeleteObjectOptions) (*s3.DeleteObjectResult, error) {
-	versionID, isDeleteMarker, orphan, err := s.store.DeleteObject(bucket, "", object, opts.BypassGovernanceRetention)
+func (s *Sia) DeleteObject(ctx context.Context, bucket s3.BucketID, object s3.ObjectID, opts s3.DeleteObjectOptions) (*s3.DeleteObjectResult, error) {
+	versionID, isDeleteMarker, orphan, err := s.store.DeleteObject(bucket, object, opts.BypassGovernanceRetention)
 	if err != nil {
 		return nil, err
 	}
@@ -271,11 +272,11 @@ func (s *Sia) DeleteObject(ctx context.Context, bucket string, object s3.ObjectI
 }
 
 // DeleteObjects deletes multiple objects from the specified bucket.
-func (s *Sia) DeleteObjects(ctx context.Context, bucket, owner string, objects []s3.ObjectID, opts s3.DeleteObjectOptions) (*s3.ObjectsDeleteResult, error) {
+func (s *Sia) DeleteObjects(ctx context.Context, bucket s3.BucketID, objects []s3.ObjectID, opts s3.DeleteObjectOptions) (*s3.ObjectsDeleteResult, error) {
 	var result s3.ObjectsDeleteResult
 
 	for _, obj := range objects {
-		versionID, isDeleteMarker, orphan, err := s.store.DeleteObject(bucket, owner, obj, opts.BypassGovernanceRetention)
+		versionID, isDeleteMarker, orphan, err := s.store.DeleteObject(bucket, obj, opts.BypassGovernanceRetention)
 		if err == nil {
 			s.cleanupOrphanFile(orphan)
 		}
@@ -314,17 +315,17 @@ func (s *Sia) DeleteObjects(ctx context.Context, bucket, owner string, objects [
 // bucket. The provided range is either nil if no range was requested, or
 // contains the requested byte range. version selects a specific version, or
 // the current version when unspecified.
-func (s *Sia) GetObject(ctx context.Context, bucket, object string, version s3.VersionRequest, rnge *s3.ObjectRangeRequest, partNumber *int32) (*s3.Object, error) {
+func (s *Sia) GetObject(ctx context.Context, bucket s3.BucketID, object string, version s3.VersionRequest, rnge *s3.ObjectRangeRequest, partNumber *int32) (*s3.Object, error) {
 	return s.headOrGetObject(ctx, bucket, object, version, rnge, partNumber, false)
 }
 
 // HeadObject is like GetObject but only retrieves the metadata of the
 // object and returns an empty body.
-func (s *Sia) HeadObject(ctx context.Context, bucket, object string, version s3.VersionRequest, rnge *s3.ObjectRangeRequest, partNumber *int32) (*s3.Object, error) {
+func (s *Sia) HeadObject(ctx context.Context, bucket s3.BucketID, object string, version s3.VersionRequest, rnge *s3.ObjectRangeRequest, partNumber *int32) (*s3.Object, error) {
 	return s.headOrGetObject(ctx, bucket, object, version, rnge, partNumber, true)
 }
 
-func (s *Sia) headOrGetObject(ctx context.Context, bucket, object string, version s3.VersionRequest, requestedRange *s3.ObjectRangeRequest, partNumber *int32, head bool) (*s3.Object, error) {
+func (s *Sia) headOrGetObject(ctx context.Context, bucket s3.BucketID, object string, version s3.VersionRequest, requestedRange *s3.ObjectRangeRequest, partNumber *int32, head bool) (*s3.Object, error) {
 	obj, err := s.store.GetObject(bucket, object, version, partNumber)
 	if err != nil {
 		return nil, err
@@ -417,7 +418,7 @@ func (s *Sia) headOrGetObject(ctx context.Context, bucket, object string, versio
 // ListObjects lists objects in the specified bucket, using the prefix to
 // limit the contents of the bucket and sort the results into the Contents and
 // CommonPrefixes fields of the returned ObjectsListResult.
-func (s *Sia) ListObjects(ctx context.Context, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error) {
+func (s *Sia) ListObjects(ctx context.Context, bucket s3.BucketID, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error) {
 	result, err := s.store.ListObjects(bucket, prefix, page)
 	if err != nil {
 		return nil, err
@@ -427,7 +428,7 @@ func (s *Sia) ListObjects(ctx context.Context, bucket string, prefix s3.Prefix, 
 
 // ListObjectVersions lists all versions (including delete markers) of the
 // objects in the specified bucket.
-func (s *Sia) ListObjectVersions(ctx context.Context, bucket string, prefix s3.Prefix, page s3.ListObjectVersionsPage) (*s3.ObjectVersionsListResult, error) {
+func (s *Sia) ListObjectVersions(ctx context.Context, bucket s3.BucketID, prefix s3.Prefix, page s3.ListObjectVersionsPage) (*s3.ObjectVersionsListResult, error) {
 	result, err := s.store.ListObjectVersions(bucket, prefix, page)
 	if err != nil {
 		return nil, err
@@ -439,7 +440,7 @@ func (s *Sia) ListObjectVersions(ctx context.Context, bucket string, prefix s3.P
 // checkWritePreconditions evaluates the preconditions against the current
 // version of the object a write would replace. It runs outside the write's
 // transaction, so it is a fail-fast check only; the store re-checks atomically.
-func (s *Sia) checkWritePreconditions(bucket, object string, p s3.ObjectPreconditions) error {
+func (s *Sia) checkWritePreconditions(bucket s3.BucketID, object string, p s3.ObjectPreconditions) error {
 	if !p.HasWritePreconditions() {
 		return nil
 	}
@@ -453,8 +454,70 @@ func (s *Sia) checkWritePreconditions(bucket, object string, p s3.ObjectPrecondi
 	return p.CheckWrite(&attrs)
 }
 
+// writeUpload streams r into a new file in the upload directory and returns the
+// file's name and the number of bytes written. A negative length reads r to EOF
+// and refuses more than limit bytes, otherwise exactly length bytes have to be
+// read. An empty object writes no file and returns a nil name. On error the file
+// is removed, but disk usage is left to the caller.
+func (s *Sia) writeUpload(r io.Reader, length, limit int64) (_ *string, size int64, err error) {
+	if length == 0 {
+		if _, err := io.Copy(io.Discard, r); err != nil {
+			return nil, 0, fmt.Errorf("failed to read object data: %w", err)
+		}
+		return nil, 0, nil
+	}
+
+	fileName := randObjectName()
+	path := filepath.Join(s.uploadDir(), fileName)
+	f, err := os.Create(path)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to create temporary file: %w", err)
+	}
+
+	// an undeclared length still reads one byte past the limit, so exceeding
+	// it is caught here rather than trusted to the caller. the bound saturates
+	// rather than wrapping to a limit that reads nothing
+	bound := limit
+	if length < 0 && bound < math.MaxInt64 {
+		bound++
+	}
+	size, err = io.Copy(f, io.LimitReader(r, bound))
+
+	// the size is settled before the file is synced, so a body that cannot be
+	// stored is not fsynced on its way to being unlinked
+	switch {
+	case err != nil:
+		err = fmt.Errorf("failed to store object: %w", err)
+	case length >= 0 && size != length:
+		err = s3errs.ErrIncompleteBody
+	case size > limit:
+		err = s3errs.ErrEntityTooLarge
+	case size > 0:
+		if err = f.Sync(); err != nil {
+			err = fmt.Errorf("failed to sync object to disk: %w", err)
+		}
+	}
+	if closeErr := f.Close(); err == nil && closeErr != nil {
+		err = fmt.Errorf("failed to close object file: %w", closeErr)
+	}
+	if err == nil && size > 0 {
+		if err = syncDir(s.uploadDir()); err != nil {
+			err = fmt.Errorf("failed to sync upload directory: %w", err)
+		}
+	}
+
+	// an undeclared length is only known to be empty after the read, so the
+	// file it wrote is dropped to store the object the same way a declared
+	// empty one is
+	if err != nil || size == 0 {
+		s.cleanupOrphan(path, 0)
+		return nil, 0, err
+	}
+	return &fileName, size, nil
+}
+
 // PutObject puts an object with the given key into the specified bucket.
-func (s *Sia) PutObject(ctx context.Context, bucket, object string, r io.Reader, opts s3.PutObjectOptions) (_ *s3.PutObjectResult, err error) {
+func (s *Sia) PutObject(ctx context.Context, bucket s3.BucketID, object string, r io.Reader, opts s3.PutObjectOptions) (_ *s3.PutObjectResult, err error) {
 	// fail fast if a precondition already cannot hold, so a doomed write does
 	// not stream its whole body first
 	if err := s.checkWritePreconditions(bucket, object, opts.Preconditions); err != nil {
@@ -466,16 +529,15 @@ func (s *Sia) PutObject(ctx context.Context, bucket, object string, r io.Reader,
 	r, ingressDone := s.transfer.trackIngress(r)
 	defer ingressDone()
 
-	if err := s.addDiskUsage(ctx, opts.ContentLength, nil); err != nil {
+	// an undeclared length reserves its bound instead, and gives back whatever
+	// it did not use once the body has been read
+	reserved := opts.ContentLength
+	if opts.ContentLength < 0 {
+		reserved = opts.MaxContentLength
+	}
+	if err := s.addDiskUsage(ctx, reserved, nil); err != nil {
 		return nil, err
 	}
-
-	var objPath string
-	defer func() {
-		if err != nil {
-			s.cleanupOrphan(objPath, opts.ContentLength)
-		}
-	}()
 
 	// compute md5 checksum for the etag
 	md5Hash := md5.New()
@@ -492,46 +554,25 @@ func (s *Sia) PutObject(ctx context.Context, bucket, object string, r io.Reader,
 	if opts.Checksum != nil {
 		checksumHash = opts.Checksum.NewHash()
 		if checksumHash == nil {
+			s.releaseDiskUsage(reserved)
 			return nil, s3errs.ErrInvalidRequest
 		}
 		r = io.TeeReader(r, checksumHash)
 	}
 
-	// handle empty object case
-	var fileName *string
-	var size int64
-	if opts.ContentLength == 0 {
-		// drain reader
-		if _, err := io.Copy(io.Discard, r); err != nil {
-			return nil, fmt.Errorf("failed to read object data: %w", err)
-		}
-	} else {
-		// save the object
-		randFileName := randObjectName()
-		objPath = filepath.Join(s.uploadDir(), randFileName)
-		fileName = &randFileName
-		f, err := os.Create(objPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create temporary file: %w", err)
-		}
-		size, err = io.Copy(f, io.LimitReader(r, opts.ContentLength))
-		if err != nil {
-			_ = f.Close()
-			return nil, fmt.Errorf("failed to store object: %w", err)
-		} else if err := f.Sync(); err != nil {
-			_ = f.Close()
-			return nil, fmt.Errorf("failed to sync object to disk: %w", err)
-		} else if err := f.Close(); err != nil {
-			return nil, fmt.Errorf("failed to close object file: %w", err)
-		} else if err := syncDir(s.uploadDir()); err != nil {
-			return nil, fmt.Errorf("failed to sync upload directory: %w", err)
-		}
+	fileName, size, err := s.writeUpload(r, opts.ContentLength, reserved)
+	if err != nil {
+		s.releaseDiskUsage(reserved)
+		return nil, err
 	}
+	// give back whatever an undeclared length reserved and did not use
+	s.releaseDiskUsage(reserved - size)
 
-	// check content length
-	if opts.ContentLength != size {
-		return nil, s3errs.ErrIncompleteBody
-	}
+	defer func() {
+		if err != nil && fileName != nil {
+			s.cleanupOrphan(filepath.Join(s.uploadDir(), *fileName), size)
+		}
+	}()
 
 	// verify checksums
 	var contentMD5 [16]byte
@@ -552,7 +593,6 @@ func (s *Sia) PutObject(ctx context.Context, bucket, object string, r io.Reader,
 		Length:        size,
 		FileName:      fileName,
 		Preconditions: opts.Preconditions,
-		BucketOwner:   opts.BucketOwner,
 		ObjectLock:    opts.ObjectLock,
 	})
 	if err != nil {

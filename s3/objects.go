@@ -144,17 +144,22 @@ type PutObjectResult struct {
 // set, the backend needs to validate the data against the provided checksums
 // and return an error if they don't match.
 type PutObjectOptions struct {
-	Meta          map[string]string
+	Meta map[string]string
+
+	// ContentLength is the exact number of bytes to read from the object data.
+	// It is negative when the length is not declared ahead of the read, which
+	// is the case for a POST form upload, and the data is then read to EOF.
 	ContentLength int64
+
+	// MaxContentLength is the largest object the caller will send when
+	// ContentLength is negative, and is what the backend reserves before it
+	// reads the data.
+	MaxContentLength int64
+
 	ContentMD5    *[16]byte
 	ContentSHA256 *[32]byte
 	Checksum      *RequestChecksum
 	Preconditions ObjectPreconditions
-
-	// BucketOwner, if set, is the [UserInfo.ID] that must still own the bucket
-	// when the object is stored, since the bucket may be recreated while the
-	// body is read. Otherwise [ErrNoSuchBucket] must be returned.
-	BucketOwner string
 
 	// ObjectLock is the lock to stamp on the new version, overriding the
 	// bucket's default retention. Nil applies the default, if any.
@@ -267,7 +272,7 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, dst *bucketAcces
 		return err
 	}
 
-	result, err := s.backend.CopyObject(r.Context(), srcBucket, srcObject, srcVersion, dstBucket, dstObject, CopyObjectOptions{
+	result, err := s.backend.CopyObject(r.Context(), src.bucketID, srcObject, srcVersion, dst.bucketID, dstObject, CopyObjectOptions{
 		Meta:                     meta,
 		Replace:                  replace,
 		SourcePreconditions:      copySourcePreconditions(r.Header),
@@ -305,7 +310,7 @@ func (s *s3) deleteObject(w http.ResponseWriter, r *http.Request, access *bucket
 		return err
 	}
 
-	result, err := s.backend.DeleteObject(r.Context(), bucket, oid, DeleteObjectOptions{
+	result, err := s.backend.DeleteObject(r.Context(), access.bucketID, oid, DeleteObjectOptions{
 		BypassGovernanceRetention: access.bypassGovernanceRetention(r.Header, object),
 	})
 	if err != nil {
@@ -376,7 +381,7 @@ func (s *s3) deleteObjects(w http.ResponseWriter, r *http.Request, access *bucke
 			keys[i] = obj.Key
 		}
 		var err error
-		res, err = s.backend.DeleteObjects(r.Context(), bucket, access.owner.ID, allowed, DeleteObjectOptions{
+		res, err = s.backend.DeleteObjects(r.Context(), access.bucketID, allowed, DeleteObjectOptions{
 			BypassGovernanceRetention: access.bypassGovernanceRetention(r.Header, keys...),
 		})
 		if err != nil {
@@ -421,9 +426,9 @@ func (s *s3) serveObject(w http.ResponseWriter, r *http.Request, access *bucketA
 	// retrieve object (HEAD fetches metadata only)
 	var obj *Object
 	if head {
-		obj, err = s.backend.HeadObject(r.Context(), bucket, object, version, rnge, partNumber)
+		obj, err = s.backend.HeadObject(r.Context(), access.bucketID, object, version, rnge, partNumber)
 	} else {
-		obj, err = s.backend.GetObject(r.Context(), bucket, object, version, rnge, partNumber)
+		obj, err = s.backend.GetObject(r.Context(), access.bucketID, object, version, rnge, partNumber)
 	}
 	if err != nil {
 		return access.hideMissing(err, object)
@@ -582,7 +587,7 @@ func (s *s3) listObjectsV1(w http.ResponseWriter, r *http.Request, access *bucke
 	}
 
 	// list objects
-	objects, err := s.backend.ListObjects(r.Context(), bucket, prefix, page)
+	objects, err := s.backend.ListObjects(r.Context(), access.bucketID, prefix, page)
 	if err != nil {
 		return err
 	}
@@ -637,7 +642,7 @@ func (s *s3) listObjectsV2(w http.ResponseWriter, r *http.Request, access *bucke
 	}
 
 	// list objects
-	objects, err := s.backend.ListObjects(r.Context(), bucket, prefix, page)
+	objects, err := s.backend.ListObjects(r.Context(), access.bucketID, prefix, page)
 	if err != nil {
 		return err
 	} else if aws.ToBool(page.FetchOwner) {
@@ -702,7 +707,7 @@ func (s *s3) listObjectVersions(w http.ResponseWriter, r *http.Request, access *
 		return err
 	}
 
-	versions, err := s.backend.ListObjectVersions(r.Context(), bucket, prefix, page)
+	versions, err := s.backend.ListObjectVersions(r.Context(), access.bucketID, prefix, page)
 	if err != nil {
 		return err
 	}
@@ -862,11 +867,11 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, access *bucketAcc
 	// extract Content-MD5 header
 	var contentMD5 *[16]byte
 	if _, exists := r.Header["Content-Md5"]; exists {
-		md5Base64 := r.Header.Get("Content-Md5")
-		contentMD5 = new([16]byte)
-		if n, err := base64.StdEncoding.Decode(contentMD5[:], []byte(md5Base64)); err != nil || n != len(contentMD5) {
-			return s3errs.ErrInvalidDigest
+		digest, err := parseContentMD5(r.Header.Get("Content-Md5"))
+		if err != nil {
+			return err
 		}
+		contentMD5 = digest
 	}
 
 	// extract SHA256 checksum from "X-Amz-Content-Sha256" header if present
@@ -886,14 +891,13 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, access *bucketAcc
 		return fmt.Errorf("a retention requires Content-MD5 or a checksum: %w", s3errs.ErrInvalidRequest)
 	}
 
-	res, err := s.backend.PutObject(r.Context(), bucket, object, r.Body, PutObjectOptions{
+	res, err := s.backend.PutObject(r.Context(), access.bucketID, object, r.Body, PutObjectOptions{
 		ContentLength: r.ContentLength,
 		ContentMD5:    contentMD5,
 		ContentSHA256: contentSHA256,
 		Checksum:      checksum,
 		Meta:          meta,
 		Preconditions: requestPreconditions(r.Header),
-		BucketOwner:   access.owner.ID,
 		ObjectLock:    lock,
 	})
 	if err != nil {
@@ -964,6 +968,19 @@ func declaresTrailingChecksum(headers http.Header) bool {
 	return false
 }
 
+// objectLocation returns the URL an object was addressed by, which a response
+// that reports where it stored something has to carry.
+func (s *s3) objectLocation(r *http.Request, bucket, object string) string {
+	location := url.URL{Scheme: "http", Host: r.Host, Path: "/" + bucket + "/" + object}
+	if r.TLS != nil {
+		location.Scheme = "https"
+	}
+	if _, ok := s.bucketFromHost(r.Host); ok {
+		location.Path = "/" + object
+	}
+	return location.String()
+}
+
 // FormatETag formats the given hash as an S3 ETag string.
 func FormatETag(hash []byte, partsCount int) string {
 	if partsCount > 0 {
@@ -994,6 +1011,18 @@ func ParseETag(s string) [16]byte {
 	copy(etag[:], decoded)
 
 	return etag
+}
+
+// parseContentMD5 decodes a base64 encoded MD5 digest, as a Content-MD5
+// header or a form field carries it.
+func parseContentMD5(encoded string) (*[16]byte, error) {
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil || len(decoded) != 16 {
+		return nil, s3errs.ErrInvalidDigest
+	}
+	var digest [16]byte
+	copy(digest[:], decoded)
+	return &digest, nil
 }
 
 // parseSource parses an X-Amz-Copy-Source string and returns the bucket,
@@ -1462,7 +1491,7 @@ func (s *s3) setLifecycleExpirationHeader(w http.ResponseWriter, r *http.Request
 	if err := access.assertBucketAllowed(actionGetLifecycleConfiguration); err != nil {
 		return
 	}
-	config, err := s.backend.GetBucketLifecycleConfiguration(r.Context(), access.bucket)
+	config, err := s.backend.GetBucketLifecycleConfiguration(r.Context(), access.bucketID)
 	if err != nil {
 		return
 	}

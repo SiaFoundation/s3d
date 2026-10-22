@@ -22,20 +22,21 @@ func TestBucketLifecycleConfiguration(t *testing.T) {
 	if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
+	bid := store.bucketID(bucket)
 
 	// missing configuration returns ErrNoSuchLifecycleConfiguration; unknown
 	// bucket returns ErrNoSuchBucket
-	if _, err := store.GetBucketLifecycleConfiguration(bucket); !errors.Is(err, s3errs.ErrNoSuchLifecycleConfiguration) {
+	if _, err := store.GetBucketLifecycleConfiguration(bid); !errors.Is(err, s3errs.ErrNoSuchLifecycleConfiguration) {
 		t.Fatalf("expected ErrNoSuchLifecycleConfiguration, got %v", err)
-	} else if err := store.PutBucketLifecycleConfiguration("nope", "", "<x/>"); !errors.Is(err, s3errs.ErrNoSuchBucket) {
+	} else if err := store.PutBucketLifecycleConfiguration(-1, "<x/>"); !errors.Is(err, s3errs.ErrNoSuchBucket) {
 		t.Fatalf("expected ErrNoSuchBucket, got %v", err)
 	}
 
 	// store and read back
 	const config = "<LifecycleConfiguration></LifecycleConfiguration>"
-	if err := store.PutBucketLifecycleConfiguration(bucket, "", config); err != nil {
+	if err := store.PutBucketLifecycleConfiguration(bid, config); err != nil {
 		t.Fatal(err)
-	} else if got, err := store.GetBucketLifecycleConfiguration(bucket); err != nil {
+	} else if got, err := store.GetBucketLifecycleConfiguration(bid); err != nil {
 		t.Fatal(err)
 	} else if got != config {
 		t.Fatalf("expected %q, got %q", config, got)
@@ -43,11 +44,11 @@ func TestBucketLifecycleConfiguration(t *testing.T) {
 
 	// overwrite replaces the configuration
 	const updated = "<LifecycleConfiguration><Rule/></LifecycleConfiguration>"
-	if err := store.PutBucketLifecycleConfiguration(bucket, "", updated); err != nil {
+	if err := store.PutBucketLifecycleConfiguration(bid, updated); err != nil {
 		t.Fatal(err)
 	}
 	store.assertCount(1, "bucket_lifecycle_configurations")
-	if got, err := store.GetBucketLifecycleConfiguration(bucket); err != nil {
+	if got, err := store.GetBucketLifecycleConfiguration(bid); err != nil {
 		t.Fatal(err)
 	} else if got != updated {
 		t.Fatalf("expected %q, got %q", updated, got)
@@ -62,13 +63,13 @@ func TestBucketLifecycleConfiguration(t *testing.T) {
 	}
 
 	// delete removes the configuration and is idempotent
-	if err := store.DeleteBucketLifecycleConfiguration(bucket); err != nil {
+	if err := store.DeleteBucketLifecycleConfiguration(bid); err != nil {
 		t.Fatal(err)
 	}
 	store.assertCount(0, "bucket_lifecycle_configurations")
-	if err := store.DeleteBucketLifecycleConfiguration(bucket); err != nil {
+	if err := store.DeleteBucketLifecycleConfiguration(bid); err != nil {
 		t.Fatalf("expected delete to be idempotent, got %v", err)
-	} else if _, err := store.GetBucketLifecycleConfiguration(bucket); !errors.Is(err, s3errs.ErrNoSuchLifecycleConfiguration) {
+	} else if _, err := store.GetBucketLifecycleConfiguration(bid); !errors.Is(err, s3errs.ErrNoSuchLifecycleConfiguration) {
 		t.Fatalf("expected ErrNoSuchLifecycleConfiguration, got %v", err)
 	}
 }
@@ -83,24 +84,25 @@ func TestAbortMultipartUploads(t *testing.T) {
 	if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
+	bid := store.bucketID(bucket)
 
 	// old upload under the "logs/" prefix with a single part
 	oldUpload := s3.NewUploadID()
-	if err := store.CreateMultipartUpload(bucket, "logs/a", oldUpload, nil, nil); err != nil {
+	if err := store.CreateMultipartUpload(bid, "logs/a", oldUpload, nil, nil); err != nil {
 		t.Fatal(err)
-	} else if _, _, err := store.AddMultipartPart(bucket, "logs/a", oldUpload, "p1", 1, frand.Entropy128(), 500); err != nil {
+	} else if _, _, err := store.AddMultipartPart(bid, "logs/a", oldUpload, "p1", 1, frand.Entropy128(), 500); err != nil {
 		t.Fatal(err)
 	}
 
 	// recent upload under the "logs/" prefix
 	newUpload := s3.NewUploadID()
-	if err := store.CreateMultipartUpload(bucket, "logs/b", newUpload, nil, nil); err != nil {
+	if err := store.CreateMultipartUpload(bid, "logs/b", newUpload, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
 	// upload under a different prefix
 	otherUpload := s3.NewUploadID()
-	if err := store.CreateMultipartUpload(bucket, "data/c", otherUpload, nil, nil); err != nil {
+	if err := store.CreateMultipartUpload(bid, "data/c", otherUpload, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -112,7 +114,7 @@ func TestAbortMultipartUploads(t *testing.T) {
 	}
 
 	// only the old "logs/" upload should be aborted
-	aborted, err := store.AbortMultipartUploads(bucket, "logs/", cutoff, 100)
+	aborted, err := store.AbortMultipartUploads(bid, "logs/", cutoff, 100)
 	if err != nil {
 		t.Fatal(err)
 	} else if len(aborted) != 1 {
@@ -136,20 +138,21 @@ func TestExpireObjects(t *testing.T) {
 	if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
+	bid := store.bucketID(bucket)
 
 	// pending on-disk object that should expire
 	oldFile := "old.obj"
-	if _, _, err := store.PutObject(bucket, "logs/old", objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 100, FileName: &oldFile}); err != nil {
+	if _, _, err := store.PutObject(bid, "logs/old", objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 100, FileName: &oldFile}); err != nil {
 		t.Fatal(err)
 	}
 	// recent object under the same prefix that should survive
 	newFile := "new.obj"
-	if _, _, err := store.PutObject(bucket, "logs/new", objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 200, FileName: &newFile}); err != nil {
+	if _, _, err := store.PutObject(bid, "logs/new", objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 200, FileName: &newFile}); err != nil {
 		t.Fatal(err)
 	}
 	// object under a different prefix that should survive
 	otherFile := "other.obj"
-	if _, _, err := store.PutObject(bucket, "data/keep", objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 300, FileName: &otherFile}); err != nil {
+	if _, _, err := store.PutObject(bid, "data/keep", objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 300, FileName: &otherFile}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -160,7 +163,7 @@ func TestExpireObjects(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deleted, orphans, err := store.ExpireObjects(bucket, "logs/", cutoff, 100)
+	deleted, orphans, err := store.ExpireObjects(bid, "logs/", cutoff, 100)
 	if err != nil {
 		t.Fatal(err)
 	} else if deleted != 1 {
@@ -181,15 +184,17 @@ func TestExpireObjectsVersions(t *testing.T) {
 	store := initTestDB(t, zap.NewNop())
 	if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
-	} else if err := store.PutBucketVersioning(bucket, "", s3.VersioningStatusEnabled); err != nil {
+	}
+	bid := store.bucketID(bucket)
+	if err := store.PutBucketVersioning(bid, s3.VersioningStatusEnabled); err != nil {
 		t.Fatal(err)
 	}
 
-	oldVersion, _, err := store.PutObject(bucket, key, objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 100, FileName: new(string)})
+	oldVersion, _, err := store.PutObject(bid, key, objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 100, FileName: new(string)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	currentVersion, _, err := store.PutObject(bucket, key, objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 200, FileName: new(string)})
+	currentVersion, _, err := store.PutObject(bid, key, objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 200, FileName: new(string)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +205,7 @@ func TestExpireObjectsVersions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deleted, orphans, err := store.ExpireObjects(bucket, "logs/", cutoff, 100)
+	deleted, orphans, err := store.ExpireObjects(bid, "logs/", cutoff, 100)
 	if err != nil {
 		t.Fatal(err)
 	} else if deleted != 0 {
@@ -208,11 +213,11 @@ func TestExpireObjectsVersions(t *testing.T) {
 	} else if len(orphans) != 0 {
 		t.Fatalf("expected no orphans, got %+v", orphans)
 	}
-	if obj, err := store.GetObject(bucket, key, s3.NoVersion(), nil); err != nil {
+	if obj, err := store.GetObject(bid, key, s3.NoVersion(), nil); err != nil {
 		t.Fatal(err)
 	} else if obj.VersionID != currentVersion {
 		t.Fatalf("expected current version %q, got %q", currentVersion, obj.VersionID)
-	} else if _, err := store.GetObject(bucket, key, s3.SpecificVersion(oldVersion), nil); err != nil {
+	} else if _, err := store.GetObject(bid, key, s3.SpecificVersion(oldVersion), nil); err != nil {
 		t.Fatalf("expected old noncurrent version to remain, got %v", err)
 	}
 }

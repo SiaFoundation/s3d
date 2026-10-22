@@ -60,7 +60,7 @@ func (s *Sia) ensureMultipartPartDir(uploadID s3.UploadID, partNumber int) (stri
 }
 
 // CreateMultipartUpload creates a new multipart upload.
-func (s *Sia) CreateMultipartUpload(ctx context.Context, bucket, object string, opts s3.CreateMultipartUploadOptions) (*s3.CreateMultipartUploadResult, error) {
+func (s *Sia) CreateMultipartUpload(ctx context.Context, bucket s3.BucketID, object string, opts s3.CreateMultipartUploadOptions) (*s3.CreateMultipartUploadResult, error) {
 	// create multipart upload directory
 	uploadID := s3.NewUploadID()
 	uploadDir, err := s.createMultipartUploadDir(uploadID.String())
@@ -78,7 +78,7 @@ func (s *Sia) CreateMultipartUpload(ctx context.Context, bucket, object string, 
 }
 
 // ListMultipartUploads lists in-progress multipart uploads.
-func (s *Sia) ListMultipartUploads(ctx context.Context, bucket string, opts s3.ListMultipartUploadsOptions, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error) {
+func (s *Sia) ListMultipartUploads(ctx context.Context, bucket s3.BucketID, opts s3.ListMultipartUploadsOptions, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error) {
 	prefix := s3.Prefix{
 		HasPrefix:    opts.Prefix != "",
 		Prefix:       opts.Prefix,
@@ -90,7 +90,7 @@ func (s *Sia) ListMultipartUploads(ctx context.Context, bucket string, opts s3.L
 }
 
 // AbortMultipartUpload aborts a multipart upload.
-func (s *Sia) AbortMultipartUpload(ctx context.Context, bucket, object string, uploadID s3.UploadID) error {
+func (s *Sia) AbortMultipartUpload(ctx context.Context, bucket s3.BucketID, object string, uploadID s3.UploadID) error {
 	// abort the multipart upload in the database
 	size, err := s.store.AbortMultipartUpload(bucket, object, uploadID)
 	if err != nil {
@@ -104,7 +104,7 @@ func (s *Sia) AbortMultipartUpload(ctx context.Context, bucket, object string, u
 }
 
 // UploadPart uploads a single multipart part.
-func (s *Sia) UploadPart(ctx context.Context, bucket, object string, uploadID s3.UploadID, r io.Reader, opts s3.UploadPartOptions) (_ *s3.UploadPartResult, err error) {
+func (s *Sia) UploadPart(ctx context.Context, bucket s3.BucketID, object string, uploadID s3.UploadID, r io.Reader, opts s3.UploadPartOptions) (_ *s3.UploadPartResult, err error) {
 	// fail fast if the bucket or the upload is unknown before streaming the
 	// body to disk
 	if _, err := s.store.HasMultipartUpload(bucket, object, uploadID); err != nil {
@@ -211,7 +211,7 @@ func (s *Sia) UploadPart(ctx context.Context, bucket, object string, uploadID s3
 }
 
 // UploadPartCopy uploads a part by copying data from an existing object.
-func (s *Sia) UploadPartCopy(ctx context.Context, srcBucket, srcObject string, srcVersion s3.VersionRequest, dstBucket, dstObject string, uploadID s3.UploadID, opts s3.UploadPartCopyOptions) (_ *s3.UploadPartCopyResult, err error) {
+func (s *Sia) UploadPartCopy(ctx context.Context, srcBucket s3.BucketID, srcObject string, srcVersion s3.VersionRequest, dstBucket s3.BucketID, dstObject string, uploadID s3.UploadID, opts s3.UploadPartCopyOptions) (_ *s3.UploadPartCopyResult, err error) {
 	// fetch source object metadata (the requested version, or the current
 	// version when unspecified). The source is resolved first so a bad copy
 	// source is reported as such rather than as a missing upload.
@@ -340,12 +340,12 @@ func (s *Sia) UploadPartCopy(ctx context.Context, srcBucket, srcObject string, s
 }
 
 // ListParts lists uploaded parts for a multipart upload.
-func (s *Sia) ListParts(ctx context.Context, bucket, object string, uploadID s3.UploadID, page s3.ListPartsPage) (*s3.ListPartsResult, error) {
+func (s *Sia) ListParts(ctx context.Context, bucket s3.BucketID, object string, uploadID s3.UploadID, page s3.ListPartsPage) (*s3.ListPartsResult, error) {
 	return s.store.ListParts(bucket, object, uploadID, page.PartNumberMarker, page.MaxParts)
 }
 
 // CompleteMultipartUpload completes a multipart upload.
-func (s *Sia) CompleteMultipartUpload(ctx context.Context, bucket, object string, uploadID s3.UploadID, parts []s3.CompleteMultipartPart, preconditions s3.ObjectPreconditions) (*s3.CompleteMultipartUploadResult, error) {
+func (s *Sia) CompleteMultipartUpload(ctx context.Context, bucket s3.BucketID, object string, uploadID s3.UploadID, parts []s3.CompleteMultipartPart, preconditions s3.ObjectPreconditions) (*s3.CompleteMultipartUploadResult, error) {
 	// get multipart upload
 	uploaded, err := s.store.MultipartParts(bucket, object, uploadID)
 	if err != nil {

@@ -144,7 +144,11 @@ func (t *S3Tester) GetBucketPolicyStatus(ctx context.Context, bucket string) (bo
 
 // AddObject adds an object to the S3 backend.
 func (t *S3Tester) AddObject(bucket, object string, data []byte, metadata map[string]string) error {
-	_, err := t.backend.PutObject(context.Background(), bucket, object, bytes.NewReader(data), s3.PutObjectOptions{
+	info, err := t.backend.BucketAccessInfo(context.Background(), bucket)
+	if err != nil {
+		return err
+	}
+	_, err = t.backend.PutObject(context.Background(), info.ID, object, bytes.NewReader(data), s3.PutObjectOptions{
 		ContentLength: int64(len(data)),
 		Meta:          metadata,
 	})

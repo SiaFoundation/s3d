@@ -274,6 +274,7 @@ func TestPutObject(t *testing.T) {
 		if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 			t.Fatal(err)
 		}
+		bid := bucketID(t, store, bucket)
 
 		// upload a small object that qualifies for the upload loop, sized to nearly fill a slab
 		data := []byte("hello upload via put!!!")
@@ -283,7 +284,7 @@ func TestPutObject(t *testing.T) {
 		}
 
 		// verify the object is on disk
-		obj, err := store.GetObject(bucket, "pending", s3.NoVersion(), nil)
+		obj, err := store.GetObject(bid, "pending", s3.NoVersion(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -314,7 +315,7 @@ func TestPutObject(t *testing.T) {
 		backend.PinObjects(t.Context())
 
 		// verify the object is now on Sia
-		obj, err = store.GetObject(bucket, "pending", s3.NoVersion(), nil)
+		obj, err = store.GetObject(bid, "pending", s3.NoVersion(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -351,7 +352,7 @@ func TestPutObject(t *testing.T) {
 		if _, err := s3Tester.PutObject(t.Context(), bucket, "blocked", bytes.NewReader(blocked), nil); err != nil {
 			t.Fatal(err)
 		}
-		blockedObj, err := store.GetObject(bucket, "blocked", s3.NoVersion(), nil)
+		blockedObj, err := store.GetObject(bid, "blocked", s3.NoVersion(), nil)
 		if err != nil {
 			t.Fatal(err)
 		} else if blockedObj.FileName == nil {
@@ -363,7 +364,7 @@ func TestPutObject(t *testing.T) {
 		backend.UploadObjects(t.Context())
 
 		// assert blocked object was not uploaded
-		blockedObj, err = store.GetObject(bucket, "blocked", s3.NoVersion(), nil)
+		blockedObj, err = store.GetObject(bid, "blocked", s3.NoVersion(), nil)
 		if err != nil {
 			t.Fatal(err)
 		} else if blockedObj.FileName == nil {
@@ -380,7 +381,7 @@ func TestPutObject(t *testing.T) {
 		backend.PinObjects(t.Context())
 
 		// assert object was uploaded
-		blockedObj, err = store.GetObject(bucket, "blocked", s3.NoVersion(), nil)
+		blockedObj, err = store.GetObject(bid, "blocked", s3.NoVersion(), nil)
 		if err != nil {
 			t.Fatal(err)
 		} else if blockedObj.FileName != nil {
@@ -397,7 +398,7 @@ func TestPutObject(t *testing.T) {
 		backend.PinObjects(t.Context())
 		memSDK.SetAccountErr(nil)
 
-		blockedObj, err = store.GetObject(bucket, "blocked", s3.NoVersion(), nil)
+		blockedObj, err = store.GetObject(bid, "blocked", s3.NoVersion(), nil)
 		if err != nil {
 			t.Fatal(err)
 		} else if blockedObj.FileName != nil {
@@ -481,7 +482,7 @@ func TestFlushObjects(t *testing.T) {
 	}
 
 	// the object should now be served from Sia
-	obj, err := store.GetObject(bucket, "small", s3.NoVersion(), nil)
+	obj, err := store.GetObject(bucketID(t, store, bucket), "small", s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.FileName != nil {
@@ -941,6 +942,7 @@ func TestSyncMetadata(t *testing.T) {
 	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 		t.Fatal(err)
 	}
+	bid := bucketID(t, store, bucket)
 
 	// upload an object and simulate the background upload to Sia
 	data := frand.Bytes(64)
@@ -952,19 +954,19 @@ func TestSyncMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	obj, err := store.GetObject(bucket, "obj", s3.NoVersion(), nil)
+	obj, err := store.GetObject(bid, "obj", s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if obj.FileName == nil {
 		t.Fatal("expected pending upload to have a filename")
 	}
 	sealed := memSDK.SealObject(siaObj)
-	if err := store.MarkObjectUploaded(bucket, "obj", "", obj.ContentMD5, sealed, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bid, "obj", "", obj.ContentMD5, sealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
 	// record the original sealed object
-	origObj, err := store.GetObject(bucket, "obj", s3.NoVersion(), nil)
+	origObj, err := store.GetObject(bid, "obj", s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1017,7 +1019,7 @@ func TestSyncMetadata(t *testing.T) {
 	}
 
 	// the object's sia_object should have been re-sealed by the sync
-	objAfter, err := store.GetObject(bucket, "obj", s3.NoVersion(), nil)
+	objAfter, err := store.GetObject(bid, "obj", s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1286,11 +1288,12 @@ func TestOverwritePendingObjectCleansUpFile(t *testing.T) {
 	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 		t.Fatal(err)
 	}
+	bid := bucketID(t, store, bucket)
 
 	uploadsDir := filepath.Join(dir, sia.UploadsDirectory)
 	pendingFilename := func(t *testing.T, object string) string {
 		t.Helper()
-		obj, err := store.GetObject(bucket, object, s3.NoVersion(), nil)
+		obj, err := store.GetObject(bid, object, s3.NoVersion(), nil)
 		if err != nil {
 			t.Fatal(err)
 		} else if obj.FileName == nil {
@@ -1373,7 +1376,7 @@ func TestOverwritePendingObjectCleansUpFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertRemoved(t, mpDir)
-	parts, err := store.ObjectPartsByName(bucket, "mp", "")
+	parts, err := store.ObjectPartsByName(bid, "mp", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1493,6 +1496,7 @@ func TestDiskUsageLimitTimeout(t *testing.T) {
 	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 		t.Fatal(err)
 	}
+	bid := bucketID(t, store, bucket)
 
 	// push usage over the limit
 	if _, err := s3Tester.PutObject(t.Context(), bucket, "a", bytes.NewReader(frand.Bytes(600)), nil); err != nil {
@@ -1501,7 +1505,7 @@ func TestDiskUsageLimitTimeout(t *testing.T) {
 
 	// a put blocked at the limit fails with SlowDown once the wait times out
 	data := frand.Bytes(10)
-	_, err = backend.PutObject(t.Context(), bucket, "b", bytes.NewReader(data), s3.PutObjectOptions{ContentLength: int64(len(data))})
+	_, err = backend.PutObject(t.Context(), bid, "b", bytes.NewReader(data), s3.PutObjectOptions{ContentLength: int64(len(data))})
 	if !errors.Is(err, s3errs.ErrSlowDown) {
 		t.Fatal("unexpected", err)
 	}
@@ -1513,7 +1517,7 @@ func TestDiskUsageLimitTimeout(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 		cancel()
 	}()
-	_, err = backend.PutObject(ctx, bucket, "c", bytes.NewReader(data), s3.PutObjectOptions{ContentLength: int64(len(data))})
+	_, err = backend.PutObject(ctx, bid, "c", bytes.NewReader(data), s3.PutObjectOptions{ContentLength: int64(len(data))})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatal("unexpected", err)
 	}
@@ -1839,7 +1843,7 @@ func TestDeleteObjectUnpin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := store.DeleteObject(bucket, "", s3.ObjectID{Key: "C"}, false); err != nil {
+	if _, _, _, err := store.DeleteObject(bucketID(t, store, bucket), s3.ObjectID{Key: "C"}, false); err != nil {
 		t.Fatal(err)
 	}
 	siaBackend.ProcessOrphans(t.Context())
@@ -1872,7 +1876,7 @@ func TestProcessOrphansGatedOnSync(t *testing.T) {
 	if err := backend.PinObjects(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := store.DeleteObject(bucket, "", s3.ObjectID{Key: "a"}, false); err != nil {
+	if _, _, _, err := store.DeleteObject(bucketID(t, store, bucket), s3.ObjectID{Key: "a"}, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1898,5 +1902,66 @@ func TestProcessOrphansGatedOnSync(t *testing.T) {
 		if time.Since(start) > 5*time.Second {
 			t.Fatal("expected the woken orphan loop to unpin the orphan")
 		}
+	}
+}
+
+func TestPutObjectUndeclaredLength(t *testing.T) {
+	backend, store := testutil.NewBackend(t)
+
+	bucket := "foo"
+	if err := backend.CreateBucket(t.Context(), testutil.AccessKeyID, bucket, s3.CreateBucketOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	bid := bucketID(t, store, bucket)
+
+	// an object below the bound is stored whole
+	data := frand.Bytes(100)
+	hash := md5.Sum(data)
+	res, err := backend.PutObject(t.Context(), bid, "within", bytes.NewReader(data), s3.PutObjectOptions{
+		ContentLength:    -1,
+		MaxContentLength: 128,
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if res.ContentMD5 != hash {
+		t.Fatalf("hash mismatch: expected %x, got %x", hash, res.ContentMD5)
+	}
+	obj, err := backend.HeadObject(t.Context(), bid, "within", s3.NoVersion(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if obj.Size != int64(len(data)) {
+		t.Fatalf("size mismatch: expected %d, got %d", len(data), obj.Size)
+	}
+
+	// an object above the bound is refused, and the read stops at the bound
+	// rather than draining the body first
+	data = frand.Bytes(1 << 20)
+	body := bytes.NewReader(data)
+	_, err = backend.PutObject(t.Context(), bid, "above", body, s3.PutObjectOptions{
+		ContentLength:    -1,
+		MaxContentLength: 128,
+	})
+	if !errors.Is(err, s3errs.ErrEntityTooLarge) {
+		t.Fatalf("expected ErrEntityTooLarge, got %v", err)
+	} else if consumed := len(data) - body.Len(); consumed > 129 {
+		t.Fatalf("expected the read to stop at the bound, consumed %d bytes", consumed)
+	}
+
+	// an empty body is stored the same way a declared empty object is
+	emptyMD5 := md5.Sum(nil)
+	res, err = backend.PutObject(t.Context(), bid, "empty", bytes.NewReader(nil), s3.PutObjectOptions{
+		ContentLength:    -1,
+		MaxContentLength: 128,
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if res.ContentMD5 != emptyMD5 {
+		t.Fatalf("empty hash mismatch: expected %x, got %x", emptyMD5, res.ContentMD5)
+	}
+	obj, err = backend.HeadObject(t.Context(), bid, "empty", s3.NoVersion(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if obj.Size != 0 {
+		t.Fatalf("expected an empty object, got %d bytes", obj.Size)
 	}
 }

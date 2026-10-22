@@ -204,7 +204,7 @@ func (s *s3) putBucketObjectLock(w http.ResponseWriter, r *http.Request, access 
 		return err
 	}
 
-	return s.backend.PutBucketObjectLockConfiguration(r.Context(), access.bucket, access.owner.ID, config)
+	return s.backend.PutBucketObjectLockConfiguration(r.Context(), access.bucketID, config)
 }
 
 // getBucketObjectLock handles GET Bucket object-lock requests.
@@ -213,7 +213,7 @@ func (s *s3) putBucketObjectLock(w http.ResponseWriter, r *http.Request, access 
 func (s *s3) getBucketObjectLock(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
 	s.logger.Debug("getting bucket object lock configuration", zap.String("bucket", access.bucket))
 
-	config, err := s.backend.GetBucketObjectLockConfiguration(r.Context(), access.bucket)
+	config, err := s.backend.GetBucketObjectLockConfiguration(r.Context(), access.bucketID)
 	if err != nil {
 		return err
 	}
@@ -303,7 +303,7 @@ func (s *s3) putObjectRetention(w http.ResponseWriter, r *http.Request, access *
 	}
 
 	bypass := access.bypassGovernanceRetention(r.Header, object)
-	if err := s.backend.PutObjectRetention(r.Context(), access.bucket, access.owner.ID, object, version, state, bypass); err != nil {
+	if err := s.backend.PutObjectRetention(r.Context(), access.bucketID, object, version, state, bypass); err != nil {
 		return access.hideMissing(err, object)
 	}
 	return nil
@@ -315,7 +315,7 @@ func (s *s3) putObjectRetention(w http.ResponseWriter, r *http.Request, access *
 func (s *s3) getObjectRetention(w http.ResponseWriter, r *http.Request, access *bucketAccess, object string, version VersionRequest) error {
 	s.logger.Debug("getting object retention", zap.String("bucket", access.bucket), zap.String("object", object))
 
-	state, err := s.backend.GetObjectRetention(r.Context(), access.bucket, object, version)
+	state, err := s.backend.GetObjectRetention(r.Context(), access.bucketID, object, version)
 	if err != nil {
 		return access.hideMissing(err, object)
 	}
@@ -361,7 +361,7 @@ func (s *s3) putObjectLegalHold(w http.ResponseWriter, r *http.Request, access *
 		return err
 	}
 
-	if err := s.backend.PutObjectLegalHold(r.Context(), access.bucket, access.owner.ID, object, version, doc.Status); err != nil {
+	if err := s.backend.PutObjectLegalHold(r.Context(), access.bucketID, object, version, doc.Status); err != nil {
 		return access.hideMissing(err, object)
 	}
 	return nil
@@ -373,7 +373,7 @@ func (s *s3) putObjectLegalHold(w http.ResponseWriter, r *http.Request, access *
 func (s *s3) getObjectLegalHold(w http.ResponseWriter, r *http.Request, access *bucketAccess, object string, version VersionRequest) error {
 	s.logger.Debug("getting object legal hold", zap.String("bucket", access.bucket), zap.String("object", object))
 
-	status, err := s.backend.GetObjectLegalHold(r.Context(), access.bucket, object, version)
+	status, err := s.backend.GetObjectLegalHold(r.Context(), access.bucketID, object, version)
 	if err != nil {
 		return access.hideMissing(err, object)
 	}
