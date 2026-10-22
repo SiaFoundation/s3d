@@ -68,7 +68,7 @@ func TestSnapshots(t *testing.T) {
 	// a snapshot is listed once it is marked pinned
 	var siaObjectID types.Hash256
 	frand.Read(siaObjectID[:])
-	if err := store.MarkSnapshotPinning(s1.ID, siaObjectID); err != nil {
+	if err := store.MarkSnapshotPinning(s1.ID, siaObjectID, s1.ObjectCount); err != nil {
 		t.Fatal(err)
 	} else if err := store.MarkSnapshotPinned(siaObjectID); err != nil {
 		t.Fatal(err)
@@ -256,7 +256,7 @@ func TestSnapshots(t *testing.T) {
 	// completing the third snapshot keeps it withheld, it existed before the
 	// snapshot finished
 	snap3ObjID := frand.Entropy256()
-	if err := store.MarkSnapshotPinning(snap3.ID, snap3ObjID); err != nil {
+	if err := store.MarkSnapshotPinning(snap3.ID, snap3ObjID, snap3.ObjectCount); err != nil {
 		t.Fatal(err)
 	} else if err := store.MarkSnapshotPinned(snap3ObjID); err != nil {
 		t.Fatal(err)
@@ -291,7 +291,7 @@ func TestSnapshots(t *testing.T) {
 	snap4ObjID := frand.Entropy256()
 	if snap4, _, err := store.CreateSnapshot(); err != nil {
 		t.Fatal(err)
-	} else if err := store.MarkSnapshotPinning(snap4.ID, snap4ObjID); err != nil {
+	} else if err := store.MarkSnapshotPinning(snap4.ID, snap4ObjID, snap4.ObjectCount); err != nil {
 		t.Fatal(err)
 	} else if err := store.MarkSnapshotPinned(snap4ObjID); err != nil {
 		t.Fatal(err)
@@ -344,7 +344,7 @@ func TestSnapshots(t *testing.T) {
 	snap5ObjID := frand.Entropy256()
 	if snap5, _, err := store.CreateSnapshot(); err != nil {
 		t.Fatal(err)
-	} else if err := store.MarkSnapshotPinning(snap5.ID, snap5ObjID); err != nil {
+	} else if err := store.MarkSnapshotPinning(snap5.ID, snap5ObjID, snap5.ObjectCount); err != nil {
 		t.Fatal(err)
 	} else if err := store.MarkSnapshotPinned(snap5ObjID); err != nil {
 		t.Fatal(err)
@@ -396,9 +396,9 @@ func TestSnapshots(t *testing.T) {
 		t.Fatal(err)
 	}
 	rb2ObjID := frand.Entropy256()
-	if err := store.MarkSnapshotPinning(rb2.ID, rb2ObjID); err != nil {
+	if err := store.MarkSnapshotPinning(rb2.ID, rb2ObjID, rb2.ObjectCount); err != nil {
 		t.Fatal(err)
-	} else if err := store.MarkSnapshotPinning(rb2.ID, rb2ObjID); !errors.Is(err, s3.ErrSnapshotNotFound) {
+	} else if err := store.MarkSnapshotPinning(rb2.ID, rb2ObjID, rb2.ObjectCount); !errors.Is(err, s3.ErrSnapshotNotFound) {
 		t.Fatal("unexpected", err)
 	}
 	if err := store.RollbackSnapshot(rb2.ID); err != nil {
@@ -446,7 +446,7 @@ func TestSnapshots(t *testing.T) {
 		t.Fatal(err)
 	}
 	rb3ObjID := frand.Entropy256()
-	if err := store.MarkSnapshotPinning(rb3.ID, rb3ObjID); err != nil {
+	if err := store.MarkSnapshotPinning(rb3.ID, rb3ObjID, rb3.ObjectCount); err != nil {
 		t.Fatal(err)
 	}
 	if deleted, err := store.RollbackIncompleteSnapshots(); err != nil {

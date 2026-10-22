@@ -979,7 +979,7 @@ func TestSyncMetadata(t *testing.T) {
 	// record a snapshot whose Sia object matches the deleted event
 	if snap, _, err := store.CreateSnapshot(); err != nil {
 		t.Fatal(err)
-	} else if err := store.MarkSnapshotPinning(snap.ID, deletedKey); err != nil {
+	} else if err := store.MarkSnapshotPinning(snap.ID, deletedKey, snap.ObjectCount); err != nil {
 		t.Fatal(err)
 	} else if err := store.MarkSnapshotPinned(deletedKey); err != nil {
 		t.Fatal(err)
@@ -1069,7 +1069,7 @@ func TestSyncMetadata(t *testing.T) {
 	recorded := uploadSnapshotObject(snapMeta)
 	if rec, _, err := store.CreateSnapshot(); err != nil {
 		t.Fatal(err)
-	} else if err := store.MarkSnapshotPinning(rec.ID, recorded.ID()); err != nil {
+	} else if err := store.MarkSnapshotPinning(rec.ID, recorded.ID(), rec.ObjectCount); err != nil {
 		t.Fatal(err)
 	} else if err := store.MarkSnapshotPinned(recorded.ID()); err != nil {
 		t.Fatal(err)
@@ -1135,7 +1135,7 @@ func TestSyncMetadata(t *testing.T) {
 	// the in-flight record carries its object's ID and completes from the
 	// object's event
 	pendingObj := uploadSnapshotObject(snapMeta)
-	if err := store.MarkSnapshotPinning(pending.ID, pendingObj.ID()); err != nil {
+	if err := store.MarkSnapshotPinning(pending.ID, pendingObj.ID(), pending.ObjectCount); err != nil {
 		t.Fatal(err)
 	}
 	memSDK.SetEvents([]sdk.ObjectEvent{
