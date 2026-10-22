@@ -12,9 +12,6 @@ import (
 	sdk "go.sia.tech/siastorage"
 )
 
-// uploadChunk is how much of the stream crosses into the SDK per write.
-const uploadChunk = 256 << 10
-
 type (
 	// IndexdSDK is a wrapper around the indexd SDK to implement the SDK interface.
 	IndexdSDK struct {
@@ -83,16 +80,7 @@ func (s *IndexdSDK) OptimalDataSize(ctx context.Context) (int64, error) {
 // obj supplies the metadata only. The SDK returns a different object once the
 // transfer finishes, since the slabs are not known until then.
 func (s *IndexdSDK) Upload(ctx context.Context, obj *sdk.Object, r io.Reader, opts ...sdk.UploadOption) (*sdk.Object, error) {
-	up, err := s.inner.Upload(ctx, obj, append(slices.Clone(s.ulOpts), opts...)...)
-	if err != nil {
-		return nil, err
-	}
-	// Close is a no op after Finish, so this only covers the copy failing.
-	defer up.Close()
-	if _, err := io.CopyBuffer(up, r, make([]byte, uploadChunk)); err != nil {
-		return nil, err
-	}
-	return up.Finish()
+	return s.inner.Upload(ctx, obj, r, append(slices.Clone(s.ulOpts), opts...)...)
 }
 
 // UploadPacked creates a new packed upload.
