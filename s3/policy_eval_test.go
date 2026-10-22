@@ -168,7 +168,7 @@ func TestPolicyConditions(t *testing.T) {
 		c, err := policyConditions{op: {"aws:SourceVpc": {want}}}.parse(true)
 		if err != nil {
 			t.Fatal(err)
-		} else if !c.matches(nil, true) {
+		} else if !c.matches(&expander{variables: true}) {
 			t.Fatalf("expected %s to match a missing key", op)
 		}
 	}

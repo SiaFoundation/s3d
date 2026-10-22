@@ -13,8 +13,8 @@ import (
 // wildcardMatch implements IAM globbing, including '/' and Unicode keys.
 func wildcardMatch(pattern, value string) bool { return matchGlob(pattern, value, false) }
 
-// matchGlob accepts escapes only for patterns escaped by expandValue. Literal
-// policy backslashes have no special meaning and are preserved by expandValue.
+// matchGlob accepts escapes only for patterns escaped by expander.expand.
+// Literal policy backslashes have no special meaning and are preserved.
 func matchGlob(pattern, value string, escapes bool) bool {
 	type token struct {
 		char     rune
@@ -77,16 +77,29 @@ func (p policyPrincipal) matches(caller *auth.Caller) bool {
 // characters literally.
 var patternEscaper = strings.NewReplacer(`\`, `\\`, "*", `\*`, "?", `\?`)
 
-// expandValue resolves the variables in value, escaping it for matchGlob if
-// it is a pattern. Missing variables do not match.
-func expandValue(value string, requestContext policyContext, variables, pattern bool) (string, bool) {
+// maxVariableExpansion bounds the bytes variables may substitute in one
+// authorization, since a small policy can repeat a large header many times.
+const maxVariableExpansion = 64 << 10
+
+// expander resolves policy variables against a request.
+type expander struct {
+	requestContext policyContext
+	// variables reports whether the policy version expands them
+	variables bool
+	// budget is the bytes left to substitute, negative once exhausted
+	budget int
+}
+
+// expand resolves the variables in value, escaping it for matchGlob if it is
+// a pattern. Missing variables do not match.
+func (e *expander) expand(value string, pattern bool) (string, bool) {
 	literal := func(value string) string {
 		if pattern {
 			return strings.ReplaceAll(value, `\`, `\\`)
 		}
 		return value
 	}
-	if !variables || !strings.Contains(value, "${") {
+	if !e.variables || !strings.Contains(value, "${") {
 		return literal(value), true
 	}
 	var out strings.Builder
@@ -106,11 +119,14 @@ func expandValue(value string, requestContext policyContext, variables, pattern 
 		if !ok {
 			return "", false
 		}
-		replacement := requestContext[key]
+		replacement := e.requestContext[key]
 		if len(replacement) == 0 {
 			replacement = fallback
 		}
 		if len(replacement) != 1 {
+			return "", false
+		}
+		if e.budget -= len(replacement[0]); e.budget < 0 {
 			return "", false
 		}
 		if pattern {
@@ -145,16 +161,15 @@ func (stmt policyStatement) principalMatches(caller *auth.Caller) bool {
 	return stmt.principal().matches(caller) != (stmt.NotPrincipal != nil)
 }
 
-// matches reports whether stmt applies to the request. variables reports
-// whether the policy version expands them.
-func (stmt *policyStatement) matches(caller *auth.Caller, requestContext policyContext, action, resource string, variables bool) bool {
+// matches reports whether stmt applies to the request.
+func (stmt *policyStatement) matches(caller *auth.Caller, e *expander, action, resource string) bool {
 	if !stmt.principalMatches(caller) || !stmt.namesAction(action) {
 		return false
 	}
 	return elementMatches(stmt.Resource, stmt.NotResource, func(pattern string) bool {
-		expanded, ok := expandValue(pattern, requestContext, variables, true)
+		expanded, ok := e.expand(pattern, true)
 		return ok && matchGlob(expanded, resource, true)
-	}) && stmt.conditions.matches(requestContext, variables)
+	}) && stmt.conditions.matches(e)
 }
 
 // allows reports whether the caller may perform action on resource. An
@@ -168,13 +183,19 @@ func (p bucketPolicy) allows(caller *auth.Caller, requestContext policyContext, 
 		return true
 	}
 	allowed := isOwner
+	e := &expander{requestContext: requestContext, variables: p.variables, budget: maxVariableExpansion}
 	for i := range p.statements {
 		stmt := &p.statements[i]
 		// once allowed, only a Deny can change the outcome
 		if allowed && stmt.Effect == policyEffectAllow {
 			continue
 		}
-		if !stmt.matches(caller, requestContext, action, resource, p.variables) {
+		matched := stmt.matches(caller, e, action, resource)
+		// an exhausted budget may have skipped a Deny
+		if e.budget < 0 {
+			return false
+		}
+		if !matched {
 			continue
 		}
 		if stmt.Effect == policyEffectDeny {
@@ -274,20 +295,20 @@ func (op conditionOperator) matches(actual []string, expected []conditionValue) 
 	return all
 }
 
-// matches reports whether every condition in the set holds for requestContext.
-func (set conditionSet) matches(requestContext policyContext, variables bool) bool {
+// matches reports whether every condition in the set holds for the request.
+func (set conditionSet) matches(e *expander) bool {
 	for _, c := range set {
 		// only string values can hold variables; the rest were parsed up front
 		expected := c.values
 		if c.op.textual() {
 			expected = make([]conditionValue, 0, len(c.values))
 			for _, value := range c.values {
-				if v, ok := expandValue(value.text, requestContext, variables, c.op.pattern()); ok {
+				if v, ok := e.expand(value.text, c.op.pattern()); ok {
 					expected = append(expected, conditionValue{text: v})
 				}
 			}
 		}
-		if !c.op.matches(requestContext[c.key], expected) {
+		if !c.op.matches(e.requestContext[c.key], expected) {
 			return false
 		}
 	}

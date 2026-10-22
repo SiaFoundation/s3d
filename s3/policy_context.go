@@ -182,12 +182,14 @@ func (a *bucketAccess) actionPolicyContext(action string) (policyContext, error)
 		// false for CreateMultipartUpload, UploadPart and UploadPartCopy,
 		// which take no conditional headers
 		creates := !query.Has("uploads")
-		if query.Get("uploadId") != "" {
+		uploadID := query.Get("uploadId")
+		if uploadID != "" {
 			creates = a.request.Method == http.MethodPost // CompleteMultipartUpload
 		}
 		extra["s3:objectcreationoperation"] = []string{strconv.FormatBool(creates)}
-		// an invalid lock is rejected by the handler
-		if lock, err := requestObjectLock(a.request.Header); err == nil {
+		// an upload's lock is set when it is created, so parts and completions
+		// ignore lock headers. An invalid lock is rejected by the handler.
+		if lock, err := requestObjectLock(a.request.Header); err == nil && uploadID == "" {
 			maps.Copy(extra, objectLockPolicyContext(lock))
 		}
 	}
