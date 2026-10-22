@@ -12,16 +12,6 @@ import (
 	"lukechampine.com/frand"
 )
 
-// maxCachedPolicies bounds the parsed policy cache, whose entries outlive
-// deleted buckets and policies.
-const maxCachedPolicies = 1000
-
-// cachedPolicy is a bucket's policy document and its parsed form.
-type cachedPolicy struct {
-	document string
-	policy   bucketPolicy
-}
-
 // BucketID identifies a bucket for its lifetime.
 type BucketID int64
 
@@ -243,40 +233,17 @@ func (a *bucketAccess) hideMissingSource(err error) error {
 	return err
 }
 
-// parsedPolicy returns the parsed form of a bucket's policy document, cached
-// until the document changes. A document that no longer parses grants nothing;
-// the error is only logged, so callers cannot tell the bucket has a policy.
+// parsedPolicy returns the parsed form of a bucket's policy document. A
+// document that no longer parses grants nothing; the error is only logged, so
+// callers cannot tell the bucket has a policy.
 func (s *s3) parsedPolicy(bucket, document string) bucketPolicy {
 	if document == "" {
 		return bucketPolicy{}
 	}
-	s.policyMu.Lock()
-	cached, ok := s.policies[bucket]
-	s.policyMu.Unlock()
-	if ok && cached.document == document {
-		return cached.policy
-	}
-
-	// parse outside the lock so a miss does not stall every other request
 	policy, err := parseBucketPolicy(bucket, document)
 	if err != nil {
-		// cached too, so a broken document is only logged once
 		s.logger.Warn("failed to parse stored bucket policy", zap.String("bucket", bucket), zap.Error(err))
-		policy = bucketPolicy{}
+		return bucketPolicy{}
 	}
-
-	s.policyMu.Lock()
-	defer s.policyMu.Unlock()
-	if s.policies == nil {
-		s.policies = make(map[string]cachedPolicy)
-	}
-	if _, ok := s.policies[bucket]; !ok && len(s.policies) >= maxCachedPolicies {
-		// evict an arbitrary entry; a hot bucket is simply parsed again
-		for evict := range s.policies {
-			delete(s.policies, evict)
-			break
-		}
-	}
-	s.policies[bucket] = cachedPolicy{document: document, policy: policy}
 	return policy
 }

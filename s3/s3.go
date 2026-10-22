@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3/auth"
@@ -398,10 +397,6 @@ type s3 struct {
 	hostBucketBases []string
 	logger          *zap.Logger
 	region          string
-
-	// policies caches parsed policies by bucket name
-	policyMu sync.Mutex
-	policies map[string]cachedPolicy
 }
 
 // Option is a configuration option for the S3 API handler.
