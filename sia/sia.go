@@ -867,7 +867,10 @@ func (s *Sia) syncBatch(ctx context.Context, cursor slabs.Cursor) (slabs.Cursor,
 	if err != nil {
 		s.syncFailed("failed to fetch object events", zap.Error(err))
 		return cursor, 0, false
-	} else if len(events) == 0 {
+	}
+	defer sdk.CloseObjects(events)
+
+	if len(events) == 0 {
 		// every published snapshot event is consumed so orphan processing
 		// is safe. Only a gate that was closed leaves the orphan loop
 		// waiting on a wake

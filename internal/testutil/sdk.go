@@ -239,10 +239,14 @@ func (s *MemorySDK) ObjectEvents(_ context.Context, cursor slabs.Cursor, limit i
 		if !after {
 			continue
 		}
-		// Every object this SDK issues has to be registered, since a blank
-		// one carries no identity of its own.
+		// The real feed hands out a fresh handle per call, which the caller
+		// owns and may close, so reuse one and the next call reads an object
+		// that has already been closed. Every object this SDK issues has to
+		// be registered too, since a blank one carries no identity of its own.
 		if ev.Object != nil {
-			s.handles[ev.Object] = ev.ID
+			h := sdk.NewEmptyObject().WithMetadata(ev.Object.Metadata())
+			s.handles[h] = ev.ID
+			ev.Object = h
 		}
 		filtered = append(filtered, ev)
 		if len(filtered) >= limit {
