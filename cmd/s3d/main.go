@@ -120,6 +120,10 @@ func main() {
 	snapshotsCreateCmd := flagg.New("create", snapshotsCreateUsage)
 	snapshotsListCmd := flagg.New("list", snapshotsListUsage)
 	snapshotsDeleteCmd := flagg.New("delete", snapshotsDeleteUsage)
+	snapshotsRestoreCmd := flagg.New("restore", snapshotsRestoreUsage)
+
+	var snapshotsRestoreOut string
+	snapshotsRestoreCmd.StringVar(&snapshotsRestoreOut, "out", "", "empty or missing directory to restore the database into")
 
 	// attempt to load the config file
 	configPath := tryLoadConfig()
@@ -162,6 +166,7 @@ func main() {
 					{Cmd: snapshotsCreateCmd},
 					{Cmd: snapshotsListCmd},
 					{Cmd: snapshotsDeleteCmd},
+					{Cmd: snapshotsRestoreCmd},
 				},
 			},
 		},
@@ -244,6 +249,9 @@ func main() {
 		return
 	case snapshotsDeleteCmd:
 		runSnapshotsDelete(ctx, snapshotsDeleteCmd)
+		return
+	case snapshotsRestoreCmd:
+		runSnapshotsRestore(ctx, snapshotsRestoreCmd, snapshotsRestoreOut)
 		return
 	case rootCmd:
 		if len(cmd.Args()) != 0 {
