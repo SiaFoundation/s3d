@@ -5,6 +5,9 @@ import (
 	"time"
 )
 
+// PinThreads exports pinThreads for testing.
+const PinThreads = pinThreads
+
 // PruneSlabsInterval exports pruneSlabsInterval for testing.
 const PruneSlabsInterval = pruneSlabsInterval
 
