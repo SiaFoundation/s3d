@@ -916,14 +916,14 @@ func declaresTrailingChecksum(headers http.Header) bool {
 // objectLocation returns the URL an object was addressed by, which a response
 // that reports where it stored something has to carry.
 func (s *s3) objectLocation(r *http.Request, bucket, object string) string {
-	protocol := "http"
+	location := url.URL{Scheme: "http", Host: r.Host, Path: "/" + bucket + "/" + object}
 	if r.TLS != nil {
-		protocol = "https"
+		location.Scheme = "https"
 	}
 	if _, ok := s.bucketFromHost(r.Host); ok {
-		return fmt.Sprintf("%s://%s/%s", protocol, r.Host, object)
+		location.Path = "/" + object
 	}
-	return fmt.Sprintf("%s://%s/%s/%s", protocol, r.Host, bucket, object)
+	return location.String()
 }
 
 // FormatETag formats the given hash as an S3 ETag string.
