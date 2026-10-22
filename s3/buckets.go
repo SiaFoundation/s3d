@@ -54,6 +54,14 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *st
 		return s.routeBucketObjectLock(w, r, accessKeyID, bucket)
 	}
 
+	// POST Object authenticates through its form fields. A POST that carries a
+	// header credential and is not a form is one of the other bucket POSTs, so
+	// it keeps its own handling instead of being refused for authenticating
+	// twice
+	if r.Method == http.MethodPost && !q.Has("delete") && (accessKeyID == nil || isPostForm(r)) {
+		return s.postObject(w, r, accessKeyID, bucket)
+	}
+
 	// routes with optional authentication. The backend rejects an anonymous
 	// caller unless the bucket's policy grants s3:ListBucket, which covers
 	// listing and HeadBucket.
@@ -79,7 +87,7 @@ func (s *s3) routeBucket(w http.ResponseWriter, r *http.Request, accessKeyID *st
 		return s.deleteBucket(w, r, validatedKey, bucket)
 	case http.MethodPost:
 		if !q.Has("delete") {
-			return s3errs.ErrNotImplemented // createObjectBrowserUpload is not implemented
+			return s3errs.ErrNotImplemented
 		}
 		return s.deleteObjects(w, r, validatedKey, bucket)
 	default:

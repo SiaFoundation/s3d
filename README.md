@@ -231,6 +231,39 @@ objects it was withholding from cleanup.
 s3d snapshots delete 0d4f2c9a1b7e3568af0c21d9e4b85730c6a91f42db38e7051c9a6b24f80d3e17
 ```
 
+### Restoring
+
+Restoring writes a snapshot's database into a new data directory. The
+destination must be empty or missing, so a restore can never overwrite an
+existing database.
+
+```sh
+s3d snapshots restore
+```
+
+With no arguments the command walks the whole recovery. When the machine has no
+app key it asks for the recovery phrase of the account holding the snapshots and
+registers in memory, leaving no database behind. It then lists the snapshots
+stored on the network, asks which one to restore and where to put it. Listing
+enumerates every object in the account, so it takes longer the more you have
+stored.
+
+Given a Sia object ID the snapshot is fetched in a single request instead, with
+no enumeration and, on a machine that already holds an authorized app key, no
+prompts.
+
+```sh
+s3d snapshots restore --out /srv/s3d-restored 0d4f2c9a1b7e3568af0c21d9e4b85730c6a91f42db38e7051c9a6b24f80d3e17
+```
+
+Run `s3d config` for the restored directory before starting `s3d`. On startup
+the instance reconciles the restored database against the network, adopting the
+snapshots it finds there.
+
+A restore brings back the database as it was when the snapshot was taken.
+Objects written after that are not recovered. Objects still buffered on disk at
+the time had not reached Sia, so they stay listed but cannot be read.
+
 ## HTTPS
 
 `s3d` can serve the S3 API over TLS in addition to plain HTTP. Set
@@ -283,6 +316,11 @@ access to that database, not the S3 API. Restoring a backup of that database
 taken before a retention was applied is one way through it. This is the same
 shape as an AWS `COMPLIANCE` retention being bounded by the AWS account
 continuing to exist.
+
+Browser form uploads via `POST Object` are signed with SigV4, like every other
+request. The legacy SigV2 form fields `AWSAccessKeyId` and `signature` are not
+accepted. A form may carry `acl`, which is matched against the policy and then
+ignored, since ACLs are unimplemented.
 
 Bucket policies are supported only to grant read access to everyone.
 `PutBucketPolicy` accepts `Allow` statements whose principal is `*` and whose
@@ -379,6 +417,7 @@ delete with nothing to delete is a no-op, as an unconditional one is.
 | PutObjectLockConfiguration | ◐ | `DefaultEventHold` is rejected |
 | **Objects** | | |
 | PutObject | ✓ | |
+| POST Object | ◐ | SigV4 signed forms only, the SigV2 form fields are not accepted |
 | GetObject | ✓ | |
 | HeadObject | ✓ | |
 | DeleteObject | ✓ | |
