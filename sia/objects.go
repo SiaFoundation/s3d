@@ -470,6 +470,68 @@ func (s *Sia) checkWritePreconditions(accessKeyID, bucket, object string, p s3.O
 	return p.CheckWrite(&attrs)
 }
 
+// writeUpload streams r into a new file in the upload directory and returns the
+// file's name and the number of bytes written. A negative length reads r to EOF
+// and refuses more than limit bytes, otherwise exactly length bytes have to be
+// read. An empty object writes no file and returns a nil name. On error the file
+// is removed, but disk usage is left to the caller.
+func (s *Sia) writeUpload(r io.Reader, length, limit int64) (_ *string, size int64, err error) {
+	if length == 0 {
+		if _, err := io.Copy(io.Discard, r); err != nil {
+			return nil, 0, fmt.Errorf("failed to read object data: %w", err)
+		}
+		return nil, 0, nil
+	}
+
+	fileName := randObjectName()
+	path := filepath.Join(s.uploadDir(), fileName)
+	f, err := os.Create(path)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to create temporary file: %w", err)
+	}
+
+	// an undeclared length still reads one byte past the limit, so exceeding
+	// it is caught here rather than trusted to the caller. the bound saturates
+	// rather than wrapping to a limit that reads nothing
+	bound := limit
+	if length < 0 && bound < math.MaxInt64 {
+		bound++
+	}
+	size, err = io.Copy(f, io.LimitReader(r, bound))
+
+	// the size is settled before the file is synced, so a body that cannot be
+	// stored is not fsynced on its way to being unlinked
+	switch {
+	case err != nil:
+		err = fmt.Errorf("failed to store object: %w", err)
+	case length >= 0 && size != length:
+		err = s3errs.ErrIncompleteBody
+	case size > limit:
+		err = s3errs.ErrEntityTooLarge
+	case size > 0:
+		if err = f.Sync(); err != nil {
+			err = fmt.Errorf("failed to sync object to disk: %w", err)
+		}
+	}
+	if closeErr := f.Close(); err == nil && closeErr != nil {
+		err = fmt.Errorf("failed to close object file: %w", closeErr)
+	}
+	if err == nil && size > 0 {
+		if err = syncDir(s.uploadDir()); err != nil {
+			err = fmt.Errorf("failed to sync upload directory: %w", err)
+		}
+	}
+
+	// an undeclared length is only known to be empty after the read, so the
+	// file it wrote is dropped to store the object the same way a declared
+	// empty one is
+	if err != nil || size == 0 {
+		s.cleanupOrphan(path, 0)
+		return nil, 0, err
+	}
+	return &fileName, size, nil
+}
+
 // PutObject puts an object with the given key into the specified bucket.
 func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object string, r io.Reader, opts s3.PutObjectOptions) (_ *s3.PutObjectResult, err error) {
 	// fail fast if the bucket is inaccessible before streaming the body to disk
@@ -498,13 +560,6 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 		return nil, err
 	}
 
-	var objPath string
-	defer func() {
-		if err != nil {
-			s.cleanupOrphan(objPath, reserved)
-		}
-	}()
-
 	// compute md5 checksum for the etag
 	md5Hash := md5.New()
 	r = io.TeeReader(r, md5Hash)
@@ -520,72 +575,25 @@ func (s *Sia) PutObject(ctx context.Context, accessKeyID string, bucket, object 
 	if opts.Checksum != nil {
 		checksumHash = opts.Checksum.NewHash()
 		if checksumHash == nil {
+			s.releaseDiskUsage(reserved)
 			return nil, s3errs.ErrInvalidRequest
 		}
 		r = io.TeeReader(r, checksumHash)
 	}
 
-	// handle empty object case
-	var fileName *string
-	var size int64
-	if opts.ContentLength == 0 {
-		// drain reader
-		if _, err := io.Copy(io.Discard, r); err != nil {
-			return nil, fmt.Errorf("failed to read object data: %w", err)
-		}
-	} else {
-		// save the object
-		randFileName := randObjectName()
-		objPath = filepath.Join(s.uploadDir(), randFileName)
-		fileName = &randFileName
-		f, err := os.Create(objPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create temporary file: %w", err)
-		}
-		// an undeclared length still reads one byte past what it reserved, so
-		// exceeding it is caught here rather than trusted to the caller. the
-		// bound saturates rather than wrapping to a limit that reads nothing
-		bound := reserved
-		if opts.ContentLength < 0 && bound < math.MaxInt64 {
-			bound++
-		}
-		size, err = io.Copy(f, io.LimitReader(r, bound))
-		if err != nil {
-			_ = f.Close()
-			return nil, fmt.Errorf("failed to store object: %w", err)
-		}
-
-		// the size is settled before the file is synced, so a body that cannot
-		// be stored is not fsynced on its way to being unlinked
-		if opts.ContentLength >= 0 && opts.ContentLength != size {
-			_ = f.Close()
-			return nil, s3errs.ErrIncompleteBody
-		} else if size > reserved {
-			_ = f.Close()
-			return nil, s3errs.ErrEntityTooLarge
-		}
-
-		if size == 0 {
-			// an undeclared length is only known to be empty after the read, so
-			// the file it wrote is dropped to store the object the same way a
-			// declared empty one is
-			_ = f.Close()
-			s.cleanupOrphan(objPath, 0)
-			objPath, fileName = "", nil
-		} else if err := f.Sync(); err != nil {
-			_ = f.Close()
-			return nil, fmt.Errorf("failed to sync object to disk: %w", err)
-		} else if err := f.Close(); err != nil {
-			return nil, fmt.Errorf("failed to close object file: %w", err)
-		} else if err := syncDir(s.uploadDir()); err != nil {
-			return nil, fmt.Errorf("failed to sync upload directory: %w", err)
-		}
+	fileName, size, err := s.writeUpload(r, opts.ContentLength, reserved)
+	if err != nil {
+		s.releaseDiskUsage(reserved)
+		return nil, err
 	}
+	// give back whatever an undeclared length reserved and did not use
+	s.releaseDiskUsage(reserved - size)
 
-	if reserved > size {
-		s.releaseDiskUsage(reserved - size)
-	}
-	reserved = size
+	defer func() {
+		if err != nil && fileName != nil {
+			s.cleanupOrphan(filepath.Join(s.uploadDir(), *fileName), size)
+		}
+	}()
 
 	// verify checksums
 	var contentMD5 [16]byte
