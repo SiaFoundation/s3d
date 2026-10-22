@@ -549,8 +549,4 @@ INSERT INTO bucket_lifecycle_configurations (bucket_id, configuration)
 DROP TABLE bucket_lifecycle_configurations_backup;`)
 		return err
 	},
-	func(tx *txn, _ *zap.Logger) error {
-		_, err := tx.Exec(`ALTER TABLE global_settings ADD COLUMN restored INTEGER NOT NULL DEFAULT FALSE CHECK (restored IN (FALSE, TRUE))`)
-		return err
-	},
 }

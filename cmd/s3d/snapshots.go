@@ -19,7 +19,6 @@ import (
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"go.sia.tech/core/types"
 	sdk "go.sia.tech/siastorage"
-	"go.uber.org/zap"
 )
 
 const (
@@ -197,21 +196,12 @@ func runSnapshotsRestore(ctx context.Context, cmd *flag.FlagSet, out string) {
 	} else if err := tmp.Close(); err != nil {
 		checkFatalRestoreError("failed to close snapshot", err)
 	}
-
-	// flag the image so the first start cleans up after the restore, opening
-	// it migrates a snapshot taken before the flag existed
-	image, err := sqlite.OpenDatabase(tmp.Name(), zap.NewNop())
-	checkFatalRestoreError("failed to open snapshot", err)
-	checkFatalRestoreError("failed to flag snapshot as restored", errors.Join(image.MarkRestored(), image.Close()))
 	checkFatalRestoreError("failed to write database", os.Rename(tmp.Name(), dbPath))
 	checkFatalError("failed to sync the destination", syncDir(destDir))
 
 	fmt.Printf("Restored %d objects from the snapshot taken at %s.\n", snap.Metadata.ObjectCount, snap.Metadata.CreatedAt.Format(time.RFC3339))
 	fmt.Println("Database written to", dbPath)
 	fmt.Println("Run 's3d config' for this directory, then start s3d to reconcile it with the network.")
-	fmt.Println("")
-	fmt.Println(ansiStyle("33", "Objects that were still buffered on disk when the snapshot was taken are removed on the first start."))
-	fmt.Println(ansiStyle("33", "To keep them, copy the old uploads directory into this one before starting s3d."))
 }
 
 // openRestoreSDK builds an SDK client from the app key recorded in the

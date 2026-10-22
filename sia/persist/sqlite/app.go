@@ -29,15 +29,6 @@ func (s *Store) AppKey() (types.PrivateKey, string, error) {
 	return types.PrivateKey(key.V), indexerURL.String, nil
 }
 
-// MarkRestored flags the database as written by a restore so the next start
-// cleans up after it.
-func (s *Store) MarkRestored() error {
-	return s.transaction(func(tx *txn) error {
-		_, err := tx.Exec(`UPDATE global_settings SET restored = TRUE`)
-		return err
-	})
-}
-
 // ReadAppKey returns the application private key and the indexer URL recorded
 // in the database at fp. The database is opened readonly, so it is neither
 // initialized nor migrated.
@@ -56,15 +47,6 @@ func ReadAppKey(fp string) (types.PrivateKey, string, error) {
 		return nil, "", ErrNoAppKey
 	}
 	return types.PrivateKey(key.V), indexerURL.String, nil
-}
-
-// Restored reports whether the database was written by a restore and startup
-// has not cleaned up after it yet.
-func (s *Store) Restored() (restored bool, err error) {
-	err = s.transaction(func(tx *txn) error {
-		return tx.QueryRow(`SELECT restored FROM global_settings`).Scan(&restored)
-	})
-	return
 }
 
 // SetAppKey sets the application private key and the indexer URL it was
