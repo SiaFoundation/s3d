@@ -44,3 +44,31 @@ func TestAppKey(t *testing.T) {
 		t.Fatalf("expected indexer URL %q, got %q", indexerURL, gotURL)
 	}
 }
+
+func TestMarkRestored(t *testing.T) {
+	log := zap.NewNop()
+	dbPath := filepath.Join(t.TempDir(), "s3d.sqlite")
+
+	// a snapshot taken before the restored column existed migrates unflagged
+	legacy := initDBVersion(t, dbPath, SchemaVersion()-1, log)
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenDatabase(dbPath, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if restored, err := store.Restored(); err != nil {
+		t.Fatal(err)
+	} else if restored {
+		t.Fatal("expected an unflagged database")
+	} else if err := store.MarkRestored(); err != nil {
+		t.Fatal(err)
+	} else if restored, err := store.Restored(); err != nil {
+		t.Fatal(err)
+	} else if !restored {
+		t.Fatal("expected a flagged database")
+	}
+}
