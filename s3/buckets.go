@@ -70,7 +70,7 @@ func (s *s3) routeBucket(r *http.Request) (operation, error) {
 		return operation{action: actionDeleteBucket, serve: s.deleteBucket}, nil
 	case http.MethodPost:
 		if !q.Has("delete") {
-			return operation{}, s3errs.ErrNotImplemented // createObjectBrowserUpload is not implemented
+			return operation{formAuth: true, serve: s.postObject}, nil
 		}
 		return operation{multiObjectDelete: true, serve: s.deleteObjects}, nil
 	default:

@@ -51,7 +51,11 @@ type operation struct {
 	// multiObjectDelete marks a DeleteObjects request. Its handler authorizes
 	// each object named in the body, so it is not given an action.
 	multiObjectDelete bool
-	serve             func(http.ResponseWriter, *http.Request, *bucketAccess) error
+	// formAuth marks a POST Object request, which authenticates through its
+	// form fields. Its handler authorizes the caller once it has verified
+	// them, so it is not given an action.
+	formAuth bool
+	serve    func(http.ResponseWriter, *http.Request, *bucketAccess) error
 }
 
 // authorize resolves the caller's access to bucket and requires op's action on
@@ -64,6 +68,11 @@ func (s *s3) authorize(r *http.Request, caller *auth.Caller, bucket, object stri
 		if caller == nil {
 			return nil, s3errs.ErrAccessDenied
 		}
+		return &bucketAccess{caller: caller, bucket: bucket}, nil
+	}
+	if op.formAuth {
+		// the bucket is not resolved until the form is verified, so an
+		// anonymous caller cannot probe for bucket names
 		return &bucketAccess{caller: caller, bucket: bucket}, nil
 	}
 

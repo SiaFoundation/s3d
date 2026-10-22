@@ -1,0 +1,532 @@
+package s3
+
+import (
+	"encoding/base64"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
+	"errors"
+	"io"
+	"math"
+	"mime"
+	"mime/multipart"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/SiaFoundation/s3d/s3/auth"
+	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"go.uber.org/zap"
+)
+
+// POST Object form field names, lowercased. S3 matches a field name without
+// regard to case and the AWS SDKs disagree on how they spell them, so a name is
+// lowercased as the form is parsed.
+const (
+	postFieldAlgorithm  = "x-amz-algorithm"
+	postFieldBucket     = "bucket"
+	postFieldContentMD5 = "content-md5"
+	postFieldCredential = "x-amz-credential"
+	postFieldDate       = "x-amz-date"
+	postFieldFile       = "file"
+	postFieldKey        = "key"
+	postFieldPolicy     = "policy"
+	postFieldRedirect   = "success_action_redirect"
+	postFieldSignature  = "x-amz-signature"
+	postFieldStatus     = "success_action_status"
+	postFieldToken      = "x-amz-security-token"
+)
+
+const (
+	// maxPostFieldBytes bounds everything the parser reads before the file, so
+	// a form cannot make the server read an arbitrary amount before the upload
+	// starts.
+	maxPostFieldBytes = 64 * 1024
+
+	// postFilenameVariable is replaced in the key with the name the client gave
+	// the file it uploaded.
+	postFilenameVariable = "${filename}"
+)
+
+// postForm holds the fields of a POST Object request that precede the file,
+// keyed by their lowercased name, and the name the client gave the file.
+type postForm struct {
+	fields   map[string]string
+	filename string
+}
+
+// get returns the value of a field, or "" if the form does not carry it.
+func (f postForm) get(name string) string {
+	return f.fields[name]
+}
+
+// header returns the form's fields spelled as request headers, which lets the
+// object handlers read a field the way they read a header.
+func (f postForm) header() http.Header {
+	headers := make(http.Header, len(f.fields))
+	for name, value := range f.fields {
+		headers.Set(name, value)
+	}
+	return headers
+}
+
+// metadata returns the object metadata the form describes.
+func (f postForm) metadata() (map[string]string, error) {
+	return metadataHeaders(f.header(), MetadataSizeLimit)
+}
+
+// expandFilename replaces the filename variable in form fields before policy
+// validation, matching S3's POST policy evaluation. The expanded fields are held
+// to the bound the parser read them under, so a short form cannot expand into a
+// large one.
+func (f postForm) expandFilename() error {
+	var expanded int
+	for _, value := range f.fields {
+		expanded += len(value) + strings.Count(value, postFilenameVariable)*(len(f.filename)-len(postFilenameVariable))
+	}
+	if expanded > maxPostFieldBytes {
+		return s3errs.ErrMaxPostPreDataLengthExceededError
+	}
+	for name, value := range f.fields {
+		f.fields[name] = strings.ReplaceAll(value, postFilenameVariable, f.filename)
+	}
+	return nil
+}
+
+// errPostPreData is returned by the bounded preamble reader once a form has
+// made the parser read more than it is allowed to before the file part.
+var errPostPreData = errors.New("post pre data limit exceeded")
+
+// postPreamble bounds the bytes a form can make the parser read before the
+// file part is reached. None of it is authenticated at that point, so the
+// bound covers the preamble, the part headers and the field values alike, and
+// it is lifted once the file part takes over.
+type postPreamble struct {
+	reader    io.Reader
+	remaining int64
+}
+
+func (p *postPreamble) Read(b []byte) (int, error) {
+	if p.remaining <= 0 {
+		return 0, errPostPreData
+	}
+	if int64(len(b)) > p.remaining {
+		b = b[:p.remaining]
+	}
+	n, err := p.reader.Read(b)
+	p.remaining -= int64(n)
+	return n, err
+}
+
+// release lifts the bound, which the file streams without.
+func (p *postPreamble) release() {
+	p.remaining = math.MaxInt64
+}
+
+// isPostForm reports whether a request carries a form submission, which is
+// what tells a POST Object request apart from the other bucket POSTs.
+func isPostForm(r *http.Request) bool {
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	return err == nil && mediaType == "multipart/form-data"
+}
+
+// parsePostForm reads the fields preceding the file and returns them with the
+// file's part still open, so the upload streams rather than being buffered.
+func parsePostForm(r *http.Request) (postForm, *multipart.Part, error) {
+	mediaType, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "multipart/form-data" {
+		return postForm{}, nil, s3errs.ErrRequestIsNotMultiPartContent
+	} else if params["boundary"] == "" {
+		return postForm{}, nil, s3errs.ErrMalformedPOSTRequest
+	}
+
+	form := postForm{fields: make(map[string]string)}
+	preamble := &postPreamble{reader: r.Body, remaining: maxPostFieldBytes}
+	reader := multipart.NewReader(preamble, params["boundary"])
+	for {
+		part, err := reader.NextPart()
+		if errors.Is(err, errPostPreData) {
+			return postForm{}, nil, s3errs.ErrMaxPostPreDataLengthExceededError
+		} else if errors.Is(err, io.EOF) {
+			// the file is required and every field has to precede it
+			return postForm{}, nil, s3errs.ErrIncorrectNumberOfFilesInPostRequest
+		} else if err != nil {
+			return postForm{}, nil, s3errs.ErrMalformedPOSTRequest
+		}
+
+		name := strings.ToLower(part.FormName())
+		if name == postFieldFile {
+			form.filename = part.FileName()
+			preamble.release()
+			return form, part, nil
+		}
+
+		value, err := io.ReadAll(part)
+		part.Close()
+		if errors.Is(err, errPostPreData) {
+			return postForm{}, nil, s3errs.ErrMaxPostPreDataLengthExceededError
+		} else if err != nil {
+			return postForm{}, nil, s3errs.ErrMalformedPOSTRequest
+		}
+		form.fields[name] = string(value)
+	}
+}
+
+// postPolicy is the decoded policy document of a POST Object request.
+type postPolicy struct {
+	expiration time.Time
+	matches    []postMatch
+
+	// minSize and maxSize are the bounds of a content-length-range condition.
+	// maxSize is negative when the policy carries no such condition.
+	minSize int64
+	maxSize int64
+}
+
+// postMatch is one field condition of a policy document. The exact and the
+// prefix form differ only in how the value is compared.
+type postMatch struct {
+	field      string
+	value      string
+	startsWith bool
+}
+
+func (m postMatch) check(value string) bool {
+	if !m.startsWith {
+		return value == m.value
+	}
+	if m.field != "content-type" {
+		return strings.HasPrefix(value, m.value)
+	}
+	for _, part := range strings.Split(value, ",") {
+		if !strings.HasPrefix(strings.TrimSpace(part), m.value) {
+			return false
+		}
+	}
+	return true
+}
+
+// parsePostPolicy decodes the base64 policy document a form submitted.
+//
+// https://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-HTTPPOSTConstructPolicy.html
+func parsePostPolicy(encoded string) (postPolicy, error) {
+	if len(encoded) > maxPolicySize {
+		return postPolicy{}, s3errs.ErrPolicyTooLarge
+	}
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return postPolicy{}, s3errs.ErrMalformedPolicy
+	}
+
+	var document struct {
+		Expiration string           `json:"expiration"`
+		Conditions []jsontext.Value `json:"conditions"`
+	}
+	if err := json.Unmarshal(decoded, &document); err != nil {
+		return postPolicy{}, s3errs.ErrMalformedPolicy
+	}
+
+	policy := postPolicy{maxSize: -1}
+	if policy.expiration, err = time.Parse(time.RFC3339, document.Expiration); err != nil {
+		return postPolicy{}, s3errs.ErrMalformedPolicy
+	}
+	for _, condition := range document.Conditions {
+		if err := policy.addCondition(condition); err != nil {
+			return postPolicy{}, err
+		}
+	}
+	return policy, nil
+}
+
+// addCondition adds one condition of a policy document, which is either an
+// object naming a single field or a three element array naming an operator.
+func (p *postPolicy) addCondition(condition jsontext.Value) error {
+	var exact map[string]string
+	if err := json.Unmarshal(condition, &exact); err == nil {
+		for field, value := range exact {
+			p.matches = append(p.matches, postMatch{
+				field: strings.ToLower(field),
+				value: value,
+			})
+		}
+		return nil
+	}
+
+	// the operator form mixes strings and numbers, so its elements are decoded
+	// one at a time
+	var elements []jsontext.Value
+	var operator string
+	if err := json.Unmarshal(condition, &elements); err != nil || len(elements) != 3 {
+		return s3errs.ErrMalformedPolicy
+	} else if err := json.Unmarshal(elements[0], &operator); err != nil {
+		return s3errs.ErrMalformedPolicy
+	}
+
+	operator = strings.ToLower(operator)
+	switch operator {
+	case "eq", "starts-with":
+		var field, value string
+		if err := json.Unmarshal(elements[1], &field); err != nil {
+			return s3errs.ErrMalformedPolicy
+		} else if err := json.Unmarshal(elements[2], &value); err != nil {
+			return s3errs.ErrMalformedPolicy
+		} else if !strings.HasPrefix(field, "$") {
+			return s3errs.ErrMalformedPolicy
+		}
+		match := postMatch{
+			field:      strings.ToLower(strings.TrimPrefix(field, "$")),
+			value:      value,
+			startsWith: operator == "starts-with",
+		}
+		// the fields that authenticate the request only support an exact
+		// match, since a prefix would let the uploader pick the date the
+		// signature is checked against
+		if match.startsWith && isPostAuthField(match.field) {
+			return s3errs.ErrMalformedPolicy
+		}
+		p.matches = append(p.matches, match)
+	case "content-length-range":
+		minSize, err := parsePostSize(elements[1])
+		if err != nil {
+			return err
+		}
+		maxSize, err := parsePostSize(elements[2])
+		if err != nil {
+			return err
+		} else if minSize < 0 || maxSize < minSize {
+			return s3errs.ErrMalformedPolicy
+		}
+		p.minSize, p.maxSize = minSize, maxSize
+	default:
+		return s3errs.ErrMalformedPolicy
+	}
+	return nil
+}
+
+// isPostAuthField reports whether a form field authenticates the request.
+func isPostAuthField(name string) bool {
+	switch name {
+	case postFieldAlgorithm, postFieldCredential, postFieldDate, postFieldToken:
+		return true
+	}
+	return false
+}
+
+// parsePostSize decodes a content-length-range bound, which S3 accepts as
+// either a number or a string holding one.
+func parsePostSize(element jsontext.Value) (int64, error) {
+	var size int64
+	if err := json.Unmarshal(element, &size); err == nil {
+		return size, nil
+	} else if err := json.Unmarshal(element, &size, json.StringifyNumbers(true)); err != nil {
+		return 0, s3errs.ErrMalformedPolicy
+	}
+	return size, nil
+}
+
+// check verifies the form against the policy. Every condition has to be
+// satisfied and every field has to be named by a condition, which is what stops
+// a client from adding a field the signer never approved.
+func (p postPolicy) check(form postForm, now time.Time) error {
+	if now.After(p.expiration) {
+		return s3errs.ErrAccessDeniedExpired
+	}
+
+	named := make(map[string]struct{}, len(p.matches))
+	for _, match := range p.matches {
+		// a field the form left out is matched as empty, so a condition that
+		// demands a particular value fails while one that demands nothing holds
+		if !match.check(form.get(match.field)) {
+			return s3errs.ErrInvalidPolicyDocument
+		}
+		named[match.field] = struct{}{}
+	}
+	for field := range form.fields {
+		if _, ok := named[field]; ok {
+			continue
+		}
+		// the policy and the signature over it cannot name themselves, and S3
+		// reserves the x-ignore- prefix for fields a form carries for its own
+		// use
+		switch {
+		case field == postFieldPolicy, field == postFieldSignature:
+		case strings.HasPrefix(field, "x-ignore-"):
+		default:
+			return s3errs.ErrInvalidPolicyDocument
+		}
+	}
+	return nil
+}
+
+// postBody enforces the lower bound of a content-length-range condition, which
+// is only known to be violated once the body ends.
+type postBody struct {
+	reader io.Reader
+	min    int64
+	read   int64
+}
+
+func (b *postBody) Read(p []byte) (int, error) {
+	n, err := b.reader.Read(p)
+	b.read += int64(n)
+	if errors.Is(err, io.EOF) && b.read < b.min {
+		return n, s3errs.ErrEntityTooSmall
+	} else if errors.Is(err, io.ErrUnexpectedEOF) {
+		return n, s3errs.ErrMalformedPOSTRequest
+	}
+	return n, err
+}
+
+// postObject handles POST Object requests, the browser form upload, which
+// authenticates through its form fields.
+//
+// https://docs.aws.amazon.com/AmazonS3/latest/API/RESTObjectPOST.html
+func (s *s3) postObject(w http.ResponseWriter, r *http.Request, header *bucketAccess) error {
+	bucket := header.bucket
+	if header.caller != nil {
+		// a signed POST that is not a form is one of the other bucket POSTs,
+		// none of which is implemented
+		if !isPostForm(r) {
+			return s3errs.ErrNotImplemented
+		}
+		return s3errs.ErrInvalidArgumentMultipleAuth
+	} else if r.ContentLength < 0 {
+		return s3errs.ErrMissingContentLength
+	}
+
+	form, file, err := parsePostForm(r)
+	if err != nil {
+		return err
+	}
+
+	caller, err := auth.PostPolicyAuth{
+		Algorithm:  form.get(postFieldAlgorithm),
+		Credential: form.get(postFieldCredential),
+		Date:       form.get(postFieldDate),
+		Policy:     form.get(postFieldPolicy),
+		Signature:  form.get(postFieldSignature),
+	}.Verify(r.Context(), s.backend, s.region, time.Now())
+	if err != nil {
+		return err
+	}
+
+	policy, err := parsePostPolicy(form.get(postFieldPolicy))
+	if err != nil {
+		return err
+	}
+
+	// the bucket condition is checked against the bucket in the URL, since a
+	// form is not required to carry a bucket field, and one that does has to
+	// agree with the URL
+	if submitted, ok := form.fields[postFieldBucket]; ok && submitted != bucket {
+		return s3errs.ErrInvalidPolicyDocument
+	}
+	form.fields[postFieldBucket] = bucket
+	if err := form.expandFilename(); err != nil {
+		return err
+	} else if err := policy.check(form, time.Now()); err != nil {
+		return err
+	}
+
+	object := form.get(postFieldKey)
+	if object == "" {
+		return s3errs.ErrUserKeyMustBeSpecified
+	} else if len(object) > KeySizeLimit {
+		return s3errs.ErrKeyTooLongError
+	}
+
+	access, err := s.bucketAccess(r, caller, bucket)
+	if err != nil {
+		return err
+	} else if err := access.assertObjectAllowed(actionPutObject, object); err != nil {
+		return err
+	}
+
+	// the request body bounds the file from above, and a content-length-range
+	// condition bounds it further, so the backend has a size to reserve against
+	// its disk limit
+	maxSize := r.ContentLength
+	if policy.maxSize >= 0 && policy.maxSize < maxSize {
+		maxSize = policy.maxSize
+	}
+
+	meta, err := form.metadata()
+	if err != nil {
+		return err
+	}
+
+	var contentMD5 *[16]byte
+	if encoded, ok := form.fields[postFieldContentMD5]; ok {
+		digest, err := parseContentMD5(encoded)
+		if err != nil {
+			return err
+		}
+		contentMD5 = digest
+	}
+
+	checksum, err := requestChecksum(form.header())
+	if err != nil {
+		return err
+	}
+
+	// the redirect is resolved before the upload, so nothing that can fail is
+	// left to run after the object has been stored
+	var redirect *url.URL
+	if target := form.get(postFieldRedirect); target != "" {
+		// S3 ignores a redirect it cannot use rather than failing the upload
+		if u, err := url.Parse(target); err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" {
+			redirect = u
+		}
+	}
+
+	log := s.logger.With(zap.String("bucket", bucket), zap.String("object", object))
+	log.Debug("post object")
+
+	res, err := s.backend.PutObject(r.Context(), access.bucketID, object, &postBody{
+		reader: file,
+		min:    policy.minSize,
+	}, PutObjectOptions{
+		ContentLength:    -1,
+		MaxContentLength: maxSize,
+		ContentMD5:       contentMD5,
+		Checksum:         checksum,
+		Meta:             meta,
+	})
+	if err != nil {
+		return err
+	}
+
+	s.setLifecycleExpirationHeader(w, r, access, object, time.Now())
+	if res.VersionID != "" {
+		w.Header().Set("x-amz-version-id", res.VersionID)
+	}
+	etag := FormatETag(res.ContentMD5[:], 0)
+	w.Header().Set("ETag", etag)
+
+	if redirect != nil {
+		query := redirect.Query()
+		query.Set("bucket", bucket)
+		query.Set("key", object)
+		query.Set("etag", etag)
+		redirect.RawQuery = query.Encode()
+		w.Header().Set("Location", redirect.String())
+		w.WriteHeader(http.StatusSeeOther)
+		return nil
+	}
+
+	switch form.get(postFieldStatus) {
+	case strconv.Itoa(http.StatusOK):
+		w.WriteHeader(http.StatusOK)
+	case strconv.Itoa(http.StatusCreated):
+		return writeXMLResponse(w, http.StatusCreated, PostObjectResponse{
+			Location: s.objectLocation(r, bucket, object),
+			Bucket:   bucket,
+			Key:      object,
+			ETag:     etag,
+		})
+	default:
+		w.WriteHeader(http.StatusNoContent)
+	}
+	return nil
+}
