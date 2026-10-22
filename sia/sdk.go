@@ -111,7 +111,7 @@ func (s *IndexdSDK) ObjectEvents(ctx context.Context, cursor slabs.Cursor, limit
 }
 
 // PruneSlabs releases the slabs no remaining object references, which frees
-// the pinned storage a deleted object was using. Only slabs pinned before
+// the pinned storage a deleted object was using. Only slabs pinned prior to
 // before are released.
 //
 // A zero before leaves the cutoff to the indexer.
