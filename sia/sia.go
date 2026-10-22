@@ -198,7 +198,6 @@ type SDK interface {
 	Download(ctx context.Context, obj *sdk.Object, rnge *s3.ObjectRange) (io.ReadCloser, error)
 	Object(ctx context.Context, id types.Hash256) (*sdk.Object, error)
 	ObjectEvents(ctx context.Context, cursor slabs.Cursor, limit int) ([]sdk.ObjectEvent, error)
-	ObjectID(obj *sdk.Object) types.Hash256
 	OptimalDataSize(ctx context.Context) (int64, error)
 	Upload(ctx context.Context, obj *sdk.Object, r io.Reader, opts ...sdk.UploadOption) (*sdk.Object, error)
 	UploadPacked(ctx context.Context, opts ...sdk.UploadOption) (PackedUpload, error)
@@ -517,7 +516,11 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 		return s3.Snapshot{}, fmt.Errorf("failed to upload snapshot: %w", err)
 	}
 
-	objectID := s.sdk.ObjectID(obj)
+	sealed, err := s.sdk.SealObject(obj)
+	if err != nil {
+		return s3.Snapshot{}, fmt.Errorf("failed to seal snapshot object: %w", err)
+	}
+	objectID := sealed.ID()
 
 	// record the object before the pin can reach the indexer, so a crash
 	// during the pin leaves a record claiming it

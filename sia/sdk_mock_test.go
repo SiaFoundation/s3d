@@ -412,7 +412,7 @@ func TestIndexdSDKDeleteObject(t *testing.T) {
 	if err := s.PinObject(ctx, obj); err != nil {
 		t.Fatalf("pin: %v", err)
 	}
-	id := s.ObjectID(obj)
+	id := obj.ID()
 
 	if err := s.DeleteObject(ctx, id); err != nil {
 		t.Fatalf("delete: %v", err)
@@ -460,7 +460,7 @@ func TestIndexdSDKPruneSlabs(t *testing.T) {
 		t.Fatal("the pinned object is not counted against the account")
 	}
 
-	if err := s.DeleteObject(ctx, s.ObjectID(obj)); err != nil {
+	if err := s.DeleteObject(ctx, obj.ID()); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	deleted, err := s.Account(ctx)
