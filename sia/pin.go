@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/SiaFoundation/s3d/sia/objects"
@@ -128,8 +129,7 @@ func (s *Sia) performObjectPinning(ctx context.Context) error {
 
 func (s *Sia) pinBatch(ctx context.Context, now time.Time, toPin []objects.UnpinnedObject) error {
 	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var errs []error
+	var failed atomic.Int64
 	sema := make(chan struct{}, pinThreads)
 	defer close(sema)
 
@@ -145,15 +145,17 @@ loop:
 			defer func() { <-sema }()
 
 			if err := s.pinObject(ctx, now, uo); err != nil {
-				mu.Lock()
-				errs = append(errs, err)
-				mu.Unlock()
+				s.logger.Error("failed to pin object", zap.Error(err))
+				failed.Add(1)
 			}
 		})
 	}
 
 	wg.Wait()
-	return errors.Join(errs...)
+	if n := failed.Load(); n > 0 {
+		return fmt.Errorf("failed to pin %d out of %d objects", n, len(toPin))
+	}
+	return nil
 }
 
 func (s *Sia) reschedulePin(siaObjectID types.Hash256) error {
