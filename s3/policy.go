@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"math/big"
 	"net/http"
 	"net/netip"
@@ -411,12 +410,23 @@ func (op conditionOperator) parseValue(value string) (v conditionValue, ok bool)
 	return v, true
 }
 
-// policyIPPrefix parses an IP address or CIDR.
+// policyIPPrefix parses an IP address or CIDR. IPv4-mapped IPv6 values are
+// unmapped, as request addresses are.
 func policyIPPrefix(value string) (netip.Prefix, error) {
+	var prefix netip.Prefix
 	if ip, err := netip.ParseAddr(value); err == nil {
-		return netip.PrefixFrom(ip, ip.BitLen()), nil
+		prefix = netip.PrefixFrom(ip, ip.BitLen())
+	} else if prefix, err = netip.ParsePrefix(value); err != nil {
+		return netip.Prefix{}, err
 	}
-	return netip.ParsePrefix(value)
+	if ip := prefix.Addr(); ip.Is4In6() {
+		// a shorter prefix also covers non-IPv4 addresses
+		if prefix.Bits() < 96 {
+			return netip.Prefix{}, fmt.Errorf("IPv4-mapped prefix %q is shorter than /96", value)
+		}
+		prefix = netip.PrefixFrom(ip.Unmap(), prefix.Bits()-96)
+	}
+	return prefix, nil
 }
 
 // policyNumberSyntax is a plain decimal number. Hex floats and digit
@@ -443,15 +453,14 @@ func policyDate(value string) (time.Time, bool) {
 	if t, err := time.Parse(time.RFC3339Nano, value); err == nil {
 		return t, true
 	}
-	if !policyNumberSyntax.MatchString(value) {
+	// exact arithmetic, so the epoch and RFC 3339 forms of a date are equal
+	seconds, ok := policyNumber(value)
+	if !ok || seconds.Cmp(big.NewRat(-62135596800, 1)) < 0 || seconds.Cmp(big.NewRat(253402300799, 1)) > 0 {
 		return time.Time{}, false
 	}
-	seconds, err := strconv.ParseFloat(value, 64)
-	if err != nil || seconds < -62135596800 || seconds > 253402300799 {
-		return time.Time{}, false
-	}
-	whole, fraction := math.Modf(seconds)
-	return time.Unix(int64(whole), int64(fraction*1e9)), true
+	whole, fraction := new(big.Int).QuoRem(seconds.Num(), seconds.Denom(), new(big.Int))
+	nanos := fraction.Mul(fraction, big.NewInt(1e9)).Quo(fraction, seconds.Denom())
+	return time.Unix(whole.Int64(), nanos.Int64()), true
 }
 
 // conditionValue is a condition's policy value, parsed for its operator unless

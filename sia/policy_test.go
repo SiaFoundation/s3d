@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SiaFoundation/s3d/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3"
@@ -1185,4 +1186,52 @@ func TestBucketPolicyOwnerOnlyAPIs(t *testing.T) {
 	} else if got != grant {
 		t.Fatalf("expected policy %q, got %q", grant, got)
 	}
+}
+
+// TestBucketPolicyObjectLockConditions checks that retention conditions see
+// the retention a PutObjectRetention body applies.
+func TestBucketPolicyObjectLockConditions(t *testing.T) {
+	const bucket = "bucket"
+
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
+	other := s3Tester.ChangeAccessKey(t, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey)
+
+	if err := s3Tester.CreateBucketWithObjectLock(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	} else if _, err := s3Tester.PutObject(t.Context(), bucket, "key", strings.NewReader("value"), nil); err != nil {
+		t.Fatal(err)
+	}
+	policy := fmt.Sprintf(`{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": %q,
+      "Action": "s3:PutObjectRetention",
+      "Resource": "arn:aws:s3:::%s/*",
+      "Condition": {"NumericLessThanEquals": {"s3:object-lock-remaining-retention-days": 10}}
+    },
+    {
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:PutObjectRetention",
+      "Resource": "arn:aws:s3:::%s/*",
+      "Condition": {"NumericGreaterThan": {"s3:object-lock-remaining-retention-days": 30}}
+    }
+  ]
+}`, testutil.OtherOwner, bucket, bucket)
+	if err := s3Tester.PutBucketPolicy(t.Context(), bucket, policy); err != nil {
+		t.Fatal(err)
+	}
+
+	retention := func(days int) *types.ObjectLockRetention {
+		return &types.ObjectLockRetention{Mode: types.ObjectLockRetentionModeCompliance, RetainUntilDate: aws.Time(time.Now().AddDate(0, 0, days))}
+	}
+	if err := other.PutObjectRetention(t.Context(), bucket, "key", nil, retention(5), false); err != nil {
+		t.Fatal(err)
+	}
+	err := other.PutObjectRetention(t.Context(), bucket, "key", nil, retention(20), false)
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+	err = s3Tester.PutObjectRetention(t.Context(), bucket, "key", nil, retention(40), false)
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
 }

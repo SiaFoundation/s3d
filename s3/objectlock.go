@@ -270,7 +270,7 @@ func (s *s3) routeObjectRetention(r *http.Request, object string, version Versio
 	}
 	switch r.Method {
 	case http.MethodPut:
-		return operation{action: actionPutObjectRetention, serve: func(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
+		return operation{action: actionPutObjectRetention, bodyConditions: true, serve: func(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
 			return s.putObjectRetention(w, r, access, object, version)
 		}}, nil
 	case http.MethodGet:
@@ -297,6 +297,8 @@ func (s *s3) putObjectRetention(w http.ResponseWriter, r *http.Request, access *
 	}
 	state, err := doc.state()
 	if err != nil {
+		return err
+	} else if err := access.assertLockActionAllowed(actionPutObjectRetention, object, &state); err != nil {
 		return err
 	}
 
@@ -331,7 +333,7 @@ func (s *s3) routeObjectLegalHold(r *http.Request, object string, version Versio
 	}
 	switch r.Method {
 	case http.MethodPut:
-		return operation{action: actionPutObjectLegalHold, serve: func(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
+		return operation{action: actionPutObjectLegalHold, bodyConditions: true, serve: func(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
 			return s.putObjectLegalHold(w, r, access, object, version)
 		}}, nil
 	case http.MethodGet:
@@ -354,6 +356,8 @@ func (s *s3) putObjectLegalHold(w http.ResponseWriter, r *http.Request, access *
 		return err
 	}
 	if err := doc.Validate(); err != nil {
+		return err
+	} else if err := access.assertLockActionAllowed(actionPutObjectLegalHold, object, &ObjectLockState{LegalHold: doc.Status}); err != nil {
 		return err
 	}
 

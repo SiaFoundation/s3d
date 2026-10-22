@@ -3,6 +3,7 @@ package s3
 import (
 	"crypto/tls"
 	"maps"
+	"math"
 	"net/http"
 	"net/netip"
 	"strconv"
@@ -185,8 +186,29 @@ func (a *bucketAccess) actionPolicyContext(action string) (policyContext, error)
 			creates = a.request.Method == http.MethodPost // CompleteMultipartUpload
 		}
 		extra["s3:objectcreationoperation"] = []string{strconv.FormatBool(creates)}
+		// an invalid lock is rejected by the handler
+		if lock, err := requestObjectLock(a.request.Header); err == nil {
+			maps.Copy(extra, objectLockPolicyContext(lock))
+		}
 	}
 	return a.requestContext.merge(extra), nil
+}
+
+// objectLockPolicyContext returns the condition keys of a lock the request
+// applies.
+func objectLockPolicyContext(lock *ObjectLockState) policyContext {
+	extra := make(policyContext)
+	if lock.Retained() {
+		// a partial day counts as a whole one
+		days := int64(math.Ceil(time.Until(lock.RetainUntil).Hours() / 24))
+		extra["s3:object-lock-mode"] = []string{lock.Mode}
+		extra["s3:object-lock-retain-until-date"] = []string{lock.RetainUntil.UTC().Format(retainUntilLayout)}
+		extra["s3:object-lock-remaining-retention-days"] = []string{strconv.FormatInt(days, 10)}
+	}
+	if lock != nil && lock.LegalHold != "" {
+		extra["s3:object-lock-legal-hold"] = []string{lock.LegalHold}
+	}
+	return extra
 }
 
 // merge returns c with extra's keys added, copying c only if needed.

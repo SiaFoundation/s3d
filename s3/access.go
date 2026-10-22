@@ -3,6 +3,7 @@ package s3
 import (
 	"errors"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -51,7 +52,10 @@ type operation struct {
 	// multiObjectDelete marks a DeleteObjects request. Its handler authorizes
 	// each object named in the body, so it is not given an action.
 	multiObjectDelete bool
-	serve             func(http.ResponseWriter, *http.Request, *bucketAccess) error
+	// bodyConditions marks an action whose condition keys are read from the
+	// body, so its handler checks the action once it has read the body.
+	bodyConditions bool
+	serve          func(http.ResponseWriter, *http.Request, *bucketAccess) error
 }
 
 // authorize resolves the caller's access to bucket and requires op's action on
@@ -75,7 +79,10 @@ func (s *s3) authorize(r *http.Request, caller *auth.Caller, bucket, object stri
 	case op.multiObjectDelete:
 		// the keys and version IDs are only known once the body is read, so
 		// deleteObjects checks every key, including explicit denies
-		err = access.assertDeleteAllowedInBucket()
+		err = access.assertAnyAllowedInBucket(actionDeleteObject, actionDeleteObjectVersion)
+	case op.bodyConditions:
+		// the handler checks the action once the body supplies its keys
+		err = access.assertAnyAllowedInBucket(op.action)
 	case isObjectAction(op.action):
 		err = access.assertObjectAllowed(op.action, object)
 	default:
@@ -179,16 +186,14 @@ func (a *bucketAccess) assertObjectAllowed(action, object string) error {
 	return a.assertAllowed(action, objectARN(a.bucket, object))
 }
 
-// assertDeleteAllowedInBucket denies a multi-delete request up front when no
-// statement could allow deletion. Resource and condition checks wait for each
-// key and version ID.
-func (a *bucketAccess) assertDeleteAllowedInBucket() error {
+// assertAnyAllowedInBucket denies a request up front when no statement could
+// allow any of actions. Resource and condition checks wait for the body.
+func (a *bucketAccess) assertAnyAllowedInBucket(actions ...string) error {
 	if a.isOwner {
 		return nil
 	}
 	for _, stmt := range a.policy.statements {
-		if stmt.Effect == policyEffectAllow && stmt.principalMatches(a.caller) &&
-			(stmt.namesAction(actionDeleteObject) || stmt.namesAction(actionDeleteObjectVersion)) {
+		if stmt.Effect == policyEffectAllow && stmt.principalMatches(a.caller) && slices.ContainsFunc(actions, stmt.namesAction) {
 			return nil
 		}
 	}
@@ -205,17 +210,28 @@ func (a *bucketAccess) assertVersionAllowed(action, object string, version Versi
 }
 
 // assertObjectLockAllowed checks that the caller may stamp lock on a new
-// version of object.
+// version of object. Each action sees only its own part of the lock.
 func (a *bucketAccess) assertObjectLockAllowed(object string, lock *ObjectLockState) error {
 	if lock.Retained() {
-		if err := a.assertObjectAllowed(actionPutObjectRetention, object); err != nil {
+		retention := &ObjectLockState{Mode: lock.Mode, RetainUntil: lock.RetainUntil}
+		if err := a.assertLockActionAllowed(actionPutObjectRetention, object, retention); err != nil {
 			return err
 		}
 	}
 	if lock != nil && lock.LegalHold != "" {
-		return a.assertObjectAllowed(actionPutObjectLegalHold, object)
+		return a.assertLockActionAllowed(actionPutObjectLegalHold, object, &ObjectLockState{LegalHold: lock.LegalHold})
 	}
 	return nil
+}
+
+// assertLockActionAllowed checks that the caller may perform action on object
+// to apply lock.
+func (a *bucketAccess) assertLockActionAllowed(action, object string, lock *ObjectLockState) error {
+	requestContext, err := a.actionPolicyContext(action)
+	if err != nil {
+		return err
+	}
+	return a.check(requestContext.merge(objectLockPolicyContext(lock)), action, objectARN(a.bucket, object))
 }
 
 // visibleObjectLock returns the part of a version's lock state the caller may
