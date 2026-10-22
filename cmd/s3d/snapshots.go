@@ -19,6 +19,7 @@ import (
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"go.sia.tech/core/types"
 	sdk "go.sia.tech/siastorage"
+	"go.uber.org/zap"
 )
 
 const (
@@ -196,6 +197,12 @@ func runSnapshotsRestore(ctx context.Context, cmd *flag.FlagSet, out string) {
 	} else if err := tmp.Close(); err != nil {
 		checkFatalRestoreError("failed to close snapshot", err)
 	}
+
+	// flag the image so the first start cleans up after the restore, opening
+	// it migrates a snapshot taken before the flag existed
+	image, err := sqlite.OpenDatabase(tmp.Name(), zap.NewNop())
+	checkFatalRestoreError("failed to open snapshot", err)
+	checkFatalRestoreError("failed to flag snapshot as restored", errors.Join(image.MarkRestored(), image.Close()))
 	checkFatalRestoreError("failed to write database", os.Rename(tmp.Name(), dbPath))
 	checkFatalError("failed to sync the destination", syncDir(destDir))
 
