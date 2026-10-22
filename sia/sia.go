@@ -282,18 +282,16 @@ type Store interface {
 	AbortMultipartUploads(bucket string, prefix string, before time.Time, limit int) ([]AbortedUpload, error)
 	ExpireObjects(bucket string, prefix string, sizeGreaterThan, sizeLessThan *int64, before time.Time, limit int) (int, []objects.OrphanedFile, error)
 
-	Backup(ctx context.Context, destPath string) error
+	Backup(ctx context.Context, destPath string) (int64, error)
 	DBVersion() int64
 
 	AdoptSnapshot(objectID types.Hash256, createdAt time.Time, gen, objectCount int64) (s3.Snapshot, error)
-	CompleteRestore(onDisk map[string]struct{}, pinBefore time.Time) (RestoreCleanup, error)
 	CreateSnapshot() (s3.Snapshot, int64, error)
 	DeleteSnapshotsBySiaObject(objectID types.Hash256) (int64, error)
 	HasSnapshotObject(objectID types.Hash256) (bool, error)
 	ListSnapshots() ([]s3.Snapshot, error)
 	MarkSnapshotPinned(objectID types.Hash256) error
-	MarkSnapshotPinning(id int64, objectID types.Hash256) error
-	Restored() (bool, error)
+	MarkSnapshotPinning(id int64, objectID types.Hash256, objectCount int64) error
 	RollbackIncompleteSnapshots() (int64, error)
 	RollbackSnapshot(id int64) error
 	SnapshotsForDeletion(before time.Time) ([]types.Hash256, error)
@@ -337,9 +335,6 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 	dir := filepath.Join(sia.directory, UploadsDirectory)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create directory %q: %w", dir, err)
-	}
-	if err := sia.completeRestore(); err != nil {
-		return nil, fmt.Errorf("failed to complete restore: %w", err)
 	}
 	diskUsage, err := sia.store.DiskUsage()
 	if err != nil {
@@ -454,7 +449,8 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 
 	tmp := filepath.Join(s.directory, TmpDirectory, fmt.Sprintf("snapshot-%x.tmp", frand.Bytes(8)))
 	backupStart := time.Now()
-	if err := s.store.Backup(ctx, tmp); err != nil {
+	objectCount, err := s.store.Backup(ctx, tmp)
+	if err != nil {
 		return s3.Snapshot{}, fmt.Errorf("failed to back up database: %w", err)
 	}
 	defer func() {
@@ -474,7 +470,7 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 		zap.Int64("snapshotID", snap.ID),
 		zap.Duration("elapsed", backupDuration),
 		zap.Int64("imageSize", imageSize),
-		zap.Int64("objectCount", snap.ObjectCount))
+		zap.Int64("objectCount", objectCount))
 
 	meta, err := json.Marshal(objects.SnapshotMetadata{
 		Type:        objects.SnapshotType,
@@ -482,7 +478,7 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 		DBVersion:   s.store.DBVersion(),
 		Encoding:    objects.SnapshotEncodingGzip,
 		Generation:  gen,
-		ObjectCount: snap.ObjectCount,
+		ObjectCount: objectCount,
 		S3DVersion:  build.Version(),
 	})
 	if err != nil {
@@ -525,7 +521,7 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 
 	// record the object before the pin can reach the indexer, so a crash
 	// during the pin leaves a record claiming it
-	if err := s.store.MarkSnapshotPinning(snap.ID, obj.ID()); err != nil {
+	if err := s.store.MarkSnapshotPinning(snap.ID, obj.ID(), objectCount); err != nil {
 		return s3.Snapshot{}, fmt.Errorf("failed to record snapshot object: %w", err)
 	}
 	if err := s.sdk.PinObject(ctx, obj); err != nil {
@@ -536,6 +532,7 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 		return s3.Snapshot{}, fmt.Errorf("failed to mark snapshot pinned: %w", err)
 	}
 	snap.SiaObjectID = obj.ID()
+	snap.ObjectCount = objectCount
 
 	s.logger.Info("snapshot complete",
 		zap.Int64("snapshotID", snap.ID),

@@ -503,8 +503,4 @@ ALTER TABLE multipart_uploads ADD COLUMN object_lock_retain_until INTEGER CHECK 
 ALTER TABLE multipart_uploads ADD COLUMN object_lock_legal_hold TEXT NOT NULL DEFAULT '' CHECK (object_lock_legal_hold IN ('', 'ON', 'OFF'));`)
 		return err
 	},
-	func(tx *txn, _ *zap.Logger) error {
-		_, err := tx.Exec(`ALTER TABLE global_settings ADD COLUMN restored INTEGER NOT NULL DEFAULT FALSE CHECK (restored IN (FALSE, TRUE))`)
-		return err
-	},
 }

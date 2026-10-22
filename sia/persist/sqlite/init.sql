@@ -204,7 +204,6 @@ CREATE TABLE global_settings (
 	last_sync_at INTEGER NOT NULL DEFAULT 0,
 	last_sync_key BLOB NOT NULL DEFAULT X'0000000000000000000000000000000000000000000000000000000000000000',
 	snapshot_gen INTEGER NOT NULL DEFAULT 0,
-	restored INTEGER NOT NULL DEFAULT FALSE CHECK (restored IN (FALSE, TRUE)), -- set on every backup copy, cleared once the first start after a restore has cleaned up
 	-- app_key and indexer_url are always set or nulled together
 	CHECK ((app_key IS NULL AND indexer_url IS NULL) OR (app_key IS NOT NULL AND indexer_url IS NOT NULL))
 );

@@ -515,15 +515,3 @@ func adjustMarkerForCommonPrefix(prefix s3.Prefix, keyMarker string) (adjustedKe
 
 	return keyMarker, false
 }
-
-func deleteMultipartUploads(tx *txn, ids []s3.UploadID) error {
-	if len(ids) == 0 {
-		return nil
-	}
-	for _, id := range ids {
-		if _, err := tx.Exec(`DELETE FROM multipart_uploads WHERE upload_id = $1`, sqlUploadID(id)); err != nil {
-			return err
-		}
-	}
-	return incrementStat(tx, statMultipartUploads, -int64(len(ids)))
-}
