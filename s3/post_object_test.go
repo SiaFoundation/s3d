@@ -310,6 +310,18 @@ func TestPostObjectResponses(t *testing.T) {
 		t.Fatalf("unexpected location %q", parsed.Location)
 	}
 
+	// a key with URL syntax in it is escaped in the location it reports
+	upload = newPostUpload(bucket, "status 201/a#b?c")
+	upload.fields = [][2]string{{"success_action_status", "201"}}
+	resp, body = upload.post(t, tester)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("unexpected status %d: %s", resp.StatusCode, body)
+	} else if err := xml.Unmarshal(body, &parsed); err != nil {
+		t.Fatal(err)
+	} else if !strings.HasSuffix(parsed.Location, "/"+bucket+"/status%20201/a%23b%3Fc") {
+		t.Fatalf("unexpected location %q", parsed.Location)
+	}
+
 	// success_action_redirect answers with a 303 carrying bucket, key and etag
 	upload = newPostUpload(bucket, "redirect")
 	upload.fields = [][2]string{{"success_action_redirect", "https://example.com/done?page=1"}}
@@ -459,6 +471,11 @@ func TestPostObjectRejections(t *testing.T) {
 	upload.fields = [][2]string{{"bucket", "other"}}
 	assertRejected(upload, s3errs.ErrInvalidPolicyDocument)
 
+	// a prefix condition on a field that authenticates the request
+	upload = newPostUpload(bucket, "rejected")
+	upload.conditions = []any{[]any{"starts-with", "$x-amz-date", ""}}
+	assertRejected(upload, s3errs.ErrMalformedPolicy)
+
 	// a signed policy that is not a JSON document
 	upload = newPostUpload(bucket, "rejected")
 	upload.policy = base64.StdEncoding.EncodeToString([]byte("{"))
@@ -529,6 +546,12 @@ func TestPostObjectRejections(t *testing.T) {
 	// a field that pushes everything preceding the file past its bound
 	upload = newPostUpload(bucket, "rejected")
 	upload.unsigned = [][2]string{{"x-ignore-padding", strings.Repeat("a", 80*1024)}}
+	assertRejected(upload, s3errs.ErrMaxPostPreDataLengthExceededError)
+
+	// a filename that expands the fields past the same bound
+	upload = newPostUpload(bucket, "rejected")
+	upload.filename = strings.Repeat("a", 16*1024)
+	upload.unsigned = [][2]string{{"x-ignore-padding", strings.Repeat("${filename}", 100)}}
 	assertRejected(upload, s3errs.ErrMaxPostPreDataLengthExceededError)
 
 	// a form that is also signed with an Authorization header

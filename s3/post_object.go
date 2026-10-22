@@ -71,24 +71,27 @@ func (f postForm) header() http.Header {
 	return headers
 }
 
-// metadata returns the object metadata the form describes. The fields that
-// authenticate the request describe the request rather than the object, so they
-// are left out.
+// metadata returns the object metadata the form describes.
 func (f postForm) metadata() (map[string]string, error) {
-	headers := f.header()
-	for _, name := range []string{postFieldAlgorithm, postFieldCredential,
-		postFieldDate, postFieldSignature, postFieldToken} {
-		headers.Del(name)
-	}
-	return metadataHeaders(headers, MetadataSizeLimit)
+	return metadataHeaders(f.header(), MetadataSizeLimit)
 }
 
 // expandFilename replaces the filename variable in form fields before policy
-// validation, matching S3's POST policy evaluation.
-func (f postForm) expandFilename() {
+// validation, matching S3's POST policy evaluation. The expanded fields are held
+// to the bound the parser read them under, so a short form cannot expand into a
+// large one.
+func (f postForm) expandFilename() error {
+	var expanded int
+	for _, value := range f.fields {
+		expanded += len(value) + strings.Count(value, postFilenameVariable)*(len(f.filename)-len(postFilenameVariable))
+	}
+	if expanded > maxPostFieldBytes {
+		return s3errs.ErrMaxPostPreDataLengthExceededError
+	}
 	for name, value := range f.fields {
 		f.fields[name] = strings.ReplaceAll(value, postFilenameVariable, f.filename)
 	}
+	return nil
 }
 
 // errPostPreData is returned by the bounded preamble reader once a form has
@@ -271,11 +274,18 @@ func (p *postPolicy) addCondition(condition jsontext.Value) error {
 		} else if !strings.HasPrefix(field, "$") {
 			return s3errs.ErrMalformedPolicy
 		}
-		p.matches = append(p.matches, postMatch{
+		match := postMatch{
 			field:      strings.ToLower(strings.TrimPrefix(field, "$")),
 			value:      value,
 			startsWith: operator == "starts-with",
-		})
+		}
+		// the fields that authenticate the request only support an exact
+		// match, since a prefix would let the uploader pick the date the
+		// signature is checked against
+		if match.startsWith && isPostAuthField(match.field) {
+			return s3errs.ErrMalformedPolicy
+		}
+		p.matches = append(p.matches, match)
 	case "content-length-range":
 		minSize, err := parsePostSize(elements[1])
 		if err != nil {
@@ -292,6 +302,15 @@ func (p *postPolicy) addCondition(condition jsontext.Value) error {
 		return s3errs.ErrMalformedPolicy
 	}
 	return nil
+}
+
+// isPostAuthField reports whether a form field authenticates the request.
+func isPostAuthField(name string) bool {
+	switch name {
+	case postFieldAlgorithm, postFieldCredential, postFieldDate, postFieldToken:
+		return true
+	}
+	return false
 }
 
 // parsePostSize decodes a content-length-range bound, which S3 accepts as
@@ -318,7 +337,7 @@ func (p postPolicy) check(form postForm, now time.Time) error {
 	for _, match := range p.matches {
 		// a field the form left out is matched as empty, so a condition that
 		// demands a particular value fails while one that demands nothing holds
-		if !match.check(form.fields[match.field]) {
+		if !match.check(form.get(match.field)) {
 			return s3errs.ErrInvalidPolicyDocument
 		}
 		named[match.field] = struct{}{}
@@ -398,8 +417,9 @@ func (s *s3) postObject(w http.ResponseWriter, r *http.Request, headerKeyID *str
 		return s3errs.ErrInvalidPolicyDocument
 	}
 	form.fields[postFieldBucket] = bucket
-	form.expandFilename()
-	if err := policy.check(form, time.Now()); err != nil {
+	if err := form.expandFilename(); err != nil {
+		return err
+	} else if err := policy.check(form, time.Now()); err != nil {
 		return err
 	}
 
