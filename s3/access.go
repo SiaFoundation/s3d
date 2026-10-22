@@ -2,12 +2,14 @@ package s3
 
 import (
 	"errors"
+	"math"
 	"net/http"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3/auth"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"go.uber.org/zap"
+	"lukechampine.com/frand"
 )
 
 // maxCachedPolicies bounds the parsed policy cache, whose entries outlive
@@ -20,9 +22,19 @@ type cachedPolicy struct {
 	policy   bucketPolicy
 }
 
+// BucketID identifies a bucket for its lifetime.
+type BucketID int64
+
+// NewBucketID returns a random, positive bucket ID.
+func NewBucketID() BucketID {
+	return BucketID(frand.Uint64n(math.MaxInt64)) + 1
+}
+
 // BucketAccessInfo is what the S3 API handler needs to authorize a request on
 // a bucket, as returned by [Backend.BucketAccessInfo].
 type BucketAccessInfo struct {
+	// ID is the bucket's ID, passed to backend calls instead of its name.
+	ID BucketID
 	// Owner is the bucket's owner. Its ID must be the user ID the backend's
 	// LoadSecret reports for the owner's access keys, see [auth.Caller].
 	Owner *UserInfo
@@ -34,6 +46,7 @@ type BucketAccessInfo struct {
 // request.
 type bucketAccess struct {
 	caller         *auth.Caller
+	bucketID       BucketID
 	bucket         string
 	owner          *UserInfo
 	policyDocument string
@@ -95,6 +108,7 @@ func (s *s3) bucketAccess(r *http.Request, caller *auth.Caller, bucket string) (
 	}
 	access := &bucketAccess{
 		caller:         caller,
+		bucketID:       info.ID,
 		bucket:         bucket,
 		owner:          info.Owner,
 		policyDocument: info.PolicyDocument,

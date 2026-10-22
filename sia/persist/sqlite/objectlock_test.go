@@ -16,6 +16,7 @@ func TestPutBucketObjectLockConfigurationValidates(t *testing.T) {
 	if err := store.CreateBucket(testAccessKeyID, "bucket", true); err != nil {
 		t.Fatal(err)
 	}
+	bid := store.bucketID("bucket")
 
 	negative := -5
 	ruleWithoutDefaultRetention := s3.ObjectLockConfiguration{
@@ -33,11 +34,11 @@ func TestPutBucketObjectLockConfigurationValidates(t *testing.T) {
 		},
 	}
 
-	if err := store.PutBucketObjectLockConfiguration("bucket", "", ruleWithoutDefaultRetention); !errors.Is(err, s3errs.ErrMalformedXML) {
+	if err := store.PutBucketObjectLockConfiguration(bid, ruleWithoutDefaultRetention); !errors.Is(err, s3errs.ErrMalformedXML) {
 		t.Fatalf("expected %v, got %v", s3errs.ErrMalformedXML, err)
-	} else if err := store.PutBucketObjectLockConfiguration("bucket", "", unknownMode); !errors.Is(err, s3errs.ErrMalformedXML) {
+	} else if err := store.PutBucketObjectLockConfiguration(bid, unknownMode); !errors.Is(err, s3errs.ErrMalformedXML) {
 		t.Fatalf("expected %v, got %v", s3errs.ErrMalformedXML, err)
-	} else if err := store.PutBucketObjectLockConfiguration("bucket", "", negativeDays); !errors.Is(err, s3errs.ErrInvalidRetentionPeriod) {
+	} else if err := store.PutBucketObjectLockConfiguration(bid, negativeDays); !errors.Is(err, s3errs.ErrInvalidRetentionPeriod) {
 		t.Fatalf("expected %v, got %v", s3errs.ErrInvalidRetentionPeriod, err)
 	}
 }

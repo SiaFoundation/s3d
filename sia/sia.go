@@ -227,33 +227,33 @@ type Store interface {
 	LoadSecret(accessKeyID string) (secret, userName string, err error)
 
 	AllFilenames() ([]string, error)
-	CopyObject(srcBucket, srcName string, srcVersion s3.VersionRequest, dstBucket, dstName string, opts s3.CopyObjectOptions) (*s3.CopyObjectResult, objects.OrphanedFile, error)
-	CreateBucket(accessKeyID, bucket string, objectLock bool) error
-	DeleteBucket(bucket string) error
-	DeleteObject(bucket, owner string, objectID s3.ObjectID, bypass bool) (string, bool, objects.OrphanedFile, error)
-	GetObject(bucket, object string, version s3.VersionRequest, partNumber *int32) (*objects.Object, error)
+	CopyObject(srcBucket s3.BucketID, srcName string, srcVersion s3.VersionRequest, dstBucket s3.BucketID, dstName string, opts s3.CopyObjectOptions) (*s3.CopyObjectResult, objects.OrphanedFile, error)
+	CreateBucket(accessKeyID, name string, objectLock bool) error
+	DeleteBucket(bucket s3.BucketID) error
+	DeleteObject(bucket s3.BucketID, objectID s3.ObjectID, bypass bool) (string, bool, objects.OrphanedFile, error)
+	GetObject(bucket s3.BucketID, object string, version s3.VersionRequest, partNumber *int32) (*objects.Object, error)
 	DiskUsage() (uint64, error)
-	BucketAccessInfo(bucket string) (s3.BucketAccessInfo, error)
-	GetBucketVersioning(bucket string) (string, error)
-	PutBucketVersioning(bucket, owner, status string) error
-	GetBucketObjectLockConfiguration(bucket string) (s3.ObjectLockConfiguration, error)
-	PutBucketObjectLockConfiguration(bucket, owner string, config s3.ObjectLockConfiguration) error
-	GetObjectLegalHold(bucket, name string, version s3.VersionRequest) (string, error)
-	GetObjectRetention(bucket, name string, version s3.VersionRequest) (s3.ObjectLockState, error)
-	PutObjectLegalHold(bucket, owner, name string, version s3.VersionRequest, status string) error
-	PutObjectRetention(bucket, owner, name string, version s3.VersionRequest, retention s3.ObjectLockState, bypass bool) error
-	PutBucketPolicy(bucket, owner, document string) error
-	DeleteBucketPolicy(bucket string) error
+	BucketAccessInfo(name string) (s3.BucketAccessInfo, error)
+	GetBucketVersioning(bucket s3.BucketID) (string, error)
+	PutBucketVersioning(bucket s3.BucketID, status string) error
+	GetBucketObjectLockConfiguration(bucket s3.BucketID) (s3.ObjectLockConfiguration, error)
+	PutBucketObjectLockConfiguration(bucket s3.BucketID, config s3.ObjectLockConfiguration) error
+	GetObjectLegalHold(bucket s3.BucketID, name string, version s3.VersionRequest) (string, error)
+	GetObjectRetention(bucket s3.BucketID, name string, version s3.VersionRequest) (s3.ObjectLockState, error)
+	PutObjectLegalHold(bucket s3.BucketID, name string, version s3.VersionRequest, status string) error
+	PutObjectRetention(bucket s3.BucketID, name string, version s3.VersionRequest, retention s3.ObjectLockState, bypass bool) error
+	PutBucketPolicy(bucket s3.BucketID, document string) error
+	DeleteBucketPolicy(bucket s3.BucketID) error
 	ObjectsCursor() (slabs.Cursor, error)
 	SetObjectsCursor(cursor slabs.Cursor) error
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
-	ListObjects(bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error)
-	ListObjectVersions(bucket string, prefix s3.Prefix, page s3.ListObjectVersionsPage) (*s3.ObjectVersionsListResult, error)
-	ObjectPartsByName(bucket, name, versionID string) ([]objects.Part, error)
+	ListObjects(bucket s3.BucketID, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error)
+	ListObjectVersions(bucket s3.BucketID, prefix s3.Prefix, page s3.ListObjectVersionsPage) (*s3.ObjectVersionsListResult, error)
+	ObjectPartsByName(bucket s3.BucketID, name, versionID string) ([]objects.Part, error)
 	ObjectsForUpload() ([]objects.ObjectForUpload, error)
 	OrphanedObjects(limit int) ([]types.Hash256, error)
-	PutObject(bucket, name string, opts objects.PutOptions) (string, objects.OrphanedFile, error)
-	MarkObjectUploaded(bucket, name, versionID string, contentMD5 [16]byte, sealed sdk.SealedObject, pinBefore time.Time) error
+	PutObject(bucket s3.BucketID, name string, opts objects.PutOptions) (string, objects.OrphanedFile, error)
+	MarkObjectUploaded(bucket s3.BucketID, name, versionID string, contentMD5 [16]byte, sealed sdk.SealedObject, pinBefore time.Time) error
 	MarkObjectPinned(siaObjectID types.Hash256) ([]objects.OrphanedFile, error)
 	ScheduleObjectForReupload(siaObjectID types.Hash256) error
 	ObjectsForPinning(now time.Time, limit int) ([]objects.UnpinnedObject, error)
@@ -261,22 +261,22 @@ type Store interface {
 	RescheduleUnpinnedObject(siaObjectID types.Hash256, nextAttemptAt time.Time) error
 	UpdateSiaObjects(siaObjects []objects.SiaObject) (int64, error)
 	RemoveOrphanedObject(objectID types.Hash256) error
-	AbortMultipartUpload(bucket, name string, uploadID s3.UploadID) (int64, error)
-	AddMultipartPart(bucket, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (string, int64, error)
-	CreateMultipartUpload(bucket, name string, uploadID s3.UploadID, meta map[string]string, lock *s3.ObjectLockState) error
-	CompleteMultipartUpload(bucket, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64, preconditions s3.ObjectPreconditions) (string, objects.OrphanedFile, error)
-	HasMultipartUpload(bucket, name string, uploadID s3.UploadID) (hasParts bool, err error)
-	ListMultipartUploads(bucket string, prefix s3.Prefix, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error)
-	ListParts(bucket, name string, uploadID s3.UploadID, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error)
-	MultipartParts(bucket, name string, uploadID s3.UploadID) ([]objects.Part, error)
+	AbortMultipartUpload(bucket s3.BucketID, name string, uploadID s3.UploadID) (int64, error)
+	AddMultipartPart(bucket s3.BucketID, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (string, int64, error)
+	CreateMultipartUpload(bucket s3.BucketID, name string, uploadID s3.UploadID, meta map[string]string, lock *s3.ObjectLockState) error
+	CompleteMultipartUpload(bucket s3.BucketID, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64, preconditions s3.ObjectPreconditions) (string, objects.OrphanedFile, error)
+	HasMultipartUpload(bucket s3.BucketID, name string, uploadID s3.UploadID) (hasParts bool, err error)
+	ListMultipartUploads(bucket s3.BucketID, prefix s3.Prefix, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error)
+	ListParts(bucket s3.BucketID, name string, uploadID s3.UploadID, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error)
+	MultipartParts(bucket s3.BucketID, name string, uploadID s3.UploadID) ([]objects.Part, error)
 	UploadStats() (s3.UploadStats, error)
 
-	PutBucketLifecycleConfiguration(bucket, owner, config string) error
-	GetBucketLifecycleConfiguration(bucket string) (string, error)
-	DeleteBucketLifecycleConfiguration(bucket string) error
+	PutBucketLifecycleConfiguration(bucket s3.BucketID, config string) error
+	GetBucketLifecycleConfiguration(bucket s3.BucketID) (string, error)
+	DeleteBucketLifecycleConfiguration(bucket s3.BucketID) error
 	AllBucketLifecycleConfigurations() ([]BucketLifecycleConfiguration, error)
-	AbortMultipartUploads(bucket string, prefix string, before time.Time, limit int) ([]AbortedUpload, error)
-	ExpireObjects(bucket string, prefix string, before time.Time, limit int) (int, []objects.OrphanedFile, error)
+	AbortMultipartUploads(bucket s3.BucketID, prefix string, before time.Time, limit int) ([]AbortedUpload, error)
+	ExpireObjects(bucket s3.BucketID, prefix string, before time.Time, limit int) (int, []objects.OrphanedFile, error)
 
 	Backup(ctx context.Context, destPath string) error
 	DBVersion() int64

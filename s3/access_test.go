@@ -26,8 +26,8 @@ type authorizationBackend struct {
 	document string
 }
 
-func (b *authorizationBackend) BucketAccessInfo(_ context.Context, bucket string) (BucketAccessInfo, error) {
-	if bucket != "bucket" {
+func (b *authorizationBackend) BucketAccessInfo(_ context.Context, name string) (BucketAccessInfo, error) {
+	if name != "bucket" {
 		return BucketAccessInfo{}, s3errs.ErrNoSuchBucket
 	}
 	return BucketAccessInfo{Owner: &UserInfo{ID: "owner"}, PolicyDocument: b.document}, nil

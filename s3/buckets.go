@@ -149,7 +149,7 @@ func (s *s3) createBucket(w http.ResponseWriter, r *http.Request, access *bucket
 func (s *s3) deleteBucket(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
 	s.logger.Debug("deleting bucket", zap.String("bucket", access.bucket))
 
-	if err := s.backend.DeleteBucket(r.Context(), access.bucket); err != nil {
+	if err := s.backend.DeleteBucket(r.Context(), access.bucketID); err != nil {
 		return err
 	}
 	w.WriteHeader(http.StatusNoContent)

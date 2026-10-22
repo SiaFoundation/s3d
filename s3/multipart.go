@@ -232,7 +232,7 @@ func (s *s3) abortMultipartUpload(w http.ResponseWriter, r *http.Request, access
 	)
 	log.Debug("abort multipart upload")
 
-	if err := s.backend.AbortMultipartUpload(r.Context(), bucket, object, uploadID); err != nil {
+	if err := s.backend.AbortMultipartUpload(r.Context(), access.bucketID, object, uploadID); err != nil {
 		return err
 	}
 
@@ -266,7 +266,7 @@ func (s *s3) createMultipartUpload(w http.ResponseWriter, r *http.Request, acces
 		return err
 	}
 
-	result, err := s.backend.CreateMultipartUpload(r.Context(), bucket, object, CreateMultipartUploadOptions{
+	result, err := s.backend.CreateMultipartUpload(r.Context(), access.bucketID, object, CreateMultipartUploadOptions{
 		Meta:       meta,
 		ObjectLock: lock,
 	})
@@ -302,7 +302,7 @@ func (s *s3) listMultipartUploads(w http.ResponseWriter, r *http.Request, access
 		MaxUploads:     maxUploads,
 	}
 
-	result, err := s.backend.ListMultipartUploads(r.Context(), bucket, opts, page)
+	result, err := s.backend.ListMultipartUploads(r.Context(), access.bucketID, opts, page)
 	if err != nil {
 		return err
 	}
@@ -371,7 +371,7 @@ func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, dst *bucketAccess,
 		return err
 	}
 
-	result, err := s.backend.UploadPartCopy(r.Context(), srcBucket, srcObject, srcVersion, dstBucket, dstObject, uploadID, UploadPartCopyOptions{
+	result, err := s.backend.UploadPartCopy(r.Context(), src.bucketID, srcObject, srcVersion, dst.bucketID, dstObject, uploadID, UploadPartCopyOptions{
 		PartNumber:          partNumber,
 		Range:               srcRange,
 		SourcePreconditions: copySourcePreconditions(r.Header),
@@ -436,7 +436,7 @@ func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, access *bucke
 		return err
 	}
 
-	res, err := s.backend.UploadPart(r.Context(), bucket, object, uploadID, r.Body, UploadPartOptions{
+	res, err := s.backend.UploadPart(r.Context(), access.bucketID, object, uploadID, r.Body, UploadPartOptions{
 		PartNumber:    int(*partNumber),
 		ContentLength: r.ContentLength,
 		ContentMD5:    contentMD5,
@@ -466,7 +466,7 @@ func (s *s3) listUploadParts(w http.ResponseWriter, r *http.Request, access *buc
 	}
 
 	// list parts
-	result, err := s.backend.ListParts(r.Context(), bucket, object, uploadID, page)
+	result, err := s.backend.ListParts(r.Context(), access.bucketID, object, uploadID, page)
 	if err != nil {
 		return err
 	}
@@ -532,7 +532,7 @@ func (s *s3) completeMultipartUpload(w http.ResponseWriter, r *http.Request, acc
 		}
 	}
 
-	res, err := s.backend.CompleteMultipartUpload(r.Context(), bucket, object, uploadID, parts, requestPreconditions(r.Header))
+	res, err := s.backend.CompleteMultipartUpload(r.Context(), access.bucketID, object, uploadID, parts, requestPreconditions(r.Header))
 	if err != nil {
 		return err
 	}

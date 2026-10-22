@@ -40,7 +40,7 @@ func (s *s3) putBucketVersioning(w http.ResponseWriter, r *http.Request, access 
 		return s3errs.ErrIllegalVersioningConfigurationException
 	}
 
-	return s.backend.PutBucketVersioning(r.Context(), access.bucket, access.owner.ID, config.Status)
+	return s.backend.PutBucketVersioning(r.Context(), access.bucketID, config.Status)
 }
 
 // getBucketVersioning handles GET Bucket versioning requests.
@@ -49,7 +49,7 @@ func (s *s3) putBucketVersioning(w http.ResponseWriter, r *http.Request, access 
 func (s *s3) getBucketVersioning(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
 	s.logger.Debug("getting bucket versioning configuration", zap.String("bucket", access.bucket))
 
-	status, err := s.backend.GetBucketVersioning(r.Context(), access.bucket)
+	status, err := s.backend.GetBucketVersioning(r.Context(), access.bucketID)
 	if err != nil {
 		return err
 	}

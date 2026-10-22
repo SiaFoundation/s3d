@@ -151,11 +151,6 @@ type PutObjectOptions struct {
 	Checksum      *RequestChecksum
 	Preconditions ObjectPreconditions
 
-	// BucketOwner, if set, is the [UserInfo.ID] that must still own the bucket
-	// when the object is stored, since the bucket may be recreated while the
-	// body is read. Otherwise [ErrNoSuchBucket] must be returned.
-	BucketOwner string
-
 	// ObjectLock is the lock to stamp on the new version, overriding the
 	// bucket's default retention. Nil applies the default, if any.
 	ObjectLock *ObjectLockState
@@ -267,7 +262,7 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, dst *bucketAcces
 		return err
 	}
 
-	result, err := s.backend.CopyObject(r.Context(), srcBucket, srcObject, srcVersion, dstBucket, dstObject, CopyObjectOptions{
+	result, err := s.backend.CopyObject(r.Context(), src.bucketID, srcObject, srcVersion, dst.bucketID, dstObject, CopyObjectOptions{
 		Meta:                     meta,
 		Replace:                  replace,
 		SourcePreconditions:      copySourcePreconditions(r.Header),
@@ -305,7 +300,7 @@ func (s *s3) deleteObject(w http.ResponseWriter, r *http.Request, access *bucket
 		return err
 	}
 
-	result, err := s.backend.DeleteObject(r.Context(), bucket, oid, DeleteObjectOptions{
+	result, err := s.backend.DeleteObject(r.Context(), access.bucketID, oid, DeleteObjectOptions{
 		BypassGovernanceRetention: access.bypassGovernanceRetention(r.Header, object),
 	})
 	if err != nil {
@@ -366,7 +361,7 @@ func (s *s3) deleteObjects(w http.ResponseWriter, r *http.Request, access *bucke
 			keys[i] = obj.Key
 		}
 		var err error
-		res, err = s.backend.DeleteObjects(r.Context(), bucket, access.owner.ID, allowed, DeleteObjectOptions{
+		res, err = s.backend.DeleteObjects(r.Context(), access.bucketID, allowed, DeleteObjectOptions{
 			BypassGovernanceRetention: access.bypassGovernanceRetention(r.Header, keys...),
 		})
 		if err != nil {
@@ -411,9 +406,9 @@ func (s *s3) serveObject(w http.ResponseWriter, r *http.Request, access *bucketA
 	// retrieve object (HEAD fetches metadata only)
 	var obj *Object
 	if head {
-		obj, err = s.backend.HeadObject(r.Context(), bucket, object, version, rnge, partNumber)
+		obj, err = s.backend.HeadObject(r.Context(), access.bucketID, object, version, rnge, partNumber)
 	} else {
-		obj, err = s.backend.GetObject(r.Context(), bucket, object, version, rnge, partNumber)
+		obj, err = s.backend.GetObject(r.Context(), access.bucketID, object, version, rnge, partNumber)
 	}
 	if err != nil {
 		return access.hideMissing(err)
@@ -572,7 +567,7 @@ func (s *s3) listObjectsV1(w http.ResponseWriter, r *http.Request, access *bucke
 	}
 
 	// list objects
-	objects, err := s.backend.ListObjects(r.Context(), bucket, prefix, page)
+	objects, err := s.backend.ListObjects(r.Context(), access.bucketID, prefix, page)
 	if err != nil {
 		return err
 	}
@@ -627,7 +622,7 @@ func (s *s3) listObjectsV2(w http.ResponseWriter, r *http.Request, access *bucke
 	}
 
 	// list objects
-	objects, err := s.backend.ListObjects(r.Context(), bucket, prefix, page)
+	objects, err := s.backend.ListObjects(r.Context(), access.bucketID, prefix, page)
 	if err != nil {
 		return err
 	} else if aws.ToBool(page.FetchOwner) {
@@ -692,7 +687,7 @@ func (s *s3) listObjectVersions(w http.ResponseWriter, r *http.Request, access *
 		return err
 	}
 
-	versions, err := s.backend.ListObjectVersions(r.Context(), bucket, prefix, page)
+	versions, err := s.backend.ListObjectVersions(r.Context(), access.bucketID, prefix, page)
 	if err != nil {
 		return err
 	}
@@ -876,14 +871,13 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, access *bucketAcc
 		return fmt.Errorf("a retention requires Content-MD5 or a checksum: %w", s3errs.ErrInvalidRequest)
 	}
 
-	res, err := s.backend.PutObject(r.Context(), bucket, object, r.Body, PutObjectOptions{
+	res, err := s.backend.PutObject(r.Context(), access.bucketID, object, r.Body, PutObjectOptions{
 		ContentLength: r.ContentLength,
 		ContentMD5:    contentMD5,
 		ContentSHA256: contentSHA256,
 		Checksum:      checksum,
 		Meta:          meta,
 		Preconditions: requestPreconditions(r.Header),
-		BucketOwner:   access.owner.ID,
 		ObjectLock:    lock,
 	})
 	if err != nil {
@@ -1452,7 +1446,7 @@ func (s *s3) setLifecycleExpirationHeader(w http.ResponseWriter, r *http.Request
 	if err := access.assertBucketAllowed(actionGetLifecycleConfiguration); err != nil {
 		return
 	}
-	config, err := s.backend.GetBucketLifecycleConfiguration(r.Context(), access.bucket)
+	config, err := s.backend.GetBucketLifecycleConfiguration(r.Context(), access.bucketID)
 	if err != nil {
 		return
 	}

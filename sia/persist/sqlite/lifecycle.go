@@ -14,14 +14,11 @@ import (
 )
 
 // PutBucketLifecycleConfiguration stores the serialized lifecycle configuration
-// for a bucket, replacing any existing configuration. owner is checked by
-// [assertBucketOwner].
-func (s *Store) PutBucketLifecycleConfiguration(bucket, owner, config string) error {
+// for a bucket, replacing any existing configuration.
+func (s *Store) PutBucketLifecycleConfiguration(bucket s3.BucketID, config string) error {
 	return s.transaction(func(tx *txn) error {
-		bid, err := bucketID(tx, bucket)
+		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
-			return err
-		} else if err := assertBucketOwner(tx, bid, owner); err != nil {
 			return err
 		}
 		_, err = tx.Exec(`
@@ -36,9 +33,9 @@ func (s *Store) PutBucketLifecycleConfiguration(bucket, owner, config string) er
 
 // GetBucketLifecycleConfiguration returns the serialized lifecycle
 // configuration for a bucket, or ErrNoSuchLifecycleConfiguration if none is set.
-func (s *Store) GetBucketLifecycleConfiguration(bucket string) (config string, err error) {
+func (s *Store) GetBucketLifecycleConfiguration(bucket s3.BucketID) (config string, err error) {
 	err = s.transaction(func(tx *txn) error {
-		bid, err := bucketID(tx, bucket)
+		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
@@ -53,9 +50,9 @@ func (s *Store) GetBucketLifecycleConfiguration(bucket string) (config string, e
 
 // DeleteBucketLifecycleConfiguration removes the lifecycle configuration for a
 // bucket. It is not an error if no configuration exists.
-func (s *Store) DeleteBucketLifecycleConfiguration(bucket string) error {
+func (s *Store) DeleteBucketLifecycleConfiguration(bucket s3.BucketID) error {
 	return s.transaction(func(tx *txn) error {
-		bid, err := bucketID(tx, bucket)
+		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
@@ -71,7 +68,7 @@ func (s *Store) AllBucketLifecycleConfigurations() (configs []sia.BucketLifecycl
 	err = s.transaction(func(tx *txn) error {
 		configs = nil
 		rows, err := tx.Query(`
-			SELECT buckets.name, blc.configuration
+			SELECT buckets.id, buckets.name, blc.configuration
 			FROM bucket_lifecycle_configurations blc
 			JOIN buckets ON buckets.id = blc.bucket_id
 		`)
@@ -81,7 +78,7 @@ func (s *Store) AllBucketLifecycleConfigurations() (configs []sia.BucketLifecycl
 		defer rows.Close()
 		for rows.Next() {
 			var c sia.BucketLifecycleConfiguration
-			if err := rows.Scan(&c.Bucket, &c.Configuration); err != nil {
+			if err := rows.Scan(&c.BucketID, &c.Bucket, &c.Configuration); err != nil {
 				return err
 			}
 			configs = append(configs, c)
@@ -92,14 +89,14 @@ func (s *Store) AllBucketLifecycleConfigurations() (configs []sia.BucketLifecycl
 }
 
 // AbortMultipartUploads deletes up to limit incomplete multipart uploads in the
-// named bucket that match prefix and were initiated at or before the cutoff. It
+// bucket that match prefix and were initiated at or before the cutoff. It
 // returns the removed uploads and the on-disk size of their parts so the caller
 // can clean up the upload directories. It performs no ownership checks.
-func (s *Store) AbortMultipartUploads(bucket string, prefix string, before time.Time, limit int) (aborted []sia.AbortedUpload, err error) {
+func (s *Store) AbortMultipartUploads(bucket s3.BucketID, prefix string, before time.Time, limit int) (aborted []sia.AbortedUpload, err error) {
 	err = s.transaction(func(tx *txn) error {
 		aborted = nil
 
-		bid, err := bucketID(tx, bucket)
+		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
@@ -160,7 +157,7 @@ func (s *Store) AbortMultipartUploads(bucket string, prefix string, before time.
 // versioning-aware delete (see [deleteCurrentObject]) to each.
 // NoncurrentVersionExpiration is not supported. Returns the number of objects
 // expired; performs no ownership checks.
-func (s *Store) ExpireObjects(bucket string, prefix string, before time.Time, limit int) (deleted int, orphans []objects.OrphanedFile, err error) {
+func (s *Store) ExpireObjects(bucket s3.BucketID, prefix string, before time.Time, limit int) (deleted int, orphans []objects.OrphanedFile, err error) {
 	err = s.transaction(func(tx *txn) error {
 		deleted = 0
 		orphans = nil

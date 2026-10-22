@@ -57,16 +57,13 @@ func (s *Store) DiskUsage() (usage uint64, err error) {
 // ("" is the null version); otherwise an enabled bucket inserts a delete
 // marker, a suspended bucket replaces the null version with a null delete
 // marker, and an unversioned bucket deletes outright. A removed object's
-// filename is returned for cleanup if no longer referenced. owner is checked by
-// [assertBucketOwner].
-func (s *Store) DeleteObject(bucket, owner string, objectID s3.ObjectID, bypass bool) (versionID string, isDeleteMarker bool, orphan objects.OrphanedFile, _ error) {
+// filename is returned for cleanup if no longer referenced.
+func (s *Store) DeleteObject(bucket s3.BucketID, objectID s3.ObjectID, bypass bool) (versionID string, isDeleteMarker bool, orphan objects.OrphanedFile, _ error) {
 	err := s.transaction(func(tx *txn) error {
 		versionID, isDeleteMarker, orphan = "", false, objects.OrphanedFile{} // reset per attempt
 
 		bid, status, err := bucketIDAndVersioning(tx, bucket)
 		if err != nil {
-			return err
-		} else if err := assertBucketOwner(tx, bid, owner); err != nil {
 			return err
 		}
 
@@ -176,7 +173,7 @@ func checkWritePreconditions(tx *txn, bid int64, name string, p s3.ObjectPrecond
 // GetObject retrieves an object. An unspecified version returns the current
 // version (ErrNoSuchKey if the key has no versions); a specified version returns
 // that version (ErrNoSuchVersion if absent). The result may be a delete marker.
-func (s *Store) GetObject(bucket, name string, version s3.VersionRequest, partNumber *int32) (*objects.Object, error) {
+func (s *Store) GetObject(bucket s3.BucketID, name string, version s3.VersionRequest, partNumber *int32) (*objects.Object, error) {
 	var obj objects.Object
 	err := s.transaction(func(tx *txn) error {
 		bid, status, err := bucketIDAndVersioning(tx, bucket)
@@ -292,14 +289,11 @@ func attachSiaObject(tx *txn, obj *objects.Object, objectID sql.Null[sqlHash256]
 // version). An enabled bucket creates a new version; otherwise the null version
 // is overwritten, orphaning any prior object ID or pending file that is no
 // longer referenced (the latter returned so the caller can remove it from disk).
-func (s *Store) PutObject(bucket, name string, opts objects.PutOptions) (versionID string, orphan objects.OrphanedFile, _ error) {
+func (s *Store) PutObject(bucket s3.BucketID, name string, opts objects.PutOptions) (versionID string, orphan objects.OrphanedFile, _ error) {
 	err := s.transaction(func(tx *txn) error {
 		versionID, orphan = "", objects.OrphanedFile{} // reset per attempt
 		bid, status, err := bucketIDAndVersioning(tx, bucket)
 		if err != nil {
-			return err
-		}
-		if err := assertBucketOwner(tx, bid, opts.BucketOwner); err != nil {
 			return err
 		}
 		if err := checkWritePreconditions(tx, bid, name, opts.Preconditions); err != nil {
@@ -326,9 +320,9 @@ func (s *Store) PutObject(bucket, name string, opts objects.PutOptions) (version
 // seen. Returns ErrObjectNotFound if no pending object exists for the bucket
 // and name or ErrObjectModified if the stored content MD5 does not match the
 // provided contentMD5.
-func (s *Store) MarkObjectUploaded(bucket, name, versionID string, contentMD5 [16]byte, sealed sdk.SealedObject, pinBefore time.Time) error {
+func (s *Store) MarkObjectUploaded(bucket s3.BucketID, name, versionID string, contentMD5 [16]byte, sealed sdk.SealedObject, pinBefore time.Time) error {
 	return s.transaction(func(tx *txn) error {
-		bid, err := bucketID(tx, bucket)
+		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
@@ -649,7 +643,7 @@ func (s *Store) UpdateSiaObjects(siaObjects []objects.SiaObject) (updated int64,
 // destination within a single transaction, applying opts.Meta per opts.Replace.
 // The result carries the wire-encoded version IDs of the new copy and the
 // source copied; an orphaned pending file is returned for the caller to remove.
-func (s *Store) CopyObject(srcBucket, srcName string, srcVersion s3.VersionRequest, dstBucket, dstName string, opts s3.CopyObjectOptions) (_ *s3.CopyObjectResult, orphan objects.OrphanedFile, err error) {
+func (s *Store) CopyObject(srcBucket s3.BucketID, srcName string, srcVersion s3.VersionRequest, dstBucket s3.BucketID, dstName string, opts s3.CopyObjectOptions) (_ *s3.CopyObjectResult, orphan objects.OrphanedFile, err error) {
 	var obj objects.Object
 	var versionID, srcVersionWire string
 	err = s.transaction(func(tx *txn) error {
@@ -760,11 +754,11 @@ func (s *Store) CopyObject(srcBucket, srcName string, srcVersion s3.VersionReque
 
 // ObjectPartsByName returns the parts for a completed multipart object. It is
 // used by the upload loop and when reading completed multipart objects.
-func (s *Store) ObjectPartsByName(bucket, name, versionID string) ([]objects.Part, error) {
+func (s *Store) ObjectPartsByName(bucket s3.BucketID, name, versionID string) ([]objects.Part, error) {
 	var parts []objects.Part
 	err := s.transaction(func(tx *txn) error {
 		parts = parts[:0] // reuse same slice if transaction retries
-		bid, err := bucketID(tx, bucket)
+		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
@@ -892,7 +886,7 @@ func (s *Store) ObjectsForUpload() ([]objects.ObjectForUpload, error) {
 	if err := s.transaction(func(tx *txn) error {
 		objs = objs[:0] // reuse same slice if transaction retries
 		rows, err := tx.Query(`
-			SELECT b.name, o.name, o.version_id, o.filename, o.content_md5, o.size, o.parts_count > 0 AS has_parts, o.updated_at
+			SELECT b.id, b.name, o.name, o.version_id, o.filename, o.content_md5, o.size, o.parts_count > 0 AS has_parts, o.updated_at
 			FROM objects o
 			JOIN buckets b ON b.id = o.bucket_id
 			WHERE o.filename IS NOT NULL AND o.sia_object_id IS NULL
@@ -905,7 +899,7 @@ func (s *Store) ObjectsForUpload() ([]objects.ObjectForUpload, error) {
 
 		for rows.Next() {
 			var obj objects.ObjectForUpload
-			if err := rows.Scan(&obj.Bucket, &obj.Name, &obj.VersionID, &obj.Filename, (*sqlMD5)(&obj.ContentMD5), &obj.Length, &obj.Multipart, (*sqlTime)(&obj.LastModified)); err != nil {
+			if err := rows.Scan(&obj.BucketID, &obj.Bucket, &obj.Name, &obj.VersionID, &obj.Filename, (*sqlMD5)(&obj.ContentMD5), &obj.Length, &obj.Multipart, (*sqlTime)(&obj.LastModified)); err != nil {
 				return err
 			}
 			objs = append(objs, obj)
@@ -1144,7 +1138,7 @@ WHERE o.bucket_id = ?
 
 // ListObjects lists objects in the specified bucket, filtered by prefix and
 // pagination settings.
-func (s *Store) ListObjects(bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (result *s3.ObjectsListResult, err error) {
+func (s *Store) ListObjects(bucket s3.BucketID, prefix s3.Prefix, page s3.ListObjectsPage) (result *s3.ObjectsListResult, err error) {
 	result = s3.NewObjectsListResult(page.MaxKeys)
 
 	// adjust marker if it falls inside a common prefix
@@ -1160,7 +1154,7 @@ func (s *Store) ListObjects(bucket string, prefix s3.Prefix, page s3.ListObjects
 	err = s.transaction(func(tx *txn) error {
 		*result = *s3.NewObjectsListResult(page.MaxKeys) // reset per transaction attempt
 
-		bid, err := bucketID(tx, bucket)
+		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
 			return fmt.Errorf("failed to get bucket ID: %w", err)
 		}
@@ -1319,14 +1313,14 @@ func listVersionPage(tx *txn, bid int64, prefix s3.Prefix, m versionMarker, limi
 // objects in the bucket, ordered by key ascending then by version creation
 // order descending (newest first), applying prefix, delimiter and the
 // (key-marker, version-id-marker) cursor.
-func (s *Store) ListObjectVersions(bucket string, prefix s3.Prefix, page s3.ListObjectVersionsPage) (*s3.ObjectVersionsListResult, error) {
+func (s *Store) ListObjectVersions(bucket s3.BucketID, prefix s3.Prefix, page s3.ListObjectVersionsPage) (*s3.ObjectVersionsListResult, error) {
 	result := s3.NewObjectVersionsListResult(page.MaxKeys)
 
 	const maxRowsPerQuery = 100
 	err := s.transaction(func(tx *txn) error {
 		*result = *s3.NewObjectVersionsListResult(page.MaxKeys) // reset per attempt
 
-		bid, err := bucketID(tx, bucket)
+		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
 			return err
 		}

@@ -12,9 +12,9 @@ func (s *Sia) CreateBucket(ctx context.Context, accessKeyID, name string, opts s
 	return s.store.CreateBucket(accessKeyID, name, opts.ObjectLockEnabled)
 }
 
-// DeleteBucket deletes the bucket with the given name.
-func (s *Sia) DeleteBucket(ctx context.Context, name string) error {
-	return s.store.DeleteBucket(name)
+// DeleteBucket deletes the bucket.
+func (s *Sia) DeleteBucket(ctx context.Context, bucket s3.BucketID) error {
+	return s.store.DeleteBucket(bucket)
 }
 
 // ListBuckets lists all available buckets for the user identified by the
@@ -23,27 +23,28 @@ func (s *Sia) ListBuckets(ctx context.Context, accessKeyID string) ([]s3.BucketI
 	return s.store.ListBuckets(accessKeyID)
 }
 
-// BucketAccessInfo returns the bucket owner and stored policy document.
-func (s *Sia) BucketAccessInfo(ctx context.Context, bucket string) (s3.BucketAccessInfo, error) {
-	return s.store.BucketAccessInfo(bucket)
+// BucketAccessInfo returns the ID, owner and stored policy document of the
+// bucket with the given name.
+func (s *Sia) BucketAccessInfo(ctx context.Context, name string) (s3.BucketAccessInfo, error) {
+	return s.store.BucketAccessInfo(name)
 }
 
 // PutBucketPolicy sets the policy of the bucket, replacing any existing one.
-func (s *Sia) PutBucketPolicy(ctx context.Context, bucket, owner, document string) error {
-	return s.store.PutBucketPolicy(bucket, owner, document)
+func (s *Sia) PutBucketPolicy(ctx context.Context, bucket s3.BucketID, document string) error {
+	return s.store.PutBucketPolicy(bucket, document)
 }
 
 // DeleteBucketPolicy removes the policy of the bucket.
-func (s *Sia) DeleteBucketPolicy(ctx context.Context, bucket string) error {
+func (s *Sia) DeleteBucketPolicy(ctx context.Context, bucket s3.BucketID) error {
 	return s.store.DeleteBucketPolicy(bucket)
 }
 
 // PutBucketVersioning sets the versioning state of the bucket.
-func (s *Sia) PutBucketVersioning(ctx context.Context, bucket, owner, status string) error {
-	return s.store.PutBucketVersioning(bucket, owner, status)
+func (s *Sia) PutBucketVersioning(ctx context.Context, bucket s3.BucketID, status string) error {
+	return s.store.PutBucketVersioning(bucket, status)
 }
 
 // GetBucketVersioning returns the versioning state of the bucket.
-func (s *Sia) GetBucketVersioning(ctx context.Context, bucket string) (string, error) {
+func (s *Sia) GetBucketVersioning(ctx context.Context, bucket s3.BucketID) (string, error) {
 	return s.store.GetBucketVersioning(bucket)
 }

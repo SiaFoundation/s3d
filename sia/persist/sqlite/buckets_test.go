@@ -20,17 +20,19 @@ func TestSuspendedDeletePreconditionAgainstCurrentVersion(t *testing.T) {
 	store := initTestDB(t, zaptest.NewLogger(t))
 	if err := store.CreateBucket(testAccessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
-	} else if err := store.PutBucketVersioning(bucket, "", s3.VersioningStatusEnabled); err != nil {
+	}
+	bid := store.bucketID(bucket)
+	if err := store.PutBucketVersioning(bid, s3.VersioningStatusEnabled); err != nil {
 		t.Fatal(err)
 	}
 
 	// a real (non-null) current version with a known ETag; no null version exists
 	md5 := frand.Entropy128()
-	if _, _, err := store.PutObject(bucket, "key", objects.PutOptions{ContentMD5: md5}); err != nil {
+	if _, _, err := store.PutObject(bid, "key", objects.PutOptions{ContentMD5: md5}); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := store.PutBucketVersioning(bucket, "", s3.VersioningStatusSuspended); err != nil {
+	if err := store.PutBucketVersioning(bid, s3.VersioningStatusSuspended); err != nil {
 		t.Fatal(err)
 	}
 
@@ -38,13 +40,13 @@ func TestSuspendedDeletePreconditionAgainstCurrentVersion(t *testing.T) {
 	// checked against the current version.
 	wrongMD5 := frand.Entropy128()
 	wrong := s3.FormatETag(wrongMD5[:], 0)
-	if _, _, _, err := store.DeleteObject(bucket, "", s3.ObjectID{Key: "key", ETag: &wrong}, false); !errors.Is(err, s3errs.ErrPreconditionFailed) {
+	if _, _, _, err := store.DeleteObject(bid, s3.ObjectID{Key: "key", ETag: &wrong}, false); !errors.Is(err, s3errs.ErrPreconditionFailed) {
 		t.Fatalf("expected ErrPreconditionFailed, got %v", err)
 	}
 
 	// the matching ETag succeeds and inserts a null delete marker
 	correct := s3.FormatETag(md5[:], 0)
-	versionID, isDeleteMarker, _, err := store.DeleteObject(bucket, "", s3.ObjectID{Key: "key", ETag: &correct}, false)
+	versionID, isDeleteMarker, _, err := store.DeleteObject(bid, s3.ObjectID{Key: "key", ETag: &correct}, false)
 	if err != nil {
 		t.Fatal(err)
 	} else if !isDeleteMarker || versionID != s3.Null {
@@ -60,13 +62,14 @@ func TestBucketAccessInfo(t *testing.T) {
 	if err := store.CreateBucket(testAccessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
+	bid := store.bucketID(bucket)
 	_, owner, err := store.LoadSecret(testAccessKeyID)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	const document = `{"Version":"2012-10-17","Statement":[]}`
-	if err := store.PutBucketPolicy(bucket, "", document); err != nil {
+	if err := store.PutBucketPolicy(bid, document); err != nil {
 		t.Fatal(err)
 	}
 	info, err := store.BucketAccessInfo(bucket)
@@ -80,34 +83,24 @@ func TestBucketAccessInfo(t *testing.T) {
 	}
 }
 
-// TestPutObjectBucketOwner checks that a write authorized against a bucket is
-// not stored in a bucket of the same name recreated by another user.
-func TestPutObjectBucketOwner(t *testing.T) {
+// TestRecreatedBucketID checks that a recreated bucket gets a new ID, so a
+// write authorized against the old bucket is not stored in the new one.
+func TestRecreatedBucketID(t *testing.T) {
 	const bucket = "test-bucket"
 	store := initTestDB(t, zaptest.NewLogger(t))
 	if err := store.CreateBucket(testAccessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
-	} else if err := store.CreateUser("bob"); err != nil {
-		t.Fatal(err)
-	} else if err := store.CreateAccessKey("bob", "BOB_KEY", "secret"); err != nil {
-		t.Fatal(err)
 	}
-	_, owner, err := store.LoadSecret(testAccessKeyID)
-	if err != nil {
+	old := store.bucketID(bucket)
+	if err := store.DeleteBucket(old); err != nil {
+		t.Fatal(err)
+	} else if err := store.CreateBucket(testAccessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, _, err := store.PutObject(bucket, "key", objects.PutOptions{BucketOwner: owner}); err != nil {
-		t.Fatal(err)
-	} else if _, _, _, err := store.DeleteObject(bucket, "", s3.ObjectID{Key: "key"}, false); err != nil {
-		t.Fatal(err)
-	} else if err := store.DeleteBucket(bucket); err != nil {
-		t.Fatal(err)
-	} else if err := store.CreateBucket("BOB_KEY", bucket, false); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, _, err := store.PutObject(bucket, "key", objects.PutOptions{BucketOwner: owner}); !errors.Is(err, s3errs.ErrNoSuchBucket) {
+	if store.bucketID(bucket) == old {
+		t.Fatal("expected a new bucket ID")
+	} else if _, _, err := store.PutObject(old, "key", objects.PutOptions{}); !errors.Is(err, s3errs.ErrNoSuchBucket) {
 		t.Fatalf("expected %v, got %v", s3errs.ErrNoSuchBucket, err)
 	}
 }

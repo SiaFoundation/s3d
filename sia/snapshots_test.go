@@ -393,7 +393,7 @@ func TestStuckPinningSnapshot(t *testing.T) {
 	if err := backend.PinObjects(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := store.DeleteObject(bucket, "", s3.ObjectID{Key: "a"}, false); err != nil {
+	if _, _, _, err := store.DeleteObject(bucketID(t, store, bucket), s3.ObjectID{Key: "a"}, false); err != nil {
 		t.Fatal(err)
 	}
 

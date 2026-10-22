@@ -160,7 +160,7 @@ func (s *Sia) lockUpload(path string) func() {
 	}
 }
 
-func (s *Sia) openUpload(bucket, name, versionID string, filename *string, multipart bool, r *s3.ObjectRange) (_ io.ReadCloser, err error) {
+func (s *Sia) openUpload(bucket s3.BucketID, name, versionID string, filename *string, multipart bool, r *s3.ObjectRange) (_ io.ReadCloser, err error) {
 	if filename == nil {
 		return nil, os.ErrNotExist
 	}
@@ -246,7 +246,7 @@ func (s *Sia) cleanupOrphanFile(o objects.OrphanedFile) {
 // CopyObject copies an object from the source bucket and object key to the
 // destination bucket and object key. opts.Meta contains any metadata that
 // should be merged into the copied object except for the x-amz-acl header.
-func (s *Sia) CopyObject(ctx context.Context, srcBucket, srcObject string, srcVersion s3.VersionRequest, dstBucket, dstObject string, opts s3.CopyObjectOptions) (*s3.CopyObjectResult, error) {
+func (s *Sia) CopyObject(ctx context.Context, srcBucket s3.BucketID, srcObject string, srcVersion s3.VersionRequest, dstBucket s3.BucketID, dstObject string, opts s3.CopyObjectOptions) (*s3.CopyObjectResult, error) {
 	result, orphan, err := s.store.CopyObject(srcBucket, srcObject, srcVersion, dstBucket, dstObject, opts)
 	if err != nil {
 		return nil, err
@@ -257,8 +257,8 @@ func (s *Sia) CopyObject(ctx context.Context, srcBucket, srcObject string, srcVe
 
 // DeleteObject deletes the object with the given key from the specified
 // bucket.
-func (s *Sia) DeleteObject(ctx context.Context, bucket string, object s3.ObjectID, opts s3.DeleteObjectOptions) (*s3.DeleteObjectResult, error) {
-	versionID, isDeleteMarker, orphan, err := s.store.DeleteObject(bucket, "", object, opts.BypassGovernanceRetention)
+func (s *Sia) DeleteObject(ctx context.Context, bucket s3.BucketID, object s3.ObjectID, opts s3.DeleteObjectOptions) (*s3.DeleteObjectResult, error) {
+	versionID, isDeleteMarker, orphan, err := s.store.DeleteObject(bucket, object, opts.BypassGovernanceRetention)
 	if err != nil {
 		return nil, err
 	}
@@ -271,11 +271,11 @@ func (s *Sia) DeleteObject(ctx context.Context, bucket string, object s3.ObjectI
 }
 
 // DeleteObjects deletes multiple objects from the specified bucket.
-func (s *Sia) DeleteObjects(ctx context.Context, bucket, owner string, objects []s3.ObjectID, opts s3.DeleteObjectOptions) (*s3.ObjectsDeleteResult, error) {
+func (s *Sia) DeleteObjects(ctx context.Context, bucket s3.BucketID, objects []s3.ObjectID, opts s3.DeleteObjectOptions) (*s3.ObjectsDeleteResult, error) {
 	var result s3.ObjectsDeleteResult
 
 	for _, obj := range objects {
-		versionID, isDeleteMarker, orphan, err := s.store.DeleteObject(bucket, owner, obj, opts.BypassGovernanceRetention)
+		versionID, isDeleteMarker, orphan, err := s.store.DeleteObject(bucket, obj, opts.BypassGovernanceRetention)
 		if err == nil {
 			s.cleanupOrphanFile(orphan)
 		}
@@ -314,17 +314,17 @@ func (s *Sia) DeleteObjects(ctx context.Context, bucket, owner string, objects [
 // bucket. The provided range is either nil if no range was requested, or
 // contains the requested byte range. version selects a specific version, or
 // the current version when unspecified.
-func (s *Sia) GetObject(ctx context.Context, bucket, object string, version s3.VersionRequest, rnge *s3.ObjectRangeRequest, partNumber *int32) (*s3.Object, error) {
+func (s *Sia) GetObject(ctx context.Context, bucket s3.BucketID, object string, version s3.VersionRequest, rnge *s3.ObjectRangeRequest, partNumber *int32) (*s3.Object, error) {
 	return s.headOrGetObject(ctx, bucket, object, version, rnge, partNumber, false)
 }
 
 // HeadObject is like GetObject but only retrieves the metadata of the
 // object and returns an empty body.
-func (s *Sia) HeadObject(ctx context.Context, bucket, object string, version s3.VersionRequest, rnge *s3.ObjectRangeRequest, partNumber *int32) (*s3.Object, error) {
+func (s *Sia) HeadObject(ctx context.Context, bucket s3.BucketID, object string, version s3.VersionRequest, rnge *s3.ObjectRangeRequest, partNumber *int32) (*s3.Object, error) {
 	return s.headOrGetObject(ctx, bucket, object, version, rnge, partNumber, true)
 }
 
-func (s *Sia) headOrGetObject(ctx context.Context, bucket, object string, version s3.VersionRequest, requestedRange *s3.ObjectRangeRequest, partNumber *int32, head bool) (*s3.Object, error) {
+func (s *Sia) headOrGetObject(ctx context.Context, bucket s3.BucketID, object string, version s3.VersionRequest, requestedRange *s3.ObjectRangeRequest, partNumber *int32, head bool) (*s3.Object, error) {
 	obj, err := s.store.GetObject(bucket, object, version, partNumber)
 	if err != nil {
 		return nil, err
@@ -417,7 +417,7 @@ func (s *Sia) headOrGetObject(ctx context.Context, bucket, object string, versio
 // ListObjects lists objects in the specified bucket, using the prefix to
 // limit the contents of the bucket and sort the results into the Contents and
 // CommonPrefixes fields of the returned ObjectsListResult.
-func (s *Sia) ListObjects(ctx context.Context, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error) {
+func (s *Sia) ListObjects(ctx context.Context, bucket s3.BucketID, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error) {
 	result, err := s.store.ListObjects(bucket, prefix, page)
 	if err != nil {
 		return nil, err
@@ -427,7 +427,7 @@ func (s *Sia) ListObjects(ctx context.Context, bucket string, prefix s3.Prefix, 
 
 // ListObjectVersions lists all versions (including delete markers) of the
 // objects in the specified bucket.
-func (s *Sia) ListObjectVersions(ctx context.Context, bucket string, prefix s3.Prefix, page s3.ListObjectVersionsPage) (*s3.ObjectVersionsListResult, error) {
+func (s *Sia) ListObjectVersions(ctx context.Context, bucket s3.BucketID, prefix s3.Prefix, page s3.ListObjectVersionsPage) (*s3.ObjectVersionsListResult, error) {
 	result, err := s.store.ListObjectVersions(bucket, prefix, page)
 	if err != nil {
 		return nil, err
@@ -439,7 +439,7 @@ func (s *Sia) ListObjectVersions(ctx context.Context, bucket string, prefix s3.P
 // checkWritePreconditions evaluates the preconditions against the current
 // version of the object a write would replace. It runs outside the write's
 // transaction, so it is a fail-fast check only; the store re-checks atomically.
-func (s *Sia) checkWritePreconditions(bucket, object string, p s3.ObjectPreconditions) error {
+func (s *Sia) checkWritePreconditions(bucket s3.BucketID, object string, p s3.ObjectPreconditions) error {
 	if !p.HasWritePreconditions() {
 		return nil
 	}
@@ -454,7 +454,7 @@ func (s *Sia) checkWritePreconditions(bucket, object string, p s3.ObjectPrecondi
 }
 
 // PutObject puts an object with the given key into the specified bucket.
-func (s *Sia) PutObject(ctx context.Context, bucket, object string, r io.Reader, opts s3.PutObjectOptions) (_ *s3.PutObjectResult, err error) {
+func (s *Sia) PutObject(ctx context.Context, bucket s3.BucketID, object string, r io.Reader, opts s3.PutObjectOptions) (_ *s3.PutObjectResult, err error) {
 	// fail fast if a precondition already cannot hold, so a doomed write does
 	// not stream its whole body first
 	if err := s.checkWritePreconditions(bucket, object, opts.Preconditions); err != nil {
@@ -552,7 +552,6 @@ func (s *Sia) PutObject(ctx context.Context, bucket, object string, r io.Reader,
 		Length:        size,
 		FileName:      fileName,
 		Preconditions: opts.Preconditions,
-		BucketOwner:   opts.BucketOwner,
 		ObjectLock:    opts.ObjectLock,
 	})
 	if err != nil {
