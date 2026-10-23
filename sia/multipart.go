@@ -273,7 +273,7 @@ func (s *Sia) UploadPartCopy(ctx context.Context, accessKeyID, srcBucket, srcObj
 		if err != nil {
 			return nil, fmt.Errorf("failed to unseal object: %w", err)
 		}
-		src, err = s.sdk.Download(pinnedObj, &objRange)
+		src, err = s.sdk.Download(ctx, pinnedObj, &objRange)
 		if err != nil {
 			return nil, fmt.Errorf("failed to download source object: %w", err)
 		}

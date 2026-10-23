@@ -417,7 +417,7 @@ func (s *Sia) headOrGetObject(ctx context.Context, accessKeyID *string, bucket, 
 	}
 
 	// otherwise, we download the body
-	body, err := s.sdk.Download(siaObj, resp.Range)
+	body, err := s.sdk.Download(ctx, siaObj, resp.Range)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download object: %w", err)
 	}

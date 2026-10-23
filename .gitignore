@@ -4,4 +4,6 @@ bin/
 s3-tests/
 CLAUDE.md
 GeoLite2-City.mmdb
+go.work
+go.work.sum
 /s3d

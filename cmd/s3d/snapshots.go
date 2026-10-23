@@ -212,7 +212,11 @@ func openRestoreSDK(ctx context.Context) *sia.IndexdSDK {
 	checkFatalError("failed to read the app key", err)
 
 	if found {
-		sdkClient, err := newSDKBuilder(indexerURL).SDK(appKey)
+		builder, err := newSDKBuilder(indexerURL)
+		checkFatalError("failed to create SDK builder", err)
+		defer builder.Close()
+
+		sdkClient, err := builder.Connect(ctx, appKey)
 		if err == nil {
 			return sia.NewSDK(sdkClient)
 		} else if !errors.Is(err, sdk.ErrUnauthorized) {
