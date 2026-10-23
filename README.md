@@ -262,7 +262,8 @@ snapshots it finds there.
 
 A restore brings back the database as it was when the snapshot was taken.
 Objects written after that are not recovered. Objects still buffered on disk at
-the time had not reached Sia, so they stay listed but cannot be read.
+the time had not reached Sia and are not part of the snapshot, nor are
+multipart uploads still in progress.
 
 ## HTTPS
 

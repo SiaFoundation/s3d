@@ -984,7 +984,11 @@ func deleteObject(tx *txn, bid int64, name string, version string, bypass bool) 
 	if err := checkObjectLock(tx, bid, name, version, bypass); err != nil {
 		return deletedRow{}, false, err
 	}
+	return deleteObjectRow(tx, bid, name, version)
+}
 
+// deleteObjectRow removes the version regardless of its object lock.
+func deleteObjectRow(tx *txn, bid int64, name string, version string) (row deletedRow, found bool, _ error) {
 	var id sql.Null[sqlHash256]
 	var wasLatest bool
 	err := tx.QueryRow(`
