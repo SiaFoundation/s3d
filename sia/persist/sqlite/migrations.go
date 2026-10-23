@@ -503,10 +503,50 @@ ALTER TABLE multipart_uploads ADD COLUMN object_lock_retain_until INTEGER CHECK 
 ALTER TABLE multipart_uploads ADD COLUMN object_lock_legal_hold TEXT NOT NULL DEFAULT '' CHECK (object_lock_legal_hold IN ('', 'ON', 'OFF'));`)
 		return err
 	},
-	// drop public_actions; access is now derived from the stored policy
-	// document on every request.
+	// rebuild buckets to drop public_actions, since access is now derived from
+	// the stored policy document on every request, and to make id
+	// AUTOINCREMENT so a deleted bucket's ID is never reused.
 	func(tx *txn, _ *zap.Logger) error {
-		_, err := tx.Exec(`ALTER TABLE buckets DROP COLUMN public_actions`)
+		_, err := tx.Exec(`
+-- dropping buckets cascades into bucket_lifecycle_configurations despite
+-- deferred foreign keys, so the configurations are backed up and dropped
+-- first. The deferred violations from objects.bucket_id and
+-- multipart_uploads.bucket_id only clear once the rows are inserted back into
+-- the renamed table
+CREATE TABLE bucket_lifecycle_configurations_backup AS SELECT bucket_id, configuration FROM bucket_lifecycle_configurations;
+DROP TABLE bucket_lifecycle_configurations;
+
+CREATE TABLE buckets_backup AS
+    SELECT id, created_at, name, user_id, versioning_status, policy, object_lock_enabled, default_retention_mode, default_retention_days, default_retention_years FROM buckets;
+CREATE TABLE buckets_new (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, -- a deleted bucket's ID is never reused
+    created_at INTEGER NOT NULL,
+    name TEXT NOT NULL UNIQUE,
+    user_id INTEGER NOT NULL,
+    versioning_status TEXT NOT NULL DEFAULT '' CHECK (versioning_status IN ('', 'Enabled', 'Suspended')),
+    policy TEXT NOT NULL DEFAULT '',
+    object_lock_enabled INTEGER NOT NULL DEFAULT FALSE CHECK (object_lock_enabled IN (FALSE, TRUE)) CHECK (object_lock_enabled = FALSE OR versioning_status = 'Enabled'),
+    default_retention_mode TEXT NOT NULL DEFAULT '' CHECK (default_retention_mode IN ('', 'GOVERNANCE', 'COMPLIANCE')),
+    default_retention_days INTEGER,
+    -- a default retention is a mode plus exactly one of days or years
+    default_retention_years INTEGER CHECK ((default_retention_mode = '' AND default_retention_days IS NULL AND default_retention_years IS NULL) OR (default_retention_mode != '' AND ((default_retention_days IS NOT NULL) != (default_retention_years IS NOT NULL)))),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+DROP TABLE buckets;
+ALTER TABLE buckets_new RENAME TO buckets;
+INSERT INTO buckets (id, created_at, name, user_id, versioning_status, policy, object_lock_enabled, default_retention_mode, default_retention_days, default_retention_years)
+    SELECT id, created_at, name, user_id, versioning_status, policy, object_lock_enabled, default_retention_mode, default_retention_days, default_retention_years FROM buckets_backup;
+DROP TABLE buckets_backup;
+CREATE INDEX buckets_user_id_idx ON buckets(user_id);
+
+CREATE TABLE bucket_lifecycle_configurations (
+    bucket_id INTEGER PRIMARY KEY,
+    configuration TEXT NOT NULL,
+    FOREIGN KEY (bucket_id) REFERENCES buckets(id) ON DELETE CASCADE
+);
+INSERT INTO bucket_lifecycle_configurations (bucket_id, configuration)
+    SELECT bucket_id, configuration FROM bucket_lifecycle_configurations_backup;
+DROP TABLE bucket_lifecycle_configurations_backup;`)
 		return err
 	},
 }

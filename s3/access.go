@@ -2,23 +2,16 @@ package s3
 
 import (
 	"errors"
-	"math"
 	"net/http"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3/auth"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"go.uber.org/zap"
-	"lukechampine.com/frand"
 )
 
 // BucketID identifies a bucket for its lifetime.
 type BucketID int64
-
-// NewBucketID returns a random, positive bucket ID.
-func NewBucketID() BucketID {
-	return BucketID(frand.Uint64n(math.MaxInt64)) + 1
-}
 
 // BucketAccessInfo is what the S3 API handler needs to authorize a request on
 // a bucket, as returned by [Backend.BucketAccessInfo].
