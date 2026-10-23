@@ -281,7 +281,7 @@ type Store interface {
 	DeleteBucketLifecycleConfiguration(bucket s3.BucketID) error
 	AllBucketLifecycleConfigurations() ([]BucketLifecycleConfiguration, error)
 	AbortMultipartUploads(bucket s3.BucketID, prefix string, before time.Time, limit int) ([]AbortedUpload, error)
-	ExpireObjects(bucket s3.BucketID, prefix string, before time.Time, limit int) (int, []objects.OrphanedFile, error)
+	ExpireObjects(bucket s3.BucketID, prefix string, sizeGreaterThan, sizeLessThan *int64, before time.Time, limit int) (int, []objects.OrphanedFile, error)
 
 	Backup(ctx context.Context, destPath string) error
 	DBVersion() int64

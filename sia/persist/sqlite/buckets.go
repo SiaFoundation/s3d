@@ -10,8 +10,7 @@ import (
 )
 
 // CreateBucket creates a new bucket owned by the user associated with the
-// given access key. objectLock also enables versioning. The bucket's ID is
-// random so that it is never reused.
+// given access key. objectLock also enables versioning.
 func (s *Store) CreateBucket(accessKeyID, name string, objectLock bool) error {
 	return s.transaction(func(tx *txn) error {
 		uid, err := userIDForAccessKey(tx, accessKeyID)
@@ -24,9 +23,9 @@ func (s *Store) CreateBucket(accessKeyID, name string, objectLock bool) error {
 			versioning = s3.VersioningStatusEnabled
 		}
 
-		res, err := tx.Exec(`INSERT INTO buckets (id, name, created_at, user_id, versioning_status, object_lock_enabled)
-			VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (name) DO NOTHING`,
-			s3.NewBucketID(), name, sqlTime(time.Now()), uid, versioning, objectLock)
+		res, err := tx.Exec(`INSERT INTO buckets (name, created_at, user_id, versioning_status, object_lock_enabled)
+			VALUES ($1, $2, $3, $4, $5) ON CONFLICT (name) DO NOTHING`,
+			name, sqlTime(time.Now()), uid, versioning, objectLock)
 		if err != nil {
 			return err
 		}
