@@ -470,10 +470,11 @@ func (s *s3) postObject(w http.ResponseWriter, r *http.Request, headerKeyID *str
 	log := s.logger.With(zap.String("bucket", bucket), zap.String("object", object))
 	log.Debug("post object")
 
-	res, err := s.backend.PutObject(r.Context(), accessKeyID, bucket, object, &postBody{
+	body := &postBody{
 		reader: file,
 		min:    policy.minSize,
-	}, PutObjectOptions{
+	}
+	res, err := s.backend.PutObject(r.Context(), accessKeyID, bucket, object, body, PutObjectOptions{
 		ContentLength:    -1,
 		MaxContentLength: maxSize,
 		ContentMD5:       contentMD5,
@@ -484,7 +485,7 @@ func (s *s3) postObject(w http.ResponseWriter, r *http.Request, headerKeyID *str
 		return err
 	}
 
-	s.setLifecycleExpirationHeader(r.Context(), w, accessKeyID, bucket, object, time.Now())
+	s.setLifecycleExpirationHeader(r.Context(), w, accessKeyID, bucket, object, body.read, time.Now())
 	if res.VersionID != "" {
 		w.Header().Set("x-amz-version-id", res.VersionID)
 	}

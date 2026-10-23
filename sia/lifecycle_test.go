@@ -2,6 +2,7 @@ package sia_test
 
 import (
 	"bytes"
+	"encoding/xml"
 	"errors"
 	"os"
 	"testing"
@@ -34,6 +35,17 @@ func TestApplyLifecycleRules(t *testing.T) {
 	put("data/keep")
 	// object expired by a Days rule once the rule's window has elapsed
 	put("days/obj")
+
+	// two objects under one prefix, separated only by size, so a rule bounding
+	// size must take the large one and leave the small one
+	putSized := func(object string, size int) {
+		t.Helper()
+		if _, err := backend.PutObject(ctx, testutil.AccessKeyID, bucket, object, bytes.NewReader(make([]byte, size)), s3.PutObjectOptions{ContentLength: int64(size)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	putSized("sized/small", 10)
+	putSized("sized/big", 100)
 
 	// incomplete multipart upload with an on-disk part, aborted once the
 	// rule's window has elapsed
@@ -68,6 +80,11 @@ func TestApplyLifecycleRules(t *testing.T) {
 				Filter:     &s3.LifecycleFilter{Prefix: aws.String("data/")},
 				Expiration: &s3.LifecycleExpiration{Date: "2020-01-01T00:00:00.000Z"},
 			},
+			{
+				Status:     s3.LifecycleStatusEnabled,
+				Filter:     &s3.LifecycleFilter{And: &s3.LifecycleAndOperator{Prefix: aws.String("sized/"), ObjectSizeGreaterThan: aws.Int64(50)}},
+				Expiration: &s3.LifecycleExpiration{Date: "2020-01-01T00:00:00.000Z"},
+			},
 		},
 	}
 	if err := backend.PutBucketLifecycleConfiguration(ctx, testutil.AccessKeyID, bucket, config); err != nil {
@@ -91,6 +108,17 @@ func TestApplyLifecycleRules(t *testing.T) {
 		t.Fatalf("expected fresh upload to survive, got %v", err)
 	}
 
+	// the rule survived the trip through the stored XML and took only the
+	// object above its lower bound
+	if _, err := backend.GetObject(ctx, &accessKeyID, bucket, "sized/big", s3.NoVersion(), nil, nil); !errors.Is(err, s3errs.ErrNoSuchKey) {
+		t.Fatalf("expected sized/big to be expired, got %v", err)
+	}
+	obj, err = backend.GetObject(ctx, &accessKeyID, bucket, "sized/small", s3.NoVersion(), nil, nil)
+	if err != nil {
+		t.Fatalf("expected sized/small to survive, got %v", err)
+	}
+	obj.Body.Close()
+
 	// applying the rules well past both windows must expire days/obj and
 	// abort the upload, but still skip the disabled rule
 	backend.ApplyLifecycleRules(ctx, time.Now().AddDate(0, 0, 31))
@@ -113,5 +141,54 @@ func TestApplyLifecycleRules(t *testing.T) {
 	uploadDir := backend.UploadDir(upload.UploadID)
 	if _, err := os.Stat(uploadDir); !os.IsNotExist(err) {
 		t.Fatalf("expected upload directory %q to be removed, got %v", uploadDir, err)
+	}
+}
+
+func TestApplyLifecycleRulesSkipsInvalidRule(t *testing.T) {
+	ctx := t.Context()
+	backend, store := testutil.NewBackend(t)
+
+	const bucket = "invalid-rule-bucket"
+	if err := backend.CreateBucket(ctx, testutil.AccessKeyID, bucket, s3.CreateBucketOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	upload, err := backend.CreateMultipartUpload(ctx, testutil.AccessKeyID, bucket, "uploads/u", s3.CreateMultipartUploadOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := backend.UploadPart(ctx, testutil.AccessKeyID, bucket, "uploads/u", upload.UploadID, bytes.NewReader([]byte("part")), s3.UploadPartOptions{PartNumber: 1, ContentLength: 4}); err != nil {
+		t.Fatal(err)
+	}
+
+	// the abort path cannot honor a size bound, so a rule carrying one is
+	// rejected on write. storing the document directly bypasses that check the
+	// way an older binary's configuration would.
+	config := s3.LifecycleConfiguration{
+		Rules: []s3.LifecycleRule{
+			{
+				ID:                             "invalid",
+				Status:                         s3.LifecycleStatusEnabled,
+				Filter:                         &s3.LifecycleFilter{And: &s3.LifecycleAndOperator{Prefix: aws.String("uploads/"), ObjectSizeGreaterThan: aws.Int64(50)}},
+				AbortIncompleteMultipartUpload: &s3.AbortIncompleteMultipartUpload{DaysAfterInitiation: 1},
+			},
+		},
+	}
+	if err := config.Validate(); err == nil {
+		t.Fatal("expected the rule to fail validation")
+	}
+	buf, err := xml.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutBucketLifecycleConfiguration(testutil.AccessKeyID, bucket, string(buf)); err != nil {
+		t.Fatal(err)
+	}
+
+	// well past the abort window, so only the skipped rule keeps the upload
+	backend.ApplyLifecycleRules(ctx, time.Now().AddDate(0, 0, 31))
+
+	if _, err := backend.ListParts(ctx, testutil.AccessKeyID, bucket, "uploads/u", upload.UploadID, s3.ListPartsPage{MaxParts: 10}); err != nil {
+		t.Fatalf("expected upload to survive an invalid rule, got %v", err)
 	}
 }
