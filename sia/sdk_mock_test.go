@@ -41,7 +41,6 @@ func mockSDK(t *testing.T) *sia.IndexdSDK {
 	t.Helper()
 
 	net := sdk.NewMockNetwork(mockHosts)
-	t.Cleanup(func() { net.Close() })
 
 	client, err := net.SDK(t.Context(), frand.Entropy256())
 	if err != nil {

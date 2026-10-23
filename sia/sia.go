@@ -868,7 +868,6 @@ func (s *Sia) syncBatch(ctx context.Context, cursor slabs.Cursor) (slabs.Cursor,
 		s.syncFailed("failed to fetch object events", zap.Error(err))
 		return cursor, 0, false
 	}
-	defer sdk.CloseObjects(events)
 
 	if len(events) == 0 {
 		// every published snapshot event is consumed so orphan processing
