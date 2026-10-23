@@ -23,10 +23,19 @@ var reservedObjectNames = regexp.MustCompile("^[a-zA-Z0-9-_.~/]+$")
 
 // KeyStore provides an interface for a secure key store.
 type KeyStore interface {
-	// LoadSecret loads the secret key for the given access key ID. If the
-	// access key wasn't found, the error s3errs.ErrInvalidAccessKeyID must be
-	// returned.
-	LoadSecret(ctx context.Context, accessKeyID string) (SecretAccessKey, error)
+	// LoadSecret loads the secret key for the given access key ID and the
+	// owner ID of the user it belongs to. If the access key wasn't found, the
+	// error s3errs.ErrInvalidAccessKeyID must be returned.
+	LoadSecret(ctx context.Context, accessKeyID string) (secret SecretAccessKey, userID string, err error)
+}
+
+// Caller is the identity that signed a request.
+type Caller struct {
+	// AccessKeyID is the access key the request was signed with.
+	AccessKeyID string
+	// UserID is the owner ID of the user the access key belongs to, as
+	// reported by the KeyStore. It is compared against a bucket owner's ID.
+	UserID string
 }
 
 // SecretAccessKey represents a secret access key. It is obtained from a
@@ -215,11 +224,11 @@ func sumHMAC(key []byte, data []byte) []byte {
 }
 
 type v4SignResult struct {
-	AccessKeyID string
-	SigningKey  []byte
-	Scope       string
-	Timestamp   string
-	SeedSig     string
+	Caller     Caller
+	SigningKey []byte
+	Scope      string
+	Timestamp  string
+	SeedSig    string
 }
 
 // v4Signature is the signature of a request and the signed inputs, taken from
@@ -243,7 +252,7 @@ func (s v4Signature) verify(req *http.Request, store KeyStore, region string, ma
 		return nil, malformed
 	}
 
-	secretKey, err := store.LoadSecret(req.Context(), s.Credential.AccessKeyID)
+	secretKey, userID, err := store.LoadSecret(req.Context(), s.Credential.AccessKeyID)
 	if err != nil {
 		return nil, err
 	}
@@ -268,11 +277,11 @@ func (s v4Signature) verify(req *http.Request, store KeyStore, region string, ma
 		return nil, s3errs.ErrSignatureDoesNotMatch
 	}
 	return &v4SignResult{
-		AccessKeyID: s.Credential.AccessKeyID,
-		SigningKey:  signingKey,
-		Scope:       scope,
-		Timestamp:   s.Date.Format(layoutISO8601),
-		SeedSig:     s.Signature,
+		Caller:     Caller{AccessKeyID: s.Credential.AccessKeyID, UserID: userID},
+		SigningKey: signingKey,
+		Scope:      scope,
+		Timestamp:  s.Date.Format(layoutISO8601),
+		SeedSig:    s.Signature,
 	}, nil
 }
 

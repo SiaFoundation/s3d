@@ -11,7 +11,7 @@ import (
 
 // CreateBucket creates a new bucket owned by the user associated with the
 // given access key. objectLock also enables versioning.
-func (s *Store) CreateBucket(accessKeyID, bucket string, objectLock bool) error {
+func (s *Store) CreateBucket(accessKeyID, name string, objectLock bool) error {
 	return s.transaction(func(tx *txn) error {
 		uid, err := userIDForAccessKey(tx, accessKeyID)
 		if err != nil {
@@ -25,7 +25,7 @@ func (s *Store) CreateBucket(accessKeyID, bucket string, objectLock bool) error 
 
 		res, err := tx.Exec(`INSERT INTO buckets (name, created_at, user_id, versioning_status, object_lock_enabled)
 			VALUES ($1, $2, $3, $4, $5) ON CONFLICT (name) DO NOTHING`,
-			bucket, sqlTime(time.Now()), uid, versioning, objectLock)
+			name, sqlTime(time.Now()), uid, versioning, objectLock)
 		if err != nil {
 			return err
 		}
@@ -35,7 +35,7 @@ func (s *Store) CreateBucket(accessKeyID, bucket string, objectLock bool) error 
 		} else if n == 0 {
 			// bucket already exists, check ownership
 			var ownerID int64
-			if err := tx.QueryRow("SELECT user_id FROM buckets WHERE name = $1", bucket).Scan(&ownerID); err != nil {
+			if err := tx.QueryRow("SELECT user_id FROM buckets WHERE name = $1", name).Scan(&ownerID); err != nil {
 				return err
 			} else if ownerID == uid {
 				return s3errs.ErrBucketAlreadyOwnedByYou
@@ -46,11 +46,10 @@ func (s *Store) CreateBucket(accessKeyID, bucket string, objectLock bool) error 
 	})
 }
 
-// DeleteBucket deletes a bucket if it is empty and owned by the requesting
-// user.
-func (s *Store) DeleteBucket(accessKeyID, bucket string) error {
+// DeleteBucket deletes a bucket if it is empty.
+func (s *Store) DeleteBucket(bucket s3.BucketID) error {
 	return s.transaction(func(tx *txn) error {
-		bid, err := bucketID(tx, accessKeyID, bucket)
+		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
@@ -65,24 +64,6 @@ func (s *Store) DeleteBucket(accessKeyID, bucket string) error {
 			return s3errs.ErrBucketNotEmpty
 		}
 		_, err = tx.Exec("DELETE FROM buckets WHERE id = $1", bid)
-		return err
-	})
-}
-
-// AssertBucketOwner verifies that the given access key owns the bucket. It also
-// gates bucket configuration, which a policy never opens up.
-func (s *Store) AssertBucketOwner(accessKeyID, bucket string) error {
-	return s.transaction(func(tx *txn) error {
-		_, err := bucketID(tx, accessKeyID, bucket)
-		return err
-	})
-}
-
-// HeadBucket verifies that the caller may read the bucket. S3 authorizes it
-// with s3:ListBucket, which a policy may grant to everyone.
-func (s *Store) HeadBucket(accessKeyID *string, bucket string) error {
-	return s.transaction(func(tx *txn) error {
-		_, err := bucketForRead(tx, accessKeyID, bucket, s3.ActionListBucket)
 		return err
 	})
 }
@@ -123,9 +104,9 @@ func (s *Store) ListBuckets(accessKeyID string) ([]s3.BucketInfo, error) {
 
 // GetBucketVersioning returns the versioning status of the bucket. The status
 // is one of "" (never configured), "Enabled" or "Suspended".
-func (s *Store) GetBucketVersioning(accessKeyID, bucket string) (status string, err error) {
+func (s *Store) GetBucketVersioning(bucket s3.BucketID) (status string, err error) {
 	err = s.transaction(func(tx *txn) error {
-		_, status, err = bucketIDAndVersioning(tx, accessKeyID, bucket)
+		_, status, err = bucketIDAndVersioning(tx, bucket)
 		if err != nil {
 			return err
 		}
@@ -136,9 +117,9 @@ func (s *Store) GetBucketVersioning(accessKeyID, bucket string) (status string, 
 
 // PutBucketVersioning sets the versioning status of the bucket to status, which
 // must be "Enabled" or "Suspended".
-func (s *Store) PutBucketVersioning(accessKeyID, bucket, status string) error {
+func (s *Store) PutBucketVersioning(bucket s3.BucketID, status string) error {
 	return s.transaction(func(tx *txn) error {
-		bid, err := bucketID(tx, accessKeyID, bucket)
+		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
@@ -155,155 +136,68 @@ func (s *Store) PutBucketVersioning(accessKeyID, bucket, status string) error {
 	})
 }
 
-// bucketVersioning returns the versioning status stored for the bucket (one of
-// "", s3.VersioningStatusEnabled or s3.VersioningStatusSuspended), which drives the write
-// and delete state machine in versioning.go.
-func bucketVersioning(tx *txn, bid int64) (status string, err error) {
-	err = tx.QueryRow(`SELECT versioning_status FROM buckets WHERE id = $1`, bid).Scan(&status)
+// bucketIDAndVersioning returns the bucket ID and versioning status (one of "",
+// s3.VersioningStatusEnabled or s3.VersioningStatusSuspended), which drives the
+// write and delete state machine in versioning.go.
+func bucketIDAndVersioning(tx *txn, bucket s3.BucketID) (bid int64, status string, err error) {
+	err = tx.QueryRow(`SELECT id, versioning_status FROM buckets WHERE id = $1`, bucket).Scan(&bid, &status)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = s3errs.ErrNoSuchBucket
+	}
 	return
 }
 
-// bucketIDAndVersioning returns the bucket ID and versioning status after
-// verifying ownership with the given access key.
-func bucketIDAndVersioning(tx *txn, accessKeyID, bucket string) (bid int64, status string, err error) {
-	bid, err = bucketID(tx, accessKeyID, bucket)
-	if err != nil {
-		return 0, "", err
-	}
-	status, err = bucketVersioning(tx, bid)
-	return bid, status, err
-}
-
-// PutBucketPolicy stores the bucket's policy, replacing any existing one.
-func (s *Store) PutBucketPolicy(accessKeyID, bucket string, policy s3.BucketPolicy) error {
+// PutBucketPolicy stores the bucket's policy document, replacing any existing
+// one.
+func (s *Store) PutBucketPolicy(bucket s3.BucketID, document string) error {
 	return s.transaction(func(tx *txn) error {
-		bid, err := bucketID(tx, accessKeyID, bucket)
+		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(`UPDATE buckets SET policy = $1, public_actions = $2 WHERE id = $3`, policy.Document, policy.Public, bid)
+		_, err = tx.Exec(`UPDATE buckets SET policy = $1 WHERE id = $2`, document, bid)
 		return err
 	})
-}
-
-// GetBucketPolicy returns the bucket's policy, or ErrNoSuchBucketPolicy if the
-// bucket has none.
-func (s *Store) GetBucketPolicy(accessKeyID, bucket string) (policy s3.BucketPolicy, err error) {
-	err = s.transaction(func(tx *txn) error {
-		bid, err := bucketID(tx, accessKeyID, bucket)
-		if err != nil {
-			return err
-		}
-		err = tx.QueryRow(`SELECT policy, public_actions FROM buckets WHERE id = $1`, bid).Scan(&policy.Document, &policy.Public)
-		if err != nil {
-			return err
-		} else if policy.Document == "" {
-			return s3errs.ErrNoSuchBucketPolicy
-		}
-		return nil
-	})
-	if err != nil {
-		return s3.BucketPolicy{}, err
-	}
-	return policy, nil
 }
 
 // DeleteBucketPolicy removes the bucket's policy. It is not an error if the
 // bucket has none.
-func (s *Store) DeleteBucketPolicy(accessKeyID, bucket string) error {
+func (s *Store) DeleteBucketPolicy(bucket s3.BucketID) error {
 	return s.transaction(func(tx *txn) error {
-		bid, err := bucketID(tx, accessKeyID, bucket)
+		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(`UPDATE buckets SET policy = '', public_actions = 0 WHERE id = $1`, bid)
+		_, err = tx.Exec(`UPDATE buckets SET policy = '' WHERE id = $1`, bid)
 		return err
 	})
 }
 
-// bucketRead is a bucket resolved for reading.
-type bucketRead struct {
-	id         int64
-	owner      string
-	versioning string
-	mayList    bool
-	// isOwner reports whether the caller owns the bucket, which gates the
-	// object lock state a read reports.
-	isOwner bool
-}
-
-// userInfo returns the bucket's owner, which a listing reports in place of the
-// caller.
-func (b bucketRead) userInfo() *s3.UserInfo {
-	return &s3.UserInfo{ID: b.owner, DisplayName: b.owner}
-}
-
-// bucketForRead resolves a bucket for a read. The caller must own the bucket,
-// as in [bucketID], or its policy must grant action to everyone, which covers
-// signed requests from other users as well as unsigned ones. An anonymous
-// caller gets ErrAccessDenied whether or not the bucket exists, so it cannot
-// probe for private buckets.
-func bucketForRead(tx *txn, accessKeyID *string, bucket string, action s3.PolicyActions) (bucketRead, error) {
-	var b bucketRead
-	var ownerID int64
-	var granted s3.PolicyActions
-	err := tx.QueryRow(`
-		SELECT b.id, b.user_id, u.name, b.public_actions, b.versioning_status
-		FROM buckets b
-		INNER JOIN users u ON u.id = b.user_id
-		WHERE b.name = $1`, bucket).Scan(&b.id, &ownerID, &b.owner, &granted, &b.versioning)
-	if errors.Is(err, sql.ErrNoRows) {
-		if accessKeyID == nil {
-			return bucketRead{}, s3errs.ErrAccessDenied
+// BucketAccessInfo returns the ID, owner and stored policy document of the
+// bucket with the given name.
+func (s *Store) BucketAccessInfo(name string) (info s3.BucketAccessInfo, err error) {
+	err = s.transaction(func(tx *txn) error {
+		var owner string
+		err := tx.QueryRow(`
+			SELECT b.id, u.name, b.policy
+			FROM buckets b
+			INNER JOIN users u ON u.id = b.user_id
+			WHERE b.name = $1`, name).Scan(&info.ID, &owner, &info.PolicyDocument)
+		if errors.Is(err, sql.ErrNoRows) {
+			return s3errs.ErrNoSuchBucket
+		} else if err != nil {
+			return err
 		}
-		return bucketRead{}, s3errs.ErrNoSuchBucket
-	} else if err != nil {
-		return bucketRead{}, err
-	}
-
-	if accessKeyID != nil {
-		uid, err := userIDForAccessKey(tx, *accessKeyID)
-		if err != nil {
-			return bucketRead{}, err
-		} else if ownerID == uid {
-			b.mayList, b.isOwner = true, true // the owner may always list
-			return b, nil
-		}
-	}
-	if !granted.Allows(action) {
-		return bucketRead{}, s3errs.ErrAccessDenied
-	}
-	b.mayList = granted.Allows(s3.ActionListBucket)
-	return b, nil
+		info.Owner = &s3.UserInfo{ID: owner, DisplayName: owner}
+		return nil
+	})
+	return
 }
 
-// bucketID returns the ID of the bucket with the given name if the user
-// associated with the given access key owns it. Returns ErrNoSuchBucket if
-// the bucket does not exist, or ErrAccessDenied if it exists but is owned by
-// a different user.
-func bucketID(t *txn, accessKeyID, bucket string) (int64, error) {
-	uid, err := userIDForAccessKey(t, accessKeyID)
-	if err != nil {
-		return 0, err
-	}
-
-	var bid, ownerID int64
-	err = t.QueryRow(`SELECT id, user_id FROM buckets WHERE name = $1`, bucket).Scan(&bid, &ownerID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, s3errs.ErrNoSuchBucket
-	} else if err != nil {
-		return 0, err
-	} else if ownerID != uid {
-		return 0, s3errs.ErrAccessDenied
-	}
-	return bid, nil
-}
-
-// bucketIDByName returns the ID of the bucket with the given name regardless
-// of ownership. It is intended for internal callers like the upload loop and
-// metadata sync paths that have no access key.
-func bucketIDByName(t *txn, bucket string) (bid int64, err error) {
-	err = t.QueryRow(`SELECT id FROM buckets WHERE name = $1`, bucket).Scan(&bid)
+// existingBucketID returns the bucket's ID, or [s3errs.ErrNoSuchBucket] if it
+// no longer exists.
+func existingBucketID(t *txn, bucket s3.BucketID) (bid int64, err error) {
+	err = t.QueryRow(`SELECT id FROM buckets WHERE id = $1`, bucket).Scan(&bid)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = s3errs.ErrNoSuchBucket
 	}

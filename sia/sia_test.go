@@ -16,6 +16,17 @@ import (
 	"lukechampine.com/frand"
 )
 
+// bucketID returns the ID of the named bucket.
+func bucketID(t *testing.T, store *sqlite.Store, name string) s3.BucketID {
+	t.Helper()
+
+	info, err := store.BucketAccessInfo(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info.ID
+}
+
 func TestDeleteOrphanedUploads(t *testing.T) {
 	// create uploads directory
 	log := zaptest.NewLogger(t)
@@ -40,6 +51,7 @@ func TestDeleteOrphanedUploads(t *testing.T) {
 	if err := store.CreateBucket(testutil.AccessKeyID, "bucket", false); err != nil {
 		t.Fatal(err)
 	}
+	bid := bucketID(t, store, "bucket")
 
 	// create sia backend
 	memSDK := testutil.NewMemorySDK()
@@ -55,7 +67,7 @@ func TestDeleteOrphanedUploads(t *testing.T) {
 	createObject := func(filename string, referenced bool) {
 		t.Helper()
 		if referenced {
-			if _, _, err := store.PutObject(testutil.AccessKeyID, "bucket", filename, objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 100, FileName: &filename}); err != nil {
+			if _, _, err := store.PutObject(bid, filename, objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 100, FileName: &filename}); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -68,7 +80,7 @@ func TestDeleteOrphanedUploads(t *testing.T) {
 	createMultipart := func(uid s3.UploadID, referenced bool) {
 		t.Helper()
 		if referenced {
-			if err := store.CreateMultipartUpload(testutil.AccessKeyID, "bucket", uid.String(), uid, nil, nil); err != nil {
+			if err := store.CreateMultipartUpload(bid, uid.String(), uid, nil, nil); err != nil {
 				t.Fatal(err)
 			}
 		}
