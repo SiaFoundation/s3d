@@ -148,6 +148,7 @@ type SnapshotMetadata struct {
 	Generation  int64     `json:"generation"`
 	ObjectCount int64     `json:"objectCount"`
 	S3DVersion  string    `json:"s3dVersion"`
+	Scheduled   bool      `json:"scheduled,omitempty"`
 }
 
 // Validate rejects metadata no version of s3d can have written. Unknown

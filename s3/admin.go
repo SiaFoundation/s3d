@@ -20,6 +20,7 @@ type Snapshot struct {
 	CreatedAt   time.Time     `json:"createdAt"`
 	SiaObjectID types.Hash256 `json:"siaObjectID"`
 	ObjectCount int64         `json:"objectCount"`
+	Scheduled   bool          `json:"scheduled"`
 }
 
 // SnapshotList describes the recorded database snapshots and whether the

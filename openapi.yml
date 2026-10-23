@@ -241,6 +241,9 @@ components:
           type: integer
           format: int64
           description: Number of uploaded objects captured by the snapshot.
+        scheduled:
+          type: boolean
+          description: Whether the snapshot was taken by the snapshot schedule.
     SnapshotList:
       type: object
       description: The recorded database snapshots and the instance's sync state.

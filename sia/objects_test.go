@@ -980,7 +980,7 @@ func TestSyncMetadata(t *testing.T) {
 	deletedKey := stypes.Hash256{1, 2, 3}
 
 	// record a snapshot whose Sia object matches the deleted event
-	if snap, _, err := store.CreateSnapshot(); err != nil {
+	if snap, _, err := store.CreateSnapshot(false); err != nil {
 		t.Fatal(err)
 	} else if err := store.MarkSnapshotPinning(snap.ID, deletedKey, snap.ObjectCount); err != nil {
 		t.Fatal(err)
@@ -1071,7 +1071,7 @@ func TestSyncMetadata(t *testing.T) {
 
 	// record one snapshot object locally, leak another with no local record
 	recorded := uploadSnapshotObject(snapMeta)
-	if rec, _, err := store.CreateSnapshot(); err != nil {
+	if rec, _, err := store.CreateSnapshot(false); err != nil {
 		t.Fatal(err)
 	} else if err := store.MarkSnapshotPinning(rec.ID, memSDK.ObjectID(recorded), rec.ObjectCount); err != nil {
 		t.Fatal(err)
@@ -1105,7 +1105,7 @@ func TestSyncMetadata(t *testing.T) {
 	// an unknown snapshot object is adopted even while an upload is in flight,
 	// and the cursor advances past its event
 	foreign := uploadSnapshotObject(snapMeta)
-	pending, _, err := store.CreateSnapshot()
+	pending, _, err := store.CreateSnapshot(false)
 	if err != nil {
 		t.Fatal(err)
 	}

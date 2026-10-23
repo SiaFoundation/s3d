@@ -583,7 +583,8 @@ func normalizeSchemaSQL(stmt string) string {
 		b.WriteString(line)
 		b.WriteString(" ")
 	}
-	return strings.Join(strings.Fields(strings.ReplaceAll(b.String(), `"`, "")), " ")
+	s := strings.Join(strings.Fields(strings.ReplaceAll(b.String(), `"`, "")), " ")
+	return strings.NewReplacer(" ,", ",", " )", ")").Replace(s)
 }
 
 // TestMigrationKeepsCustomIndexerURL checks the backfill only fills a missing

@@ -389,7 +389,7 @@ func TestStuckPinningSnapshot(t *testing.T) {
 	}
 
 	// a record left awaiting its pin, the state a crash during PinObject leaves
-	snap, _, err := store.CreateSnapshot()
+	snap, _, err := store.CreateSnapshot(false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -500,7 +500,7 @@ func TestSnapshotStartup(t *testing.T) {
 
 	// a snapshot whose pin landed before the process died, so the indexer
 	// holds its object while the record still awaits the pin
-	landed, landedGen, err := storeA.CreateSnapshot()
+	landed, landedGen, err := storeA.CreateSnapshot(false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -510,7 +510,7 @@ func TestSnapshotStartup(t *testing.T) {
 	}
 
 	// a snapshot whose pin never reached the indexer
-	lost, _, err := storeA.CreateSnapshot()
+	lost, _, err := storeA.CreateSnapshot(false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -619,10 +619,13 @@ func TestSnapshotRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// a third snapshot only exists on the network, not in the second snapshot
-	snap3, err := backendA.CreateSnapshot(t.Context())
+	// a third, scheduled snapshot only exists on the network, not in the
+	// second snapshot
+	snap3, err := backendA.CreateScheduledSnapshot(t.Context())
 	if err != nil {
 		t.Fatal(err)
+	} else if !downloadMetadata(t, memSDK, snap3.SiaObjectID).Scheduled {
+		t.Fatal("expected scheduled metadata")
 	}
 	if err := backendA.Close(); err != nil {
 		t.Fatal(err)
@@ -651,6 +654,8 @@ func TestSnapshotRecovery(t *testing.T) {
 	backendB.SyncMetadata(t.Context())
 	if snapshots := assertSnapshots(storeB, snap3.SiaObjectID, snap2.SiaObjectID); snapshots[1].CreatedAt.Unix() != snap2.CreatedAt.Unix() {
 		t.Fatal("mismatch", snapshots[1].CreatedAt)
+	} else if !snapshots[0].Scheduled || snapshots[1].Scheduled {
+		t.Fatal("scheduled flag not adopted", snapshots[0].Scheduled, snapshots[1].Scheduled)
 	}
 
 	// the generation counter continues past the adopted snapshots and their

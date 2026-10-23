@@ -165,7 +165,8 @@ CREATE TABLE snapshots (
     gen_completed INTEGER, -- generation it completed at, NULL until pinned
 
     state INTEGER NOT NULL, -- lifecycle state, values defined in snapshots.go
-    state_since INTEGER NOT NULL -- when the current state was entered
+    state_since INTEGER NOT NULL, -- when the current state was entered
+    scheduled INTEGER NOT NULL DEFAULT FALSE CHECK (scheduled IN (FALSE, TRUE)) -- taken by the snapshot schedule
 );
 
 -- serves the orphan guard, both halves probe by completion generation

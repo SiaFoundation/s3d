@@ -3,6 +3,8 @@ package sia
 import (
 	"context"
 	"time"
+
+	"github.com/SiaFoundation/s3d/s3"
 )
 
 // PinThreads exports pinThreads for testing.
@@ -47,4 +49,9 @@ func (s *Sia) DeleteOrphanedUploads() (int, error) { //nolint:revive
 // ProcessSnapshotDeletions exports processSnapshotDeletions for testing.
 func (s *Sia) ProcessSnapshotDeletions(ctx context.Context, now time.Time) { //nolint:revive
 	s.processSnapshotDeletions(ctx, now)
+}
+
+// CreateScheduledSnapshot exports createSnapshot with scheduled set for testing.
+func (s *Sia) CreateScheduledSnapshot(ctx context.Context) (s3.Snapshot, error) { //nolint:revive
+	return s.createSnapshot(ctx, true)
 }
