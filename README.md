@@ -296,7 +296,7 @@ AWS Signature V4 exclusively. SigV4A is not implemented. Supported
 (`s3.example.com/bucket/object`) and virtual-hosted-style
 (`bucket.s3.example.com/object`) addressing are supported.
 
-Bucket lifecycle configuration supports prefix-based `AbortIncompleteMultipartUpload` rules and current-object `Expiration` rules.
+Bucket lifecycle configuration supports prefix-based `AbortIncompleteMultipartUpload` rules and current-object `Expiration` rules. Rules may also filter by object size with `ObjectSizeGreaterThan` and `ObjectSizeLessThan`, which exclude their own values, and a filter combining a non-empty prefix with size bounds must wrap them in `And`.
 
 Object Lock is supported in both `GOVERNANCE` and `COMPLIANCE` mode, with
 retention periods, legal holds and bucket default retention rules. Creating a
@@ -404,7 +404,7 @@ delete with nothing to delete is a no-op, as an unconditional one is.
 | DeleteBucketPolicy | ✓ | |
 | GetBucketPolicyStatus | ✓ | |
 | GetBucketLifecycle | ✓ | |
-| PutBucketLifecycle | ◐ | Prefix-based `AbortIncompleteMultipartUpload` and current-object `Expiration` rules only |
+| PutBucketLifecycle | ◐ | Prefix and object-size filters only, with `AbortIncompleteMultipartUpload` and current-object `Expiration` rules |
 | DeleteBucketLifecycle | ✓ | |
 | GetBucketCors | ✗ | |
 | PutBucketCors | ✗ | |
