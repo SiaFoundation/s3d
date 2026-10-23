@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/SiaFoundation/s3d/sia/objects"
@@ -20,6 +22,9 @@ const (
 	// pinBatchSize is the maximum number of unpinned objects processed
 	// per pin loop iteration.
 	pinBatchSize = 100
+
+	// pinThreads is the number of objects pinned concurrently per batch.
+	pinThreads = 10
 )
 
 // wakePinLoop signals the pin loop to run an iteration immediately rather than
@@ -113,28 +118,42 @@ func (s *Sia) performObjectPinning(ctx context.Context) error {
 			return nil
 		}
 
-		for _, uo := range toPin {
-			if ctx.Err() != nil {
-				return nil
-			}
-			id := uo.SiaObject.ID
-			if !now.Before(uo.PinBefore) {
-				s.logger.Warn("upload expired before pinning; scheduling for re-upload",
-					zap.Stringer("siaObjectID", &id),
-					zap.Time("pinBefore", uo.PinBefore))
-				if err := s.store.ScheduleObjectForReupload(id); err != nil && !errors.Is(err, objects.ErrObjectNotFound) {
-					return fmt.Errorf("failed to schedule expired object for re-upload (siaObjectID=%v): %w", id, err)
-				}
-				continue
-			}
-			if err := s.pinObject(ctx, uo); err != nil {
-				return err
-			}
-		}
-
-		if len(toPin) < pinBatchSize {
+		if err := s.pinBatch(ctx, now, toPin); err != nil {
+			return err
+		} else if len(toPin) < pinBatchSize {
 			return nil
 		}
+	}
+	return nil
+}
+
+func (s *Sia) pinBatch(ctx context.Context, now time.Time, toPin []objects.UnpinnedObject) error {
+	var wg sync.WaitGroup
+	var failed atomic.Int64
+	sema := make(chan struct{}, pinThreads)
+	defer close(sema)
+
+loop:
+	for _, uo := range toPin {
+		select {
+		case <-ctx.Done():
+			break loop
+		case sema <- struct{}{}:
+		}
+
+		wg.Go(func() {
+			defer func() { <-sema }()
+
+			if err := s.pinObject(ctx, now, uo); err != nil {
+				s.logger.Error("failed to pin object", zap.Error(err))
+				failed.Add(1)
+			}
+		})
+	}
+
+	wg.Wait()
+	if n := failed.Load(); n > 0 {
+		return fmt.Errorf("failed to pin %d out of %d objects", n, len(toPin))
 	}
 	return nil
 }
@@ -147,8 +166,18 @@ func (s *Sia) reschedulePin(siaObjectID types.Hash256) error {
 	return nil
 }
 
-func (s *Sia) pinObject(ctx context.Context, uo objects.UnpinnedObject) error {
+func (s *Sia) pinObject(ctx context.Context, now time.Time, uo objects.UnpinnedObject) error {
 	id := uo.SiaObject.ID
+	if !now.Before(uo.PinBefore) {
+		s.logger.Warn("upload expired before pinning; scheduling for re-upload",
+			zap.Stringer("siaObjectID", &id),
+			zap.Time("pinBefore", uo.PinBefore))
+		if err := s.store.ScheduleObjectForReupload(id); err != nil && !errors.Is(err, objects.ErrObjectNotFound) {
+			return fmt.Errorf("failed to schedule expired object for re-upload (siaObjectID=%v): %w", id, err)
+		}
+		return nil
+	}
+
 	sdkObj, err := s.sdk.UnsealObject(uo.SiaObject.Sealed)
 	if err != nil {
 		s.logger.Error("failed to unseal object for pinning",

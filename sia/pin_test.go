@@ -3,12 +3,15 @@ package sia_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/SiaFoundation/s3d/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3"
+	"github.com/SiaFoundation/s3d/sia"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -237,5 +240,55 @@ func TestUnsealStagedObject(t *testing.T) {
 	}
 	if !bytes.Equal(got, data) {
 		t.Fatal("unsealed object returned different data")
+	}
+}
+
+// TestPinLoopPinsConcurrently verifies that a pin cycle pins objects in
+// parallel instead of one after the other.
+func TestPinLoopPinsConcurrently(t *testing.T) {
+	memSDK := testutil.NewMemorySDK()
+	backend, store := testutil.NewBackend(t, testutil.WithSDK(memSDK))
+
+	const bucket = "bucket"
+	if err := store.CreateBucket(testutil.AccessKeyID, bucket, false); err != nil {
+		t.Fatal(err)
+	}
+	for i := range sia.PinThreads {
+		stageUpload(t, memSDK, store, bucket, fmt.Sprintf("obj%d", i), time.Now().Add(time.Hour))
+	}
+
+	// every pin blocks until all of them are in flight at once
+	var inflight sync.WaitGroup
+	inflight.Add(sia.PinThreads)
+	release := make(chan struct{})
+	memSDK.SetPinHook(func(*sdk.Object) {
+		inflight.Done()
+		<-release
+	})
+
+	done := make(chan error, 1)
+	go func() { done <- backend.PinObjects(t.Context()) }()
+
+	allInflight := make(chan struct{})
+	go func() {
+		inflight.Wait()
+		close(allInflight)
+	}()
+	select {
+	case <-allInflight:
+	case <-time.After(10 * time.Second):
+		close(release)
+		t.Fatal("pins did not run concurrently")
+	}
+	close(release)
+
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	} else if got := memSDK.PinAttempts(); got != sia.PinThreads {
+		t.Fatal("unexpected", got)
+	} else if _, ok, err := store.NextPinningAttempt(); err != nil {
+		t.Fatal(err)
+	} else if ok {
+		t.Fatal("expected every object to be pinned")
 	}
 }
