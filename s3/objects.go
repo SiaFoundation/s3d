@@ -418,7 +418,7 @@ func (s *s3) serveObject(w http.ResponseWriter, r *http.Request, accessKeyID *st
 	// write headers
 	setVersionHeaders(w, obj)
 	if accessKeyID != nil {
-		s.setLifecycleExpirationHeader(r.Context(), w, *accessKeyID, bucket, object, obj.LastModified)
+		s.setLifecycleExpirationHeader(r.Context(), w, *accessKeyID, bucket, object, obj.Size, obj.LastModified)
 	}
 	if err := writeGetOrHeadObjectHeaders(obj, w, r); err != nil {
 		return err
@@ -849,7 +849,7 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, accessKeyID strin
 		return err
 	}
 
-	s.setLifecycleExpirationHeader(r.Context(), w, accessKeyID, bucket, object, time.Now())
+	s.setLifecycleExpirationHeader(r.Context(), w, accessKeyID, bucket, object, r.ContentLength, time.Now())
 	if res.VersionID != "" {
 		w.Header().Set("x-amz-version-id", res.VersionID)
 	}
@@ -1438,12 +1438,12 @@ func parseRangeHeader(s string) (*ObjectRangeRequest, error) {
 // setLifecycleExpirationHeader sets the x-amz-expiration response header when an
 // enabled lifecycle expiration rule applies to the object. It is best-effort:
 // any error fetching the configuration is swallowed so the request is unaffected.
-func (s *s3) setLifecycleExpirationHeader(ctx context.Context, w http.ResponseWriter, accessKeyID, bucket, object string, lastModified time.Time) {
+func (s *s3) setLifecycleExpirationHeader(ctx context.Context, w http.ResponseWriter, accessKeyID, bucket, object string, size int64, lastModified time.Time) {
 	config, err := s.backend.GetBucketLifecycleConfiguration(ctx, accessKeyID, bucket)
 	if err != nil {
 		return
 	}
-	if v := config.ExpirationHeader(object, lastModified); v != "" {
+	if v := config.ExpirationHeader(object, size, lastModified); v != "" {
 		w.Header().Set("x-amz-expiration", v)
 	}
 }
