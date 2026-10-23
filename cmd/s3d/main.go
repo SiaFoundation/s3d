@@ -355,11 +355,18 @@ func main() {
 
 	indexdSDK := sia.NewSDK(sdkClient, sia.WithUploadOptions(sdk.WithRedundancy(cfg.Sia.DataShards, cfg.Sia.ParityShards)))
 
-	backend, err := sia.New(ctx, indexdSDK, store, cfg.Directory,
+	backendOpts := []sia.Option{
 		sia.WithDiskUsageLimit(cfg.Sia.DiskUsageLimit),
 		sia.WithUploadThreads(cfg.Sia.UploadThreads),
 		sia.WithUploadDeadline(cfg.Sia.UploadDeadline),
-		sia.WithLogger(log.Named("backend")))
+		sia.WithLogger(log.Named("backend")),
+	}
+	if cfg.Sia.SnapshotSchedule != "" {
+		hour, minute, err := parseSnapshotSchedule(cfg.Sia.SnapshotSchedule)
+		checkFatalError("invalid server configuration", err)
+		backendOpts = append(backendOpts, sia.WithSnapshotSchedule(hour, minute, cfg.Sia.SnapshotRetention))
+	}
+	backend, err := sia.New(ctx, indexdSDK, store, cfg.Directory, backendOpts...)
 	if err != nil {
 		checkFatalError("failed to create Sia backend", err)
 	}
@@ -469,6 +476,15 @@ func validateServerConfig(cfg Config) error {
 		return errors.New("admin address must differ from the S3 HTTPS address")
 	case cfg.ApiHttpsAddress != "" && cfg.ApiAddress == cfg.ApiHttpsAddress:
 		return errors.New("S3 HTTP and HTTPS addresses must differ")
+	case cfg.Sia.SnapshotRetention < 0:
+		return errors.New("snapshot retention must not be negative")
+	case cfg.Sia.SnapshotSchedule == "" && cfg.Sia.SnapshotRetention > 0:
+		return errors.New("snapshot retention requires a snapshot schedule")
+	}
+	if cfg.Sia.SnapshotSchedule != "" {
+		if _, _, err := parseSnapshotSchedule(cfg.Sia.SnapshotSchedule); err != nil {
+			return err
+		}
 	}
 	if _, err := s3.ParseTrustedProxies(cfg.S3.TrustedProxies); err != nil {
 		return err

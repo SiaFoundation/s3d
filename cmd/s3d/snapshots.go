@@ -108,9 +108,9 @@ func runSnapshotsList(ctx context.Context, cmd *flag.FlagSet) {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "SIA OBJECT ID\tCREATED\tOBJECTS")
+	fmt.Fprintln(w, "SIA OBJECT ID\tCREATED\tOBJECTS\tSCHEDULED")
 	for _, snap := range list.Snapshots {
-		fmt.Fprintf(w, "%s\t%s\t%d\n", snap.SiaObjectID, snap.CreatedAt.Format(time.RFC3339), snap.ObjectCount)
+		fmt.Fprintf(w, "%s\t%s\t%d\t%s\n", snap.SiaObjectID, snap.CreatedAt.Format(time.RFC3339), snap.ObjectCount, scheduledMark(snap.Scheduled))
 	}
 	w.Flush()
 }
@@ -246,7 +246,7 @@ func promptSnapshot(snapshots []sia.RemoteSnapshot) sia.RemoteSnapshot {
 
 	var restorable int
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "#\tSIA OBJECT ID\tCREATED\tOBJECTS\tDB VERSION\tS3D VERSION")
+	fmt.Fprintln(w, "#\tSIA OBJECT ID\tCREATED\tOBJECTS\tSCHEDULED\tDB VERSION\tS3D VERSION")
 	for i, snap := range snapshots {
 		m, note := snap.Metadata, ""
 		if checkSnapshotVersion(snap) != nil {
@@ -254,7 +254,7 @@ func promptSnapshot(snapshots []sia.RemoteSnapshot) sia.RemoteSnapshot {
 		} else {
 			restorable++
 		}
-		fmt.Fprintf(w, "%d\t%s\t%s\t%d\t%d\t%s%s\n", i+1, snap.ObjectID, m.CreatedAt.Format(time.RFC3339), m.ObjectCount, m.DBVersion, m.S3DVersion, note)
+		fmt.Fprintf(w, "%d\t%s\t%s\t%d\t%s\t%d\t%s%s\n", i+1, snap.ObjectID, m.CreatedAt.Format(time.RFC3339), m.ObjectCount, scheduledMark(m.Scheduled), m.DBVersion, m.S3DVersion, note)
 	}
 	w.Flush()
 	fmt.Println("")
@@ -327,4 +327,12 @@ func checkSnapshotVersion(snap sia.RemoteSnapshot) error {
 		return fmt.Errorf("snapshot encoding %q is not supported by this build", enc)
 	}
 	return nil
+}
+
+// scheduledMark renders the scheduled column of a snapshot table.
+func scheduledMark(scheduled bool) string {
+	if scheduled {
+		return "yes"
+	}
+	return ""
 }

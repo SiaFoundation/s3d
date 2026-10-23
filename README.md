@@ -222,6 +222,24 @@ s3d snapshots list
 reports whether the instance has finished syncing with the Sia network. Until it
 has, the list may be incomplete.
 
+### Scheduling
+
+`s3d` can take a snapshot every day at a fixed time and keep only the newest
+ones.
+
+```yaml
+sia:
+  snapshotSchedule: "03:00"
+  snapshotRetention: 7
+```
+
+`snapshotSchedule` is a local time of day, so a daily snapshot also flushes the
+objects buffered on disk every day. If the instance was down at that time, the
+snapshot is taken on the next start. `snapshotRetention` is the number of
+scheduled snapshots kept, `0` keeps all of them. Retention only ever removes
+snapshots the schedule took, a snapshot created with `s3d snapshots create` is
+kept until it is deleted. The `list` output marks scheduled snapshots.
+
 ### Deleting
 
 Deleting unpins the snapshot's Sia object and removes its record, releasing the
@@ -514,6 +532,8 @@ sia:
   diskUsageLimit: 10737418240 # max bytes buffered on disk pending upload (0 disables the limit, default 10 GiB)
   uploadThreads: 1 # object groups uploaded to Sia concurrently by the background upload loop (default 4)
   uploadDeadline: 24h # upload a group regardless of waste once an object was last modified this long ago (0s disables the deadline, default 24h)
+  snapshotSchedule: "03:00" # local time of day at which a snapshot is taken every day (empty disables scheduled snapshots)
+  snapshotRetention: 7 # scheduled snapshots kept, retention only removes snapshots the schedule took (0 keeps all of them)
   dataShards: 10 # shards each slab is split into (default 10)
   parityShards: 20 # recovery shards added to each slab (default 20)
 s3:

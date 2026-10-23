@@ -59,6 +59,12 @@ type (
 		// its group is uploaded regardless of wasted space. Zero disables the
 		// deadline.
 		UploadDeadline time.Duration `yaml:"uploadDeadline"`
+		// SnapshotSchedule is the local time of day, as HH:MM, at which a
+		// snapshot is taken every day. Empty disables scheduled snapshots.
+		SnapshotSchedule string `yaml:"snapshotSchedule"`
+		// SnapshotRetention is the number of scheduled snapshots kept. Zero
+		// keeps all of them.
+		SnapshotRetention int `yaml:"snapshotRetention"`
 		// DataShards is the number of shards each slab is split into.
 		DataShards uint8 `yaml:"dataShards"`
 		// ParityShards is the number of recovery shards added to each slab.
@@ -84,6 +90,15 @@ type (
 		S3            S3     `yaml:"s3"`
 	}
 )
+
+// parseSnapshotSchedule parses a time of day in HH:MM form.
+func parseSnapshotSchedule(s string) (hour, minute int, err error) {
+	t, err := time.Parse("15:04", s)
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid snapshot schedule %q, expected HH:MM", s)
+	}
+	return t.Hour(), t.Minute(), nil
+}
 
 // LoadFile loads the configuration from the provided file path.
 // If the file does not exist or cannot be decoded, an error is returned.
