@@ -16,6 +16,9 @@ const PruneSlabsInterval = pruneSlabsInterval
 // SnapshotConfirmDelay exports snapshotConfirmDelay for testing.
 const SnapshotConfirmDelay = snapshotConfirmDelay
 
+// ScheduledSnapshotRetryDelay exports scheduledSnapshotRetryDelay for testing.
+const ScheduledSnapshotRetryDelay = scheduledSnapshotRetryDelay
+
 // SetDiskUsageTimeout overrides the disk usage timeout for testing.
 func (s *Sia) SetDiskUsageTimeout(d time.Duration) { //nolint:revive
 	s.diskUsageTimeout = d
@@ -54,4 +57,9 @@ func (s *Sia) ProcessSnapshotDeletions(ctx context.Context, now time.Time) { //n
 // CreateScheduledSnapshot exports createSnapshot with scheduled set for testing.
 func (s *Sia) CreateScheduledSnapshot(ctx context.Context) (s3.Snapshot, error) { //nolint:revive
 	return s.createSnapshot(ctx, true)
+}
+
+// RunScheduledSnapshot exports runScheduledSnapshot for testing.
+func (s *Sia) RunScheduledSnapshot(ctx context.Context, now time.Time, hour, minute, keep int) { //nolint:revive
+	s.runScheduledSnapshot(ctx, now, snapshotSchedule{hour: hour, minute: minute, keep: keep})
 }

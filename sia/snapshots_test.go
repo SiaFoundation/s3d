@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/SiaFoundation/s3d/build"
@@ -825,4 +826,170 @@ func TestFetchRemoteSnapshot(t *testing.T) {
 	if _, err := sia.FetchRemoteSnapshot(t.Context(), memSDK, types.Hash256(frand.Entropy256())); err == nil {
 		t.Fatal("expected an error")
 	}
+}
+
+// TestScheduledSnapshots verifies the due check, retention and the retry delay
+// of the scheduled snapshot pass.
+func TestScheduledSnapshots(t *testing.T) {
+	memSDK := testutil.NewMemorySDK()
+	backend, store := testutil.NewBackend(t, testutil.WithSDK(memSDK))
+	ctx := t.Context()
+
+	// the listing is complete, retention may run
+	backend.SyncMetadata(ctx)
+
+	// the slot passed an hour ago
+	base := time.Now()
+	slot := base.Add(-time.Hour)
+	hour, minute := slot.Hour(), slot.Minute()
+
+	scheduled := func() []s3.Snapshot {
+		t.Helper()
+		snapshots, err := store.ListSnapshots()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []s3.Snapshot
+		for _, snap := range snapshots {
+			if snap.Scheduled {
+				out = append(out, snap)
+			}
+		}
+		return out
+	}
+	assertScheduled := func(n int) []s3.Snapshot {
+		t.Helper()
+		snapshots := scheduled()
+		if len(snapshots) != n {
+			t.Fatal("unexpected", len(snapshots))
+		}
+		for _, snap := range snapshots {
+			if !memSDK.Pinned(snap.SiaObjectID) {
+				t.Fatal("expected pinned", snap.SiaObjectID)
+			} else if !downloadMetadata(t, memSDK, snap.SiaObjectID).Scheduled {
+				t.Fatal("expected scheduled metadata", snap.SiaObjectID)
+			}
+		}
+		return snapshots
+	}
+
+	// no scheduled snapshot exists, so the first pass takes one at once
+	backend.RunScheduledSnapshot(ctx, base, hour, minute, 2)
+	first := assertScheduled(1)[0]
+
+	// a pass inside the same slot does nothing
+	backend.RunScheduledSnapshot(ctx, base.Add(30*time.Minute), hour, minute, 2)
+	assertScheduled(1)
+
+	// the next day's slot takes another
+	backend.RunScheduledSnapshot(ctx, base.AddDate(0, 0, 1), hour, minute, 2)
+	second := assertScheduled(2)[0]
+	if second.SiaObjectID == first.SiaObjectID {
+		t.Fatal("expected a new snapshot")
+	}
+
+	// a missed slot is caught up, which pushes the first snapshot past the
+	// retention count
+	backend.RunScheduledSnapshot(ctx, base.AddDate(0, 0, 3), hour, minute, 2)
+	if snapshots := assertScheduled(2); snapshots[1].SiaObjectID != second.SiaObjectID {
+		t.Fatal("expected the second snapshot to be kept")
+	} else if memSDK.Pinned(first.SiaObjectID) {
+		t.Fatal("expected the first snapshot to be pruned")
+	}
+
+	// a manual snapshot is never pruned and does not count
+	manual, err := backend.CreateSnapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend.RunScheduledSnapshot(ctx, base.AddDate(0, 0, 4), hour, minute, 2)
+	if assertScheduled(2); !memSDK.Pinned(manual.SiaObjectID) {
+		t.Fatal("expected the manual snapshot to be kept")
+	} else if memSDK.Pinned(second.SiaObjectID) {
+		t.Fatal("expected the second snapshot to be pruned")
+	}
+
+	// zero keeps every scheduled snapshot
+	backend.RunScheduledSnapshot(ctx, base.AddDate(0, 0, 5), hour, minute, 0)
+	assertScheduled(3)
+
+	// a lower count is applied inside the slot without taking a snapshot
+	backend.RunScheduledSnapshot(ctx, base.AddDate(0, 0, 5).Add(time.Minute), hour, minute, 2)
+	assertScheduled(2)
+
+	// a failed attempt is retried only after the retry delay
+	memSDK.SetPinError(errors.New("pin failed"))
+	failedAt := base.AddDate(0, 0, 6)
+	backend.RunScheduledSnapshot(ctx, failedAt, hour, minute, 0)
+	assertScheduled(2)
+	memSDK.SetPinError(nil)
+	backend.RunScheduledSnapshot(ctx, failedAt.Add(sia.ScheduledSnapshotRetryDelay-time.Minute), hour, minute, 0)
+	assertScheduled(2)
+	backend.RunScheduledSnapshot(ctx, failedAt.Add(sia.ScheduledSnapshotRetryDelay), hour, minute, 0)
+	assertScheduled(3)
+}
+
+// TestScheduledSnapshotLoop verifies the background loop snapshots at startup,
+// again when the slot passes, and once a day after that, pruning to the
+// retention count each time.
+func TestScheduledSnapshotLoop(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		memSDK := testutil.NewMemorySDK()
+		log := zaptest.NewLogger(t)
+		dir := t.TempDir()
+		store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+
+		// the slot is two minutes away
+		slot := time.Now().Add(2 * time.Minute)
+		backend, err := sia.New(t.Context(), memSDK, store, dir,
+			sia.WithUploadDisabled(), sia.WithSnapshotSchedule(slot.Hour(), slot.Minute(), 1), sia.WithLogger(log))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer backend.Close()
+
+		assertSnapshot := func(prev types.Hash256) types.Hash256 {
+			t.Helper()
+			snapshots, err := store.ListSnapshots()
+			if err != nil {
+				t.Fatal(err)
+			} else if len(snapshots) != 1 {
+				t.Fatal("unexpected", len(snapshots))
+			} else if !snapshots[0].Scheduled {
+				t.Fatal("expected a scheduled snapshot")
+			} else if snapshots[0].SiaObjectID == prev {
+				t.Fatal("expected a new snapshot")
+			} else if prev != (types.Hash256{}) && memSDK.Pinned(prev) {
+				t.Fatal("expected the previous snapshot to be pruned")
+			}
+			return snapshots[0].SiaObjectID
+		}
+
+		// the first pass snapshots at once
+		synctest.Wait()
+		id := assertSnapshot(types.Hash256{})
+
+		// the slot passing takes another, nothing happens in between
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		if snapshots, err := store.ListSnapshots(); err != nil {
+			t.Fatal(err)
+		} else if len(snapshots) != 1 || snapshots[0].SiaObjectID != id {
+			t.Fatal("unexpected snapshot before the slot")
+		}
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		id = assertSnapshot(id)
+
+		// then once a day
+		for range 3 {
+			time.Sleep(24 * time.Hour)
+			synctest.Wait()
+			id = assertSnapshot(id)
+		}
+	})
 }

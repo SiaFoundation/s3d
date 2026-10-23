@@ -44,6 +44,14 @@ const (
 	// deleting state before we effectively delete it.
 	snapshotConfirmDelay = time.Hour
 
+	// scheduledSnapshotInterval is the interval at which the scheduled
+	// snapshot loop checks whether a snapshot is due.
+	scheduledSnapshotInterval = time.Minute
+
+	// scheduledSnapshotRetryDelay is how long the scheduled snapshot loop
+	// waits after a failed attempt before trying again.
+	scheduledSnapshotRetryDelay = time.Hour
+
 	// defaultLifecycleLoopInterval is the default interval at which the
 	// background lifecycle loop runs.
 	defaultLifecycleLoopInterval = time.Hour
@@ -151,6 +159,15 @@ func WithUploadDeadline(d time.Duration) Option {
 	}
 }
 
+// WithSnapshotSchedule takes a snapshot every day at the given local time of
+// day and keeps only the newest keep scheduled snapshots. Zero keeps all of
+// them.
+func WithSnapshotSchedule(hour, minute, keep int) Option {
+	return func(s *Sia) {
+		s.snapshotSchedule = &snapshotSchedule{hour: hour, minute: minute, keep: keep}
+	}
+}
+
 // Sia implements the s3.Backend interface for storing data on Sia.
 type Sia struct {
 	sdk   SDK
@@ -175,6 +192,9 @@ type Sia struct {
 
 	lifecycleLoopInterval time.Duration
 	lifecycleDayDuration  time.Duration
+
+	snapshotSchedule *snapshotSchedule
+	snapshotRetryAt  time.Time
 
 	pinMu   sync.Mutex
 	pinWake chan struct{}
@@ -326,6 +346,10 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		return nil, fmt.Errorf("upload threads must not be negative, got %d", sia.uploadThreads)
 	} else if sia.uploadDeadline < 0 {
 		return nil, fmt.Errorf("upload deadline must not be negative, got %s", sia.uploadDeadline)
+	} else if sched := sia.snapshotSchedule; sched != nil && (sched.hour < 0 || sched.hour > 23 || sched.minute < 0 || sched.minute > 59) {
+		return nil, fmt.Errorf("invalid snapshot schedule %02d:%02d", sched.hour, sched.minute)
+	} else if sched != nil && sched.keep < 0 {
+		return nil, fmt.Errorf("snapshot retention must not be negative, got %d", sched.keep)
 	}
 	if sia.uploadThreads == 0 {
 		sia.uploadThreads = DefaultUploadThreads
@@ -391,6 +415,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		launchBgLoop(sia.syncMetadataLoop),
 		launchBgLoop(sia.uploadLoop),
 		launchBgLoop(sia.lifecycleLoop),
+		launchBgLoop(sia.snapshotsLoop),
 		launchBgLoop(sia.pinLoop),
 		launchBgLoop(sia.statsLoop),
 	); err != nil {

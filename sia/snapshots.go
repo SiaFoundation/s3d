@@ -9,17 +9,27 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"time"
 
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/api"
 	"go.sia.tech/indexd/slabs"
 	sdk "go.sia.tech/siastorage"
+	"go.uber.org/zap"
 )
 
 // remoteSnapshotBatchSize is the number of object events fetched per request
 // while enumerating the account.
 const remoteSnapshotBatchSize = api.MaxLimit
+
+// snapshotSchedule is the local time of day at which a snapshot is taken and
+// the number of scheduled snapshots kept, zero keeps all of them.
+type snapshotSchedule struct {
+	hour   int
+	minute int
+	keep   int
+}
 
 // RemoteSnapshot is a snapshot stored on the Sia network.
 type RemoteSnapshot struct {
@@ -135,4 +145,99 @@ func DownloadSnapshot(ctx context.Context, sdk SDK, snap RemoteSnapshot, w io.Wr
 		return errors.Join(fmt.Errorf("failed to write snapshot image: %w", err), ctx.Err())
 	}
 	return ctx.Err()
+}
+
+// dueAt returns the most recent instant at the scheduled time of day at or
+// before now.
+func (sched snapshotSchedule) dueAt(now time.Time) time.Time {
+	now = now.Local()
+	due := time.Date(now.Year(), now.Month(), now.Day(), sched.hour, sched.minute, 0, 0, now.Location())
+	if due.After(now) {
+		due = due.AddDate(0, 0, -1)
+	}
+	return due
+}
+
+// snapshotsLoop takes snapshots on the configured schedule.
+func (s *Sia) snapshotsLoop(ctx context.Context) {
+	if s.snapshotSchedule == nil {
+		return
+	}
+	sched := *s.snapshotSchedule
+	t := time.NewTicker(scheduledSnapshotInterval)
+	defer t.Stop()
+
+	for {
+		s.runScheduledSnapshot(ctx, time.Now(), sched)
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
+// runScheduledSnapshot takes a snapshot when none was taken since the
+// schedule's last slot and applies the retention count.
+func (s *Sia) runScheduledSnapshot(ctx context.Context, now time.Time, sched snapshotSchedule) {
+	if !now.Before(s.snapshotRetryAt) {
+		s.takeScheduledSnapshot(ctx, now, sched)
+	}
+	s.pruneScheduledSnapshots(ctx, sched.keep)
+}
+
+// takeScheduledSnapshot takes a snapshot when none was taken since the
+// schedule's last slot.
+func (s *Sia) takeScheduledSnapshot(ctx context.Context, now time.Time, sched snapshotSchedule) {
+	snapshots, err := s.store.ListSnapshots()
+	if err != nil {
+		s.logger.Error("failed to list snapshots", zap.Error(err))
+		return
+	}
+	// the listing is newest first
+	var newest time.Time
+	for _, snap := range snapshots {
+		if snap.Scheduled {
+			newest = snap.CreatedAt
+			break
+		}
+	}
+	if !newest.Before(sched.dueAt(now)) {
+		return
+	}
+
+	if _, err := s.createSnapshot(ctx, true); err != nil {
+		s.snapshotRetryAt = now.Add(scheduledSnapshotRetryDelay)
+		s.logger.Error("failed to take scheduled snapshot", zap.Error(err))
+	}
+}
+
+// pruneScheduledSnapshots deletes every scheduled snapshot past the newest
+// keep once object metadata is synced.
+func (s *Sia) pruneScheduledSnapshots(ctx context.Context, keep int) {
+	if keep == 0 {
+		return
+	} else if !s.synced.Load() {
+		s.logger.Debug("deferring snapshot retention until object metadata is synced")
+		return
+	}
+	snapshots, err := s.store.ListSnapshots()
+	if err != nil {
+		s.logger.Error("failed to list snapshots", zap.Error(err))
+		return
+	}
+	var kept int
+	for _, snap := range snapshots {
+		if ctx.Err() != nil {
+			return
+		} else if !snap.Scheduled {
+			continue
+		} else if kept++; kept <= keep {
+			continue
+		}
+		if err := s.DeleteSnapshot(ctx, snap.SiaObjectID); err != nil {
+			s.logger.Error("failed to prune scheduled snapshot", zap.Stringer("objectID", &snap.SiaObjectID), zap.Error(err))
+		}
+	}
 }
