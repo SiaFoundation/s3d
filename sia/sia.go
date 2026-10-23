@@ -423,10 +423,12 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 	}
 	if stats, sErr := s.store.UploadStats(); sErr != nil {
 		s.logger.Warn("failed to read upload stats before snapshot", zap.Error(sErr))
-	} else if stats.PendingObjects > 0 {
-		s.logger.Warn("snapshot does not cover objects still pending upload",
+	} else if stats.PendingObjects > 0 || stats.UnpinnedObjects > 0 || stats.MultipartUploads > 0 {
+		s.logger.Warn("snapshot does not cover objects not yet pinned or multipart uploads in progress",
 			zap.Int64("pendingObjects", stats.PendingObjects),
-			zap.Int64("pendingSize", stats.PendingSize))
+			zap.Int64("pendingSize", stats.PendingSize),
+			zap.Int64("unpinnedObjects", stats.UnpinnedObjects),
+			zap.Int64("multipartUploads", stats.MultipartUploads))
 	}
 
 	snap, gen, err := s.store.CreateSnapshot()
