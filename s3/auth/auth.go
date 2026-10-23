@@ -144,8 +144,23 @@ func HandleAuth(req *http.Request, store KeyStore, region string, now time.Time)
 		err.HTTPStatus = http.StatusForbidden
 		return nil, err
 	default:
-		return nil, nil // anonymous
+		return nil, handleAnonymousPayload(req)
 	}
+}
+
+// handleAnonymousPayload strips the aws-chunked framing from an unsigned
+// streaming body. Signed streaming bodies and malformed framing are denied.
+func handleAnonymousPayload(req *http.Request) error {
+	switch payloadHash := req.Header.Get(HeaderXAMZContentSHA256); payloadHash {
+	case ContentStreamingUnsignedPayloadTrailer:
+		if err := handleAuthV4Streaming(req, payloadHash, nil); err != nil {
+			return s3errs.ErrAccessDenied
+		}
+		return nil
+	case ContentStreamingAWS4HMACSHA256Payload, ContentStreamingAWS4HMACSHA256PayloadTrailer:
+		return s3errs.ErrAccessDenied
+	}
+	return nil
 }
 
 // isPresigned returns true if query carries either presigned authentication
@@ -163,6 +178,11 @@ func handleAuthV4(req *http.Request, query url.Values, store KeyStore, region st
 	result, err := verifyV4SignedRequest(req, query, store, region, now)
 	if err != nil {
 		return nil, err
+	}
+	// a missing payload hash was signed as the empty payload's, so the body
+	// must be verified against it rather than treated as unsigned
+	if req.Header.Get(HeaderXAMZContentSHA256) == "" {
+		req.Header.Set(HeaderXAMZContentSHA256, emptySha256Hex)
 	}
 
 	// at this point the signature is valid, but we still need to check if the
@@ -211,11 +231,11 @@ func AccessKeyIDFromRequest(req *http.Request) string {
 
 // Sha256HashFromRequest extracts the SHA256 hash of the payload from the
 // request if available. This hash should then be used to verify the integrity
-// of the payload.
+// of the payload. Only anonymous requests can lack the header by this point.
 func Sha256HashFromRequest(req *http.Request) (*[32]byte, error) {
 	h := req.Header.Get(HeaderXAMZContentSHA256)
 	switch h {
-	case ContentUnsignedPayload,
+	case "", ContentUnsignedPayload,
 		ContentStreamingUnsignedPayloadTrailer,
 		ContentStreamingAWS4HMACSHA256Payload,
 		ContentStreamingAWS4HMACSHA256PayloadTrailer:

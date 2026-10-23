@@ -130,6 +130,7 @@ func handleAuthV4Presigned(req *http.Request, query url.Values, store KeyStore, 
 	if err := handleAuthV4Payload(req, payloadHash, result); err != nil {
 		return nil, err
 	}
+	result.Caller.Presigned = true
 	return &result.Caller, nil
 }
 

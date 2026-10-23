@@ -45,6 +45,8 @@ type (
 	// S3 contains S3 related configuration.
 	S3 struct {
 		HostBases []string `yaml:"hostBases"`
+		// TrustedProxies contains IPs and CIDRs whose forwarding headers are trusted.
+		TrustedProxies []string `yaml:"trustedProxies"`
 	}
 
 	// Sia contains the configuration for the Sia backend.
@@ -220,6 +222,9 @@ func setAccessKeyPairs() {
 		} else if errors.Is(err, sia.ErrUserAlreadyExists) {
 			fmt.Printf("User %q already exists, reusing it.\n", userName)
 			break
+		} else if errors.Is(err, sia.ErrReservedUserName) {
+			stdoutError(fmt.Sprintf("User name %q is reserved.", userName))
+			continue
 		}
 		checkFatalError("failed to create user", err)
 	}
