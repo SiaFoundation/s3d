@@ -90,6 +90,7 @@ CREATE TABLE objects (
     object_lock_mode TEXT NOT NULL DEFAULT '' CHECK (object_lock_mode IN ('', 'GOVERNANCE', 'COMPLIANCE')),
     object_lock_retain_until INTEGER CHECK ((object_lock_mode = '' AND object_lock_retain_until IS NULL) OR (object_lock_mode != '' AND object_lock_retain_until IS NOT NULL)), -- unix milliseconds
     object_lock_legal_hold TEXT NOT NULL DEFAULT '' CHECK (object_lock_legal_hold IN ('', 'ON', 'OFF')), -- '' means never set
+    noncurrent_at INTEGER, -- set when a version stops being current, which is when its successor was written
     -- non-empty objects must have a filename, a sia_object_id, or both (between uploading and pinning)
     CHECK ((size = 0 AND filename IS NULL AND sia_object_id IS NULL) OR (size > 0 AND (filename IS NOT NULL OR sia_object_id IS NOT NULL))),
     CHECK (is_delete_marker IN (FALSE, TRUE)),
@@ -101,6 +102,8 @@ CREATE INDEX objects_filename_idx ON objects(filename) WHERE filename IS NOT NUL
 CREATE INDEX objects_bucket_id_updated_at_idx ON objects(bucket_id, updated_at);
 CREATE INDEX objects_bucket_name_seq_idx ON objects(bucket_id, name, seq DESC);
 CREATE UNIQUE INDEX objects_is_latest_idx ON objects(bucket_id, name) WHERE is_latest = TRUE;
+CREATE INDEX objects_noncurrent_at_idx ON objects(bucket_id, noncurrent_at) WHERE is_latest = FALSE;
+CREATE INDEX objects_delete_marker_updated_at_idx ON objects(bucket_id, updated_at) WHERE is_latest = TRUE AND is_delete_marker = TRUE;
 
 CREATE TABLE unpinned_objects (
     sia_object_id BLOB PRIMARY KEY,

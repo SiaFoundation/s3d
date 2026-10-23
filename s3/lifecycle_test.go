@@ -201,6 +201,9 @@ func TestLifecycleCutoffs(t *testing.T) {
 		// a shortened day duration drops the calendar anchoring: 5 "days" of
 		// 10s is a flat 50s before now.
 		{"accelerated days", &s3.LifecycleExpiration{Days: 5}, 10 * time.Second, now.Add(-50 * time.Second), true},
+		// a window that overflows int64 nanoseconds reaches nothing rather
+		// than wrapping to a cutoff in the future
+		{"overflowing days", &s3.LifecycleExpiration{Days: 106752}, 0, time.Time{}, true},
 		{"past date", &s3.LifecycleExpiration{Date: "2020-01-01T00:00:00.000Z"}, 0, now, true},
 		{"future date", &s3.LifecycleExpiration{Date: "2030-01-01T00:00:00.000Z"}, 0, time.Time{}, false},
 		{"delete marker only", &s3.LifecycleExpiration{ExpiredObjectDeleteMarker: aws.Bool(true)}, 0, time.Time{}, false},
@@ -225,6 +228,27 @@ func TestLifecycleCutoffs(t *testing.T) {
 	want := time.Date(2026, 6, 4, 0, 0, 0, 0, time.UTC)
 	if got := abort.AbortCutoff(now, 24*time.Hour); !got.Equal(want) {
 		t.Fatalf("expected abort cutoff %v, got %v", want, got)
+	}
+
+	// NoncurrentDays is anchored the same way, 30 days before 2026-06-09T12:00Z
+	// is 2026-05-10T00:00Z
+	aged := &s3.LifecycleNoncurrentVersionExpiration{NoncurrentDays: 30}
+	want = time.Date(2026, 5, 10, 0, 0, 0, 0, time.UTC)
+	if got := aged.NoncurrentCutoff(now, 24*time.Hour); !got.Equal(want) {
+		t.Fatalf("expected noncurrent cutoff %v, got %v", want, got)
+	}
+
+	// without NoncurrentDays the cutoff is now, so a version demoted moments
+	// ago still qualifies and only the retain count holds it back
+	counted := &s3.LifecycleNoncurrentVersionExpiration{NewerNoncurrentVersions: aws.Int(5)}
+	if got := counted.NoncurrentCutoff(now, 24*time.Hour); !got.Equal(now) {
+		t.Fatalf("expected noncurrent cutoff %v, got %v", now, got)
+	}
+	if got := counted.Retain(); got != 5 {
+		t.Fatalf("expected retain 5, got %d", got)
+	}
+	if got := aged.Retain(); got != 0 {
+		t.Fatalf("expected retain 0 when unset, got %d", got)
 	}
 }
 
@@ -264,7 +288,6 @@ func TestLifecycleConfigurationValidate(t *testing.T) {
 		{"zero days", enabled(s3.LifecycleRule{Expiration: &s3.LifecycleExpiration{}}), s3errs.ErrInvalidArgument},
 		{"bad date", enabled(s3.LifecycleRule{Expiration: &s3.LifecycleExpiration{Date: "not-a-date"}}), s3errs.ErrMalformedXML},
 		{"non-midnight date", enabled(s3.LifecycleRule{Expiration: &s3.LifecycleExpiration{Date: "2020-01-01T12:34:56Z"}}), s3errs.ErrInvalidArgument},
-		{"expired delete marker unsupported", enabled(s3.LifecycleRule{Expiration: &s3.LifecycleExpiration{ExpiredObjectDeleteMarker: aws.Bool(true)}}), s3errs.ErrNotImplemented},
 		{"days and expired delete marker", enabled(s3.LifecycleRule{Expiration: &s3.LifecycleExpiration{Days: 1, ExpiredObjectDeleteMarker: aws.Bool(true)}}), s3errs.ErrMalformedXML},
 		{"abort zero days", enabled(s3.LifecycleRule{AbortIncompleteMultipartUpload: &s3.AbortIncompleteMultipartUpload{DaysAfterInitiation: 0}}), s3errs.ErrMalformedXML},
 		{"tag filter", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{Tag: &s3.LifecycleTag{Key: "k", Value: "v"}}, Expiration: &s3.LifecycleExpiration{Days: 1}}), s3errs.ErrNotImplemented},
@@ -292,7 +315,18 @@ func TestLifecycleConfigurationValidate(t *testing.T) {
 		{"negative size bound", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{ObjectSizeGreaterThan: aws.Int64(-1)}, Expiration: &s3.LifecycleExpiration{Days: 1}}), s3errs.ErrInvalidArgument},
 		{"and tag filter", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{And: &s3.LifecycleAndOperator{Prefix: aws.String("logs/"), Tags: []s3.LifecycleTag{{Key: "k", Value: "v"}}}}, Expiration: &s3.LifecycleExpiration{Days: 1}}), s3errs.ErrNotImplemented},
 		{"transition action", enabled(s3.LifecycleRule{Expiration: &s3.LifecycleExpiration{Days: 1}, Transitions: []s3.LifecycleUnsupportedAction{{}}}), s3errs.ErrNotImplemented},
-		{"noncurrent version expiration action", enabled(s3.LifecycleRule{Expiration: &s3.LifecycleExpiration{Days: 1}, NoncurrentVersionExpiration: &s3.LifecycleUnsupportedAction{}}), s3errs.ErrNotImplemented},
+		{"noncurrent version transition action", enabled(s3.LifecycleRule{Expiration: &s3.LifecycleExpiration{Days: 1}, NoncurrentVersionTransitions: []s3.LifecycleUnsupportedAction{{}}}), s3errs.ErrNotImplemented},
+		{"noncurrent days", enabled(s3.LifecycleRule{NoncurrentVersionExpiration: &s3.LifecycleNoncurrentVersionExpiration{NoncurrentDays: 30}}), nil},
+		{"noncurrent days with expiration", enabled(s3.LifecycleRule{Expiration: &s3.LifecycleExpiration{Days: 60}, NoncurrentVersionExpiration: &s3.LifecycleNoncurrentVersionExpiration{NoncurrentDays: 30}}), nil},
+		{"newer noncurrent versions", enabled(s3.LifecycleRule{NoncurrentVersionExpiration: &s3.LifecycleNoncurrentVersionExpiration{NewerNoncurrentVersions: aws.Int(10)}}), nil},
+		{"newer noncurrent versions at limit", enabled(s3.LifecycleRule{NoncurrentVersionExpiration: &s3.LifecycleNoncurrentVersionExpiration{NewerNoncurrentVersions: aws.Int(100)}}), nil},
+		{"newer noncurrent versions above limit", enabled(s3.LifecycleRule{NoncurrentVersionExpiration: &s3.LifecycleNoncurrentVersionExpiration{NewerNoncurrentVersions: aws.Int(101)}}), s3errs.ErrInvalidArgument},
+		{"newer noncurrent versions below one", enabled(s3.LifecycleRule{NoncurrentVersionExpiration: &s3.LifecycleNoncurrentVersionExpiration{NewerNoncurrentVersions: aws.Int(0)}}), s3errs.ErrInvalidArgument},
+		{"newer noncurrent versions without filter", s3.LifecycleConfiguration{Rules: []s3.LifecycleRule{{Status: s3.LifecycleStatusEnabled, Prefix: aws.String("logs/"), NoncurrentVersionExpiration: &s3.LifecycleNoncurrentVersionExpiration{NewerNoncurrentVersions: aws.Int(10)}}}}, s3errs.ErrInvalidRequest},
+		{"negative noncurrent days", enabled(s3.LifecycleRule{NoncurrentVersionExpiration: &s3.LifecycleNoncurrentVersionExpiration{NoncurrentDays: -1}}), s3errs.ErrInvalidArgument},
+		{"empty noncurrent expiration", enabled(s3.LifecycleRule{NoncurrentVersionExpiration: &s3.LifecycleNoncurrentVersionExpiration{}}), s3errs.ErrMalformedXML},
+		{"expired delete marker", enabled(s3.LifecycleRule{Expiration: &s3.LifecycleExpiration{ExpiredObjectDeleteMarker: aws.Bool(true)}}), nil},
+		{"expired delete marker with noncurrent expiration", enabled(s3.LifecycleRule{Expiration: &s3.LifecycleExpiration{ExpiredObjectDeleteMarker: aws.Bool(true)}, NoncurrentVersionExpiration: &s3.LifecycleNoncurrentVersionExpiration{NoncurrentDays: 30}}), nil},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

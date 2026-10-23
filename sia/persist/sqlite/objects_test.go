@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"database/sql"
 	"errors"
 	"reflect"
 	"testing"
@@ -2153,6 +2154,85 @@ func TestVersioning(t *testing.T) {
 			} else if got != want {
 				t.Fatalf("expected status %q, got %q", want, got)
 			}
+		}
+	})
+
+	t.Run("NoncurrentTimestamp", func(t *testing.T) {
+		const (
+			bucket = "noncurrent-at"
+			key    = "key"
+		)
+		if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
+			t.Fatal(err)
+		} else if err := store.PutBucketVersioning(accessKeyID, bucket, s3.VersioningStatusEnabled); err != nil {
+			t.Fatal(err)
+		}
+
+		put := func() string {
+			t.Helper()
+			v, _, err := store.PutObject(accessKeyID, bucket, key, objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 1, FileName: new(string)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return v
+		}
+		noncurrentAt := func(version string) sql.NullInt64 {
+			t.Helper()
+			var at sql.NullInt64
+			err := store.db.QueryRow(`SELECT o.noncurrent_at FROM objects o
+				JOIN buckets b ON b.id = o.bucket_id
+				WHERE b.name = ? AND o.name = ? AND o.version_id = ?`, bucket, key, version).Scan(&at)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return at
+		}
+
+		v1 := put()
+		if at := noncurrentAt(v1); at.Valid {
+			t.Fatal("expected the only version to carry no noncurrent timestamp")
+		}
+
+		// the successor demotes v1, which stamps it
+		before := time.Now().Add(-time.Second)
+		v2 := put()
+		at1 := noncurrentAt(v1)
+		if !at1.Valid {
+			t.Fatal("expected the demoted version to be stamped")
+		} else if stamped := time.Unix(at1.Int64, 0); stamped.Before(before) {
+			t.Fatalf("expected a stamp at or after %v, got %v", before, stamped)
+		}
+		if at := noncurrentAt(v2); at.Valid {
+			t.Fatal("expected the current version to carry no noncurrent timestamp")
+		}
+
+		// removing the current version promotes v1 back, clearing its stamp
+		if _, _, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: key, VersionID: &v2}, false); err != nil {
+			t.Fatal(err)
+		}
+		if at := noncurrentAt(v1); at.Valid {
+			t.Fatal("expected the promoted version to have its noncurrent timestamp cleared")
+		}
+
+		// suspending versioning writes a null version that each later put
+		// replaces in place, which must leave the versions behind it alone
+		v3 := put()
+		if err := store.PutBucketVersioning(accessKeyID, bucket, s3.VersioningStatusSuspended); err != nil {
+			t.Fatal(err)
+		}
+		put()
+
+		const stamp = 1000
+		if _, err := store.db.Exec(`UPDATE objects SET noncurrent_at = ?
+			WHERE bucket_id = (SELECT id FROM buckets WHERE name = ?) AND name = ? AND version_id IN (?, ?)`,
+			stamp, bucket, key, v1, v3); err != nil {
+			t.Fatal(err)
+		}
+		put()
+		if at := noncurrentAt(v1); !at.Valid || at.Int64 != stamp {
+			t.Fatalf("expected the oldest version to keep its stamp, got %v", at)
+		} else if at := noncurrentAt(v3); !at.Valid || at.Int64 != stamp {
+			t.Fatalf("expected the replaced version's predecessor to keep its stamp, got %v", at)
 		}
 	})
 

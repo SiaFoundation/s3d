@@ -74,7 +74,7 @@ func putObject(tx *txn, bid int64, name string, status string, contentMD5 [16]by
 	)
 	if status == s3.VersioningStatusEnabled {
 		version = newDBVersion()
-	} else if old, replacedOld, err = deleteObject(tx, bid, name, nullVersion, false); err != nil {
+	} else if old, replacedOld, err = deleteNullVersion(tx, bid, name); err != nil {
 		return objectMutationResult{}, fmt.Errorf("failed to delete null version: %w", err)
 	}
 
@@ -156,7 +156,7 @@ func deleteCurrentObject(tx *txn, bid int64, name string, status string, objectI
 			return objectMutationResult{}, err
 		}
 		var orphan objects.OrphanedFile
-		row, found, err := deleteObject(tx, bid, name, nullVersion, false)
+		row, found, err := deleteNullVersion(tx, bid, name)
 		if err != nil {
 			return objectMutationResult{}, fmt.Errorf("failed to delete null version: %w", err)
 		}

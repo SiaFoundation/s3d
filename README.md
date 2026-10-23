@@ -296,7 +296,22 @@ AWS Signature V4 exclusively. SigV4A is not implemented. Supported
 (`s3.example.com/bucket/object`) and virtual-hosted-style
 (`bucket.s3.example.com/object`) addressing are supported.
 
-Bucket lifecycle configuration supports prefix-based `AbortIncompleteMultipartUpload` rules and current-object `Expiration` rules. Rules may also filter by object size with `ObjectSizeGreaterThan` and `ObjectSizeLessThan`, which exclude their own values, and a filter combining a non-empty prefix with size bounds must wrap them in `And`.
+Bucket lifecycle configuration supports `AbortIncompleteMultipartUpload` rules,
+`Expiration` of the current version, `NoncurrentVersionExpiration` of older
+versions, and `ExpiredObjectDeleteMarker` for a delete marker left as the last
+version of its key. A `Days` or `Date` expiration also removes such a marker
+once the marker itself is old enough, as S3 does.
+
+`NoncurrentVersionExpiration` honors `NoncurrentDays` and
+`NewerNoncurrentVersions`. The latter retains between 1 and 100 versions and
+requires a `Filter`, and when both are given a version expires only once it is
+both old enough and behind enough newer versions. Noncurrent age is counted from
+the moment a version was superseded, which is when its successor was written.
+
+Rules may filter by prefix and by object size with `ObjectSizeGreaterThan` and
+`ObjectSizeLessThan`, which exclude their own values. A filter combining a
+non-empty prefix with size bounds must wrap them in `And`. Tag filters and
+storage class transitions are rejected.
 
 Object Lock is supported in both `GOVERNANCE` and `COMPLIANCE` mode, with
 retention periods, legal holds and bucket default retention rules. Creating a
@@ -404,7 +419,7 @@ delete with nothing to delete is a no-op, as an unconditional one is.
 | DeleteBucketPolicy | ✓ | |
 | GetBucketPolicyStatus | ✓ | |
 | GetBucketLifecycle | ✓ | |
-| PutBucketLifecycle | ◐ | Prefix and object-size filters only, with `AbortIncompleteMultipartUpload` and current-object `Expiration` rules |
+| PutBucketLifecycle | ◐ | Tag filters and storage class transitions are rejected |
 | DeleteBucketLifecycle | ✓ | |
 | GetBucketCors | ✗ | |
 | PutBucketCors | ✗ | |

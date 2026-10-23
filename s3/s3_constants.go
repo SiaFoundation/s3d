@@ -40,6 +40,10 @@ const (
 	// LifecycleRuleIDSizeLimit defines the maximum length of a lifecycle rule
 	// ID. AWS allows rule IDs of up to 255 characters.
 	LifecycleRuleIDSizeLimit = 255
+
+	// NewerNoncurrentVersionsLimit defines the largest number of noncurrent
+	// versions a lifecycle rule may retain.
+	NewerNoncurrentVersionsLimit = 100
 )
 
 const (

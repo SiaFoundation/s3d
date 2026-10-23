@@ -250,3 +250,189 @@ func TestExpireObjectsVersions(t *testing.T) {
 		t.Fatalf("expected old noncurrent version to remain, got %v", err)
 	}
 }
+
+func TestExpireNoncurrentVersions(t *testing.T) {
+	const accessKeyID = testAccessKeyID
+
+	store := initTestDB(t, zap.NewNop())
+
+	// setup returns a versioned bucket holding four versions of one key, the
+	// newest current and the other three noncurrent, oldest first.
+	setup := func(bucket string) (key string, versions []string) {
+		t.Helper()
+		key = "logs/obj"
+		if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
+			t.Fatal(err)
+		} else if err := store.PutBucketVersioning(accessKeyID, bucket, s3.VersioningStatusEnabled); err != nil {
+			t.Fatal(err)
+		}
+		for range 4 {
+			v, _, err := store.PutObject(accessKeyID, bucket, key, objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 1, FileName: new(string)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			versions = append(versions, v)
+		}
+		return key, versions
+	}
+	backdate := func(bucket, key, version string, d time.Duration) {
+		t.Helper()
+		res, err := store.db.Exec(`UPDATE objects SET noncurrent_at = ?
+			WHERE bucket_id = (SELECT id FROM buckets WHERE name = ?) AND name = ? AND version_id = ?`,
+			sqlTime(time.Now().Add(-d)), bucket, key, version)
+		if err != nil {
+			t.Fatal(err)
+		} else if n, err := res.RowsAffected(); err != nil {
+			t.Fatal(err)
+		} else if n != 1 {
+			t.Fatalf("expected to backdate one row, got %d", n)
+		}
+	}
+	exists := func(bucket, key, version string) bool {
+		t.Helper()
+		_, err := store.GetObject(aws.String(accessKeyID), bucket, key, s3.SpecificVersion(version), nil, s3.ActionGetObject)
+		if err == nil {
+			return true
+		} else if errors.Is(err, s3errs.ErrNoSuchVersion) {
+			return false
+		}
+		t.Fatal(err)
+		return false
+	}
+
+	t.Run("Age", func(t *testing.T) {
+		const bucket = "age"
+		key, v := setup(bucket)
+		// only the two oldest noncurrent versions are past the cutoff
+		backdate(bucket, key, v[0], 48*time.Hour)
+		backdate(bucket, key, v[1], 48*time.Hour)
+
+		deleted, _, err := store.ExpireNoncurrentVersions(bucket, "logs/", nil, nil, 0, time.Now().Add(-24*time.Hour), 100)
+		if err != nil {
+			t.Fatal(err)
+		} else if deleted != 2 {
+			t.Fatalf("expected 2 expired versions, got %d", deleted)
+		}
+		if exists(bucket, key, v[0]) || exists(bucket, key, v[1]) {
+			t.Fatal("expected the backdated versions to be expired")
+		} else if !exists(bucket, key, v[2]) || !exists(bucket, key, v[3]) {
+			t.Fatal("expected the recent noncurrent version and the current version to remain")
+		}
+	})
+
+	t.Run("RetainCount", func(t *testing.T) {
+		const bucket = "retain"
+		key, v := setup(bucket)
+		// no age bound, so only the retain count decides
+		deleted, _, err := store.ExpireNoncurrentVersions(bucket, "logs/", nil, nil, 1, time.Now(), 100)
+		if err != nil {
+			t.Fatal(err)
+		} else if deleted != 2 {
+			t.Fatalf("expected 2 expired versions, got %d", deleted)
+		}
+		// v[2] is the newest noncurrent and is the one retained
+		if exists(bucket, key, v[0]) || exists(bucket, key, v[1]) {
+			t.Fatal("expected the two oldest noncurrent versions to be expired")
+		} else if !exists(bucket, key, v[2]) || !exists(bucket, key, v[3]) {
+			t.Fatal("expected the retained noncurrent version and the current version to remain")
+		}
+	})
+
+	t.Run("AgeAndRetainCountBothApply", func(t *testing.T) {
+		const bucket = "both"
+		key, v := setup(bucket)
+		// every noncurrent version is old enough, so the count binds
+		for _, version := range v[:3] {
+			backdate(bucket, key, version, 48*time.Hour)
+		}
+		deleted, _, err := store.ExpireNoncurrentVersions(bucket, "logs/", nil, nil, 2, time.Now().Add(-24*time.Hour), 100)
+		if err != nil {
+			t.Fatal(err)
+		} else if deleted != 1 {
+			t.Fatalf("expected 1 expired version, got %d", deleted)
+		}
+		if exists(bucket, key, v[0]) {
+			t.Fatal("expected the oldest noncurrent version to be expired")
+		} else if !exists(bucket, key, v[1]) || !exists(bucket, key, v[2]) {
+			t.Fatal("expected the two retained noncurrent versions to remain")
+		}
+
+		// the age bound alone keeps a young version even when the count allows
+		if deleted, _, err := store.ExpireNoncurrentVersions(bucket, "logs/", nil, nil, 0, time.Now().Add(-72*time.Hour), 100); err != nil {
+			t.Fatal(err)
+		} else if deleted != 0 {
+			t.Fatalf("expected nothing to expire before the cutoff, got %d", deleted)
+		}
+	})
+
+	t.Run("PrefixAndSizeBounds", func(t *testing.T) {
+		const bucket = "bounds"
+		key, v := setup(bucket)
+		for _, version := range v[:3] {
+			backdate(bucket, key, version, 48*time.Hour)
+		}
+		// every version is 1 byte, so an exclusive lower bound of 1 matches none
+		if deleted, _, err := store.ExpireNoncurrentVersions(bucket, "logs/", aws.Int64(1), nil, 0, time.Now(), 100); err != nil {
+			t.Fatal(err)
+		} else if deleted != 0 {
+			t.Fatalf("expected the size bound to exclude every version, got %d", deleted)
+		}
+		// a prefix that matches nothing also selects nothing
+		if deleted, _, err := store.ExpireNoncurrentVersions(bucket, "other/", nil, nil, 0, time.Now(), 100); err != nil {
+			t.Fatal(err)
+		} else if deleted != 0 {
+			t.Fatalf("expected the prefix to exclude every version, got %d", deleted)
+		}
+	})
+}
+
+func TestExpireDeleteMarkers(t *testing.T) {
+	const (
+		accessKeyID = testAccessKeyID
+		bucket      = "marker-bucket"
+		key         = "logs/obj"
+	)
+
+	store := initTestDB(t, zap.NewNop())
+	if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
+		t.Fatal(err)
+	} else if err := store.PutBucketVersioning(accessKeyID, bucket, s3.VersioningStatusEnabled); err != nil {
+		t.Fatal(err)
+	}
+
+	version, _, err := store.PutObject(accessKeyID, bucket, key, objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 1, FileName: new(string)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// deleting without a version leaves a delete marker over the old version
+	_, isMarker, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: key}, false)
+	if err != nil {
+		t.Fatal(err)
+	} else if !isMarker {
+		t.Fatal("expected a delete marker")
+	}
+
+	// the marker is not expired while another version of the key survives
+	if deleted, _, err := store.ExpireDeleteMarkers(bucket, "logs/", time.Now(), 100); err != nil {
+		t.Fatal(err)
+	} else if deleted != 0 {
+		t.Fatalf("expected the marker to survive alongside another version, got %d", deleted)
+	}
+
+	// once the last version is gone the marker is an expired object delete marker
+	if _, _, _, err := store.DeleteObject(accessKeyID, bucket, s3.ObjectID{Key: key, VersionID: &version}, false); err != nil {
+		t.Fatal(err)
+	}
+	// a cutoff before the marker was created holds it back
+	if deleted, _, err := store.ExpireDeleteMarkers(bucket, "logs/", time.Now().Add(-time.Hour), 100); err != nil {
+		t.Fatal(err)
+	} else if deleted != 0 {
+		t.Fatalf("expected the marker to survive a cutoff before its creation, got %d", deleted)
+	}
+	if deleted, _, err := store.ExpireDeleteMarkers(bucket, "logs/", time.Now(), 100); err != nil {
+		t.Fatal(err)
+	} else if deleted != 1 {
+		t.Fatalf("expected the marker to be removed, got %d", deleted)
+	}
+	store.assertCount(0, "objects")
+}
