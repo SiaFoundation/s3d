@@ -175,11 +175,14 @@ func (s *Sia) UploadPart(ctx context.Context, bucket s3.BucketID, object string,
 	var uploadHash hash.Hash
 	if upload.Algorithm != "" {
 		uploadHash = upload.Algorithm.NewHash()
+		if uploadHash == nil {
+			return nil, fmt.Errorf("cannot hash %q", upload.Algorithm)
+		}
 		writers = append(writers, uploadHash)
 	}
 
 	var checksumHash hash.Hash
-	if opts.Checksum != nil && uploadHash == nil {
+	if opts.Checksum != nil && upload.Algorithm == "" {
 		checksumHash = opts.Checksum.NewHash()
 		if checksumHash == nil {
 			return nil, s3errs.ErrInvalidRequest
@@ -349,6 +352,9 @@ func (s *Sia) UploadPartCopy(ctx context.Context, srcBucket s3.BucketID, srcObje
 	var uploadHash hash.Hash
 	if upload.Algorithm != "" {
 		uploadHash = upload.Algorithm.NewHash()
+		if uploadHash == nil {
+			return nil, fmt.Errorf("cannot hash %q", upload.Algorithm)
+		}
 		writers = append(writers, uploadHash)
 	}
 

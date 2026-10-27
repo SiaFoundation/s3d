@@ -307,6 +307,18 @@ func TestMultipartChecksum(t *testing.T) {
 		t.Fatalf("expected checksum %s, got %s", partSHA256, got)
 	}
 
+	// assert [s3errs.ErrBadDigest] for a part whose checksum does not cover it
+	_, err = s3Tester.Client().UploadPart(t.Context(), &service.UploadPartInput{
+		Bucket:         aws.String(bucket),
+		Key:            aws.String(object),
+		UploadId:       aws.String(uploadID),
+		PartNumber:     aws.Int32(3),
+		Body:           bytes.NewReader(data),
+		ContentLength:  aws.Int64(int64(len(data))),
+		ChecksumSHA256: aws.String(base64.StdEncoding.EncodeToString(frand.Bytes(32))),
+	})
+	testutil.AssertS3Error(t, s3errs.ErrBadDigest, err)
+
 	// assert [s3errs.ErrInvalidRequest] for a part carrying another algorithm
 	var crc32Sum [4]byte
 	binary.BigEndian.PutUint32(crc32Sum[:], crc32.ChecksumIEEE(data))

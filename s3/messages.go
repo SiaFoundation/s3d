@@ -1,8 +1,11 @@
 package s3
 
 import (
+	"encoding/base64"
 	"encoding/xml"
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3/s3errs"
@@ -657,8 +660,11 @@ func NewChecksumElements(a ChecksumAlgorithm, value string) ChecksumElements {
 }
 
 // Value returns the one element that is set and the algorithm it belongs to,
-// both empty when none is set. More than one set element returns
-// [s3errs.ErrInvalidRequest].
+// both empty when none is set. More than one set element wraps
+// [s3errs.ErrInvalidRequest], and a value that is not base64 of the algorithm's
+// digest size wraps [s3errs.ErrBadDigest]. A composite value carrying a part
+// count suffix such as "-3" is validated on the digest before the suffix. The
+// value is returned as it arrived so a caller can compare a composite verbatim.
 func (e ChecksumElements) Value() (ChecksumAlgorithm, string, error) {
 	var algorithm ChecksumAlgorithm
 	var value string
@@ -680,7 +686,19 @@ func (e ChecksumElements) Value() (ChecksumAlgorithm, string, error) {
 		count++
 	}
 	if count > 1 {
-		return "", "", s3errs.ErrInvalidRequest
+		return "", "", fmt.Errorf("found %d checksums, expected at most one: %w", count, s3errs.ErrInvalidRequest)
+	} else if count == 0 {
+		return "", "", nil
+	}
+
+	digest := value
+	if base, parts, ok := strings.Cut(value, "-"); ok && parts != "" && strings.Trim(parts, "0123456789") == "" {
+		digest = base
+	}
+
+	sum, err := base64.StdEncoding.DecodeString(digest)
+	if err != nil || len(sum) != algorithm.NewHash().Size() {
+		return "", "", fmt.Errorf("checksum %q is not a %s digest: %w", value, algorithm, s3errs.ErrBadDigest)
 	}
 	return algorithm, value, nil
 }
