@@ -165,6 +165,9 @@ func ObjectChecksumFromMeta(meta map[string]string) *ObjectChecksum {
 
 // StoreInMeta writes the checksum to an object's metadata.
 func (c ObjectChecksum) StoreInMeta(meta map[string]string) {
+	if c.Algorithm == "" {
+		return
+	}
 	meta[c.Algorithm.Header()] = c.Value
 	meta[HeaderXAMZChecksumType] = string(c.Type)
 }
