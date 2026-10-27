@@ -432,7 +432,7 @@ components:
           description: The user to issue the key to.
         accessKeyID:
           type: string
-          description: The access key ID, between 16 and 128 characters. Generated when omitted together with secretKey.
+          description: The access key ID, between 16 and 128 characters without slashes, commas or whitespace. Generated when omitted together with secretKey.
         secretKey:
           type: string
           description: The secret key, between 32 and 128 characters. Generated when omitted together with accessKeyID.
