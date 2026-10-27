@@ -51,20 +51,22 @@ func TestRequestChecksum(t *testing.T) {
 			headers: map[string]string{"X-Amz-Checksum-Made-Up": sum},
 		},
 		{
+			// both values are well formed, so the error comes from the count
+			// rather than from whichever header the loop reaches first
 			name:    "more than one checksum",
-			headers: map[string]string{"X-Amz-Checksum-Crc32": sum, "X-Amz-Checksum-Sha1": sum},
+			headers: map[string]string{"X-Amz-Checksum-Crc32": sum, "X-Amz-Checksum-Crc32c": sum},
 			wantErr: s3errs.ErrInvalidRequest,
 		},
 		{
 			name:    "sum is not base64",
 			headers: map[string]string{"X-Amz-Checksum-Crc32": "not base64!"},
-			wantErr: s3errs.ErrInvalidRequest,
+			wantErr: s3errs.ErrBadDigest,
 		},
 		{
 			// four bytes is a crc32, not a sha256
 			name:    "sum has the wrong length",
 			headers: map[string]string{"X-Amz-Checksum-Sha256": sum},
-			wantErr: s3errs.ErrInvalidRequest,
+			wantErr: s3errs.ErrBadDigest,
 		},
 	}
 
