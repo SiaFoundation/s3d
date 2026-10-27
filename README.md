@@ -379,8 +379,8 @@ checksum sent with `PutObject` is validated and stored the same way.
 `x-amz-checksum-type` only when the request carries `x-amz-checksum-mode` set
 to `ENABLED`, and a response to a `Range` request never carries one. A read of
 a single part through `partNumber` returns that part's checksum rather than the
-object's, and a `partNumber` read of an object with one part returns the
-object's own checksum.
+object's, and a `partNumber` read of an object that was not uploaded in parts
+returns the object's own checksum.
 
 `CreateMultipartUpload` accepts an `x-amz-checksum-algorithm` of `CRC32`,
 `CRC32C`, `CRC64NVME`, `SHA1` or `SHA256` and an `x-amz-checksum-type` of
