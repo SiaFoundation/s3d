@@ -516,7 +516,7 @@ func TestPostObjectRejections(t *testing.T) {
 	// a checksum field that does not decode to a digest of the right length
 	upload = newPostUpload(bucket, "rejected")
 	upload.fields = [][2]string{{"x-amz-checksum-sha256", "sailorjerry"}}
-	assertRejected(upload, s3errs.ErrInvalidRequest)
+	assertRejected(upload, s3errs.ErrBadDigest)
 
 	// a well formed checksum field the file does not match
 	upload = newPostUpload(bucket, "rejected")
