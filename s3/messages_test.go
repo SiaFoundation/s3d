@@ -2,9 +2,12 @@ package s3
 
 import (
 	"encoding/xml"
+	"errors"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/SiaFoundation/s3d/s3/s3errs"
 )
 
 func TestStorageClassXML(t *testing.T) {
@@ -57,6 +60,79 @@ func TestContentTimeXML(t *testing.T) {
 			want := "<ContentTime>" + tt.want + "</ContentTime>"
 			if string(buf) != want {
 				t.Fatalf("expected %q, got %q", want, string(buf))
+			}
+		})
+	}
+}
+
+func TestChecksumElementsValue(t *testing.T) {
+	const sha256Value = "arcu6553sHVAiX4MjW0j7I7vD4w6R+Gz9Ok0Q9lTa+0="
+
+	tests := []struct {
+		name          string
+		elements      ChecksumElements
+		wantAlgorithm ChecksumAlgorithm
+		wantValue     string
+		wantErr       error
+	}{
+		{
+			name:          "single element",
+			elements:      ChecksumElements{ChecksumSHA256: sha256Value},
+			wantAlgorithm: ChecksumSHA256,
+			wantValue:     sha256Value,
+		},
+		{
+			name:          "composite suffix",
+			elements:      ChecksumElements{ChecksumSHA256: sha256Value + "-3"},
+			wantAlgorithm: ChecksumSHA256,
+			wantValue:     sha256Value + "-3",
+		},
+		{
+			name:          "crc32",
+			elements:      ChecksumElements{ChecksumCRC32: "tzf7Gg=="},
+			wantAlgorithm: ChecksumCRC32,
+			wantValue:     "tzf7Gg==",
+		},
+		{
+			name: "none set",
+		},
+		{
+			name:     "two elements",
+			elements: ChecksumElements{ChecksumCRC32: "tzf7Gg==", ChecksumSHA256: sha256Value},
+			wantErr:  s3errs.ErrInvalidRequest,
+		},
+		{
+			name:     "invalid base64",
+			elements: ChecksumElements{ChecksumSHA256: "!!!!"},
+			wantErr:  s3errs.ErrBadDigest,
+		},
+		{
+			name:     "wrong length",
+			elements: ChecksumElements{ChecksumSHA256: "tzf7Gg=="},
+			wantErr:  s3errs.ErrBadDigest,
+		},
+		{
+			name:     "composite suffix on a short digest",
+			elements: ChecksumElements{ChecksumSHA256: "tzf7Gg==-3"},
+			wantErr:  s3errs.ErrBadDigest,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			algorithm, value, err := tt.elements.Value()
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("expected %v, got %v", tt.wantErr, err)
+				}
+				return
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if algorithm != tt.wantAlgorithm {
+				t.Fatalf("expected algorithm %q, got %q", tt.wantAlgorithm, algorithm)
+			} else if value != tt.wantValue {
+				t.Fatalf("expected value %q, got %q", tt.wantValue, value)
 			}
 		})
 	}
