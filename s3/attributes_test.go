@@ -298,8 +298,8 @@ func TestGetObjectAttributes(t *testing.T) {
 		t.Fatal("unexpected", reported.ObjectParts.MaxParts)
 	}
 
-	// assert [s3errs.ErrMethodNotAllowed] for a request that names no key, so
-	// the bucket routes keep answering it
+	// assert [s3errs.ErrMethodNotAllowed] for a request that names no key, which
+	// the guard in routeObjectAttributes answers
 	resp, body = rawRequest(http.MethodGet, "/"+bucket+"?attributes", http.Header{
 		"X-Amz-Object-Attributes": []string{"ETag"},
 	})
