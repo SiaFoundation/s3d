@@ -13,7 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/SiaFoundation/s3d/sia"
+	"github.com/SiaFoundation/s3d/s3"
+	"github.com/SiaFoundation/s3d/s3/auth"
 	"go.uber.org/zap"
 	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
@@ -219,17 +220,17 @@ func setAccessKeyPairs() {
 		err := store.CreateUser(userName)
 		if err == nil {
 			break
-		} else if errors.Is(err, sia.ErrUserAlreadyExists) {
+		} else if errors.Is(err, s3.ErrUserAlreadyExists) {
 			fmt.Printf("User %q already exists, reusing it.\n", userName)
 			break
-		} else if errors.Is(err, sia.ErrReservedUserName) {
+		} else if errors.Is(err, s3.ErrReservedUserName) {
 			stdoutError(fmt.Sprintf("User name %q is reserved.", userName))
 			continue
 		}
 		checkFatalError("failed to create user", err)
 	}
 
-	accessKey, secretKey := generateAccessKey()
+	accessKey, secretKey := auth.GenerateAccessKey()
 	checkFatalError("failed to create access key", store.CreateAccessKey(userName, accessKey, secretKey))
 
 	fmt.Println("")
