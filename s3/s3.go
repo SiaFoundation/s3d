@@ -156,6 +156,11 @@ type Backend interface {
 	// - If ContentMD5 is set in opts, and the MD5 checksum of the data read
 	//   from 'r' does not match, [ErrBadDigest] must be returned.
 	//
+	// - If opts.Checksum is set, its algorithm must be computed over the data
+	//   read from 'r', stored with the object and returned in the result. If
+	//   opts.Checksum.Sum is set and does not match, [ErrBadDigest] must be
+	//   returned.
+	//
 	// - opts.Preconditions must be evaluated against the current version of the
 	//   object, via ObjectPreconditions.CheckWrite.
 	PutObject(ctx context.Context, bucket BucketID, object string, r io.Reader, opts PutObjectOptions) (*PutObjectResult, error)

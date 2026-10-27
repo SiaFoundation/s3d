@@ -136,6 +136,10 @@ type PutObjectResult struct {
 	// VersionID is the wire-encoded version to report, or "" on a suspended or
 	// unversioned bucket.
 	VersionID string
+
+	// Checksum is the digest the backend computed for the request's algorithm,
+	// nil when none was asked for.
+	Checksum *RequestChecksum
 }
 
 // PutObjectOptions contains options for a PutObject operation.
@@ -166,14 +170,18 @@ type PutObjectOptions struct {
 	ObjectLock *ObjectLockState
 }
 
-// RequestChecksum is an additional checksum a client asked to have validated,
-// taken from an X-Amz-Checksum-* request header. The backend validates it the
-// same way it validates ContentMD5 and returns ErrBadDigest on a mismatch.
+// RequestChecksum is an additional checksum a client asked for, taken from an
+// X-Amz-Checksum-* request header or from the trailer the request declares.
+// The backend computes it over the object data, stores it with the object and
+// returns it. A sum the request carried up front is validated the same way
+// ContentMD5 is, and a mismatch returns ErrBadDigest.
 type RequestChecksum struct {
 	// Algorithm is the header suffix, canonically formatted, such as "Crc32".
 	Algorithm string
 
-	// Sum is the expected checksum, decoded from the header's base64.
+	// Sum is the expected checksum, decoded from the header's base64. It is nil
+	// when the checksum arrives as a trailer, which the auth layer validates
+	// once the body has been read.
 	Sum []byte
 }
 
@@ -880,14 +888,18 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, access *bucketAcc
 		return err
 	}
 
-	// extract the checksum from an "X-Amz-Checksum-*" header if present
+	// extract the checksum from an "X-Amz-Checksum-*" header or the trailer the
+	// request declares, if either is present
 	checksum, err := requestChecksum(r.Header)
 	if err != nil {
 		return err
 	}
+	if checksum == nil {
+		checksum = trailingChecksum(r.Header)
+	}
 
 	// AWS requires a body checksum on an upload that carries a retention
-	if lock.Retained() && contentMD5 == nil && checksum == nil && !declaresTrailingChecksum(r.Header) {
+	if lock.Retained() && contentMD5 == nil && checksum == nil {
 		return fmt.Errorf("a retention requires Content-MD5 or a checksum: %w", s3errs.ErrInvalidRequest)
 	}
 
@@ -908,6 +920,7 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, access *bucketAcc
 	if res.VersionID != "" {
 		w.Header().Set("x-amz-version-id", res.VersionID)
 	}
+	writeChecksumHeader(w, res.Checksum)
 	w.Header().Set("ETag", FormatETag(res.ContentMD5[:], 0))
 	return nil
 }
@@ -956,16 +969,26 @@ func requestChecksum(headers http.Header) (*RequestChecksum, error) {
 	return found, nil
 }
 
-// declaresTrailingChecksum reports whether the request declares a trailing
-// checksum the backend can compute. The auth layer validates it after the body.
-func declaresTrailingChecksum(headers http.Header) bool {
+// trailingChecksum returns the checksum the request declares as a trailer, or
+// nil when it declares none the backend can compute. The sum is nil since the
+// auth layer validates it after the body.
+func trailingChecksum(headers http.Header) *RequestChecksum {
 	for h := range strings.SplitSeq(headers.Get(auth.HeaderXAMZTrailer), ",") {
 		suffix, ok := strings.CutPrefix(textproto.CanonicalMIMEHeaderKey(strings.TrimSpace(h)), checksumPrefix)
 		if ok && auth.NewChecksumHash(suffix) != nil {
-			return true
+			return &RequestChecksum{Algorithm: suffix}
 		}
 	}
-	return false
+	return nil
+}
+
+// writeChecksumHeader echoes the checksum the backend computed for the object
+// it just stored.
+func writeChecksumHeader(w http.ResponseWriter, checksum *RequestChecksum) {
+	if checksum == nil {
+		return
+	}
+	w.Header().Set(checksumPrefix+checksum.Algorithm, base64.StdEncoding.EncodeToString(checksum.Sum))
 }
 
 // objectLocation returns the URL an object was addressed by, which a response
@@ -1070,6 +1093,7 @@ var objectMetadataHeaders = map[string]struct{}{
 	"X-Amz-Checksum-Sha1":      {},
 	"X-Amz-Checksum-Sha256":    {},
 	"X-Amz-Checksum-Sha512":    {},
+	"X-Amz-Checksum-Type":      {},
 
 	// X-Amz-Website-Redirect-Location is an object header, but s3d does not
 	// implement static website hosting, so storing it would report a redirect
