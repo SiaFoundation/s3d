@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -109,7 +110,7 @@ func TestGetObjectAttributes(t *testing.T) {
 		t.Fatal(err)
 	} else if aws.ToInt64(single.ObjectSize) != int64(len(data)) {
 		t.Fatal("unexpected", aws.ToInt64(single.ObjectSize))
-	} else if got := aws.ToString(single.ETag); got != s3.FormatETag(dataMD5[:], 0) {
+	} else if got := aws.ToString(single.ETag); got != strings.Trim(s3.FormatETag(dataMD5[:], 0), `"`) {
 		t.Fatal("unexpected", got)
 	} else if single.StorageClass != types.StorageClassStandard {
 		t.Fatal("unexpected", single.StorageClass)
@@ -234,11 +235,12 @@ func TestGetObjectAttributes(t *testing.T) {
 		t.Fatal("unexpected", aws.ToInt32(rest.ObjectParts.Parts[0].PartNumber))
 	}
 
-	// an attribute that was not asked for is left out
+	// an attribute that was not asked for is left out, and the reported ETag
+	// keeps its part count suffix without the quotes a header spells it with
 	etagOnly, err := attributes(multipartKey, []types.ObjectAttributes{types.ObjectAttributesEtag}, nil)
 	if err != nil {
 		t.Fatal(err)
-	} else if got := aws.ToString(etagOnly.ETag); got != aws.ToString(completed.ETag) {
+	} else if got := aws.ToString(etagOnly.ETag); got != strings.Trim(aws.ToString(completed.ETag), `"`) {
 		t.Fatal("unexpected", got)
 	} else if etagOnly.Checksum != nil {
 		t.Fatal("expected no checksum")
