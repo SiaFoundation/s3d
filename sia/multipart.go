@@ -521,9 +521,10 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, bucket s3.BucketID, o
 }
 
 // checkPartChecksum compares the checksum a completion request names for a part
-// against the digest the part was stored with. An upload without an algorithm
-// ignores whatever the request named, since a part of such an upload carries no
-// digest to compare against.
+// against the digest the part was stored with. A request that names none is
+// accepted whatever the upload's type, as is any request against an upload
+// without an algorithm, since a part of such an upload carries no digest to
+// compare against.
 func checkPartChecksum(upload objects.MultipartChecksum, requested s3.CompleteMultipartPart, part objects.Part) error {
 	if upload.Algorithm == "" {
 		return nil
@@ -533,8 +534,6 @@ func checkPartChecksum(upload objects.MultipartChecksum, requested s3.CompleteMu
 	switch {
 	case err != nil:
 		return err
-	case algorithm == "" && upload.Type == s3.ChecksumTypeComposite:
-		return s3errs.ErrBadDigest
 	case algorithm == "":
 		return nil
 	case algorithm != upload.Algorithm:
