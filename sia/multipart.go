@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/md5"
 	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"hash"
@@ -413,7 +414,12 @@ func (s *Sia) ListParts(ctx context.Context, bucket s3.BucketID, object string, 
 }
 
 // CompleteMultipartUpload completes a multipart upload.
-func (s *Sia) CompleteMultipartUpload(ctx context.Context, bucket s3.BucketID, object string, uploadID s3.UploadID, parts []s3.CompleteMultipartPart, preconditions s3.ObjectPreconditions) (*s3.CompleteMultipartUploadResult, error) {
+func (s *Sia) CompleteMultipartUpload(ctx context.Context, bucket s3.BucketID, object string, uploadID s3.UploadID, parts []s3.CompleteMultipartPart, opts s3.CompleteMultipartUploadOptions) (*s3.CompleteMultipartUploadResult, error) {
+	upload, err := s.store.MultipartUploadChecksum(bucket, object, uploadID)
+	if err != nil {
+		return nil, err
+	}
+
 	// get multipart upload
 	uploaded, err := s.store.MultipartParts(bucket, object, uploadID)
 	if err != nil {
@@ -435,6 +441,9 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, bucket s3.BucketID, o
 		}
 		if s3.ParseETag(p.ETag) != part.ContentMD5 {
 			return nil, s3errs.ErrInvalidPart
+		}
+		if err := checkPartChecksum(upload, p, part); err != nil {
+			return nil, err
 		}
 		lastPart := i == len(parts)-1
 		if !lastPart && part.Size < s3.MinUploadPartSize {
@@ -470,8 +479,31 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, bucket s3.BucketID, o
 		contentLength += int64(part.Size)
 	}
 
+	// compute the object's additional checksum and check it against the one
+	// the client expects
+	var checksum *s3.ObjectChecksum
+	if upload.Algorithm != "" {
+		value, err := objectChecksumValue(upload, completed)
+		if err != nil {
+			return nil, err
+		}
+		checksum = &s3.ObjectChecksum{Algorithm: upload.Algorithm, Type: upload.Type, Value: value}
+
+		switch {
+		case opts.ChecksumType != "" && opts.ChecksumType != upload.Type:
+			return nil, s3errs.ErrBadDigest
+		case opts.ChecksumValue != "" && opts.ChecksumAlgorithm != upload.Algorithm:
+			return nil, s3errs.ErrBadDigest
+		case opts.ChecksumValue != "" && opts.ChecksumValue != value:
+			return nil, s3errs.ErrBadDigest
+		}
+	}
+	if opts.ObjectSize != nil && *opts.ObjectSize != contentLength {
+		return nil, s3errs.ErrInvalidRequest
+	}
+
 	// complete the multipart upload in the database
-	versionID, orphan, err := s.store.CompleteMultipartUpload(bucket, object, uploadID, contentMD5, contentLength, nil, preconditions)
+	versionID, orphan, err := s.store.CompleteMultipartUpload(bucket, object, uploadID, contentMD5, contentLength, checksum, opts.Preconditions)
 	if err != nil {
 		return nil, fmt.Errorf("failed to complete multipart upload in store: %w", err)
 	}
@@ -484,7 +516,61 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, bucket s3.BucketID, o
 		ETag:       etag,
 		ContentMD5: contentMD5,
 		VersionID:  versionID,
+		Checksum:   checksum,
 	}, nil
+}
+
+// checkPartChecksum compares the checksum a completion request names for a part
+// against the digest the part was stored with. An upload without an algorithm
+// ignores whatever the request named, since a part of such an upload carries no
+// digest to compare against.
+func checkPartChecksum(upload objects.MultipartChecksum, requested s3.CompleteMultipartPart, part objects.Part) error {
+	if upload.Algorithm == "" {
+		return nil
+	}
+
+	algorithm, value, err := requested.Value()
+	switch {
+	case err != nil:
+		return err
+	case algorithm == "" && upload.Type == s3.ChecksumTypeComposite:
+		return s3errs.ErrBadDigest
+	case algorithm == "":
+		return nil
+	case algorithm != upload.Algorithm:
+		return s3errs.ErrInvalidRequest
+	}
+
+	sum, err := base64.StdEncoding.DecodeString(value)
+	if err != nil || !bytes.Equal(sum, part.Checksum) {
+		return s3errs.ErrBadDigest
+	}
+	return nil
+}
+
+// objectChecksumValue returns the value the upload's algorithm takes over the
+// completed parts, a composite one carrying its part count suffix.
+func objectChecksumValue(upload objects.MultipartChecksum, completed []objects.Part) (string, error) {
+	partChecksums := make([]s3.PartChecksum, len(completed))
+	for i, part := range completed {
+		partChecksums[i] = s3.PartChecksum{Sum: part.Checksum, Length: part.Size}
+	}
+
+	var value string
+	switch {
+	case upload.Type == s3.ChecksumTypeComposite && upload.Algorithm.SupportsType(s3.ChecksumTypeComposite):
+		value = s3.CompositeChecksum(upload.Algorithm, partChecksums)
+	case upload.Type == s3.ChecksumTypeFullObject:
+		sum, err := s3.CombineChecksums(upload.Algorithm, partChecksums)
+		if err != nil {
+			return "", err
+		}
+		value = base64.StdEncoding.EncodeToString(sum)
+	}
+	if value == "" {
+		return "", fmt.Errorf("cannot compute a %s %s checksum", upload.Type, upload.Algorithm)
+	}
+	return value, nil
 }
 
 func syncDir(path string) error {
