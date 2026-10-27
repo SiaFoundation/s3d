@@ -3,8 +3,12 @@ package s3_test
 import (
 	"bytes"
 	"crypto/md5"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"hash/crc32"
 	"io"
 	"math"
 	"strconv"
@@ -17,6 +21,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	service "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"lukechampine.com/frand"
 )
 
 func TestCreateMultipartUpload(t *testing.T) {
@@ -144,6 +149,54 @@ func TestUploadPart(t *testing.T) {
 	if got := strings.Trim(*part.ETag, `"`); got != hex.EncodeToString(expectedMD5[:]) {
 		t.Fatalf("expected ETag %x, got %q", expectedMD5, *part.ETag)
 	}
+
+	crc32Checksum := func(b []byte) string {
+		var sum [4]byte
+		binary.BigEndian.PutUint32(sum[:], crc32.ChecksumIEEE(b))
+		return base64.StdEncoding.EncodeToString(sum[:])
+	}
+
+	// upload a part with a checksum that does not match the data
+	_, err = s3Tester.Client().UploadPart(t.Context(), &service.UploadPartInput{
+		Bucket:        aws.String(bucket),
+		Key:           aws.String(object),
+		UploadId:      aws.String(uploadID),
+		PartNumber:    aws.Int32(1),
+		Body:          bytes.NewReader(data),
+		ContentLength: aws.Int64(int64(len(data))),
+		ChecksumCRC32: aws.String(crc32Checksum(frand.Bytes(100))),
+	})
+	testutil.AssertS3Error(t, s3errs.ErrBadDigest, err)
+
+	// upload a part with a checksum the client computed itself
+	checksummed, err := s3Tester.Client().UploadPart(t.Context(), &service.UploadPartInput{
+		Bucket:        aws.String(bucket),
+		Key:           aws.String(object),
+		UploadId:      aws.String(uploadID),
+		PartNumber:    aws.Int32(1),
+		Body:          bytes.NewReader(data),
+		ContentLength: aws.Int64(int64(len(data))),
+		ChecksumCRC32: aws.String(crc32Checksum(data)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if got := aws.ToString(checksummed.ChecksumCRC32); got != crc32Checksum(data) {
+		t.Fatalf("checksum mismatch: expected %s, got %s", crc32Checksum(data), got)
+	}
+
+	// assert [s3errs.ErrInvalidRequest] is returned for two checksums
+	sha256Sum := sha256.Sum256(data)
+	_, err = s3Tester.Client().UploadPart(t.Context(), &service.UploadPartInput{
+		Bucket:         aws.String(bucket),
+		Key:            aws.String(object),
+		UploadId:       aws.String(uploadID),
+		PartNumber:     aws.Int32(1),
+		Body:           bytes.NewReader(data),
+		ContentLength:  aws.Int64(int64(len(data))),
+		ChecksumCRC32:  aws.String(crc32Checksum(data)),
+		ChecksumSHA256: aws.String(base64.StdEncoding.EncodeToString(sha256Sum[:])),
+	})
+	testutil.AssertS3Error(t, s3errs.ErrInvalidRequest, err)
 
 	// assert [s3errs.ErrInvalidArgument] is returned for invalid part number
 	_, err = s3Tester.UploadPart(t.Context(), bucket, object, *res.UploadId, 0, data)
