@@ -471,6 +471,35 @@ func TestPutObject(t *testing.T) {
 			t.Fatalf("unexpected checksum type %q", head.ChecksumType)
 		}
 
+		// a request that does not ask for the checksum is not served one
+		unasked, err := s3Tester.Client().HeadObject(t.Context(), &service.HeadObjectInput{
+			Bucket: aws.String(bucket),
+			Key:    aws.String(checksummed),
+		})
+		if err != nil {
+			t.Fatal(err)
+		} else if unasked.ChecksumCRC32 != nil {
+			t.Fatalf("unexpected checksum %q", aws.ToString(unasked.ChecksumCRC32))
+		} else if unasked.ChecksumType != "" {
+			t.Fatalf("unexpected checksum type %q", unasked.ChecksumType)
+		}
+
+		// a get asking for the checksum is served it too
+		get, err := s3Tester.Client().GetObject(t.Context(), &service.GetObjectInput{
+			Bucket:       aws.String(bucket),
+			Key:          aws.String(checksummed),
+			ChecksumMode: types.ChecksumModeEnabled,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer get.Body.Close()
+		if got := aws.ToString(get.ChecksumCRC32); got != crc32Checksum(data) {
+			t.Fatalf("checksum mismatch: expected %s, got %s", crc32Checksum(data), got)
+		} else if get.ChecksumType != types.ChecksumTypeFullObject {
+			t.Fatalf("unexpected checksum type %q", get.ChecksumType)
+		}
+
 		// upload with a checksum that does not match the body
 		_, err = s3Tester.Client().PutObject(t.Context(), &service.PutObjectInput{
 			Bucket:        aws.String(bucket),
