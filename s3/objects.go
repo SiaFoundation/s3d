@@ -936,11 +936,12 @@ const (
 // Streaming trailers carry their checksum after the body instead and are
 // validated in the auth layer.
 func requestChecksum(headers http.Header) (*RequestChecksum, error) {
-	var found *RequestChecksum
+	var algorithm string
+	var size int
+	var count int
 
 	for name := range headers {
-		name = textproto.CanonicalMIMEHeaderKey(name)
-		suffix, ok := strings.CutPrefix(name, checksumPrefix)
+		suffix, ok := strings.CutPrefix(textproto.CanonicalMIMEHeaderKey(name), checksumPrefix)
 		if !ok {
 			continue
 		}
@@ -950,24 +951,27 @@ func requestChecksum(headers http.Header) (*RequestChecksum, error) {
 		if newHash == nil {
 			continue
 		}
-
-		// AWS refuses a request naming more than one checksum rather than
-		// guessing which one the client meant
-		if found != nil {
-			return nil, s3errs.ErrInvalidRequest
-		}
-
-		// a value that does not decode to a digest of the right length
-		// answers BadDigest, while InvalidDigest stays reserved for
-		// Content-MD5
-		sum, err := base64.StdEncoding.DecodeString(headers.Get(name))
-		if err != nil || len(sum) != newHash.Size() {
-			return nil, s3errs.ErrBadDigest
-		}
-		found = &RequestChecksum{Algorithm: suffix, Sum: sum}
+		algorithm = suffix
+		size = newHash.Size()
+		count++
 	}
 
-	return found, nil
+	// AWS refuses a request naming more than one checksum rather than guessing
+	// which one the client meant. Counting before decoding keeps that answer
+	// independent of header order.
+	if count > 1 {
+		return nil, s3errs.ErrInvalidRequest
+	} else if count == 0 {
+		return nil, nil
+	}
+
+	// a value that does not decode to a digest of the right length answers
+	// BadDigest, while InvalidDigest stays reserved for Content-MD5
+	sum, err := base64.StdEncoding.DecodeString(headers.Get(checksumPrefix + algorithm))
+	if err != nil || len(sum) != size {
+		return nil, s3errs.ErrBadDigest
+	}
+	return &RequestChecksum{Algorithm: algorithm, Sum: sum}, nil
 }
 
 // trailingChecksum returns the checksum the request declares as a trailer, or
