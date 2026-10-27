@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
 func TestValidateBucketName(t *testing.T) {
@@ -201,6 +202,36 @@ func TestWriteGetOrHeadObjectHeaders(t *testing.T) {
 	}
 	if got := w.Header().Get("X-Amz-Checksum-Type"); got != "" {
 		t.Fatal("served", got)
+	}
+
+	// a part read of a multipart object that stored no part digest reports
+	// nothing, since the object checksum covers more than the part served
+	obj.Range = &ObjectRange{Start: 0, Length: 10}
+	obj.Size = 30
+	obj.PartsCount = aws.Int32(3)
+	obj.Metadata["X-Amz-Checksum-Sha256"] = "arcu6553sHVAiX4MjW0j7I7vD4w6R+Gz9Ok0Q9lTa+0="
+
+	partRequest := httptest.NewRequest(http.MethodGet, "/bucket/object?partNumber=1", nil)
+	partRequest.Header.Set(HeaderXAMZChecksumMode, "ENABLED")
+
+	w = httptest.NewRecorder()
+	if err := writeGetOrHeadObjectHeaders(obj, w, partRequest); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.Header().Get("X-Amz-Checksum-Sha256"); got != "" {
+		t.Fatal("served", got)
+	}
+
+	// the same read of a single part object reports the object's digest, which
+	// covers that one part in full
+	obj.PartsCount = aws.Int32(1)
+
+	w = httptest.NewRecorder()
+	if err := writeGetOrHeadObjectHeaders(obj, w, partRequest); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.Header().Get("X-Amz-Checksum-Sha256"); got == "" {
+		t.Fatal("served nothing")
 	}
 }
 

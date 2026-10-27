@@ -1566,11 +1566,13 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 	checksumRequested := checksumModeEnabled(r)
 	partRead := r.URL.Query().Get("partNumber") != ""
 
-	// a part read reports the part's digest, falling back to the object's when
-	// the part carries none. a client range reports no digest, since one would
-	// let the client check a slice against the whole object's checksum
+	// a part read reports the part's digest, falling back to the object's only
+	// on a single part object, whose one part the object checksum covers in
+	// full. every other partial read reports no digest, since one would let the
+	// client check a slice against the whole object's checksum
+	singlePart := obj.PartsCount == nil || *obj.PartsCount <= 1
 	servePartChecksum := checksumRequested && partRead && obj.PartChecksum != nil
-	serveObjectChecksum := checksumRequested && !servePartChecksum && (partRead || obj.Range == nil)
+	serveObjectChecksum := checksumRequested && !servePartChecksum && (obj.Range == nil || (partRead && singlePart))
 
 	for mk, mv := range obj.Metadata {
 		// stored keys are not guaranteed to be canonically formatted
@@ -1595,7 +1597,9 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 	if servePartChecksum {
 		if checksum := ObjectChecksumFromMeta(obj.Metadata); checksum != nil {
 			w.Header().Set(checksum.Algorithm.Header(), base64.StdEncoding.EncodeToString(obj.PartChecksum))
-			w.Header().Set(HeaderXAMZChecksumType, string(checksum.Type))
+			if checksum.Type != "" {
+				w.Header().Set(HeaderXAMZChecksumType, string(checksum.Type))
+			}
 		}
 	}
 

@@ -584,6 +584,23 @@ func TestMultipartChecksum(t *testing.T) {
 		t.Fatalf("expected no checksum type, got %q", unaskedPart.ChecksumType)
 	}
 
+	// a client range reports no digest, part count or not
+	ranged, err := s3Tester.Client().GetObject(t.Context(), &service.GetObjectInput{
+		Bucket:       aws.String(bucket),
+		Key:          aws.String(fullObjectKey),
+		Range:        aws.String("bytes=0-99"),
+		ChecksumMode: types.ChecksumModeEnabled,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ranged.Body.Close()
+	if ranged.ChecksumCRC32 != nil {
+		t.Fatalf("expected no checksum, got %s", *ranged.ChecksumCRC32)
+	} else if ranged.ChecksumType != "" {
+		t.Fatalf("expected no checksum type, got %q", ranged.ChecksumType)
+	}
+
 	// a read naming no part reports the object's digest
 	fullObjectHead, err := s3Tester.Client().HeadObject(t.Context(), &service.HeadObjectInput{
 		Bucket:       aws.String(bucket),
@@ -637,6 +654,35 @@ func TestMultipartChecksum(t *testing.T) {
 		t.Fatal(err)
 	} else if head.ChecksumSHA256 != nil {
 		t.Fatalf("expected no checksum, got %s", *head.ChecksumSHA256)
+	}
+
+	// a single part object has no part digest, so its part read falls back to
+	// the object's, which covers the one part in full
+	const singleKey = "single"
+	if _, err := s3Tester.Client().PutObject(t.Context(), &service.PutObjectInput{
+		Bucket:         aws.String(bucket),
+		Key:            aws.String(singleKey),
+		Body:           bytes.NewReader(data),
+		ContentLength:  aws.Int64(int64(len(data))),
+		ChecksumSHA256: aws.String(partSHA256),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	singleRead, err := s3Tester.Client().GetObject(t.Context(), &service.GetObjectInput{
+		Bucket:       aws.String(bucket),
+		Key:          aws.String(singleKey),
+		PartNumber:   aws.Int32(1),
+		ChecksumMode: types.ChecksumModeEnabled,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	singleRead.Body.Close()
+	if got := aws.ToString(singleRead.ChecksumSHA256); got != partSHA256 {
+		t.Fatalf("expected checksum %s, got %s", partSHA256, got)
+	} else if singleRead.ChecksumType != types.ChecksumTypeFullObject {
+		t.Fatalf("expected type %q, got %q", types.ChecksumTypeFullObject, singleRead.ChecksumType)
 	}
 }
 
