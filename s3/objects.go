@@ -1535,6 +1535,8 @@ func (s *s3) setLifecycleExpirationHeader(w http.ResponseWriter, r *http.Request
 // writeGetOrHeadObjectHeaders contains shared logic for constructing headers for
 // a HEAD and a GET request for a /bucket/object URL.
 func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Request) error {
+	checksumRequested := strings.EqualFold(r.Header.Get(HeaderXAMZChecksumMode), "ENABLED")
+
 	for mk, mv := range obj.Metadata {
 		// stored keys are not guaranteed to be canonically formatted
 		mk = textproto.CanonicalMIMEHeaderKey(mk)
@@ -1543,10 +1545,10 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 			continue
 		}
 
-		// ranged responses should not include checksum headers, this prevents
-		// clients from checking the checksum of a partial object against the
-		// full object checksum
-		if obj.Range != nil && strings.HasPrefix(mk, checksumPrefix) {
+		// checksum headers are served only to a client that asked for them,
+		// and never on a ranged response, which would let a client check a
+		// partial object against the full object checksum
+		if strings.HasPrefix(mk, checksumPrefix) && (!checksumRequested || obj.Range != nil) {
 			continue
 		}
 

@@ -97,7 +97,10 @@ func TestMetadataHeaders(t *testing.T) {
 		"X-Amz-Sdk-Checksum-Algorithm",
 		"X-Amz-Trailer",
 		"X-Amz-Security-Token",
-		// written by the backend next to the checksum it computed
+		// written by the backend next to the checksum it computed, or read off
+		// the request and never stored
+		"X-Amz-Checksum-Algorithm",
+		"X-Amz-Checksum-Mode",
 		"X-Amz-Checksum-Type",
 		// routing
 		"X-Amz-Copy-Source",
@@ -162,8 +165,11 @@ func TestWriteGetOrHeadObjectHeaders(t *testing.T) {
 		},
 	}
 
+	r := httptest.NewRequest(http.MethodGet, "/bucket/object", nil)
+	r.Header.Set(HeaderXAMZChecksumMode, "ENABLED")
+
 	w := httptest.NewRecorder()
-	if err := writeGetOrHeadObjectHeaders(obj, w, httptest.NewRequest(http.MethodGet, "/bucket/object", nil)); err != nil {
+	if err := writeGetOrHeadObjectHeaders(obj, w, r); err != nil {
 		t.Fatal(err)
 	}
 
@@ -187,6 +193,14 @@ func TestWriteGetOrHeadObjectHeaders(t *testing.T) {
 	// the checksum type is served back even though a request cannot store it
 	if got := w.Header().Get("X-Amz-Checksum-Type"); got != "FULL_OBJECT" {
 		t.Fatal("mismatch", got)
+	}
+
+	w = httptest.NewRecorder()
+	if err := writeGetOrHeadObjectHeaders(obj, w, httptest.NewRequest(http.MethodGet, "/bucket/object", nil)); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.Header().Get("X-Amz-Checksum-Type"); got != "" {
+		t.Fatal("served", got)
 	}
 }
 
