@@ -421,12 +421,13 @@ type (
 	// CompleteMultipartUploadResponse matches the XML response returned after a
 	// successful CompleteMultipartUpload operation.
 	CompleteMultipartUploadResponse struct {
-		XMLName  xml.Name `xml:"CompleteMultipartUploadResult"`
-		Xmlns    string   `xml:"xmlns,attr"`
-		Location string   `xml:"Location"`
-		Bucket   string   `xml:"Bucket"`
-		Key      string   `xml:"Key"`
-		ETag     string   `xml:"ETag"`
+		XMLName      xml.Name     `xml:"CompleteMultipartUploadResult"`
+		Xmlns        string       `xml:"xmlns,attr"`
+		Location     string       `xml:"Location"`
+		Bucket       string       `xml:"Bucket"`
+		Key          string       `xml:"Key"`
+		ETag         string       `xml:"ETag"`
+		ChecksumType ChecksumType `xml:"ChecksumType,omitempty"`
 		ChecksumElements
 	}
 
