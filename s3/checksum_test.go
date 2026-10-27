@@ -352,6 +352,9 @@ func TestCompositeChecksum(t *testing.T) {
 	if got := CompositeChecksum(ChecksumSHA256, []PartChecksum{single}); got != "Ok6Cs5b96ux6+MWQkJO7UBT5sKPBeXBLwvj/hK89smg=-1" {
 		t.Fatalf("unexpected composite %q", got)
 	}
+	if got := CompositeChecksum(ChecksumSHA256, []PartChecksum{single, {Length: single.Length}}); got != "" {
+		t.Fatalf("expected no composite, got %q", got)
+	}
 
 	tests := []struct {
 		algorithm ChecksumAlgorithm
