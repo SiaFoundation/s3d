@@ -255,11 +255,11 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, version s3.
 	// part's, because ContentMD5 and PartsCount are the object's ETag inputs
 	var partObjID sql.Null[sqlHash256]
 	err := tx.QueryRow(`
-		SELECT o.filename, o.sia_object_id, o.metadata, o.updated_at, o.size, p.offset, p.content_length, o.content_md5
+		SELECT o.filename, o.sia_object_id, o.metadata, o.updated_at, o.size, p.offset, p.content_length, o.content_md5, p.checksum
 		FROM object_parts p
 		JOIN objects o ON o.bucket_id = p.bucket_id AND o.name = p.name AND o.version_id = p.version_id
 		WHERE o.bucket_id = $1 AND o.name = $2 AND o.version_id = $3 AND p.part_number = $4
-	`, bid, name, versionID, *partNumber).Scan(&obj.FileName, &partObjID, (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Size, &obj.Offset, &obj.Length, (*sqlMD5)(&obj.ContentMD5))
+	`, bid, name, versionID, *partNumber).Scan(&obj.FileName, &partObjID, (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Size, &obj.Offset, &obj.Length, (*sqlMD5)(&obj.ContentMD5), &obj.PartChecksum)
 	if err != nil {
 		return err
 	}
@@ -676,7 +676,14 @@ func (s *Store) CopyObject(srcBucket s3.BucketID, srcName string, srcVersion s3.
 		}
 
 		if opts.Replace {
-			obj.Meta = opts.Meta
+			// the copy holds the same bytes, so the source's additional
+			// checksum survives a metadata replacement
+			checksum := s3.ObjectChecksumFromMeta(obj.Meta)
+			obj.Meta = make(map[string]string, len(opts.Meta))
+			maps.Copy(obj.Meta, opts.Meta)
+			if checksum != nil {
+				checksum.StoreInMeta(obj.Meta)
+			}
 		} else {
 			maps.Copy(obj.Meta, opts.Meta)
 		}
@@ -719,8 +726,8 @@ func (s *Store) CopyObject(srcBucket s3.BucketID, srcName string, srcVersion s3.
 
 		if obj.PartsCount > 0 {
 			_, err = tx.Exec(`
-				INSERT INTO object_parts (bucket_id, name, version_id, part_number, filename, content_md5, content_length, offset)
-				SELECT $1, $2, $3, part_number, filename, content_md5, content_length, offset
+				INSERT INTO object_parts (bucket_id, name, version_id, part_number, filename, content_md5, content_length, offset, checksum)
+				SELECT $1, $2, $3, part_number, filename, content_md5, content_length, offset, checksum
 				FROM object_parts
 				WHERE bucket_id = $4 AND name = $5 AND version_id = $6
 			`, dstBid, dstName, dstVersion, srcBid, srcName, srcInternalVersion)
