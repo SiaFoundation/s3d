@@ -7,18 +7,22 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/xml"
 	"errors"
 	"hash/crc32"
 	"io"
 	"math"
+	"net/http"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SiaFoundation/s3d/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	service "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"lukechampine.com/frand"
@@ -703,6 +707,101 @@ func TestMultipartChecksum(t *testing.T) {
 		t.Fatalf("expected checksum %s, got %s", partSHA256, got)
 	} else if singleRead.ChecksumType != types.ChecksumTypeFullObject {
 		t.Fatalf("expected type %q, got %q", types.ChecksumTypeFullObject, singleRead.ChecksumType)
+	}
+}
+
+// TestCreateMultipartUploadChecksumValue checks that a checksum value header on
+// the creation request is dropped rather than stored with the object, which
+// would report a digest s3d never computed.
+func TestCreateMultipartUploadChecksumValue(t *testing.T) {
+	const (
+		bucket = "stray-checksum-bucket"
+		object = "object"
+	)
+
+	s3Tester := testutil.NewTester(t)
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// the SDK has no field for a checksum value on a creation request, so it is
+	// signed and sent by hand
+	stray := base64.StdEncoding.EncodeToString(frand.Bytes(32))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+		*s3Tester.Client().Options().BaseEndpoint+"/"+bucket+"/"+object+"?uploads", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set(s3.HeaderXAMZChecksumAlgorithm, string(s3.ChecksumCRC32))
+	req.Header.Set(s3.ChecksumSHA256.Header(), stray)
+
+	empty := sha256.Sum256(nil)
+	payload := hex.EncodeToString(empty[:])
+	req.Header.Set("X-Amz-Content-Sha256", payload)
+	creds := aws.Credentials{AccessKeyID: testutil.AccessKeyID, SecretAccessKey: testutil.SecretAccessKey}
+	if err := v4.NewSigner().SignHTTP(t.Context(), creds, req, payload, "s3", "us-east-1", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	} else if resp.StatusCode != http.StatusOK {
+		t.Fatal("unexpected status", resp.StatusCode, string(body))
+	}
+
+	var created s3.InitiateMultipartUploadResponse
+	if err := xml.Unmarshal(body, &created); err != nil {
+		t.Fatal(err)
+	}
+
+	data := frand.Bytes(1024)
+	var crc32Sum [4]byte
+	binary.BigEndian.PutUint32(crc32Sum[:], crc32.ChecksumIEEE(data))
+	partCRC32 := base64.StdEncoding.EncodeToString(crc32Sum[:])
+
+	uploaded, err := s3Tester.Client().UploadPart(t.Context(), &service.UploadPartInput{
+		Bucket:        aws.String(bucket),
+		Key:           aws.String(object),
+		UploadId:      aws.String(created.UploadID),
+		PartNumber:    aws.Int32(1),
+		Body:          bytes.NewReader(data),
+		ContentLength: aws.Int64(int64(len(data))),
+		ChecksumCRC32: aws.String(partCRC32),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s3Tester.CompleteMultipartUpload(t.Context(), bucket, object, created.UploadID, []types.CompletedPart{{
+		PartNumber:    aws.Int32(1),
+		ETag:          uploaded.ETag,
+		ChecksumCRC32: aws.String(partCRC32),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	head, err := s3Tester.Client().HeadObject(t.Context(), &service.HeadObjectInput{
+		Bucket:       aws.String(bucket),
+		Key:          aws.String(object),
+		ChecksumMode: types.ChecksumModeEnabled,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if head.ChecksumSHA256 != nil {
+		t.Fatalf("expected no SHA256 checksum, got %s", *head.ChecksumSHA256)
+	}
+	composite := s3.CompositeChecksum(s3.ChecksumCRC32, []s3.PartChecksum{{Sum: crc32Sum[:], Length: int64(len(data))}})
+	if got := aws.ToString(head.ChecksumCRC32); got != composite {
+		t.Fatalf("expected checksum %s, got %s", composite, got)
+	} else if head.ChecksumType != types.ChecksumTypeComposite {
+		t.Fatalf("expected type %q, got %q", types.ChecksumTypeComposite, head.ChecksumType)
 	}
 }
 

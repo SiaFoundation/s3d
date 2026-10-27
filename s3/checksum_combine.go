@@ -28,13 +28,17 @@ type PartChecksum struct {
 // CompositeChecksum returns the base64 digest of the concatenated part digests
 // followed by a part count suffix such as "-3", the value AWS reports for a
 // multipart object whose checksum type is COMPOSITE. It returns an empty string
-// for an algorithm the backend cannot hash.
+// for an algorithm the backend cannot hash and for a part that does not carry a
+// digest of the algorithm's width.
 func CompositeChecksum(a ChecksumAlgorithm, parts []PartChecksum) string {
 	h := a.NewHash()
 	if h == nil {
 		return ""
 	}
 	for _, part := range parts {
+		if len(part.Sum) != h.Size() {
+			return ""
+		}
 		h.Write(part.Sum)
 	}
 	return base64.StdEncoding.EncodeToString(h.Sum(nil)) + "-" + strconv.Itoa(len(parts))

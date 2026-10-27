@@ -1099,19 +1099,12 @@ func parseSource(source string) (bucket, object string, version VersionRequest, 
 // with the request that carried it. User defined metadata arrives under
 // metaPrefix instead.
 var objectMetadataHeaders = map[string]struct{}{
-	"Cache-Control":            {},
-	"Content-Disposition":      {},
-	"Content-Encoding":         {},
-	"Content-Language":         {},
-	"Content-Type":             {},
-	"Expires":                  {},
-	"X-Amz-Checksum-Crc32":     {},
-	"X-Amz-Checksum-Crc32c":    {},
-	"X-Amz-Checksum-Crc64nvme": {},
-	"X-Amz-Checksum-Md5":       {},
-	"X-Amz-Checksum-Sha1":      {},
-	"X-Amz-Checksum-Sha256":    {},
-	"X-Amz-Checksum-Sha512":    {},
+	"Cache-Control":       {},
+	"Content-Disposition": {},
+	"Content-Encoding":    {},
+	"Content-Language":    {},
+	"Content-Type":        {},
+	"Expires":             {},
 
 	// X-Amz-Website-Redirect-Location is an object header, but s3d does not
 	// implement static website hosting, so storing it would report a redirect
@@ -1130,11 +1123,11 @@ func isObjectMetadataHeader(name string) bool {
 }
 
 // isServedMetadataHeader reports whether the canonically formatted header name
-// is served back with the object. The checksum type is written by the backend
-// alongside the checksum it computed, so it is served without being storable
-// from a request.
+// is served back with the object. The X-Amz-Checksum-* family is written by the
+// backend alongside the checksum it computed, so it is served without being
+// storable from a request.
 func isServedMetadataHeader(name string) bool {
-	return isObjectMetadataHeader(name) || name == HeaderXAMZChecksumType
+	return isObjectMetadataHeader(name) || strings.HasPrefix(name, checksumPrefix)
 }
 
 // metadataHeaders extracts S3 metadata headers from the given HTTP headers.
