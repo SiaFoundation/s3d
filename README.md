@@ -372,6 +372,14 @@ each object of a multi delete honors its `ETag`, `Size` and `LastModifiedTime`
 elements, where a failed precondition fails only that object. A conditional
 delete with nothing to delete is a no-op, as an unconditional one is.
 
+`PutObject`, `POST Object` and `UploadPart` validate an `x-amz-checksum-*`
+header against the body and echo the checksum back on the response. A trailing
+checksum sent with `PutObject` is validated and stored the same way.
+`HeadObject` and `GetObject` return the stored checksum and
+`x-amz-checksum-type` only when the request carries `x-amz-checksum-mode` set
+to `ENABLED`, and a ranged response never carries one. An object assembled by
+`CompleteMultipartUpload` has no checksum of its own yet.
+
 ### Operations
 
 ✓ fully supported, ◐ supported with the limitations listed, ✗ not implemented.

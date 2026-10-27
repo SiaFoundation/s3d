@@ -156,7 +156,7 @@ func TestS3(t *testing.T) {
 	t.Run("test_s3", func(t *testing.T) {
 		runTox(t, confPath, testsDir,
 			"s3tests/functional/test_s3.py",
-			"-m", "not s3d_not_implemented and not s3d_not_supported and not bucket_logging and not encryption and not sse_s3 and not bucket_encryption and not lifecycle_transition and not tagging and not object_ownership and not checksum and not cloud_transition and not cloud_restore and not iam_user and not iam_account",
+			"-m", "not s3d_not_implemented and not s3d_not_supported and not bucket_logging and not encryption and not sse_s3 and not bucket_encryption and not lifecycle_transition and not tagging and not object_ownership and not cloud_transition and not cloud_restore and not iam_user and not iam_account",
 			// the two policy-status tests with _acl in their names only use bucket
 			// policies, so they are kept despite the general ACL exclusion
 			// the lifecycle exclusions drop tests for unimplemented features,
@@ -177,7 +177,10 @@ func TestS3(t *testing.T) {
 			// post_object stays excluded because all 36 POST tests sign their
 			// form with SigV2 or send it anonymously, so not one of them
 			// reaches the SigV4 path s3d implements.
-			"-k", "(not _acl or publicpolicy_acl_bucket_policy_status or nonpublicpolicy_acl_bucket_policy_status) and not post_object and not _torrent and not cors and not notification and not replication and not website and not _select and not lifecycle_expiration_tags and not lifecycle_expiration_versioned and not tags_head and not noncur and not deletemarker and not delete_marker_nonversioned and not delete_marker_expiration and not lifecycle_set_filter and not lifecycle_set_empty_filter and not lifecycle_transition_set_invalid_date and not bucket_list_return_data_versioning and not bucket_recreate_not_overriding and not versioning_concurrent_multi_object_delete",
+			//
+			// multipart_reupload_checksum needs a checksum on a multipart
+			// object, which Stage 2 adds and then drops this exclusion.
+			"-k", "(not _acl or publicpolicy_acl_bucket_policy_status or nonpublicpolicy_acl_bucket_policy_status) and not multipart_reupload_checksum and not post_object and not _torrent and not cors and not notification and not replication and not website and not _select and not lifecycle_expiration_tags and not lifecycle_expiration_versioned and not tags_head and not noncur and not deletemarker and not delete_marker_nonversioned and not delete_marker_expiration and not lifecycle_set_filter and not lifecycle_set_empty_filter and not lifecycle_transition_set_invalid_date and not bucket_list_return_data_versioning and not bucket_recreate_not_overriding and not versioning_concurrent_multi_object_delete",
 		)
 	})
 
