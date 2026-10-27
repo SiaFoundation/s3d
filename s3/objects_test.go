@@ -453,6 +453,8 @@ func TestPutObject(t *testing.T) {
 			t.Fatal(err)
 		} else if got := aws.ToString(put.ChecksumCRC32); got != crc32Checksum(data) {
 			t.Fatalf("checksum mismatch: expected %s, got %s", crc32Checksum(data), got)
+		} else if put.ChecksumType != types.ChecksumTypeFullObject {
+			t.Fatalf("unexpected checksum type %q", put.ChecksumType)
 		}
 
 		// the checksum is stored with the object and served back
@@ -547,10 +549,12 @@ func TestPutObjectTrailingChecksum(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
-	} else if !rt.contains("STREAMING-UNSIGNED-PAYLOAD-TRAILER") {
-		t.Fatalf("no request used STREAMING-UNSIGNED-PAYLOAD-TRAILER; observed=%v", rt.sha256s)
+	} else if got := rt.last(); got != "STREAMING-UNSIGNED-PAYLOAD-TRAILER" {
+		t.Fatalf("expected the put to use STREAMING-UNSIGNED-PAYLOAD-TRAILER, got %q", got)
 	} else if got := aws.ToString(put.ChecksumCRC32); got != want {
 		t.Fatalf("checksum mismatch: expected %s, got %s", want, got)
+	} else if put.ChecksumType != types.ChecksumTypeFullObject {
+		t.Fatalf("unexpected checksum type %q", put.ChecksumType)
 	}
 
 	head, err := s3Tester.Client().HeadObject(t.Context(), &service.HeadObjectInput{

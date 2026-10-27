@@ -42,6 +42,16 @@ func (rt *recordingTransport) contains(want string) bool {
 	return slices.Contains(rt.sha256s, want)
 }
 
+// last returns the payload hash of the most recent request.
+func (rt *recordingTransport) last() string {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if len(rt.sha256s) == 0 {
+		return ""
+	}
+	return rt.sha256s[len(rt.sha256s)-1]
+}
+
 // recordingHTTPClient adapts a recordingTransport to aws.HTTPClient so it can
 // be injected via service.Options.HTTPClient.
 type recordingHTTPClient struct{ rt *recordingTransport }

@@ -983,12 +983,13 @@ func trailingChecksum(headers http.Header) *RequestChecksum {
 }
 
 // writeChecksumHeader echoes the checksum the backend computed for the object
-// it just stored.
+// it just stored, which always covers the object in full.
 func writeChecksumHeader(w http.ResponseWriter, checksum *RequestChecksum) {
 	if checksum == nil {
 		return
 	}
 	w.Header().Set(checksumPrefix+checksum.Algorithm, base64.StdEncoding.EncodeToString(checksum.Sum))
+	w.Header().Set(HeaderXAMZChecksumType, string(ChecksumTypeFullObject))
 }
 
 // objectLocation returns the URL an object was addressed by, which a response
@@ -1093,7 +1094,6 @@ var objectMetadataHeaders = map[string]struct{}{
 	"X-Amz-Checksum-Sha1":      {},
 	"X-Amz-Checksum-Sha256":    {},
 	"X-Amz-Checksum-Sha512":    {},
-	"X-Amz-Checksum-Type":      {},
 
 	// X-Amz-Website-Redirect-Location is an object header, but s3d does not
 	// implement static website hosting, so storing it would report a redirect
@@ -1109,6 +1109,14 @@ func isObjectMetadataHeader(name string) bool {
 	}
 	_, ok := objectMetadataHeaders[name]
 	return ok
+}
+
+// isServedMetadataHeader reports whether the canonically formatted header name
+// is served back with the object. The checksum type is written by the backend
+// alongside the checksum it computed, so it is served without being storable
+// from a request.
+func isServedMetadataHeader(name string) bool {
+	return isObjectMetadataHeader(name) || name == HeaderXAMZChecksumType
 }
 
 // metadataHeaders extracts S3 metadata headers from the given HTTP headers.
@@ -1531,7 +1539,7 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 		// stored keys are not guaranteed to be canonically formatted
 		mk = textproto.CanonicalMIMEHeaderKey(mk)
 
-		if !isObjectMetadataHeader(mk) {
+		if !isServedMetadataHeader(mk) {
 			continue
 		}
 
