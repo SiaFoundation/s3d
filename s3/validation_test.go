@@ -97,6 +97,8 @@ func TestMetadataHeaders(t *testing.T) {
 		"X-Amz-Sdk-Checksum-Algorithm",
 		"X-Amz-Trailer",
 		"X-Amz-Security-Token",
+		// written by the backend next to the checksum it computed
+		"X-Amz-Checksum-Type",
 		// routing
 		"X-Amz-Copy-Source",
 		"X-Amz-Metadata-Directive",
@@ -156,6 +158,7 @@ func TestWriteGetOrHeadObjectHeaders(t *testing.T) {
 			"X-Amz-Object-Lock-Mode":                    "GOVERNANCE",
 			"x-amz-meta-keep":                           "kept",
 			"Content-Type":                              "text/plain",
+			"X-Amz-Checksum-Type":                       "FULL_OBJECT",
 		},
 	}
 
@@ -179,6 +182,10 @@ func TestWriteGetOrHeadObjectHeaders(t *testing.T) {
 		t.Fatal("mismatch", got)
 	}
 	if got := w.Header().Get("Content-Type"); got != "text/plain" {
+		t.Fatal("mismatch", got)
+	}
+	// the checksum type is served back even though a request cannot store it
+	if got := w.Header().Get("X-Amz-Checksum-Type"); got != "FULL_OBJECT" {
 		t.Fatal("mismatch", got)
 	}
 }

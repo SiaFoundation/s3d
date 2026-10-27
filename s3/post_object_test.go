@@ -263,6 +263,8 @@ func TestPostObjectSDKForms(t *testing.T) {
 	resp := assertUpload(upload)
 	if got := resp.Header.Get("x-amz-checksum-sha256"); got != base64.StdEncoding.EncodeToString(sum[:]) {
 		t.Fatalf("unexpected checksum %q", got)
+	} else if got := resp.Header.Get("x-amz-checksum-type"); got != "FULL_OBJECT" {
+		t.Fatalf("unexpected checksum type %q", got)
 	}
 
 	// the JavaScript SDK capitalizes the fields and sends the bucket
