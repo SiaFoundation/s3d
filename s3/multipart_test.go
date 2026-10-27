@@ -216,6 +216,151 @@ func TestUploadPart(t *testing.T) {
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchBucket, err)
 }
 
+func TestMultipartChecksum(t *testing.T) {
+	s3Tester := testutil.NewTester(t)
+
+	const (
+		bucket = "checksum-bucket"
+		object = "object"
+		source = "source"
+	)
+
+	// create target bucket
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	createUpload := func(algorithm types.ChecksumAlgorithm, checksumType types.ChecksumType) (*service.CreateMultipartUploadOutput, error) {
+		return s3Tester.Client().CreateMultipartUpload(t.Context(), &service.CreateMultipartUploadInput{
+			Bucket:            aws.String(bucket),
+			Key:               aws.String(object),
+			ChecksumAlgorithm: algorithm,
+			ChecksumType:      checksumType,
+		})
+	}
+
+	// assert [s3errs.ErrInvalidRequest] for a type the algorithm does not support
+	_, err := createUpload(types.ChecksumAlgorithmSha256, types.ChecksumTypeFullObject)
+	testutil.AssertS3Error(t, s3errs.ErrInvalidRequest, err)
+
+	// assert [s3errs.ErrInvalidRequest] for a type without an algorithm
+	_, err = createUpload("", types.ChecksumTypeComposite)
+	testutil.AssertS3Error(t, s3errs.ErrInvalidRequest, err)
+
+	// an algorithm without a type takes the algorithm's default
+	fullObject, err := createUpload(types.ChecksumAlgorithmCrc64nvme, "")
+	if err != nil {
+		t.Fatal(err)
+	} else if fullObject.ChecksumAlgorithm != types.ChecksumAlgorithmCrc64nvme {
+		t.Fatalf("expected algorithm %q, got %q", types.ChecksumAlgorithmCrc64nvme, fullObject.ChecksumAlgorithm)
+	} else if fullObject.ChecksumType != types.ChecksumTypeFullObject {
+		t.Fatalf("expected type %q, got %q", types.ChecksumTypeFullObject, fullObject.ChecksumType)
+	}
+	if err := s3Tester.AbortMultipartUpload(t.Context(), bucket, object, *fullObject.UploadId); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := createUpload(types.ChecksumAlgorithmSha256, "")
+	if err != nil {
+		t.Fatal(err)
+	} else if res.ChecksumAlgorithm != types.ChecksumAlgorithmSha256 {
+		t.Fatalf("expected algorithm %q, got %q", types.ChecksumAlgorithmSha256, res.ChecksumAlgorithm)
+	} else if res.ChecksumType != types.ChecksumTypeComposite {
+		t.Fatalf("expected type %q, got %q", types.ChecksumTypeComposite, res.ChecksumType)
+	}
+	uploadID := *res.UploadId
+
+	// the SHA256 of 1024 'A' bytes
+	const partSHA256 = "arcu6553sHVAiX4MjW0j7I7vD4w6R+Gz9Ok0Q9lTa+0="
+	data := bytes.Repeat([]byte("A"), 1024)
+
+	// a part carrying the upload's algorithm is echoed back
+	part1, err := s3Tester.Client().UploadPart(t.Context(), &service.UploadPartInput{
+		Bucket:         aws.String(bucket),
+		Key:            aws.String(object),
+		UploadId:       aws.String(uploadID),
+		PartNumber:     aws.Int32(1),
+		Body:           bytes.NewReader(data),
+		ContentLength:  aws.Int64(int64(len(data))),
+		ChecksumSHA256: aws.String(partSHA256),
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if got := aws.ToString(part1.ChecksumSHA256); got != partSHA256 {
+		t.Fatalf("expected checksum %s, got %s", partSHA256, got)
+	}
+
+	// a part carrying no checksum still reports the upload's algorithm
+	part2, err := s3Tester.Client().UploadPart(t.Context(), &service.UploadPartInput{
+		Bucket:        aws.String(bucket),
+		Key:           aws.String(object),
+		UploadId:      aws.String(uploadID),
+		PartNumber:    aws.Int32(2),
+		Body:          bytes.NewReader(data),
+		ContentLength: aws.Int64(int64(len(data))),
+	}, func(o *service.Options) {
+		o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if got := aws.ToString(part2.ChecksumSHA256); got != partSHA256 {
+		t.Fatalf("expected checksum %s, got %s", partSHA256, got)
+	}
+
+	// assert [s3errs.ErrInvalidRequest] for a part carrying another algorithm
+	var crc32Sum [4]byte
+	binary.BigEndian.PutUint32(crc32Sum[:], crc32.ChecksumIEEE(data))
+	_, err = s3Tester.Client().UploadPart(t.Context(), &service.UploadPartInput{
+		Bucket:        aws.String(bucket),
+		Key:           aws.String(object),
+		UploadId:      aws.String(uploadID),
+		PartNumber:    aws.Int32(3),
+		Body:          bytes.NewReader(data),
+		ContentLength: aws.Int64(int64(len(data))),
+		ChecksumCRC32: aws.String(base64.StdEncoding.EncodeToString(crc32Sum[:])),
+	})
+	testutil.AssertS3Error(t, s3errs.ErrInvalidRequest, err)
+
+	// a copied part is hashed with the upload's algorithm
+	sourceData := frand.Bytes(6 << 20)
+	if _, err := s3Tester.PutObject(t.Context(), bucket, source, bytes.NewReader(sourceData), nil); err != nil {
+		t.Fatal(err)
+	}
+	copyRange := s3.ObjectRange{Start: 1 << 20, Length: 5 << 20}
+	copied, err := s3Tester.UploadPartCopy(t.Context(), bucket, source, bucket, object, uploadID, testutil.UploadPartCopyOptions{
+		PartNumber: 3,
+		Range:      &copyRange,
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if copied.CopyPartResult == nil {
+		t.Fatal("expected CopyPartResult in response")
+	}
+	copiedSum := sha256.Sum256(sourceData[copyRange.Start : copyRange.Start+copyRange.Length])
+	expectedCopied := base64.StdEncoding.EncodeToString(copiedSum[:])
+	if got := aws.ToString(copied.CopyPartResult.ChecksumSHA256); got != expectedCopied {
+		t.Fatalf("expected checksum %s, got %s", expectedCopied, got)
+	}
+
+	// the listing reports the upload's algorithm, its type and every digest
+	listed, err := s3Tester.ListParts(t.Context(), bucket, object, uploadID, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if listed.ChecksumAlgorithm != types.ChecksumAlgorithmSha256 {
+		t.Fatalf("expected algorithm %q, got %q", types.ChecksumAlgorithmSha256, listed.ChecksumAlgorithm)
+	} else if listed.ChecksumType != types.ChecksumTypeComposite {
+		t.Fatalf("expected type %q, got %q", types.ChecksumTypeComposite, listed.ChecksumType)
+	} else if len(listed.Parts) != 3 {
+		t.Fatalf("expected 3 parts, got %d", len(listed.Parts))
+	}
+	expectedSums := []string{partSHA256, partSHA256, expectedCopied}
+	for i, part := range listed.Parts {
+		if got := aws.ToString(part.ChecksumSHA256); got != expectedSums[i] {
+			t.Fatalf("expected part %d checksum %s, got %s", i+1, expectedSums[i], got)
+		}
+	}
+}
+
 func TestUploadPartCopy(t *testing.T) {
 	// prepare a tester with an additional keypair
 	s3Tester := testutil.NewTester(t, testutil.WithKeyPair("other", "foo", "bar"))

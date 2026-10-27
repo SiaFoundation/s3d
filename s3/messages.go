@@ -4,6 +4,8 @@ import (
 	"encoding/xml"
 	"net/http"
 	"time"
+
+	"github.com/SiaFoundation/s3d/s3/s3errs"
 )
 
 // Null is used by S3 to represent an explicit empty value in XML responses.
@@ -354,6 +356,7 @@ type (
 		XMLName      xml.Name    `xml:"CopyPartResult"`
 		ETag         string      `xml:"ETag"`
 		LastModified ContentTime `xml:"LastModified,omitempty"`
+		ChecksumElements
 	}
 )
 
@@ -381,6 +384,8 @@ type (
 		MaxParts             int64                `xml:"MaxParts"`
 		IsTruncated          bool                 `xml:"IsTruncated"`
 		StorageClass         StorageClass         `xml:"StorageClass"`
+		ChecksumAlgorithm    ChecksumAlgorithm    `xml:"ChecksumAlgorithm,omitempty"`
+		ChecksumType         ChecksumType         `xml:"ChecksumType,omitempty"`
 		Initiator            *UserInfo            `xml:"Initiator,omitempty"`
 		Owner                *UserInfo            `xml:"Owner,omitempty"`
 		Parts                []ListedPartResponse `xml:"Part"`
@@ -392,6 +397,7 @@ type (
 		LastModified ContentTime `xml:"LastModified,omitempty"`
 		ETag         string      `xml:"ETag"`
 		Size         int64       `xml:"Size"`
+		ChecksumElements
 	}
 
 	// CompleteMultipartUploadRequest matches the XML request body sent when
@@ -406,6 +412,7 @@ type (
 	CompleteMultipartPart struct {
 		PartNumber int    `xml:"PartNumber"`
 		ETag       string `xml:"ETag"`
+		ChecksumElements
 	}
 
 	// CompleteMultipartUploadResponse matches the XML response returned after a
@@ -417,6 +424,7 @@ type (
 		Bucket   string   `xml:"Bucket"`
 		Key      string   `xml:"Key"`
 		ETag     string   `xml:"ETag"`
+		ChecksumElements
 	}
 
 	// ListMultipartUploadsResponse is the response to a ListMultipartUploads
@@ -618,3 +626,61 @@ type (
 		Status string `xml:"Status,omitempty"`
 	}
 )
+
+// ChecksumElements are the per algorithm checksum elements a multipart message
+// carries. At most one is set.
+type ChecksumElements struct {
+	ChecksumCRC32     string `xml:"ChecksumCRC32,omitempty"`
+	ChecksumCRC32C    string `xml:"ChecksumCRC32C,omitempty"`
+	ChecksumCRC64NVME string `xml:"ChecksumCRC64NVME,omitempty"`
+	ChecksumSHA1      string `xml:"ChecksumSHA1,omitempty"`
+	ChecksumSHA256    string `xml:"ChecksumSHA256,omitempty"`
+}
+
+// NewChecksumElements returns the elements for an algorithm with value in the
+// matching slot. An algorithm with no element leaves all of them unset.
+func NewChecksumElements(a ChecksumAlgorithm, value string) ChecksumElements {
+	var elements ChecksumElements
+	switch a {
+	case ChecksumCRC32:
+		elements.ChecksumCRC32 = value
+	case ChecksumCRC32C:
+		elements.ChecksumCRC32C = value
+	case ChecksumCRC64NVME:
+		elements.ChecksumCRC64NVME = value
+	case ChecksumSHA1:
+		elements.ChecksumSHA1 = value
+	case ChecksumSHA256:
+		elements.ChecksumSHA256 = value
+	}
+	return elements
+}
+
+// Value returns the one element that is set and the algorithm it belongs to,
+// both empty when none is set. More than one set element returns
+// [s3errs.ErrInvalidRequest].
+func (e ChecksumElements) Value() (ChecksumAlgorithm, string, error) {
+	var algorithm ChecksumAlgorithm
+	var value string
+	var count int
+	for _, candidate := range []struct {
+		algorithm ChecksumAlgorithm
+		value     string
+	}{
+		{ChecksumCRC32, e.ChecksumCRC32},
+		{ChecksumCRC32C, e.ChecksumCRC32C},
+		{ChecksumCRC64NVME, e.ChecksumCRC64NVME},
+		{ChecksumSHA1, e.ChecksumSHA1},
+		{ChecksumSHA256, e.ChecksumSHA256},
+	} {
+		if candidate.value == "" {
+			continue
+		}
+		algorithm, value = candidate.algorithm, candidate.value
+		count++
+	}
+	if count > 1 {
+		return "", "", s3errs.ErrInvalidRequest
+	}
+	return algorithm, value, nil
+}

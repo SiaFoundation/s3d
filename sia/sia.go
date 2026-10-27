@@ -274,6 +274,7 @@ type Store interface {
 	ListMultipartUploads(bucket s3.BucketID, prefix s3.Prefix, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error)
 	ListParts(bucket s3.BucketID, name string, uploadID s3.UploadID, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error)
 	MultipartParts(bucket s3.BucketID, name string, uploadID s3.UploadID) ([]objects.Part, error)
+	MultipartUploadChecksum(bucket s3.BucketID, name string, uploadID s3.UploadID) (objects.MultipartChecksum, error)
 	UploadStats() (s3.UploadStats, error)
 
 	PutBucketLifecycleConfiguration(bucket s3.BucketID, config string) error

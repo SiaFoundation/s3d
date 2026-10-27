@@ -1,6 +1,7 @@
 package s3
 
 import (
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"net/http"
@@ -21,6 +22,12 @@ import (
 type CreateMultipartUploadOptions struct {
 	Meta       map[string]string
 	ObjectLock *ObjectLockState
+
+	// ChecksumAlgorithm and ChecksumType are the additional checksum every
+	// part of the upload is hashed with, both empty when the client asked for
+	// none.
+	ChecksumAlgorithm ChecksumAlgorithm
+	ChecksumType      ChecksumType
 }
 
 // CreateMultipartUploadResult returns an upload ID for a newly created
@@ -67,6 +74,10 @@ type UploadPartCopyResult struct {
 	// SourceVersionID is the wire-encoded version that was copied ("" when the
 	// source bucket is unversioned, so no header is emitted).
 	SourceVersionID string
+
+	// Checksum is the digest the backend computed for the upload's algorithm,
+	// nil when the upload has none.
+	Checksum *RequestChecksum
 }
 
 // ListPartsPage specifies pagination options when listing the parts of an
@@ -279,14 +290,25 @@ func (s *s3) createMultipartUpload(w http.ResponseWriter, r *http.Request, acces
 		return err
 	}
 
+	algorithm, checksumType, err := requestMultipartChecksum(r.Header)
+	if err != nil {
+		return err
+	}
+
 	result, err := s.backend.CreateMultipartUpload(r.Context(), access.bucketID, object, CreateMultipartUploadOptions{
-		Meta:       meta,
-		ObjectLock: lock,
+		Meta:              meta,
+		ObjectLock:        lock,
+		ChecksumAlgorithm: algorithm,
+		ChecksumType:      checksumType,
 	})
 	if err != nil {
 		return err
 	}
 
+	if algorithm != "" {
+		w.Header().Set(HeaderXAMZChecksumAlgorithm, string(algorithm))
+		w.Header().Set(HeaderXAMZChecksumType, string(checksumType))
+	}
 	return writeXMLResponse(w, http.StatusOK, InitiateMultipartUploadResponse{
 		Xmlns:    "http://s3.amazonaws.com/doc/2006-03-01/",
 		Bucket:   bucket,
@@ -398,10 +420,15 @@ func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, dst *bucketAccess,
 	if result.SourceVersionID != "" {
 		w.Header().Set("x-amz-copy-source-version-id", result.SourceVersionID)
 	}
-	return writeXMLResponse(w, http.StatusOK, PartCopyResult{
+	resp := PartCopyResult{
 		ETag:         etag,
 		LastModified: NewContentTime(result.LastModified),
-	})
+	}
+	if result.Checksum != nil {
+		algorithm, _ := ChecksumAlgorithmFromSuffix(result.Checksum.Algorithm)
+		resp.ChecksumElements = NewChecksumElements(algorithm, base64.StdEncoding.EncodeToString(result.Checksum.Sum))
+	}
+	return writeXMLResponse(w, http.StatusOK, resp)
 }
 
 func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, access *bucketAccess, object string, uploadID UploadID) error {
@@ -503,6 +530,9 @@ func (s *s3) listUploadParts(w http.ResponseWriter, r *http.Request, access *buc
 		MaxParts:         page.MaxParts,
 		IsTruncated:      result.IsTruncated,
 		StorageClass:     result.StorageClass,
+
+		ChecksumAlgorithm: result.ChecksumAlgorithm,
+		ChecksumType:      result.ChecksumType,
 	}
 	if result.IsTruncated && result.NextPartNumberMarker != "" {
 		if next, err := strconv.Atoi(result.NextPartNumberMarker); err == nil {
@@ -514,12 +544,16 @@ func (s *s3) listUploadParts(w http.ResponseWriter, r *http.Request, access *buc
 	resp.Initiator = access.owner
 
 	for _, part := range result.Parts {
-		resp.Parts = append(resp.Parts, ListedPartResponse{
+		listed := ListedPartResponse{
 			PartNumber:   part.PartNumber,
 			LastModified: NewContentTime(part.LastModified),
 			ETag:         FormatETag(part.ContentMD5[:], 0),
 			Size:         part.Size,
-		})
+		}
+		if len(part.Checksum) > 0 {
+			listed.ChecksumElements = NewChecksumElements(result.ChecksumAlgorithm, base64.StdEncoding.EncodeToString(part.Checksum))
+		}
+		resp.Parts = append(resp.Parts, listed)
 	}
 
 	return writeXMLResponse(w, http.StatusOK, resp)
@@ -570,6 +604,34 @@ func (s *s3) completeMultipartUpload(w http.ResponseWriter, r *http.Request, acc
 		Key:      object,
 		ETag:     res.ETag,
 	})
+}
+
+// requestMultipartChecksum reads the additional checksum a multipart upload is
+// created with. An algorithm without a type takes the algorithm's default. A
+// type without an algorithm, and a type the algorithm does not support, return
+// [s3errs.ErrInvalidRequest].
+func requestMultipartChecksum(headers http.Header) (ChecksumAlgorithm, ChecksumType, error) {
+	algorithm, err := ParseChecksumAlgorithm(headers.Get(HeaderXAMZChecksumAlgorithm))
+	if err != nil {
+		return "", "", err
+	}
+
+	checksumType, err := ParseChecksumType(headers.Get(HeaderXAMZChecksumType))
+	if err != nil {
+		return "", "", err
+	}
+
+	switch {
+	case algorithm == "" && checksumType != "":
+		return "", "", fmt.Errorf("%w: a checksum type needs a checksum algorithm", s3errs.ErrInvalidRequest)
+	case algorithm == "":
+		return "", "", nil
+	case checksumType == "":
+		return algorithm, algorithm.DefaultType(), nil
+	case !algorithm.SupportsType(checksumType):
+		return "", "", fmt.Errorf("%w: %s does not support checksum type %s", s3errs.ErrInvalidRequest, algorithm, checksumType)
+	}
+	return algorithm, checksumType, nil
 }
 
 func parsePartNumber(s string) (*int32, error) {
