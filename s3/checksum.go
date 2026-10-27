@@ -44,6 +44,10 @@ const (
 	HeaderXAMZChecksumMode      = "X-Amz-Checksum-Mode"
 )
 
+// HeaderXAMZMpObjectSize is the size a client expects a completed multipart
+// object to have.
+const HeaderXAMZMpObjectSize = "X-Amz-Mp-Object-Size"
+
 // reservedChecksumHeaders cannot carry a checksum value, so a scan over the
 // X-Amz-Checksum-* family skips them.
 var reservedChecksumHeaders = []string{HeaderXAMZChecksumAlgorithm, HeaderXAMZChecksumType, HeaderXAMZChecksumMode}

@@ -523,6 +523,66 @@ func TestCompleteMultipartUpload(t *testing.T) {
 	if !bytes.Equal(data, append(part1, smallPart...)) {
 		t.Fatalf("unexpected object data length=%d", len(data))
 	}
+
+	// a composite upload stores the digest over its part digests
+	const (
+		composite       = "composite"
+		compositePart   = "arcu6553sHVAiX4MjW0j7I7vD4w6R+Gz9Ok0Q9lTa+0="
+		compositeObject = "Ok6Cs5b96ux6+MWQkJO7UBT5sKPBeXBLwvj/hK89smg=-1"
+	)
+	created, err := s3Tester.Client().CreateMultipartUpload(t.Context(), &service.CreateMultipartUploadInput{
+		Bucket:            aws.String(bucket),
+		Key:               aws.String(composite),
+		ChecksumAlgorithm: s3Types.ChecksumAlgorithmSha256,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	uploadID = *created.UploadId
+
+	compositeData := bytes.Repeat([]byte("A"), 1024)
+	uploaded, err := s3Tester.Client().UploadPart(t.Context(), &service.UploadPartInput{
+		Bucket:         aws.String(bucket),
+		Key:            aws.String(composite),
+		UploadId:       aws.String(uploadID),
+		PartNumber:     aws.Int32(1),
+		Body:           bytes.NewReader(compositeData),
+		ContentLength:  aws.Int64(int64(len(compositeData))),
+		ChecksumSHA256: aws.String(compositePart),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	completed, err := s3Tester.Client().CompleteMultipartUpload(t.Context(), &service.CompleteMultipartUploadInput{
+		Bucket:         aws.String(bucket),
+		Key:            aws.String(composite),
+		UploadId:       aws.String(uploadID),
+		ChecksumSHA256: aws.String(compositeObject),
+		ChecksumType:   s3Types.ChecksumTypeComposite,
+		MpuObjectSize:  aws.Int64(int64(len(compositeData))),
+		MultipartUpload: &s3Types.CompletedMultipartUpload{
+			Parts: []s3Types.CompletedPart{
+				{PartNumber: aws.Int32(1), ETag: uploaded.ETag, ChecksumSHA256: aws.String(compositePart)},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if got := aws.ToString(completed.ChecksumSHA256); got != compositeObject {
+		t.Fatalf("expected checksum %s, got %s", compositeObject, got)
+	}
+
+	stored, err := store.GetObject(bucketID(t, store, bucket), composite, s3.NoVersion(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checksum := s3.ObjectChecksumFromMeta(stored.Meta)
+	if checksum == nil {
+		t.Fatal("expected a stored checksum")
+	} else if *checksum != (s3.ObjectChecksum{Algorithm: s3.ChecksumSHA256, Type: s3.ChecksumTypeComposite, Value: compositeObject}) {
+		t.Fatalf("unexpected stored checksum %+v", *checksum)
+	}
 }
 
 func TestMultipartUpload(t *testing.T) {

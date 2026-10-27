@@ -247,9 +247,9 @@ type Backend interface {
 	//
 	// - If the last part is below the minimum size, [ErrEntityTooSmall] must be returned.
 	//
-	// - preconditions must be evaluated against the current version of the
+	// - opts.Preconditions must be evaluated against the current version of the
 	//   object, via ObjectPreconditions.CheckWrite.
-	CompleteMultipartUpload(ctx context.Context, bucket BucketID, object string, uploadID UploadID, parts []CompleteMultipartPart, preconditions ObjectPreconditions) (*CompleteMultipartUploadResult, error)
+	CompleteMultipartUpload(ctx context.Context, bucket BucketID, object string, uploadID UploadID, parts []CompleteMultipartPart, opts CompleteMultipartUploadOptions) (*CompleteMultipartUploadResult, error)
 
 	// PutBucketLifecycleConfiguration sets the lifecycle configuration for the
 	// specified bucket, replacing any existing configuration.

@@ -371,6 +371,206 @@ func TestMultipartChecksum(t *testing.T) {
 			t.Fatalf("expected part %d checksum %s, got %s", i+1, expectedSums[i], got)
 		}
 	}
+
+	createChecksumUpload := func(key string, algorithm types.ChecksumAlgorithm, checksumType types.ChecksumType) string {
+		t.Helper()
+		created, err := s3Tester.Client().CreateMultipartUpload(t.Context(), &service.CreateMultipartUploadInput{
+			Bucket:            aws.String(bucket),
+			Key:               aws.String(key),
+			ChecksumAlgorithm: algorithm,
+			ChecksumType:      checksumType,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return *created.UploadId
+	}
+
+	uploadChecksumPart := func(key, id string, partNumber int32, body []byte, apply func(*service.UploadPartInput)) *string {
+		t.Helper()
+		input := &service.UploadPartInput{
+			Bucket:        aws.String(bucket),
+			Key:           aws.String(key),
+			UploadId:      aws.String(id),
+			PartNumber:    aws.Int32(partNumber),
+			Body:          bytes.NewReader(body),
+			ContentLength: aws.Int64(int64(len(body))),
+		}
+		if apply != nil {
+			apply(input)
+		}
+		uploaded, err := s3Tester.Client().UploadPart(t.Context(), input, func(o *service.Options) {
+			o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return uploaded.ETag
+	}
+
+	completeChecksumUpload := func(key, id string, parts []types.CompletedPart, apply func(*service.CompleteMultipartUploadInput)) (*service.CompleteMultipartUploadOutput, error) {
+		input := &service.CompleteMultipartUploadInput{
+			Bucket:          aws.String(bucket),
+			Key:             aws.String(key),
+			UploadId:        aws.String(id),
+			MultipartUpload: &types.CompletedMultipartUpload{Parts: parts},
+		}
+		if apply != nil {
+			apply(input)
+		}
+		return s3Tester.Client().CompleteMultipartUpload(t.Context(), input)
+	}
+
+	// a composite upload reports the digest over its part digests
+	const (
+		compositeKey    = "composite"
+		compositeSHA256 = "Ok6Cs5b96ux6+MWQkJO7UBT5sKPBeXBLwvj/hK89smg=-1"
+	)
+	compositeID := createChecksumUpload(compositeKey, types.ChecksumAlgorithmSha256, "")
+	compositeETag := uploadChecksumPart(compositeKey, compositeID, 1, data, func(in *service.UploadPartInput) {
+		in.ChecksumSHA256 = aws.String(partSHA256)
+	})
+	compositePart := types.CompletedPart{PartNumber: aws.Int32(1), ETag: compositeETag, ChecksumSHA256: aws.String(partSHA256)}
+
+	// assert [s3errs.ErrBadDigest] for an object checksum the parts do not produce
+	_, err = completeChecksumUpload(compositeKey, compositeID, []types.CompletedPart{compositePart}, func(in *service.CompleteMultipartUploadInput) {
+		in.ChecksumSHA256 = aws.String("bad")
+	})
+	testutil.AssertS3Error(t, s3errs.ErrBadDigest, err)
+
+	// assert [s3errs.ErrBadDigest] for a composite part that carries no checksum
+	_, err = completeChecksumUpload(compositeKey, compositeID, []types.CompletedPart{{
+		PartNumber: aws.Int32(1),
+		ETag:       compositeETag,
+	}}, nil)
+	testutil.AssertS3Error(t, s3errs.ErrBadDigest, err)
+
+	// assert [s3errs.ErrInvalidRequest] for a part carrying another algorithm
+	_, err = completeChecksumUpload(compositeKey, compositeID, []types.CompletedPart{{
+		PartNumber:    aws.Int32(1),
+		ETag:          compositeETag,
+		ChecksumCRC32: aws.String(base64.StdEncoding.EncodeToString(crc32Sum[:])),
+	}}, nil)
+	testutil.AssertS3Error(t, s3errs.ErrInvalidRequest, err)
+
+	// assert [s3errs.ErrBadDigest] for a type the upload was not created with
+	_, err = completeChecksumUpload(compositeKey, compositeID, []types.CompletedPart{compositePart}, func(in *service.CompleteMultipartUploadInput) {
+		in.ChecksumType = types.ChecksumTypeFullObject
+	})
+	testutil.AssertS3Error(t, s3errs.ErrBadDigest, err)
+
+	// assert [s3errs.ErrInvalidRequest] for an object size the parts do not add up to
+	_, err = completeChecksumUpload(compositeKey, compositeID, []types.CompletedPart{compositePart}, func(in *service.CompleteMultipartUploadInput) {
+		in.MpuObjectSize = aws.Int64(5)
+	})
+	testutil.AssertS3Error(t, s3errs.ErrInvalidRequest, err)
+
+	completedComposite, err := completeChecksumUpload(compositeKey, compositeID, []types.CompletedPart{compositePart}, func(in *service.CompleteMultipartUploadInput) {
+		in.ChecksumSHA256 = aws.String(compositeSHA256)
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if got := aws.ToString(completedComposite.ChecksumSHA256); got != compositeSHA256 {
+		t.Fatalf("expected checksum %s, got %s", compositeSHA256, got)
+	} else if completedComposite.ChecksumType != types.ChecksumTypeComposite {
+		t.Fatalf("expected type %q, got %q", types.ChecksumTypeComposite, completedComposite.ChecksumType)
+	}
+
+	// the same data uploaded again reports the same ETag and checksum
+	repeatID := createChecksumUpload(compositeKey, types.ChecksumAlgorithmSha256, "")
+	repeatETag := uploadChecksumPart(compositeKey, repeatID, 1, data, func(in *service.UploadPartInput) {
+		in.ChecksumSHA256 = aws.String(partSHA256)
+	})
+	repeated, err := completeChecksumUpload(compositeKey, repeatID, []types.CompletedPart{{
+		PartNumber:     aws.Int32(1),
+		ETag:           repeatETag,
+		ChecksumSHA256: aws.String(partSHA256),
+	}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if got := aws.ToString(repeated.ETag); got != aws.ToString(completedComposite.ETag) {
+		t.Fatalf("expected ETag %s, got %s", aws.ToString(completedComposite.ETag), got)
+	} else if got := aws.ToString(repeated.ChecksumSHA256); got != compositeSHA256 {
+		t.Fatalf("expected checksum %s, got %s", compositeSHA256, got)
+	}
+
+	// a full object upload reports the digest over the parts' bytes
+	const (
+		fullObjectKey   = "full-object"
+		fullObjectCRC32 = "WgDhBQ=="
+	)
+	fullObjectData := [][]byte{
+		bytes.Repeat([]byte("A"), int(s3.MinUploadPartSize)),
+		bytes.Repeat([]byte("B"), int(s3.MinUploadPartSize)),
+		bytes.Repeat([]byte("C"), int(s3.MinUploadPartSize)),
+	}
+	fullObjectSums := []string{"JRTCyQ==", "QoZTGg==", "YAgjqw=="}
+
+	fullObjectID := createChecksumUpload(fullObjectKey, types.ChecksumAlgorithmCrc32, types.ChecksumTypeFullObject)
+	fullObjectParts := make([]types.CompletedPart, len(fullObjectData))
+	for i, body := range fullObjectData {
+		number := int32(i + 1)
+		etag := uploadChecksumPart(fullObjectKey, fullObjectID, number, body, func(in *service.UploadPartInput) {
+			in.ChecksumCRC32 = aws.String(fullObjectSums[i])
+		})
+		fullObjectParts[i] = types.CompletedPart{
+			PartNumber:    aws.Int32(number),
+			ETag:          etag,
+			ChecksumCRC32: aws.String(fullObjectSums[i]),
+		}
+	}
+
+	completedFullObject, err := completeChecksumUpload(fullObjectKey, fullObjectID, fullObjectParts, func(in *service.CompleteMultipartUploadInput) {
+		in.ChecksumCRC32 = aws.String(fullObjectCRC32)
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if got := aws.ToString(completedFullObject.ChecksumCRC32); got != fullObjectCRC32 {
+		t.Fatalf("expected checksum %s, got %s", fullObjectCRC32, got)
+	} else if completedFullObject.ChecksumType != types.ChecksumTypeFullObject {
+		t.Fatalf("expected type %q, got %q", types.ChecksumTypeFullObject, completedFullObject.ChecksumType)
+	}
+
+	// a full object upload completes without any part checksum
+	bareID := createChecksumUpload(fullObjectKey, types.ChecksumAlgorithmCrc32, types.ChecksumTypeFullObject)
+	bareParts := make([]types.CompletedPart, len(fullObjectData))
+	for i, body := range fullObjectData {
+		number := int32(i + 1)
+		bareParts[i] = types.CompletedPart{
+			PartNumber: aws.Int32(number),
+			ETag:       uploadChecksumPart(fullObjectKey, bareID, number, body, nil),
+		}
+	}
+
+	completedBare, err := completeChecksumUpload(fullObjectKey, bareID, bareParts, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if got := aws.ToString(completedBare.ChecksumCRC32); got != fullObjectCRC32 {
+		t.Fatalf("expected checksum %s, got %s", fullObjectCRC32, got)
+	}
+
+	// an upload created without an algorithm stores no checksum
+	const plainKey = "plain"
+	plainID := createChecksumUpload(plainKey, "", "")
+	plainETag := uploadChecksumPart(plainKey, plainID, 1, data, nil)
+	if _, err := completeChecksumUpload(plainKey, plainID, []types.CompletedPart{{
+		PartNumber:     aws.Int32(1),
+		ETag:           plainETag,
+		ChecksumSHA256: aws.String(partSHA256),
+	}}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	head, err := s3Tester.Client().HeadObject(t.Context(), &service.HeadObjectInput{
+		Bucket:       aws.String(bucket),
+		Key:          aws.String(plainKey),
+		ChecksumMode: types.ChecksumModeEnabled,
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if head.ChecksumSHA256 != nil {
+		t.Fatalf("expected no checksum, got %s", *head.ChecksumSHA256)
+	}
 }
 
 func TestUploadPartCopy(t *testing.T) {
