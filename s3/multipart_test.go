@@ -438,11 +438,14 @@ func TestMultipartChecksum(t *testing.T) {
 	})
 	testutil.AssertS3Error(t, s3errs.ErrBadDigest, err)
 
-	// assert [s3errs.ErrBadDigest] for a composite part that carries no checksum
+	// assert [s3errs.ErrBadDigest] for a wrong object checksum even when the
+	// part element carries none
 	_, err = completeChecksumUpload(compositeKey, compositeID, []types.CompletedPart{{
 		PartNumber: aws.Int32(1),
 		ETag:       compositeETag,
-	}}, nil)
+	}}, func(in *service.CompleteMultipartUploadInput) {
+		in.ChecksumSHA256 = aws.String("bad")
+	})
 	testutil.AssertS3Error(t, s3errs.ErrBadDigest, err)
 
 	// assert [s3errs.ErrInvalidRequest] for a part carrying another algorithm
@@ -509,6 +512,23 @@ func TestMultipartChecksum(t *testing.T) {
 		t.Fatalf("expected ETag %s, got %s", aws.ToString(completedComposite.ETag), got)
 	} else if got := aws.ToString(repeated.ChecksumSHA256); got != compositeSHA256 {
 		t.Fatalf("expected checksum %s, got %s", compositeSHA256, got)
+	}
+
+	// a composite upload completes without any part checksum element
+	bareCompositeID := createChecksumUpload(compositeKey, types.ChecksumAlgorithmSha256, "")
+	bareCompositeETag := uploadChecksumPart(compositeKey, bareCompositeID, 1, data, func(in *service.UploadPartInput) {
+		in.ChecksumSHA256 = aws.String(partSHA256)
+	})
+	bareComposite, err := completeChecksumUpload(compositeKey, bareCompositeID, []types.CompletedPart{{
+		PartNumber: aws.Int32(1),
+		ETag:       bareCompositeETag,
+	}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if got := aws.ToString(bareComposite.ChecksumSHA256); got != compositeSHA256 {
+		t.Fatalf("expected checksum %s, got %s", compositeSHA256, got)
+	} else if bareComposite.ChecksumType != types.ChecksumTypeComposite {
+		t.Fatalf("expected type %q, got %q", types.ChecksumTypeComposite, bareComposite.ChecksumType)
 	}
 
 	// a full object upload reports the digest over the parts' bytes

@@ -386,9 +386,9 @@ through `partNumber` returns that part's checksum rather than the object's.
 algorithms. When the type is omitted, `CRC64NVME` defaults to `FULL_OBJECT` and
 the others to `COMPOSITE`. Every part is hashed with the upload's algorithm
 whether or not the client sends a value of its own, and a part checksum of
-another algorithm is refused. `CompleteMultipartUpload` requires a checksum on
-every part element of a `COMPOSITE` upload and requires none on a `FULL_OBJECT`
-upload.
+another algorithm is refused. A `CompleteMultipartUpload` request may omit the
+part checksum elements for either type and any element it carries must match the
+stored part digest.
 
 `CopyObject` keeps the source checksum and its type unchanged, where AWS would
 recompute a full object value, because s3d copies metadata without reading the
