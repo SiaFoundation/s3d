@@ -957,11 +957,12 @@ func requestChecksum(headers http.Header) (*RequestChecksum, error) {
 			return nil, s3errs.ErrInvalidRequest
 		}
 
-		// AWS answers a malformed value with InvalidRequest and reserves
-		// InvalidDigest for Content-MD5
+		// a value that does not decode to a digest of the right length
+		// answers BadDigest, while InvalidDigest stays reserved for
+		// Content-MD5
 		sum, err := base64.StdEncoding.DecodeString(headers.Get(name))
 		if err != nil || len(sum) != newHash.Size() {
-			return nil, s3errs.ErrInvalidRequest
+			return nil, s3errs.ErrBadDigest
 		}
 		found = &RequestChecksum{Algorithm: suffix, Sum: sum}
 	}
