@@ -107,11 +107,11 @@ func TestRequestChecksum(t *testing.T) {
 	}
 }
 
-func TestDeclaresTrailingChecksum(t *testing.T) {
+func TestTrailingChecksum(t *testing.T) {
 	tests := []struct {
 		name    string
 		headers map[string]string
-		want    bool
+		want    string // "" expects no checksum
 	}{
 		{
 			name:    "no trailer",
@@ -120,12 +120,12 @@ func TestDeclaresTrailingChecksum(t *testing.T) {
 		{
 			name:    "crc32 trailer",
 			headers: map[string]string{"X-Amz-Trailer": "x-amz-checksum-crc32"},
-			want:    true,
+			want:    "Crc32",
 		},
 		{
 			name:    "trailer list with padding",
 			headers: map[string]string{"X-Amz-Trailer": "x-amz-foo, x-amz-checksum-sha256"},
-			want:    true,
+			want:    "Sha256",
 		},
 		{
 			name:    "unknown algorithm",
@@ -148,8 +148,20 @@ func TestDeclaresTrailingChecksum(t *testing.T) {
 			for k, v := range tt.headers {
 				h.Set(k, v)
 			}
-			if got := declaresTrailingChecksum(h); got != tt.want {
-				t.Fatalf("expected %v, got %v", tt.want, got)
+			got := trailingChecksum(h)
+			if tt.want == "" {
+				if got != nil {
+					t.Fatalf("unexpected checksum: %+v", got)
+				}
+				return
+			} else if got == nil {
+				t.Fatalf("expected %s, got no checksum", tt.want)
+			}
+
+			if got.Algorithm != tt.want {
+				t.Fatal("algorithm mismatch", got.Algorithm)
+			} else if got.Sum != nil {
+				t.Fatalf("unexpected sum %x", got.Sum)
 			}
 		})
 	}
@@ -287,5 +299,11 @@ func TestObjectChecksumMeta(t *testing.T) {
 	}
 	if got := ObjectChecksumFromMeta(map[string]string{HeaderXAMZChecksumType: "COMPOSITE"}); got != nil {
 		t.Fatalf("expected no checksum, got %+v", *got)
+	}
+
+	empty := make(map[string]string)
+	ObjectChecksum{Type: ChecksumTypeFullObject}.StoreInMeta(empty)
+	if len(empty) != 0 {
+		t.Fatalf("expected no metadata, got %v", empty)
 	}
 }
