@@ -146,7 +146,8 @@ func (s *s3) getObjectAttributes(w http.ResponseWriter, r *http.Request, access 
 
 	resp := GetObjectAttributesResponse{Xmlns: "http://s3.amazonaws.com/doc/2006-03-01/"}
 	if requested[attributeETag] {
-		resp.ETag = FormatETag(attrs.ContentMD5[:], int(attrs.PartsCount))
+		// the element carries the ETag without the quotes a header spells it with
+		resp.ETag = strings.Trim(FormatETag(attrs.ContentMD5[:], int(attrs.PartsCount)), `"`)
 	}
 	if requested[attributeObjectSize] {
 		resp.ObjectSize = aws.Int64(attrs.Size)
