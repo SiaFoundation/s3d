@@ -4,6 +4,8 @@ import (
 	"encoding/base32"
 	"encoding/base64"
 	"fmt"
+	"strings"
+	"unicode"
 
 	"lukechampine.com/frand"
 )
@@ -25,10 +27,12 @@ func GenerateAccessKey() (accessKeyID, secretKey string) {
 }
 
 // ValidateAccessKey checks that an access key ID and secret key have acceptable
-// lengths.
+// lengths and that the ID can be carried in a SigV4 credential.
 func ValidateAccessKey(accessKeyID, secretKey string) error {
 	if len(accessKeyID) < minAccessKeyIDLength || len(accessKeyID) > maxAccessKeyIDLength {
 		return fmt.Errorf("access key must be between %d and %d characters", minAccessKeyIDLength, maxAccessKeyIDLength)
+	} else if strings.ContainsAny(accessKeyID, "/,") || strings.ContainsFunc(accessKeyID, unicode.IsSpace) {
+		return fmt.Errorf("access key must not contain slashes, commas or whitespace")
 	} else if len(secretKey) < minSecretKeyLength || len(secretKey) > maxSecretKeyLength {
 		return fmt.Errorf("secret key must be between %d and %d characters", minSecretKeyLength, maxSecretKeyLength)
 	}
