@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"bytes"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia/objects"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"go.uber.org/zap"
 	"lukechampine.com/frand"
 )
@@ -25,7 +27,7 @@ func TestCreateMultipartUpload(t *testing.T) {
 	store := initTestDB(t, zap.NewNop())
 
 	// assert [s3errs.ErrNoSuchBucket] for unknown bucket - then create it
-	if err := store.CreateMultipartUpload(-1, object, s3.NewUploadID(), nil, nil); !errors.Is(err, s3errs.ErrNoSuchBucket) {
+	if err := store.CreateMultipartUpload(-1, object, s3.NewUploadID(), nil, nil, objects.MultipartChecksum{}); !errors.Is(err, s3errs.ErrNoSuchBucket) {
 		t.Fatal(err)
 	} else if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
@@ -34,14 +36,39 @@ func TestCreateMultipartUpload(t *testing.T) {
 
 	// create multipart upload
 	uid1 := s3.NewUploadID()
-	err := store.CreateMultipartUpload(bid, object, uid1, nil, nil)
+	err := store.CreateMultipartUpload(bid, object, uid1, nil, nil, objects.MultipartChecksum{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	store.assertCount(1, "multipart_uploads")
 
-	// abort the multipart upload
+	// an upload created without an algorithm reports no checksum
+	if checksum, err := store.MultipartUploadChecksum(bid, object, uid1); err != nil {
+		t.Fatal(err)
+	} else if checksum != (objects.MultipartChecksum{}) {
+		t.Fatal("unexpected", checksum)
+	}
+
+	// assert [s3errs.ErrNoSuchUpload] for unknown upload ID
+	if _, err := store.MultipartUploadChecksum(bid, object, s3.NewUploadID()); !errors.Is(err, s3errs.ErrNoSuchUpload) {
+		t.Fatal(err)
+	}
+
+	// create an upload carrying a checksum
+	uid2 := s3.NewUploadID()
+	want := objects.MultipartChecksum{Algorithm: s3.ChecksumSHA256, Type: s3.ChecksumTypeComposite}
+	if err := store.CreateMultipartUpload(bid, object, uid2, nil, nil, want); err != nil {
+		t.Fatal(err)
+	} else if checksum, err := store.MultipartUploadChecksum(bid, object, uid2); err != nil {
+		t.Fatal(err)
+	} else if checksum != want {
+		t.Fatal("unexpected", checksum)
+	}
+
+	// abort the multipart uploads
 	if _, err := store.AbortMultipartUpload(bid, object, uid1); err != nil {
+		t.Fatal(err)
+	} else if _, err := store.AbortMultipartUpload(bid, object, uid2); err != nil {
 		t.Fatal(err)
 	}
 	store.assertCount(0, "multipart_uploads")
@@ -67,30 +94,64 @@ func TestAddMultipartPart(t *testing.T) {
 	bid := store.bucketID(bucket)
 
 	// assert [s3errs.ErrNoSuchUpload] for unknown upload ID
-	if _, _, err := store.AddMultipartPart(bid, object, s3.NewUploadID(), location, 1, contentMD5, 0); !errors.Is(err, s3errs.ErrNoSuchUpload) {
+	if _, _, err := store.AddMultipartPart(bid, object, s3.NewUploadID(), location, 1, contentMD5, 0, nil); !errors.Is(err, s3errs.ErrNoSuchUpload) {
 		t.Fatal(err)
 	}
 
 	// create multipart upload
 	uid := s3.NewUploadID()
-	err := store.CreateMultipartUpload(bid, object, uid, nil, nil)
+	upload := objects.MultipartChecksum{Algorithm: s3.ChecksumSHA256, Type: s3.ChecksumTypeComposite}
+	err := store.CreateMultipartUpload(bid, object, uid, nil, nil, upload)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// add a part (assert no error on duplicate part addition)
-	prev, _, err := store.AddMultipartPart(bid, object, uid, location, 1, contentMD5, 0)
+	first := frand.Bytes(32)
+	prev, _, err := store.AddMultipartPart(bid, object, uid, location, 1, contentMD5, 0, first)
 	if err != nil {
 		t.Fatal(err)
 	} else if prev != "" {
 		t.Fatal("expected empty previous filename for first part upload", prev)
 	}
 
-	prev, _, err = store.AddMultipartPart(bid, object, uid, location, 1, contentMD5, 0)
+	if parts, err := store.MultipartParts(bid, object, uid); err != nil {
+		t.Fatal(err)
+	} else if len(parts) != 1 {
+		t.Fatal("unexpected", len(parts))
+	} else if !bytes.Equal(parts[0].Checksum, first) {
+		t.Fatalf("unexpected %x", parts[0].Checksum)
+	}
+
+	// re-adding the part replaces its checksum
+	second := frand.Bytes(32)
+	prev, _, err = store.AddMultipartPart(bid, object, uid, location, 1, contentMD5, 0, second)
 	if err != nil {
 		t.Fatal(err)
 	} else if prev == "" || prev != location {
 		t.Fatal("expected previous filename to be returned on part overwrite", prev)
+	}
+
+	if parts, err := store.MultipartParts(bid, object, uid); err != nil {
+		t.Fatal(err)
+	} else if len(parts) != 1 {
+		t.Fatal("unexpected", len(parts))
+	} else if !bytes.Equal(parts[0].Checksum, second) {
+		t.Fatalf("unexpected %x", parts[0].Checksum)
+	}
+
+	// the listing reports the upload's algorithm alongside each part digest
+	listed, err := store.ListParts(bid, object, uid, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	} else if listed.ChecksumAlgorithm != s3.ChecksumSHA256 {
+		t.Fatal("unexpected", listed.ChecksumAlgorithm)
+	} else if listed.ChecksumType != s3.ChecksumTypeComposite {
+		t.Fatal("unexpected", listed.ChecksumType)
+	} else if len(listed.Parts) != 1 {
+		t.Fatal("unexpected", len(listed.Parts))
+	} else if !bytes.Equal(listed.Parts[0].Checksum, second) {
+		t.Fatalf("unexpected %x", listed.Parts[0].Checksum)
 	}
 
 	store.assertCount(1, "multipart_parts")
@@ -119,7 +180,7 @@ func TestAbortMultipartUpload(t *testing.T) {
 
 	// create multipart upload
 	uid := s3.NewUploadID()
-	err := store.CreateMultipartUpload(bid, object, uid, nil, nil)
+	err := store.CreateMultipartUpload(bid, object, uid, nil, nil, objects.MultipartChecksum{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +189,7 @@ func TestAbortMultipartUpload(t *testing.T) {
 	frand.Read(contentMD5[:])
 
 	// add a part
-	if _, _, err := store.AddMultipartPart(bid, object, uid, filename, 1, contentMD5, 0); err != nil {
+	if _, _, err := store.AddMultipartPart(bid, object, uid, filename, 1, contentMD5, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -167,7 +228,7 @@ func TestHasMultipartUpload(t *testing.T) {
 
 	// create multipart upload
 	uid := s3.NewUploadID()
-	err := store.CreateMultipartUpload(bid, object, uid, nil, nil)
+	err := store.CreateMultipartUpload(bid, object, uid, nil, nil, objects.MultipartChecksum{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +241,7 @@ func TestHasMultipartUpload(t *testing.T) {
 	}
 
 	// add a part and assert hasParts is true
-	if _, _, err := store.AddMultipartPart(bid, object, uid, "p1", 1, [16]byte{}, 100); err != nil {
+	if _, _, err := store.AddMultipartPart(bid, object, uid, "p1", 1, [16]byte{}, 100, nil); err != nil {
 		t.Fatal(err)
 	}
 	if hasParts, err := store.HasMultipartUpload(bid, object, uid); err != nil {
@@ -212,7 +273,7 @@ func TestListParts(t *testing.T) {
 
 	// create multipart upload
 	uid := s3.NewUploadID()
-	err := store.CreateMultipartUpload(bid, object, uid, nil, nil)
+	err := store.CreateMultipartUpload(bid, object, uid, nil, nil, objects.MultipartChecksum{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +281,7 @@ func TestListParts(t *testing.T) {
 	// add finalized parts
 	const totalParts = 5
 	for i := 1; i <= totalParts; i++ {
-		_, _, err := store.AddMultipartPart(bid, object, uid, "", i, frand.Entropy128(), int64(frand.Uint64n(100)+1))
+		_, _, err := store.AddMultipartPart(bid, object, uid, "", i, frand.Entropy128(), int64(frand.Uint64n(100)+1), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -278,7 +339,8 @@ func TestCompleteMultipartUpload(t *testing.T) {
 	bid := store.bucketID(bucket)
 
 	uid := s3.NewUploadID()
-	err := store.CreateMultipartUpload(bid, object, uid, nil, nil)
+	upload := objects.MultipartChecksum{Algorithm: s3.ChecksumSHA256, Type: s3.ChecksumTypeComposite}
+	err := store.CreateMultipartUpload(bid, object, uid, nil, nil, upload)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,27 +348,40 @@ func TestCompleteMultipartUpload(t *testing.T) {
 	partMD5A := frand.Entropy128()
 	partMD5B := frand.Entropy128()
 	parts := []objects.Part{
-		{PartNumber: 1, Filename: "part-1", Size: s3.MinUploadPartSize, ContentMD5: partMD5A},
-		{PartNumber: 2, Filename: "part-2", Size: 5, ContentMD5: partMD5B}, // Last part can be any size
+		{PartNumber: 1, Filename: "part-1", Size: s3.MinUploadPartSize, ContentMD5: partMD5A, Checksum: frand.Bytes(32)},
+		{PartNumber: 2, Filename: "part-2", Size: 5, ContentMD5: partMD5B, Checksum: frand.Bytes(32)}, // Last part can be any size
 	}
 
 	// add parts to the upload
 	for _, part := range parts {
-		if _, _, err := store.AddMultipartPart(bid, object, uid, part.Filename, part.PartNumber, part.ContentMD5, part.Size); err != nil {
+		if _, _, err := store.AddMultipartPart(bid, object, uid, part.Filename, part.PartNumber, part.ContentMD5, part.Size, part.Checksum); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	contentMD5 := frand.Entropy128()
 	totalSize := s3.MinUploadPartSize + 5 // part1 + part2
-	if _, _, err := store.CompleteMultipartUpload(bid, object, uid, contentMD5, int64(totalSize), s3.ObjectPreconditions{}); err != nil {
+	checksum := &s3.ObjectChecksum{Algorithm: s3.ChecksumSHA256, Type: s3.ChecksumTypeComposite, Value: "x=-2"}
+	if _, _, err := store.CompleteMultipartUpload(bid, object, uid, contentMD5, int64(totalSize), checksum, s3.ObjectPreconditions{}); err != nil {
 		t.Fatal(err)
 	}
 
 	store.assertCount(0, "multipart_uploads")
 	store.assertCount(len(parts), "object_parts")
 
-	rows, err := store.db.Query(`SELECT part_number, content_md5, offset, content_length FROM object_parts ORDER BY part_number`)
+	// the object carries the completed checksum and each part its own digest
+	obj, err := store.GetObject(bid, object, s3.NoVersion(), aws.Int32(2))
+	if err != nil {
+		t.Fatal(err)
+	} else if obj.Meta["X-Amz-Checksum-Sha256"] != "x=-2" {
+		t.Fatal("unexpected", obj.Meta)
+	} else if obj.Meta["X-Amz-Checksum-Type"] != "COMPOSITE" {
+		t.Fatal("unexpected", obj.Meta)
+	} else if !bytes.Equal(obj.PartChecksum, parts[1].Checksum) {
+		t.Fatalf("unexpected %x", obj.PartChecksum)
+	}
+
+	rows, err := store.db.Query(`SELECT part_number, content_md5, offset, content_length, checksum FROM object_parts ORDER BY part_number`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +393,8 @@ func TestCompleteMultipartUpload(t *testing.T) {
 		var length int64
 		var offset int64
 		var contentMD5 sqlMD5
-		if err := rows.Scan(&partNumber, &contentMD5, &offset, &length); err != nil {
+		var partChecksum []byte
+		if err := rows.Scan(&partNumber, &contentMD5, &offset, &length, &partChecksum); err != nil {
 			t.Fatal(err)
 		}
 		idx := partNumber - 1
@@ -330,6 +406,9 @@ func TestCompleteMultipartUpload(t *testing.T) {
 		}
 		if parts[idx].ContentMD5 != [16]byte(contentMD5) {
 			t.Fatalf("expected MD5 %x, got %x", parts[idx].ContentMD5, contentMD5)
+		}
+		if !bytes.Equal(parts[idx].Checksum, partChecksum) {
+			t.Fatalf("expected checksum %x, got %x", parts[idx].Checksum, partChecksum)
 		}
 		offsets = append(offsets, offset)
 	}
@@ -362,7 +441,7 @@ func TestListMultipartUploads(t *testing.T) {
 		uids := make(map[string][]string)
 		for _, key := range keys {
 			uid := s3.NewUploadID()
-			err := store.CreateMultipartUpload(bid, key, uid, nil, nil)
+			err := store.CreateMultipartUpload(bid, key, uid, nil, nil, objects.MultipartChecksum{})
 			if err != nil {
 				t.Fatal(err)
 			}
