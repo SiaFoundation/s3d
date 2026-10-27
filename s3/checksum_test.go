@@ -154,3 +154,138 @@ func TestDeclaresTrailingChecksum(t *testing.T) {
 		})
 	}
 }
+
+func TestParseChecksumAlgorithm(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    ChecksumAlgorithm
+		wantErr error
+	}{
+		{name: "lowercase", input: "crc32", want: ChecksumCRC32},
+		{name: "uppercase", input: "CRC32C", want: ChecksumCRC32C},
+		{name: "mixed case", input: "Crc64nvme", want: ChecksumCRC64NVME},
+		{name: "sha1", input: "sha1", want: ChecksumSHA1},
+		{name: "sha256", input: "SHA256", want: ChecksumSHA256},
+		{name: "empty"},
+		{name: "unknown algorithm", input: "XXHASH64", wantErr: s3errs.ErrInvalidRequest},
+		{name: "md5 is not an additional checksum", input: "MD5", wantErr: s3errs.ErrInvalidRequest},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseChecksumAlgorithm(tt.input)
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("expected %v, got %v", tt.wantErr, err)
+				}
+				return
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.want {
+				t.Fatalf("expected %q, got %q", tt.want, got)
+			}
+		})
+	}
+}
+
+func TestParseChecksumType(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    ChecksumType
+		wantErr error
+	}{
+		{name: "composite", input: "COMPOSITE", want: ChecksumTypeComposite},
+		{name: "full object lowercase", input: "full_object", want: ChecksumTypeFullObject},
+		{name: "empty"},
+		{name: "unknown type", input: "WHOLE_OBJECT", wantErr: s3errs.ErrInvalidRequest},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseChecksumType(tt.input)
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("expected %v, got %v", tt.wantErr, err)
+				}
+				return
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.want {
+				t.Fatalf("expected %q, got %q", tt.want, got)
+			}
+		})
+	}
+}
+
+func TestChecksumAlgorithmHeader(t *testing.T) {
+	if got := ChecksumCRC64NVME.Header(); got != "X-Amz-Checksum-Crc64nvme" {
+		t.Fatalf("unexpected header %q", got)
+	}
+	if got := ChecksumSHA256.HeaderSuffix(); got != "Sha256" {
+		t.Fatalf("unexpected suffix %q", got)
+	}
+
+	if got, ok := ChecksumAlgorithmFromSuffix("Crc32c"); !ok || got != ChecksumCRC32C {
+		t.Fatalf("expected %q, got %q %v", ChecksumCRC32C, got, ok)
+	}
+	if _, ok := ChecksumAlgorithmFromSuffix("Md5"); ok {
+		t.Fatal("expected Md5 to be rejected")
+	}
+}
+
+func TestChecksumTypeSupport(t *testing.T) {
+	tests := []struct {
+		algorithm   ChecksumAlgorithm
+		composite   bool
+		fullObject  bool
+		defaultType ChecksumType
+	}{
+		{ChecksumCRC32, true, true, ChecksumTypeComposite},
+		{ChecksumCRC64NVME, false, true, ChecksumTypeFullObject},
+		{ChecksumSHA1, true, false, ChecksumTypeComposite},
+		{ChecksumSHA256, true, false, ChecksumTypeComposite},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.algorithm), func(t *testing.T) {
+			if got := tt.algorithm.SupportsType(ChecksumTypeComposite); got != tt.composite {
+				t.Fatalf("composite: expected %v, got %v", tt.composite, got)
+			}
+			if got := tt.algorithm.SupportsType(ChecksumTypeFullObject); got != tt.fullObject {
+				t.Fatalf("full object: expected %v, got %v", tt.fullObject, got)
+			}
+			if got := tt.algorithm.DefaultType(); got != tt.defaultType {
+				t.Fatalf("default: expected %q, got %q", tt.defaultType, got)
+			}
+		})
+	}
+}
+
+func TestObjectChecksumMeta(t *testing.T) {
+	want := ObjectChecksum{
+		Algorithm: ChecksumSHA256,
+		Type:      ChecksumTypeComposite,
+		Value:     "abc=-3",
+	}
+
+	meta := make(map[string]string)
+	want.StoreInMeta(meta)
+
+	got := ObjectChecksumFromMeta(meta)
+	if got == nil {
+		t.Fatal("expected a checksum")
+	} else if *got != want {
+		t.Fatalf("expected %+v, got %+v", want, *got)
+	}
+
+	if got := ObjectChecksumFromMeta(map[string]string{}); got != nil {
+		t.Fatalf("expected no checksum, got %+v", *got)
+	}
+	if got := ObjectChecksumFromMeta(map[string]string{HeaderXAMZChecksumType: "COMPOSITE"}); got != nil {
+		t.Fatalf("expected no checksum, got %+v", *got)
+	}
+}
