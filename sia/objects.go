@@ -321,6 +321,45 @@ func (s *Sia) GetObject(ctx context.Context, bucket s3.BucketID, object string, 
 	return s.headOrGetObject(ctx, bucket, object, version, rnge, partNumber, false)
 }
 
+// GetObjectAttributes retrieves the attributes of the object with the given key
+// from the specified bucket, along with a page of its parts when it was uploaded
+// in parts. version selects a specific version, or the current version when
+// unspecified.
+func (s *Sia) GetObjectAttributes(ctx context.Context, bucket s3.BucketID, object string, version s3.VersionRequest, page s3.ObjectAttributesPage) (*s3.ObjectAttributes, error) {
+	obj, err := s.store.GetObject(bucket, object, version, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	attrs := &s3.ObjectAttributes{
+		ContentMD5:     obj.ContentMD5,
+		PartsCount:     obj.PartsCount,
+		Size:           obj.Length,
+		LastModified:   obj.LastModified,
+		VersionID:      obj.VersionID,
+		Versioned:      obj.Versioned,
+		IsDeleteMarker: obj.IsDeleteMarker,
+		Checksum:       s3.ObjectChecksumFromMeta(obj.Meta),
+	}
+	if obj.IsDeleteMarker || obj.PartsCount == 0 {
+		return attrs, nil
+	}
+
+	parts, truncated, err := s.store.ObjectParts(bucket, object, s3.SpecificVersion(obj.VersionID), page.PartNumberMarker, page.MaxParts)
+	if err != nil {
+		return nil, err
+	}
+	attrs.IsTruncated = truncated
+	for _, part := range parts {
+		attrs.Parts = append(attrs.Parts, s3.ObjectPart{
+			PartNumber: part.PartNumber,
+			Size:       part.Size,
+			Checksum:   part.Checksum,
+		})
+	}
+	return attrs, nil
+}
+
 // HeadObject is like GetObject but only retrieves the metadata of the
 // object and returns an empty body.
 func (s *Sia) HeadObject(ctx context.Context, bucket s3.BucketID, object string, version s3.VersionRequest, rnge *s3.ObjectRangeRequest, partNumber *int32) (*s3.Object, error) {

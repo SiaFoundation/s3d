@@ -232,7 +232,6 @@ func (e CopySourceError) Unwrap() error {
 
 var unsupportedObjectSubresources = map[string]struct{}{
 	"acl":          {},
-	"attributes":   {},
 	"renameObject": {},
 	"restore":      {},
 	"select":       {},
