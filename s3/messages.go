@@ -631,6 +631,49 @@ type (
 	}
 )
 
+// Types related to object attributes routes
+type (
+	// GetObjectAttributesResponse is the response to a GetObjectAttributes
+	// request. Every element the request did not ask for is left out.
+	//
+	// https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObjectAttributes.html
+	GetObjectAttributesResponse struct {
+		XMLName      xml.Name             `xml:"GetObjectAttributesResponse"`
+		Xmlns        string               `xml:"xmlns,attr"`
+		ETag         string               `xml:"ETag,omitempty"`
+		Checksum     *ChecksumResponse    `xml:"Checksum,omitempty"`
+		ObjectParts  *ObjectPartsResponse `xml:"ObjectParts,omitempty"`
+		StorageClass StorageClass         `xml:"StorageClass,omitempty"`
+		ObjectSize   *int64               `xml:"ObjectSize,omitempty"`
+	}
+
+	// ChecksumResponse is the additional checksum stored with an object and how
+	// it covers the object.
+	ChecksumResponse struct {
+		ChecksumElements
+		ChecksumType ChecksumType `xml:"ChecksumType,omitempty"`
+	}
+
+	// ObjectPartsResponse is the page of parts a multipart object reports.
+	// PartsCount is the object's total, independent of the page.
+	ObjectPartsResponse struct {
+		IsTruncated          bool                 `xml:"IsTruncated"`
+		MaxParts             int                  `xml:"MaxParts"`
+		NextPartNumberMarker int                  `xml:"NextPartNumberMarker,omitempty"`
+		PartNumberMarker     int                  `xml:"PartNumberMarker"`
+		Parts                []ObjectPartResponse `xml:"Part"`
+		PartsCount           int32                `xml:"PartsCount"`
+	}
+
+	// ObjectPartResponse represents a single part entry in a
+	// GetObjectAttributes response.
+	ObjectPartResponse struct {
+		ChecksumElements
+		PartNumber int   `xml:"PartNumber"`
+		Size       int64 `xml:"Size"`
+	}
+)
+
 // ChecksumElements are the per algorithm checksum elements a multipart message
 // carries. At most one is set.
 type ChecksumElements struct {

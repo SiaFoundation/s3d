@@ -266,6 +266,87 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, version s3.
 	return attachSiaObject(tx, obj, partObjID)
 }
 
+// objectVersionID resolves the version of (bid, name) a request addresses,
+// returning sql.ErrNoRows when it is absent. An unspecified version resolves to
+// the current version.
+func objectVersionID(tx *txn, bid int64, name string, version s3.VersionRequest) (string, error) {
+	if version.Specified {
+		var found string
+		err := tx.QueryRow(`
+			SELECT version_id
+			FROM objects
+			WHERE bucket_id = $1 AND name = $2 AND version_id = $3
+		`, bid, name, version.ID).Scan(&found)
+		return found, err
+	}
+	var versionID string
+	err := tx.QueryRow(`
+		SELECT version_id
+		FROM objects
+		WHERE bucket_id = $1 AND name = $2 AND is_latest = TRUE
+	`, bid, name).Scan(&versionID)
+	return versionID, err
+}
+
+// ObjectParts returns the parts of a multipart object ordered by part number,
+// skipping the parts up to and including partNumberMarker and reporting at most
+// maxParts of them. The second return value is true when more parts remain. An
+// object that was not uploaded in parts has none.
+//
+// An unspecified version reads the current version, returning ErrNoSuchKey when
+// the key has no versions. A specified version reads that version, returning
+// ErrNoSuchVersion when it is absent.
+func (s *Store) ObjectParts(bucket s3.BucketID, name string, version s3.VersionRequest, partNumberMarker, maxParts int) ([]objects.Part, bool, error) {
+	var parts []objects.Part
+	var truncated bool
+	if err := s.transaction(func(tx *txn) error {
+		parts, truncated = parts[:0], false // reset per attempt
+
+		bid, err := existingBucketID(tx, bucket)
+		if err != nil {
+			return err
+		}
+
+		versionID, err := objectVersionID(tx, bid, name, version)
+		if err != nil {
+			return err
+		}
+
+		rows, err := tx.Query(`
+			SELECT part_number, content_length, checksum
+			FROM object_parts
+			WHERE bucket_id = $1 AND name = $2 AND version_id = $3 AND part_number > $4
+			ORDER BY part_number ASC
+			LIMIT $5
+		`, bid, name, versionID, partNumberMarker, maxParts+1)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			if len(parts) >= maxParts {
+				truncated = true
+				break
+			}
+			var p objects.Part
+			if err := rows.Scan(&p.PartNumber, &p.Size, &p.Checksum); err != nil {
+				return err
+			}
+			parts = append(parts, p)
+		}
+		return rows.Err()
+	}); errors.Is(err, sql.ErrNoRows) {
+		if version.Specified {
+			return nil, false, s3errs.ErrNoSuchVersion
+		}
+		return nil, false, s3errs.ErrNoSuchKey
+	} else if err != nil {
+		return nil, false, err
+	}
+	return parts, truncated, nil
+}
+
 // attachSiaObject loads the sealed object referenced by objectID from the
 // normalized sia object tables and attaches it to obj. A null objectID leaves
 // obj untouched.

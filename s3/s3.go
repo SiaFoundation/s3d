@@ -115,6 +115,21 @@ type Backend interface {
 	//   if absent). The result may be a delete marker (Object.IsDeleteMarker).
 	GetObject(ctx context.Context, bucket BucketID, object string, version VersionRequest, rnge *ObjectRangeRequest, partNumber *int32) (*Object, error)
 
+	// GetObjectAttributes retrieves the attributes of the object with the given
+	// key from the specified bucket, along with a page of its parts when it was
+	// uploaded in parts.
+	//
+	// - A missing bucket, a missing key and a missing version are reported
+	//   exactly as GetObject reports them.
+	//
+	// - version unspecified addresses the current version, a specified request
+	//   the exact version, where an empty ID is the null version. The result
+	//   may be a delete marker, reported by ObjectAttributes.IsDeleteMarker.
+	//
+	// - page bounds the parts reported, with ObjectAttributes.IsTruncated set
+	//   when parts beyond the page remain.
+	GetObjectAttributes(ctx context.Context, bucket BucketID, object string, version VersionRequest, page ObjectAttributesPage) (*ObjectAttributes, error)
+
 	// BucketAccessInfo returns the ID, owner and policy document of the bucket
 	// with the given name. It is called on every bucket request.
 	//
@@ -705,6 +720,8 @@ func (s *s3) route(r *http.Request, bucket, object string) (operation, error) {
 		return s.routeObjectRetention(r, object, VersionFromQuery(query["versionId"]))
 	} else if _, ok := query["legal-hold"]; ok {
 		return s.routeObjectLegalHold(r, object, VersionFromQuery(query["versionId"]))
+	} else if _, ok := query["attributes"]; ok {
+		return s.routeObjectAttributes(r, object, VersionFromQuery(query["versionId"]))
 	} else if version := VersionFromQuery(query["versionId"]); version.Specified {
 		return s.routeObjectVersion(r, object, version)
 	} else if bucket != "" && object != "" {

@@ -254,6 +254,7 @@ type Store interface {
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
 	ListObjects(bucket s3.BucketID, prefix s3.Prefix, page s3.ListObjectsPage) (*s3.ObjectsListResult, error)
 	ListObjectVersions(bucket s3.BucketID, prefix s3.Prefix, page s3.ListObjectVersionsPage) (*s3.ObjectVersionsListResult, error)
+	ObjectParts(bucket s3.BucketID, name string, version s3.VersionRequest, partNumberMarker, maxParts int) ([]objects.Part, bool, error)
 	ObjectPartsByName(bucket s3.BucketID, name, versionID string) ([]objects.Part, error)
 	ObjectsForUpload() ([]objects.ObjectForUpload, error)
 	OrphanedObjects(limit int) ([]types.Hash256, error)
