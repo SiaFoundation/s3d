@@ -37,6 +37,7 @@ type UploadPartOptions struct {
 	ContentLength int64
 	ContentMD5    *[16]byte
 	ContentSHA256 *[32]byte
+	Checksum      *RequestChecksum
 }
 
 // UploadPartCopyOptions contains options for copying an individual part in a
@@ -52,6 +53,10 @@ type UploadPartCopyOptions struct {
 type UploadPartResult struct {
 	ContentMD5   [16]byte
 	LastModified time.Time
+
+	// Checksum is the digest the backend computed for the request's algorithm,
+	// nil when none was asked for.
+	Checksum *RequestChecksum
 }
 
 // UploadPartCopyResult contains metadata about a copied part, such as the
@@ -436,16 +441,24 @@ func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, access *bucke
 		return err
 	}
 
+	// extract the checksum from an "X-Amz-Checksum-*" header, if present
+	checksum, err := requestChecksum(r.Header)
+	if err != nil {
+		return err
+	}
+
 	res, err := s.backend.UploadPart(r.Context(), access.bucketID, object, uploadID, r.Body, UploadPartOptions{
 		PartNumber:    int(*partNumber),
 		ContentLength: r.ContentLength,
 		ContentMD5:    contentMD5,
 		ContentSHA256: contentSHA256,
+		Checksum:      checksum,
 	})
 	if err != nil {
 		return err
 	}
 
+	writeChecksumValueHeader(w, res.Checksum)
 	w.Header().Set("ETag", FormatETag(res.ContentMD5[:], 0))
 	return nil
 }

@@ -982,13 +982,22 @@ func trailingChecksum(headers http.Header) *RequestChecksum {
 	return nil
 }
 
+// writeChecksumValueHeader echoes the checksum the backend computed for the
+// data it just stored.
+func writeChecksumValueHeader(w http.ResponseWriter, checksum *RequestChecksum) {
+	if checksum == nil {
+		return
+	}
+	w.Header().Set(checksumPrefix+checksum.Algorithm, base64.StdEncoding.EncodeToString(checksum.Sum))
+}
+
 // writeChecksumHeader echoes the checksum the backend computed for the object
 // it just stored, which always covers the object in full.
 func writeChecksumHeader(w http.ResponseWriter, checksum *RequestChecksum) {
 	if checksum == nil {
 		return
 	}
-	w.Header().Set(checksumPrefix+checksum.Algorithm, base64.StdEncoding.EncodeToString(checksum.Sum))
+	writeChecksumValueHeader(w, checksum)
 	w.Header().Set(HeaderXAMZChecksumType, string(ChecksumTypeFullObject))
 }
 
