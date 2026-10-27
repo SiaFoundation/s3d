@@ -70,7 +70,12 @@ func (s *Sia) CreateMultipartUpload(ctx context.Context, bucket s3.BucketID, obj
 	}
 
 	// create multipart upload in the database
-	if err := s.store.CreateMultipartUpload(bucket, object, uploadID, opts.Meta, opts.ObjectLock, objects.MultipartChecksum{}); err != nil {
+	var checksum objects.MultipartChecksum
+	if opts.ChecksumAlgorithm != "" {
+		checksum = objects.MultipartChecksum{Algorithm: opts.ChecksumAlgorithm, Type: opts.ChecksumType}
+	}
+
+	if err := s.store.CreateMultipartUpload(bucket, object, uploadID, opts.Meta, opts.ObjectLock, checksum); err != nil {
 		s.cleanupOrphan(uploadDir, 0)
 		return nil, fmt.Errorf("failed to create multipart upload: %w", err)
 	}
@@ -108,8 +113,16 @@ func (s *Sia) AbortMultipartUpload(ctx context.Context, bucket s3.BucketID, obje
 func (s *Sia) UploadPart(ctx context.Context, bucket s3.BucketID, object string, uploadID s3.UploadID, r io.Reader, opts s3.UploadPartOptions) (_ *s3.UploadPartResult, err error) {
 	// fail fast if the bucket or the upload is unknown before streaming the
 	// body to disk
-	if _, err := s.store.HasMultipartUpload(bucket, object, uploadID); err != nil {
+	upload, err := s.store.MultipartUploadChecksum(bucket, object, uploadID)
+	if err != nil {
 		return nil, err
+	}
+
+	if upload.Algorithm != "" && opts.Checksum != nil {
+		algorithm, ok := s3.ChecksumAlgorithmFromSuffix(opts.Checksum.Algorithm)
+		if !ok || algorithm != upload.Algorithm {
+			return nil, s3errs.ErrInvalidRequest
+		}
 	}
 
 	// track the request before reserving disk space so a request blocked
@@ -159,8 +172,14 @@ func (s *Sia) UploadPart(ctx context.Context, bucket s3.BucketID, object string,
 		writers = append(writers, sha256Hash)
 	}
 
+	var uploadHash hash.Hash
+	if upload.Algorithm != "" {
+		uploadHash = upload.Algorithm.NewHash()
+		writers = append(writers, uploadHash)
+	}
+
 	var checksumHash hash.Hash
-	if opts.Checksum != nil {
+	if opts.Checksum != nil && uploadHash == nil {
 		checksumHash = opts.Checksum.NewHash()
 		if checksumHash == nil {
 			return nil, s3errs.ErrInvalidRequest
@@ -194,8 +213,16 @@ func (s *Sia) UploadPart(ctx context.Context, bucket s3.BucketID, object string,
 		}
 	}
 
+	var storedChecksum []byte
 	var checksum *s3.RequestChecksum
-	if checksumHash != nil {
+	switch {
+	case uploadHash != nil:
+		storedChecksum = uploadHash.Sum(nil)
+		if opts.Checksum != nil && opts.Checksum.Sum != nil && !bytes.Equal(storedChecksum, opts.Checksum.Sum) {
+			return nil, s3errs.ErrBadDigest
+		}
+		checksum = &s3.RequestChecksum{Algorithm: upload.Algorithm.HeaderSuffix(), Sum: storedChecksum}
+	case checksumHash != nil:
 		checksum = &s3.RequestChecksum{Algorithm: opts.Checksum.Algorithm, Sum: checksumHash.Sum(nil)}
 		if opts.Checksum.Sum != nil && !bytes.Equal(checksum.Sum, opts.Checksum.Sum) {
 			return nil, s3errs.ErrBadDigest
@@ -215,7 +242,7 @@ func (s *Sia) UploadPart(ctx context.Context, bucket s3.BucketID, object string,
 	}
 
 	// add multipart part to the database
-	previous, prevSize, err := s.store.AddMultipartPart(bucket, object, uploadID, filepath.Base(partPath), opts.PartNumber, contentMD5, contentLength, nil)
+	previous, prevSize, err := s.store.AddMultipartPart(bucket, object, uploadID, filepath.Base(partPath), opts.PartNumber, contentMD5, contentLength, storedChecksum)
 	if err != nil {
 		return nil, fmt.Errorf("failed to add part: %w", err)
 	}
@@ -255,8 +282,9 @@ func (s *Sia) UploadPartCopy(ctx context.Context, srcBucket s3.BucketID, srcObje
 		return nil, s3errs.ErrEntityTooLarge
 	}
 
-	// check if the multipart upload exists
-	if _, err := s.store.HasMultipartUpload(dstBucket, dstObject, uploadID); err != nil {
+	// read the upload's checksum, which fails when the upload is unknown
+	upload, err := s.store.MultipartUploadChecksum(dstBucket, dstObject, uploadID)
+	if err != nil {
 		return nil, err
 	}
 
@@ -316,7 +344,15 @@ func (s *Sia) UploadPartCopy(ctx context.Context, srcBucket s3.BucketID, srcObje
 
 	// copy the requested range to the part file
 	md5Hash := md5.New()
-	contentLength, err := io.Copy(io.MultiWriter(partFile, md5Hash), io.LimitReader(src, objRange.Length))
+	writers := []io.Writer{partFile, md5Hash}
+
+	var uploadHash hash.Hash
+	if upload.Algorithm != "" {
+		uploadHash = upload.Algorithm.NewHash()
+		writers = append(writers, uploadHash)
+	}
+
+	contentLength, err := io.Copy(io.MultiWriter(writers...), io.LimitReader(src, objRange.Length))
 	if err != nil {
 		return nil, fmt.Errorf("failed to copy source data: %w", err)
 	}
@@ -326,6 +362,13 @@ func (s *Sia) UploadPartCopy(ctx context.Context, srcBucket s3.BucketID, srcObje
 
 	var contentMD5 [16]byte
 	copy(contentMD5[:], md5Hash.Sum(nil))
+
+	var storedChecksum []byte
+	var checksum *s3.RequestChecksum
+	if uploadHash != nil {
+		storedChecksum = uploadHash.Sum(nil)
+		checksum = &s3.RequestChecksum{Algorithm: upload.Algorithm.HeaderSuffix(), Sum: storedChecksum}
+	}
 
 	// sync part file
 	if err := partFile.Sync(); err != nil {
@@ -340,7 +383,7 @@ func (s *Sia) UploadPartCopy(ctx context.Context, srcBucket s3.BucketID, srcObje
 	}
 
 	// add multipart part to the database
-	previous, prevSize, err := s.store.AddMultipartPart(dstBucket, dstObject, uploadID, filepath.Base(partPath), opts.PartNumber, contentMD5, contentLength, nil)
+	previous, prevSize, err := s.store.AddMultipartPart(dstBucket, dstObject, uploadID, filepath.Base(partPath), opts.PartNumber, contentMD5, contentLength, storedChecksum)
 	if err != nil {
 		return nil, fmt.Errorf("failed to add part: %w", err)
 	}
@@ -354,6 +397,7 @@ func (s *Sia) UploadPartCopy(ctx context.Context, srcBucket s3.BucketID, srcObje
 		ContentMD5:      contentMD5,
 		LastModified:    obj.LastModified,
 		SourceVersionID: srcVersionWire,
+		Checksum:        checksum,
 	}, nil
 }
 
