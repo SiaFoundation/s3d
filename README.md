@@ -377,18 +377,20 @@ header against the body and echo the checksum back on the response. A trailing
 checksum sent with `PutObject` is validated and stored the same way.
 `HeadObject` and `GetObject` return the stored checksum and
 `x-amz-checksum-type` only when the request carries `x-amz-checksum-mode` set
-to `ENABLED`, and a ranged response never carries one. A read of a single part
-through `partNumber` returns that part's checksum rather than the object's.
+to `ENABLED`, and a response to a `Range` request never carries one. A read of
+a single part through `partNumber` returns that part's checksum rather than the
+object's, and a `partNumber` read of an object with one part returns the
+object's own checksum.
 
 `CreateMultipartUpload` accepts an `x-amz-checksum-algorithm` of `CRC32`,
 `CRC32C`, `CRC64NVME`, `SHA1` or `SHA256` and an `x-amz-checksum-type` of
 `COMPOSITE` or `FULL_OBJECT`. `FULL_OBJECT` is allowed only for the three CRC
-algorithms. When the type is omitted, `CRC64NVME` defaults to `FULL_OBJECT` and
-the others to `COMPOSITE`. Every part is hashed with the upload's algorithm
-whether or not the client sends a value of its own, and a part checksum of
-another algorithm is refused. A `CompleteMultipartUpload` request may omit the
-part checksum elements for either type and any element it carries must match the
-stored part digest.
+algorithms, and `CRC64NVME` takes `FULL_OBJECT` only. When the type is omitted,
+`CRC64NVME` defaults to `FULL_OBJECT` and the others to `COMPOSITE`. Every part
+is hashed with the upload's algorithm whether or not the client sends a value
+of its own, and a part checksum of another algorithm is refused. A
+`CompleteMultipartUpload` request may omit the part checksum elements for
+either type and any element it carries must match the stored part digest.
 
 `CopyObject` keeps the source checksum and its type unchanged, where AWS would
 recompute a full object value, because s3d copies metadata without reading the
@@ -431,6 +433,7 @@ data.
 | POST Object | ◐ | SigV4 signed forms only, the SigV2 form fields are not accepted |
 | GetObject | ✓ | |
 | HeadObject | ✓ | |
+| GetObjectAttributes | ✓ | |
 | DeleteObject | ✓ | |
 | DeleteObjects | ✓ | |
 | CopyObject | ✓ | |
