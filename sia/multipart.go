@@ -70,7 +70,7 @@ func (s *Sia) CreateMultipartUpload(ctx context.Context, bucket s3.BucketID, obj
 	}
 
 	// create multipart upload in the database
-	if err := s.store.CreateMultipartUpload(bucket, object, uploadID, opts.Meta, opts.ObjectLock); err != nil {
+	if err := s.store.CreateMultipartUpload(bucket, object, uploadID, opts.Meta, opts.ObjectLock, objects.MultipartChecksum{}); err != nil {
 		s.cleanupOrphan(uploadDir, 0)
 		return nil, fmt.Errorf("failed to create multipart upload: %w", err)
 	}
@@ -215,7 +215,7 @@ func (s *Sia) UploadPart(ctx context.Context, bucket s3.BucketID, object string,
 	}
 
 	// add multipart part to the database
-	previous, prevSize, err := s.store.AddMultipartPart(bucket, object, uploadID, filepath.Base(partPath), opts.PartNumber, contentMD5, contentLength)
+	previous, prevSize, err := s.store.AddMultipartPart(bucket, object, uploadID, filepath.Base(partPath), opts.PartNumber, contentMD5, contentLength, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to add part: %w", err)
 	}
@@ -340,7 +340,7 @@ func (s *Sia) UploadPartCopy(ctx context.Context, srcBucket s3.BucketID, srcObje
 	}
 
 	// add multipart part to the database
-	previous, prevSize, err := s.store.AddMultipartPart(dstBucket, dstObject, uploadID, filepath.Base(partPath), opts.PartNumber, contentMD5, contentLength)
+	previous, prevSize, err := s.store.AddMultipartPart(dstBucket, dstObject, uploadID, filepath.Base(partPath), opts.PartNumber, contentMD5, contentLength, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to add part: %w", err)
 	}
@@ -421,7 +421,7 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, bucket s3.BucketID, o
 	}
 
 	// complete the multipart upload in the database
-	versionID, orphan, err := s.store.CompleteMultipartUpload(bucket, object, uploadID, contentMD5, contentLength, preconditions)
+	versionID, orphan, err := s.store.CompleteMultipartUpload(bucket, object, uploadID, contentMD5, contentLength, nil, preconditions)
 	if err != nil {
 		return nil, fmt.Errorf("failed to complete multipart upload in store: %w", err)
 	}

@@ -88,21 +88,21 @@ func TestAbortMultipartUploads(t *testing.T) {
 
 	// old upload under the "logs/" prefix with a single part
 	oldUpload := s3.NewUploadID()
-	if err := store.CreateMultipartUpload(bid, "logs/a", oldUpload, nil, nil); err != nil {
+	if err := store.CreateMultipartUpload(bid, "logs/a", oldUpload, nil, nil, objects.MultipartChecksum{}); err != nil {
 		t.Fatal(err)
-	} else if _, _, err := store.AddMultipartPart(bid, "logs/a", oldUpload, "p1", 1, frand.Entropy128(), 500); err != nil {
+	} else if _, _, err := store.AddMultipartPart(bid, "logs/a", oldUpload, "p1", 1, frand.Entropy128(), 500, nil); err != nil {
 		t.Fatal(err)
 	}
 
 	// recent upload under the "logs/" prefix
 	newUpload := s3.NewUploadID()
-	if err := store.CreateMultipartUpload(bid, "logs/b", newUpload, nil, nil); err != nil {
+	if err := store.CreateMultipartUpload(bid, "logs/b", newUpload, nil, nil, objects.MultipartChecksum{}); err != nil {
 		t.Fatal(err)
 	}
 
 	// upload under a different prefix
 	otherUpload := s3.NewUploadID()
-	if err := store.CreateMultipartUpload(bid, "data/c", otherUpload, nil, nil); err != nil {
+	if err := store.CreateMultipartUpload(bid, "data/c", otherUpload, nil, nil, objects.MultipartChecksum{}); err != nil {
 		t.Fatal(err)
 	}
 

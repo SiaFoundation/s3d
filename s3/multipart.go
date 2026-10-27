@@ -86,6 +86,11 @@ type ListPartsResult struct {
 	StorageClass         StorageClass
 	InitiatorID          string
 	InitiatorDisplayName string
+
+	// ChecksumAlgorithm and ChecksumType are the upload's additional checksum,
+	// empty when it was created without one.
+	ChecksumAlgorithm ChecksumAlgorithm
+	ChecksumType      ChecksumType
 }
 
 // UploadPart represents a single uploaded part that can be returned by
@@ -95,6 +100,10 @@ type UploadPart struct {
 	LastModified time.Time
 	Size         int64
 	ContentMD5   [16]byte
+
+	// Checksum is the part's additional digest, nil when the upload has no
+	// algorithm.
+	Checksum []byte
 }
 
 // CompletedPart represents a single part referenced during a multipart
