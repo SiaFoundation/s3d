@@ -476,6 +476,23 @@ func TestMultipartChecksum(t *testing.T) {
 		t.Fatalf("expected type %q, got %q", types.ChecksumTypeComposite, completedComposite.ChecksumType)
 	}
 
+	// a part read reports the part's digest, which carries no part count suffix
+	compositeRead, err := s3Tester.Client().GetObject(t.Context(), &service.GetObjectInput{
+		Bucket:       aws.String(bucket),
+		Key:          aws.String(compositeKey),
+		PartNumber:   aws.Int32(1),
+		ChecksumMode: types.ChecksumModeEnabled,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compositeRead.Body.Close()
+	if got := aws.ToString(compositeRead.ChecksumSHA256); got != partSHA256 {
+		t.Fatalf("expected checksum %s, got %s", partSHA256, got)
+	} else if compositeRead.ChecksumType != types.ChecksumTypeComposite {
+		t.Fatalf("expected type %q, got %q", types.ChecksumTypeComposite, compositeRead.ChecksumType)
+	}
+
 	// the same data uploaded again reports the same ETag and checksum
 	repeatID := createChecksumUpload(compositeKey, types.ChecksumAlgorithmSha256, "")
 	repeatETag := uploadChecksumPart(compositeKey, repeatID, 1, data, func(in *service.UploadPartInput) {
@@ -529,6 +546,56 @@ func TestMultipartChecksum(t *testing.T) {
 		t.Fatalf("expected checksum %s, got %s", fullObjectCRC32, got)
 	} else if completedFullObject.ChecksumType != types.ChecksumTypeFullObject {
 		t.Fatalf("expected type %q, got %q", types.ChecksumTypeFullObject, completedFullObject.ChecksumType)
+	}
+
+	// a part read reports the part's digest and the object's checksum type
+	fullObjectPart, err := s3Tester.Client().GetObject(t.Context(), &service.GetObjectInput{
+		Bucket:       aws.String(bucket),
+		Key:          aws.String(fullObjectKey),
+		PartNumber:   aws.Int32(2),
+		ChecksumMode: types.ChecksumModeEnabled,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fullObjectPart.Body.Close()
+	if got := aws.ToString(fullObjectPart.ChecksumCRC32); got != fullObjectSums[1] {
+		t.Fatalf("expected checksum %s, got %s", fullObjectSums[1], got)
+	} else if fullObjectPart.ChecksumType != types.ChecksumTypeFullObject {
+		t.Fatalf("expected type %q, got %q", types.ChecksumTypeFullObject, fullObjectPart.ChecksumType)
+	}
+
+	// a part read without the checksum mode reports neither. the SDK sets the
+	// mode itself unless response validation is turned off
+	unaskedPart, err := s3Tester.Client().GetObject(t.Context(), &service.GetObjectInput{
+		Bucket:     aws.String(bucket),
+		Key:        aws.String(fullObjectKey),
+		PartNumber: aws.Int32(2),
+	}, func(o *service.Options) {
+		o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unaskedPart.Body.Close()
+	if unaskedPart.ChecksumCRC32 != nil {
+		t.Fatalf("expected no checksum, got %s", *unaskedPart.ChecksumCRC32)
+	} else if unaskedPart.ChecksumType != "" {
+		t.Fatalf("expected no checksum type, got %q", unaskedPart.ChecksumType)
+	}
+
+	// a read naming no part reports the object's digest
+	fullObjectHead, err := s3Tester.Client().HeadObject(t.Context(), &service.HeadObjectInput{
+		Bucket:       aws.String(bucket),
+		Key:          aws.String(fullObjectKey),
+		ChecksumMode: types.ChecksumModeEnabled,
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if got := aws.ToString(fullObjectHead.ChecksumCRC32); got != fullObjectCRC32 {
+		t.Fatalf("expected checksum %s, got %s", fullObjectCRC32, got)
+	} else if fullObjectHead.ChecksumType != types.ChecksumTypeFullObject {
+		t.Fatalf("expected type %q, got %q", types.ChecksumTypeFullObject, fullObjectHead.ChecksumType)
 	}
 
 	// a full object upload completes without any part checksum
