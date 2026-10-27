@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
-	"github.com/SiaFoundation/s3d/sia"
 	"go.uber.org/zap/zaptest"
 )
 
@@ -28,7 +28,7 @@ func TestUsersCRUD(t *testing.T) {
 	}
 
 	// duplicate name fails
-	if err := store.CreateUser("alice"); !errors.Is(err, sia.ErrUserAlreadyExists) {
+	if err := store.CreateUser("alice"); !errors.Is(err, s3.ErrUserAlreadyExists) {
 		t.Fatal("expected ErrUserAlreadyExists", err)
 	}
 
@@ -48,7 +48,7 @@ func TestUsersCRUD(t *testing.T) {
 	}
 
 	// delete unknown user fails
-	if err := store.DeleteUser("charlie"); !errors.Is(err, sia.ErrUserNotFound) {
+	if err := store.DeleteUser("charlie"); !errors.Is(err, s3.ErrUserNotFound) {
 		t.Fatal("expected ErrUserNotFound", err)
 	}
 
@@ -83,7 +83,7 @@ func TestAccessKeysCRUD(t *testing.T) {
 	}
 
 	// creating key for unknown user fails
-	if err := store.CreateAccessKey("charlie", "AKID4", "secret4"); !errors.Is(err, sia.ErrUserNotFound) {
+	if err := store.CreateAccessKey("charlie", "AKID4", "secret4"); !errors.Is(err, s3.ErrUserNotFound) {
 		t.Fatal("expected ErrUserNotFound", err)
 	}
 
@@ -131,7 +131,7 @@ func TestAccessKeysCRUD(t *testing.T) {
 	}
 
 	// deleting unknown key fails
-	if err := store.DeleteAccessKey("AKID_UNKNOWN"); err == nil {
+	if err := store.DeleteAccessKey("AKID_UNKNOWN"); !errors.Is(err, s3.ErrAccessKeyNotFound) {
 		t.Fatal("expected error for unknown key")
 	}
 
@@ -211,8 +211,8 @@ func TestBucketOwnership(t *testing.T) {
 	}
 
 	// deleting alice fails while she owns buckets
-	if err := store.DeleteUser("alice"); err == nil {
-		t.Fatal("expected error deleting user with buckets")
+	if err := store.DeleteUser("alice"); !errors.Is(err, s3.ErrUserHasBuckets) {
+		t.Fatal("expected ErrUserHasBuckets", err)
 	}
 
 	// alice can delete her bucket

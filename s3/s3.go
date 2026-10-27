@@ -14,7 +14,6 @@ import (
 
 	"github.com/SiaFoundation/s3d/s3/auth"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
-	"go.sia.tech/core/types"
 	"go.sia.tech/jape"
 	"go.uber.org/zap"
 )
@@ -373,31 +372,10 @@ type Backend interface {
 	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
 	ListObjectVersions(ctx context.Context, bucket BucketID, prefix Prefix, page ListObjectVersionsPage) (*ObjectVersionsListResult, error)
-
-	// UploadStats returns statistics about the background upload pipeline.
-	UploadStats(ctx context.Context) (UploadStats, error)
-
-	// FlushObjects uploads all pending objects to Sia regardless of padding,
-	// rather than waiting for the background pipeline to batch them into
-	// efficiently packed slabs. It blocks until the uploads complete.
-	FlushObjects(ctx context.Context) error
-
-	// CreateSnapshot backs up the database, uploads it to Sia as a tagged
-	// snapshot object, and records the object ID.
-	CreateSnapshot(ctx context.Context) (Snapshot, error)
-
-	// ListSnapshots returns the recorded database snapshots and whether the
-	// last metadata sync drained the network's event stream.
-	ListSnapshots(ctx context.Context) (SnapshotList, error)
-
-	// DeleteSnapshot unpins a snapshot's Sia object from the network and
-	// removes its record, releasing the orphaned objects it was withholding.
-	//
-	// - If no such snapshot exists, [ErrSnapshotNotFound] must be returned.
-	DeleteSnapshot(ctx context.Context, objectID types.Hash256) error
 }
 
 type s3 struct {
+	admin           AdminBackend
 	backend         Backend
 	hostBucketBases []string
 	logger          *zap.Logger
@@ -509,15 +487,11 @@ func corsMiddleware(handler http.Handler) http.Handler {
 }
 
 // NewAdmin creates an HTTP handler that serves the admin API using the provided
-// backend. It exposes /prometheus, which serves the background upload stats as
-// Prometheus metrics, /stats/uploads, which serves the same stats as JSON,
-// /objects/flush, which uploads all pending objects regardless of padding,
-// and /snapshots and /snapshots/:objectID, which create, list, and delete
-// database snapshots uploaded to Sia.
-func NewAdmin(b Backend, opts ...Option) http.Handler {
+// backend.
+func NewAdmin(b AdminBackend, opts ...Option) http.Handler {
 	s3 := &s3{
-		backend: b,
-		logger:  zap.NewNop(),
+		admin:  b,
+		logger: zap.NewNop(),
 	}
 	for _, opt := range opts {
 		opt(s3)
@@ -530,6 +504,12 @@ func NewAdmin(b Backend, opts ...Option) http.Handler {
 		"POST /snapshots":             s3.handleCreateSnapshot,
 		"GET /snapshots":              s3.handleListSnapshots,
 		"DELETE /snapshots/:objectID": s3.handleDeleteSnapshot,
+		"GET /users":                  s3.handleListUsers,
+		"POST /users":                 s3.handleCreateUser,
+		"DELETE /users/:name":         s3.handleDeleteUser,
+		"GET /keys":                   s3.handleListAccessKeys,
+		"POST /keys":                  s3.handleCreateAccessKey,
+		"DELETE /keys/:accessKeyID":   s3.handleDeleteAccessKey,
 	})
 }
 

@@ -169,10 +169,10 @@ assembling objects from existing data without re-uploading.
 
 ## Admin API
 
-`s3d` serves an admin API on a separate HTTP address for monitoring. It is
-always enabled and defaults to `127.0.0.1:8001`. The admin password is set
-during `s3d config`, or via `adminAddress` and `adminPassword` in the config
-file:
+`s3d` serves an admin API on a separate HTTP address for monitoring and for
+managing users and access keys. It is always enabled and defaults to
+`127.0.0.1:8001`. The admin password is set during `s3d config`, or via
+`adminAddress` and `adminPassword` in the config file:
 
 ```yaml
 adminAddress: 127.0.0.1:8001 # must differ from apiAddress
@@ -180,7 +180,9 @@ adminPassword: change-me # required
 ```
 
 Requests are authenticated via HTTP Basic authentication using the configured
-password; the username is ignored.
+password; the username is ignored. The API is served over plain HTTP and the
+password can issue access keys for every user, so keep the address on loopback
+or put a reverse proxy that terminates TLS in front of it.
 
 The admin API is documented in [`openapi.yml`](openapi.yml) and rendered at
 [api.sia.tech/s3d](https://api.sia.tech/s3d). It serves upload pipeline metrics
@@ -188,6 +190,16 @@ in the Prometheus text exposition format.
 
 ```sh
 curl -u ":change-me" http://127.0.0.1:8001/prometheus
+```
+
+Users and access keys can be managed through the API as well as through the
+`users` and `keys` commands. The commands open the database directly, so they
+work before `s3d` has started for the first time, while the API serves a
+running instance. A secret key is only returned when it is created.
+
+```sh
+curl -u ":change-me" -X POST http://127.0.0.1:8001/users -d '{"name":"alice"}'
+curl -u ":change-me" -X POST http://127.0.0.1:8001/keys -d '{"userName":"alice"}'
 ```
 
 ## Snapshots
@@ -465,7 +477,7 @@ generate one.
 | Port | Protocol | Description |
 |------|----------|-------------|
 | 8000 | TCP | S3 API |
-| 8001 | TCP | Admin API (disabled by default, see [Admin API](#admin-api)) |
+| 8001 | TCP | Admin API, see [Admin API](#admin-api) |
 
 ### Default Paths
 
@@ -522,6 +534,6 @@ s3:
     - s3.example.com
 ```
 
-Access keys are managed via the `s3d users` and `s3d keys` CLI commands and
-stored in the SQLite database. See [Getting Started](#getting-started) for
-details.
+Access keys are managed via the `s3d users` and `s3d keys` CLI commands or
+the [Admin API](#admin-api) and stored in the SQLite database. See
+[Getting Started](#getting-started) for details.

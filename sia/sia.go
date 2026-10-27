@@ -64,22 +64,6 @@ const (
 	TmpDirectory = "tmp"
 )
 
-var (
-	// ErrUserAlreadyExists is returned when creating a user that already exists.
-	ErrUserAlreadyExists = errors.New("user already exists")
-
-	// ErrReservedUserName is returned when creating a user whose name bucket
-	// policies use for anonymous callers.
-	ErrReservedUserName = errors.New("user name is reserved")
-
-	// ErrUserNotFound is returned when a user does not exist.
-	ErrUserNotFound = errors.New("user not found")
-
-	// ErrAccessKeyAlreadyExists is returned when creating an access key that
-	// already exists.
-	ErrAccessKeyAlreadyExists = errors.New("access key already exists")
-)
-
 // Option is a configuration option for the S3 API handler.
 type Option func(*Sia)
 
@@ -151,7 +135,7 @@ func WithUploadDeadline(d time.Duration) Option {
 	}
 }
 
-// Sia implements the s3.Backend interface for storing data on Sia.
+// Sia implements the s3.Backend and s3.AdminBackend interfaces for storing data on Sia.
 type Sia struct {
 	sdk   SDK
 	store Store
@@ -211,13 +195,6 @@ type SDK interface {
 	UnsealObject(sealed sdk.SealedObject) (*sdk.Object, error)
 }
 
-// AccessKeyInfo contains metadata about an access key.
-type AccessKeyInfo struct {
-	AccessKeyID string
-	SecretKey   string
-	UserName    string
-}
-
 // Store represents the storage backend used by the Sia backend.
 type Store interface {
 	// user and access key management
@@ -226,7 +203,7 @@ type Store interface {
 	ListUsers() ([]string, error)
 	CreateAccessKey(userName, accessKeyID, secretKey string) error
 	DeleteAccessKey(accessKeyID string) error
-	ListAccessKeys(userName *string) ([]AccessKeyInfo, error)
+	ListAccessKeys(userName *string) ([]s3.AccessKey, error)
 	LoadSecret(accessKeyID string) (secret, userName string, err error)
 
 	AllFilenames() ([]string, error)
