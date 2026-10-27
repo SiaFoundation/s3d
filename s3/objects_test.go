@@ -1148,6 +1148,90 @@ func TestCopyObject(t *testing.T) {
 	}
 }
 
+func TestCopyObjectChecksum(t *testing.T) {
+	s3Tester := testutil.NewTester(t)
+
+	const (
+		bucket    = "checksum-bucket"
+		object    = "composite"
+		copied    = "composite-copy"
+		partSum   = "arcu6553sHVAiX4MjW0j7I7vD4w6R+Gz9Ok0Q9lTa+0="
+		objectSum = "Ok6Cs5b96ux6+MWQkJO7UBT5sKPBeXBLwvj/hK89smg=-1"
+	)
+
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	created, err := s3Tester.Client().CreateMultipartUpload(t.Context(), &service.CreateMultipartUploadInput{
+		Bucket:            aws.String(bucket),
+		Key:               aws.String(object),
+		ChecksumAlgorithm: types.ChecksumAlgorithmSha256,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data := bytes.Repeat([]byte("A"), 1024)
+	uploaded, err := s3Tester.Client().UploadPart(t.Context(), &service.UploadPartInput{
+		Bucket:         aws.String(bucket),
+		Key:            aws.String(object),
+		UploadId:       created.UploadId,
+		PartNumber:     aws.Int32(1),
+		Body:           bytes.NewReader(data),
+		ContentLength:  aws.Int64(int64(len(data))),
+		ChecksumSHA256: aws.String(partSum),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s3Tester.CompleteMultipartUpload(t.Context(), bucket, object, *created.UploadId, []types.CompletedPart{{
+		PartNumber:     aws.Int32(1),
+		ETag:           uploaded.ETag,
+		ChecksumSHA256: aws.String(partSum),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// a copy that replaces the metadata keeps the object's checksum
+	if _, err := s3Tester.CopyObject(t.Context(), bucket, object, bucket, copied, types.MetadataDirectiveReplace, map[string]string{"foo": "bar"}); err != nil {
+		t.Fatal(err)
+	}
+
+	head, err := s3Tester.Client().HeadObject(t.Context(), &service.HeadObjectInput{
+		Bucket:       aws.String(bucket),
+		Key:          aws.String(copied),
+		ChecksumMode: types.ChecksumModeEnabled,
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if got := aws.ToString(head.ChecksumSHA256); got != objectSum {
+		t.Fatalf("expected checksum %s, got %s", objectSum, got)
+	} else if head.ChecksumType != types.ChecksumTypeComposite {
+		t.Fatalf("expected type %q, got %q", types.ChecksumTypeComposite, head.ChecksumType)
+	} else if head.Metadata["foo"] != "bar" {
+		t.Fatalf("metadata mismatch: %+v", head.Metadata)
+	}
+
+	// the copy's part read reports the part's digest
+	part, err := s3Tester.Client().GetObject(t.Context(), &service.GetObjectInput{
+		Bucket:       aws.String(bucket),
+		Key:          aws.String(copied),
+		PartNumber:   aws.Int32(1),
+		ChecksumMode: types.ChecksumModeEnabled,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	part.Body.Close()
+	if got := aws.ToString(part.ChecksumSHA256); got != partSum {
+		t.Fatalf("expected checksum %s, got %s", partSum, got)
+	} else if part.ChecksumType != types.ChecksumTypeComposite {
+		t.Fatalf("expected type %q, got %q", types.ChecksumTypeComposite, part.ChecksumType)
+	}
+}
+
 func TestRangeRequest(t *testing.T) {
 	for idx, tc := range []struct {
 		inst, inend  int64
