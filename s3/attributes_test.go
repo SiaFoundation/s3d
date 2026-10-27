@@ -57,10 +57,10 @@ func TestGetObjectAttributes(t *testing.T) {
 
 	// the SDK refuses to send some of the requests under test, so those are
 	// signed and sent by hand
-	rawRequest := func(path string, header http.Header) (*http.Response, []byte) {
+	rawRequest := func(method, path string, header http.Header) (*http.Response, []byte) {
 		t.Helper()
 
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, *s3Tester.Client().Options().BaseEndpoint+path, nil)
+		req, err := http.NewRequestWithContext(t.Context(), method, *s3Tester.Client().Options().BaseEndpoint+path, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -251,7 +251,7 @@ func TestGetObjectAttributes(t *testing.T) {
 	}
 
 	// assert [s3errs.ErrInvalidArgument] for a request naming no attribute
-	resp, body := rawRequest("/"+bucket+"/"+singleKey+"?attributes", nil)
+	resp, body := rawRequest(http.MethodGet, "/"+bucket+"/"+singleKey+"?attributes", nil)
 	var parsed s3.ErrorResponse
 	if err := xml.Unmarshal(body, &parsed); err != nil {
 		t.Fatal(err)
@@ -260,12 +260,62 @@ func TestGetObjectAttributes(t *testing.T) {
 	}
 
 	// assert [s3errs.ErrInvalidArgument] for an attribute that does not exist
-	resp, body = rawRequest("/"+bucket+"/"+singleKey+"?attributes", http.Header{
+	resp, body = rawRequest(http.MethodGet, "/"+bucket+"/"+singleKey+"?attributes", http.Header{
 		"X-Amz-Object-Attributes": []string{"ETag, Nonsense"},
 	})
 	if err := xml.Unmarshal(body, &parsed); err != nil {
 		t.Fatal(err)
 	} else if resp.StatusCode != s3errs.ErrInvalidArgument.HTTPStatus || parsed.Code != s3errs.ErrInvalidArgument.Code {
+		t.Fatal("unexpected", resp.StatusCode, parsed.Code)
+	}
+
+	// assert [s3errs.ErrInvalidArgument] for a marker that is not a part number
+	for _, value := range []string{"two", "-1"} {
+		resp, body = rawRequest(http.MethodGet, "/"+bucket+"/"+multipartKey+"?attributes", http.Header{
+			"X-Amz-Object-Attributes":  []string{"ObjectParts"},
+			"X-Amz-Part-Number-Marker": []string{value},
+		})
+		if err := xml.Unmarshal(body, &parsed); err != nil {
+			t.Fatal(err)
+		} else if resp.StatusCode != s3errs.ErrInvalidArgument.HTTPStatus || parsed.Code != s3errs.ErrInvalidArgument.Code {
+			t.Fatal("unexpected", value, resp.StatusCode, parsed.Code)
+		}
+	}
+
+	// a part limit above the maximum is clamped to it
+	resp, body = rawRequest(http.MethodGet, "/"+bucket+"/"+multipartKey+"?attributes", http.Header{
+		"X-Amz-Object-Attributes": []string{"ObjectParts"},
+		"X-Amz-Max-Parts":         []string{"5000"},
+	})
+	var reported s3.GetObjectAttributesResponse
+	if resp.StatusCode != http.StatusOK {
+		t.Fatal("unexpected", resp.StatusCode)
+	} else if err := xml.Unmarshal(body, &reported); err != nil {
+		t.Fatal(err)
+	} else if reported.ObjectParts == nil {
+		t.Fatal("expected object parts")
+	} else if reported.ObjectParts.MaxParts != s3.MaxUploadListParts {
+		t.Fatal("unexpected", reported.ObjectParts.MaxParts)
+	}
+
+	// assert [s3errs.ErrMethodNotAllowed] for a request that names no key, so
+	// the bucket routes keep answering it
+	resp, body = rawRequest(http.MethodGet, "/"+bucket+"?attributes", http.Header{
+		"X-Amz-Object-Attributes": []string{"ETag"},
+	})
+	if err := xml.Unmarshal(body, &parsed); err != nil {
+		t.Fatal(err)
+	} else if resp.StatusCode != s3errs.ErrMethodNotAllowed.HTTPStatus || parsed.Code != s3errs.ErrMethodNotAllowed.Code {
+		t.Fatal("unexpected", resp.StatusCode, parsed.Code)
+	}
+
+	// assert [s3errs.ErrMethodNotAllowed] for a method other than GET
+	resp, body = rawRequest(http.MethodPut, "/"+bucket+"/"+singleKey+"?attributes", http.Header{
+		"X-Amz-Object-Attributes": []string{"ETag"},
+	})
+	if err := xml.Unmarshal(body, &parsed); err != nil {
+		t.Fatal(err)
+	} else if resp.StatusCode != s3errs.ErrMethodNotAllowed.HTTPStatus || parsed.Code != s3errs.ErrMethodNotAllowed.Code {
 		t.Fatal("unexpected", resp.StatusCode, parsed.Code)
 	}
 
@@ -290,7 +340,7 @@ func TestGetObjectAttributes(t *testing.T) {
 	}
 
 	marker := "/" + versionedBucket + "/" + singleKey + "?attributes&versionId=" + aws.ToString(deleted.VersionId)
-	resp, _ = rawRequest(marker, http.Header{
+	resp, _ = rawRequest(http.MethodGet, marker, http.Header{
 		"X-Amz-Object-Attributes": []string{"ETag"},
 	})
 	if resp.StatusCode != http.StatusMethodNotAllowed {

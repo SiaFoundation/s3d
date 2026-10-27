@@ -93,7 +93,7 @@ type ObjectAttributes struct {
 // routeObjectAttributes routes requests that contain '?attributes' in the
 // query string.
 func (s *s3) routeObjectAttributes(r *http.Request, object string, version VersionRequest) (operation, error) {
-	if r.Method != http.MethodGet {
+	if object == "" || r.Method != http.MethodGet {
 		return operation{}, s3errs.ErrMethodNotAllowed
 	}
 	return operation{action: readAction(version), serve: func(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
@@ -201,7 +201,7 @@ func objectAttributesPage(header http.Header) (ObjectAttributesPage, error) {
 	page := ObjectAttributesPage{MaxParts: int(maxParts)}
 	if raw := header.Get(HeaderXAMZPartNumberMarker); raw != "" {
 		marker, err := strconv.Atoi(raw)
-		if err != nil {
+		if err != nil || marker < 0 {
 			return ObjectAttributesPage{}, fmt.Errorf("invalid part number marker %q: %w", raw, s3errs.ErrInvalidArgument)
 		}
 		page.PartNumberMarker = marker
