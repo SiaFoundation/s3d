@@ -180,8 +180,13 @@ func (s *Sia) snapshotsLoop(ctx context.Context) {
 }
 
 // runScheduledSnapshot takes a snapshot when none was taken since the
-// schedule's last slot and applies the retention count.
+// schedule's last slot and applies the retention count once object metadata
+// is synced.
 func (s *Sia) runScheduledSnapshot(ctx context.Context, now time.Time, sched snapshotSchedule) {
+	if !s.synced.Load() {
+		s.logger.Debug("deferring scheduled snapshots until object metadata is synced")
+		return
+	}
 	if !now.Before(s.snapshotRetryAt) {
 		s.takeScheduledSnapshot(ctx, now, sched)
 	}
@@ -215,12 +220,9 @@ func (s *Sia) takeScheduledSnapshot(ctx context.Context, now time.Time, sched sn
 }
 
 // pruneScheduledSnapshots deletes every scheduled snapshot past the newest
-// keep once object metadata is synced.
+// keep.
 func (s *Sia) pruneScheduledSnapshots(ctx context.Context, keep int) {
 	if keep == 0 {
-		return
-	} else if !s.synced.Load() {
-		s.logger.Debug("deferring snapshot retention until object metadata is synced")
 		return
 	}
 	snapshots, err := s.store.ListSnapshots()

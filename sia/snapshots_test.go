@@ -954,9 +954,9 @@ func TestScheduledSnapshots(t *testing.T) {
 	assertScheduled(3)
 }
 
-// TestScheduledSnapshotLoop verifies the background loop snapshots at startup,
-// again when the slot passes, and once a day after that, pruning to the
-// retention count each time.
+// TestScheduledSnapshotLoop verifies the background loop snapshots once the
+// first sync completes, again when the slot passes, and once a day after that,
+// pruning to the retention count each time.
 func TestScheduledSnapshotLoop(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		memSDK := testutil.NewMemorySDK()
@@ -994,18 +994,12 @@ func TestScheduledSnapshotLoop(t *testing.T) {
 			return snapshots[0].SiaObjectID
 		}
 
-		// the first pass snapshots at once
+		// the first pass after the sync snapshots at once
+		time.Sleep(time.Minute)
 		synctest.Wait()
 		id := assertSnapshot(types.Hash256{})
 
-		// the slot passing takes another, nothing happens in between
-		time.Sleep(time.Minute)
-		synctest.Wait()
-		if snapshots, err := store.ListSnapshots(); err != nil {
-			t.Fatal(err)
-		} else if len(snapshots) != 1 || snapshots[0].SiaObjectID != id {
-			t.Fatal("unexpected snapshot before the slot")
-		}
+		// the slot passing takes another
 		time.Sleep(time.Minute)
 		synctest.Wait()
 		id = assertSnapshot(id)
