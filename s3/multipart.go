@@ -509,6 +509,8 @@ func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, access *bucke
 	checksum, err := requestChecksum(r.Header)
 	if err != nil {
 		return err
+	} else if checksum == nil {
+		checksum = trailingChecksum(r.Header)
 	}
 
 	res, err := s.backend.UploadPart(r.Context(), access.bucketID, object, uploadID, r.Body, UploadPartOptions{
@@ -698,6 +700,8 @@ func objectChecksumHeader(headers http.Header) (ChecksumAlgorithm, string, error
 
 	if count > 1 {
 		return "", "", fmt.Errorf("%w: found %d checksums, expected at most one", s3errs.ErrInvalidRequest, count)
+	} else if count == 1 && value == "" {
+		return "", "", s3errs.ErrBadDigest
 	}
 	return algorithm, value, nil
 }

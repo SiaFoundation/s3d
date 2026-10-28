@@ -466,6 +466,12 @@ func TestMultipartChecksum(t *testing.T) {
 	})
 	testutil.AssertS3Error(t, s3errs.ErrBadDigest, err)
 
+	// assert [s3errs.ErrBadDigest] for a present but empty object checksum
+	_, err = completeChecksumUpload(compositeKey, compositeID, []types.CompletedPart{compositePart}, func(in *service.CompleteMultipartUploadInput) {
+		in.ChecksumSHA256 = aws.String("")
+	})
+	testutil.AssertS3Error(t, s3errs.ErrBadDigest, err)
+
 	// assert [s3errs.ErrInvalidRequest] for an object size the parts do not add up to
 	_, err = completeChecksumUpload(compositeKey, compositeID, []types.CompletedPart{compositePart}, func(in *service.CompleteMultipartUploadInput) {
 		in.MpuObjectSize = aws.Int64(5)
@@ -713,6 +719,58 @@ func TestMultipartChecksum(t *testing.T) {
 // TestCreateMultipartUploadChecksumValue checks that a checksum value header on
 // the creation request is dropped rather than stored with the object, which
 // would report a digest s3d never computed.
+func TestUploadPartTrailingChecksumAlgorithm(t *testing.T) {
+	s3Tester := testutil.NewTester(t, testutil.WithTLS())
+
+	const (
+		bucket = "trailing-part"
+		object = "object"
+	)
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+	created, err := s3Tester.Client().CreateMultipartUpload(t.Context(), &service.CreateMultipartUploadInput{
+		Bucket:            aws.String(bucket),
+		Key:               aws.String(object),
+		ChecksumAlgorithm: types.ChecksumAlgorithmSha256,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	uploadID := aws.ToString(created.UploadId)
+	data := frand.Bytes(64)
+
+	// an unseekable body makes the SDK send the checksum as a trailer, which
+	// must match the upload's algorithm like a header does
+	_, err = s3Tester.Client().UploadPart(t.Context(), &service.UploadPartInput{
+		Bucket:            aws.String(bucket),
+		Key:               aws.String(object),
+		UploadId:          aws.String(uploadID),
+		PartNumber:        aws.Int32(1),
+		Body:              readerOnly{bytes.NewReader(data)},
+		ContentLength:     aws.Int64(int64(len(data))),
+		ChecksumAlgorithm: types.ChecksumAlgorithmCrc32,
+	})
+	testutil.AssertS3Error(t, s3errs.ErrInvalidRequest, err)
+
+	part, err := s3Tester.Client().UploadPart(t.Context(), &service.UploadPartInput{
+		Bucket:            aws.String(bucket),
+		Key:               aws.String(object),
+		UploadId:          aws.String(uploadID),
+		PartNumber:        aws.Int32(1),
+		Body:              readerOnly{bytes.NewReader(data)},
+		ContentLength:     aws.Int64(int64(len(data))),
+		ChecksumAlgorithm: types.ChecksumAlgorithmSha256,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(data)
+	if got := aws.ToString(part.ChecksumSHA256); got != base64.StdEncoding.EncodeToString(sum[:]) {
+		t.Fatalf("checksum mismatch: expected %s, got %s", base64.StdEncoding.EncodeToString(sum[:]), got)
+	}
+}
+
 func TestCreateMultipartUploadChecksumValue(t *testing.T) {
 	const (
 		bucket = "stray-checksum-bucket"
