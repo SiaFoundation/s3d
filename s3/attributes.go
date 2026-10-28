@@ -119,7 +119,11 @@ func (s *s3) getObjectAttributes(w http.ResponseWriter, r *http.Request, access 
 		return err
 	}
 
-	attrs, err := s.backend.GetObjectAttributes(r.Context(), access.bucketID, object, version, page)
+	var partsPage *ObjectAttributesPage
+	if requested[attributeObjectParts] {
+		partsPage = &page
+	}
+	attrs, err := s.backend.GetObjectAttributes(r.Context(), access.bucketID, object, version, partsPage)
 	if err != nil {
 		return access.hideMissing(err, object)
 	}
