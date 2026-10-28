@@ -359,10 +359,21 @@ func TestCompleteMultipartUpload(t *testing.T) {
 		}
 	}
 
-	contentMD5 := frand.Entropy128()
-	totalSize := s3.MinUploadPartSize + 5 // part1 + part2
+	// a part replaced with one of the same length after the parts were read
+	// fails the completion instead of landing under the stale checksum
+	stale := mustMultipartParts(t, store, bid, object, uid)
+	if _, _, err := store.AddMultipartPart(bid, object, uid, "part-2b", 2, frand.Entropy128(), 5, frand.Bytes(32)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.CompleteMultipartUpload(bid, object, uid, stale, nil, s3.ObjectPreconditions{}); !errors.Is(err, s3errs.ErrInvalidPart) {
+		t.Fatal("expected ErrInvalidPart, got", err)
+	}
+	store.assertCount(1, "multipart_uploads")
+	parts[1].Filename = "part-2b"
+	parts[1] = mustMultipartParts(t, store, bid, object, uid)[1]
+
 	checksum := &s3.ObjectChecksum{Algorithm: s3.ChecksumSHA256, Type: s3.ChecksumTypeComposite, Value: "x=-2"}
-	if _, _, err := store.CompleteMultipartUpload(bid, object, uid, contentMD5, int64(totalSize), checksum, s3.ObjectPreconditions{}); err != nil {
+	if _, _, err := store.CompleteMultipartUpload(bid, object, uid, mustMultipartParts(t, store, bid, object, uid), checksum, s3.ObjectPreconditions{}); err != nil {
 		t.Fatal(err)
 	}
 
