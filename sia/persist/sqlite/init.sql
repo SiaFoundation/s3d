@@ -17,13 +17,12 @@ CREATE TABLE access_keys (
 CREATE INDEX access_keys_user_id_idx ON access_keys(user_id);
 
 CREATE TABLE buckets (
-    id INTEGER PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT, -- a deleted bucket's ID is never reused
     created_at INTEGER NOT NULL,
     name TEXT NOT NULL UNIQUE,
     user_id INTEGER NOT NULL,
     versioning_status TEXT NOT NULL DEFAULT '' CHECK (versioning_status IN ('', 'Enabled', 'Suspended')),
     policy TEXT NOT NULL DEFAULT '',
-    public_actions INTEGER NOT NULL DEFAULT 0,
     object_lock_enabled INTEGER NOT NULL DEFAULT FALSE CHECK (object_lock_enabled IN (FALSE, TRUE)) CHECK (object_lock_enabled = FALSE OR versioning_status = 'Enabled'),
     default_retention_mode TEXT NOT NULL DEFAULT '' CHECK (default_retention_mode IN ('', 'GOVERNANCE', 'COMPLIANCE')),
     default_retention_days INTEGER,

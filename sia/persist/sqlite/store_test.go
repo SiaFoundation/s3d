@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/SiaFoundation/s3d/s3"
 	"go.uber.org/zap"
 )
 
@@ -25,6 +26,17 @@ func (store *testStore) assertCount(expected int, table string) {
 	} else if got != expected {
 		store.t.Fatalf("expected %d rows in %s, got %d", expected, table, got)
 	}
+}
+
+// bucketID returns the ID of the named bucket.
+func (store *testStore) bucketID(name string) s3.BucketID {
+	store.t.Helper()
+
+	info, err := store.BucketAccessInfo(name)
+	if err != nil {
+		store.t.Fatal(err)
+	}
+	return info.ID
 }
 
 func newTestStore(t testing.TB, log *zap.Logger) *testStore {
