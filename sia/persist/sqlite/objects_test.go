@@ -206,11 +206,12 @@ func TestAllFilenames(t *testing.T) {
 	}
 
 	// complete the multipart upload
-	if _, _, err := store.AddMultipartPart(bid, "mp1", uid, "p1", 1, frand.Entropy128(), s3.MinUploadPartSize, nil); err != nil {
+	p1MD5 := frand.Entropy128()
+	if _, _, err := store.AddMultipartPart(bid, "mp1", uid, "p1", 1, p1MD5, s3.MinUploadPartSize, nil); err != nil {
 		t.Fatal(err)
 	}
-	mpMD5 := frand.Entropy128()
-	if _, _, err := store.CompleteMultipartUpload(bid, "mp1", uid, mpMD5, s3.MinUploadPartSize, nil, s3.ObjectPreconditions{}); err != nil {
+	mpMD5 := multipartMD5(p1MD5)
+	if _, _, err := store.CompleteMultipartUpload(bid, "mp1", uid, mustMultipartParts(t, store, bid, "mp1", uid), nil, s3.ObjectPreconditions{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -259,7 +260,6 @@ func TestGetObject(t *testing.T) {
 
 		multipartSealed = sealedObject()
 
-		multipartMD5      = frand.Entropy128()
 		multipartUploadID = s3.NewUploadID()
 		multipartMeta     = map[string]string{"baz": "qux"}
 	)
@@ -286,6 +286,7 @@ func TestGetObject(t *testing.T) {
 	// add parts
 	part1MD5 := frand.Entropy128()
 	part2MD5 := frand.Entropy128()
+	multipartMD5 := multipartMD5(part1MD5, part2MD5)
 	if _, _, err := store.AddMultipartPart(bid, multipart, multipartUploadID, "part-1", 1, part1MD5, s3.MinUploadPartSize, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +295,7 @@ func TestGetObject(t *testing.T) {
 	}
 	// complete
 	totalSize := int64(s3.MinUploadPartSize + 2)
-	_, _, err = store.CompleteMultipartUpload(bid, multipart, multipartUploadID, multipartMD5, totalSize, nil, s3.ObjectPreconditions{})
+	_, _, err = store.CompleteMultipartUpload(bid, multipart, multipartUploadID, mustMultipartParts(t, store, bid, multipart, multipartUploadID), nil, s3.ObjectPreconditions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -405,8 +406,9 @@ func TestGetObjectPartFields(t *testing.T) {
 	if _, _, err := store.AddMultipartPart(bid, name, uploadID, "part-2", 2, frand.Entropy128(), 64, nil); err != nil {
 		t.Fatal(err)
 	}
-	contentMD5 := frand.Entropy128()
-	if _, _, err := store.CompleteMultipartUpload(bid, name, uploadID, contentMD5, s3.MinUploadPartSize+64, nil, s3.ObjectPreconditions{}); err != nil {
+	completedParts := mustMultipartParts(t, store, bid, name, uploadID)
+	contentMD5 := multipartMD5(completedParts[0].ContentMD5, completedParts[1].ContentMD5)
+	if _, _, err := store.CompleteMultipartUpload(bid, name, uploadID, completedParts, nil, s3.ObjectPreconditions{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -481,7 +483,7 @@ func TestCopyObject(t *testing.T) {
 	}
 
 	checksum := &s3.ObjectChecksum{Algorithm: s3.ChecksumSHA256, Type: s3.ChecksumTypeComposite, Value: "x=-2"}
-	if _, _, err := store.CompleteMultipartUpload(bid, name, uploadID, frand.Entropy128(), s3.MinUploadPartSize+64, checksum, s3.ObjectPreconditions{}); err != nil {
+	if _, _, err := store.CompleteMultipartUpload(bid, name, uploadID, mustMultipartParts(t, store, bid, name, uploadID), checksum, s3.ObjectPreconditions{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1626,7 +1628,7 @@ func TestObjectsForUpload(t *testing.T) {
 		t.Fatal(err)
 	}
 	mpSize := int64(s3.MinUploadPartSize + 50)
-	if _, _, err := store.CompleteMultipartUpload(bid, "multipart", uid, frand.Entropy128(), mpSize, nil, s3.ObjectPreconditions{}); err != nil {
+	if _, _, err := store.CompleteMultipartUpload(bid, "multipart", uid, mustMultipartParts(t, store, bid, "multipart", uid), nil, s3.ObjectPreconditions{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1786,7 +1788,7 @@ func TestUploadStats(t *testing.T) {
 	if _, _, err := store.AddMultipartPart(bid, "mp1", uid, "p1", 1, frand.Entropy128(), 500, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.CompleteMultipartUpload(bid, "mp1", uid, frand.Entropy128(), 500, nil, s3.ObjectPreconditions{}); err != nil {
+	if _, _, err := store.CompleteMultipartUpload(bid, "mp1", uid, mustMultipartParts(t, store, bid, "mp1", uid), nil, s3.ObjectPreconditions{}); err != nil {
 		t.Fatal(err)
 	}
 
