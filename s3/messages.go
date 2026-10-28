@@ -530,7 +530,8 @@ type (
 	PolicyStatus struct {
 		XMLName xml.Name `xml:"PolicyStatus"`
 		Xmlns   string   `xml:"xmlns,attr,omitempty"`
-		// IsPublic is true when the policy grants anonymous callers access.
+		// IsPublic is true when the policy grants access to callers not
+		// limited to fixed principals or conditions, as S3 classifies it.
 		IsPublic bool `xml:"IsPublic"`
 	}
 

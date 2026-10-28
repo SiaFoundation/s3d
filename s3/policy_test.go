@@ -112,17 +112,17 @@ func TestParseBucketPolicy(t *testing.T) {
 			want: []string{actionGetObject, actionGetObjectVersion, actionListBucket, actionListBucketVersions},
 		},
 		{
-			// an object action with no object resource grants nothing, as in S3
+			// as in S3, an action must apply to one of the statement's resources
 			name: "object action with only the bucket resource",
 			policy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*",
 				"Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket"}]}`,
-			want: nil,
+			err: s3errs.ErrMalformedPolicyInapplicable,
 		},
 		{
 			name: "bucket action with only the object resource",
 			policy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*",
 				"Action":"s3:ListBucket","Resource":"arn:aws:s3:::bucket/*"}]}`,
-			want: nil,
+			err: s3errs.ErrMalformedPolicyInapplicable,
 		},
 
 		// malformed documents
@@ -242,7 +242,7 @@ func TestParseBucketPolicy(t *testing.T) {
 			name: "legacy version",
 			policy: `{"Version":"2008-10-17","Statement":[{"Effect":"Allow","Principal":"*",
 				"Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/*"}]}`,
-			err: s3errs.ErrMalformedPolicy,
+			want: []string{actionGetObject},
 		},
 		{
 			name: "unknown effect",
@@ -272,81 +272,13 @@ func TestParseBucketPolicy(t *testing.T) {
 			name: "resource names another bucket",
 			policy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*",
 				"Action":"s3:GetObject","Resource":"arn:aws:s3:::other/*"}]}`,
-			err: s3errs.ErrMalformedPolicy,
+			err: s3errs.ErrMalformedPolicyResource,
 		},
 		{
 			name: "resource names a bucket with a matching prefix",
 			policy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*",
 				"Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket-two/*"}]}`,
-			err: s3errs.ErrMalformedPolicy,
-		},
-
-		// valid policies expressing access s3d cannot represent; accepting one as
-		// a plain read grant would allow more than it says
-		{
-			name: "deny statement",
-			policy: `{"Version":"2012-10-17","Statement":[
-				{"Effect":"Allow","Principal":"*","Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/*"},
-				{"Effect":"Deny","Principal":"*","Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/secret/*"}]}`,
-			err: s3errs.ErrNotImplemented,
-		},
-		{
-			name: "condition",
-			policy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*",
-				"Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/*",
-				"Condition":{"IpAddress":{"aws:SourceIp":"10.0.0.0/8"}}}]}`,
-			err: s3errs.ErrNotImplemented,
-		},
-		{
-			name: "not action",
-			policy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*",
-				"NotAction":"s3:DeleteObject","Resource":"arn:aws:s3:::bucket/*"}]}`,
-			err: s3errs.ErrNotImplemented,
-		},
-		{
-			name: "not principal",
-			policy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow",
-				"NotPrincipal":{"AWS":"arn:aws:iam::111122223333:root"},
-				"Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/*"}]}`,
-			err: s3errs.ErrNotImplemented,
-		},
-		{
-			name: "not resource",
-			policy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*",
-				"Action":"s3:GetObject","NotResource":"arn:aws:s3:::bucket/secret/*"}]}`,
-			err: s3errs.ErrNotImplemented,
-		},
-		{
-			name: "named principal",
-			policy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow",
-				"Principal":{"AWS":"arn:aws:iam::111122223333:root"},
-				"Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/*"}]}`,
-			err: s3errs.ErrNotImplemented,
-		},
-		{
-			name: "service principal",
-			policy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow",
-				"Principal":{"Service":"cloudfront.amazonaws.com"},
-				"Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/*"}]}`,
-			err: s3errs.ErrNotImplemented,
-		},
-		{
-			name: "wildcard action",
-			policy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*",
-				"Action":"s3:*","Resource":"arn:aws:s3:::bucket/*"}]}`,
-			err: s3errs.ErrNotImplemented,
-		},
-		{
-			name: "write action",
-			policy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*",
-				"Action":["s3:GetObject","s3:PutObject"],"Resource":"arn:aws:s3:::bucket/*"}]}`,
-			err: s3errs.ErrNotImplemented,
-		},
-		{
-			name: "prefix scoped resource",
-			policy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*",
-				"Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/public/*"}]}`,
-			err: s3errs.ErrNotImplemented,
+			err: s3errs.ErrMalformedPolicyResource,
 		},
 	}
 
@@ -368,16 +300,17 @@ func TestParseBucketPolicy(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, action := range supportedPolicyActions {
+			// what the policy allows an anonymous caller, who owns nothing
+			for _, action := range []string{actionGetObject, actionGetObjectVersion, actionListBucket, actionListBucketVersions} {
 				resource := policyARNPrefix + "bucket"
 				if isObjectAction(action) {
 					resource += "/key"
 				}
-				if got, want := policy.allows(action, resource), slices.Contains(test.want, action); got != want {
+				if got, want := policy.allows(nil, nil, false, action, resource), slices.Contains(test.want, action); got != want {
 					t.Fatalf("action %s: expected %v, got %v", action, want, got)
 				}
 			}
-			if got, want := policy.isPublic("bucket"), len(test.want) > 0; got != want {
+			if got, want := policy.isPublic(), len(test.want) > 0; got != want {
 				t.Fatalf("expected public %v, got %v", want, got)
 			}
 		})
@@ -394,5 +327,104 @@ func TestParseBucketPolicyTooLarge(t *testing.T) {
 
 	if _, err := readBucketPolicy(strings.NewReader(policy)); !errors.Is(err, s3errs.ErrPolicyTooLarge) {
 		t.Fatalf("expected %v, got %v", s3errs.ErrPolicyTooLarge, err)
+	}
+}
+
+// TestPolicyValidation checks that malformed statements are rejected.
+func TestPolicyValidation(t *testing.T) {
+	tests := []struct {
+		name      string
+		statement string // the members after "Effect":"Allow"
+		err       error
+	}{
+		{"Allow with NotPrincipal", `"NotPrincipal":{"AWS":"other"},"Action":"s3:*","Resource":"*"`, s3errs.ErrMalformedPolicy},
+		{"Principal and NotPrincipal", `"Principal":"*","NotPrincipal":"other","Action":"s3:*","Resource":"*"`, s3errs.ErrMalformedPolicy},
+		{"Action and NotAction", `"Principal":"*","Action":"s3:*","NotAction":"s3:GetObject","Resource":"*"`, s3errs.ErrMalformedPolicy},
+		{"empty Action", `"Principal":"*","Action":[],"NotAction":"s3:*","Resource":"*"`, s3errs.ErrMalformedPolicy},
+		{"Resource and NotResource", `"Principal":"*","Action":"s3:*","Resource":"*","NotResource":"arn:aws:s3:::bucket/key"`, s3errs.ErrMalformedPolicy},
+		{"unknown action", `"Principal":"*","Action":"s3:NotAnAction","Resource":"*"`, s3errs.ErrMalformedPolicyAction},
+		{"unknown operator", `"Principal":"*","Action":"s3:*","Resource":"*","Condition":{"NoOperator":{"aws:SecureTransport":"true"}}`, s3errs.ErrMalformedPolicy},
+		{"invalid Bool", `"Principal":"*","Action":"s3:*","Resource":"*","Condition":{"Bool":{"aws:SecureTransport":"yes"}}`, s3errs.ErrMalformedPolicy},
+		{"invalid IP", `"Principal":"*","Action":"s3:*","Resource":"*","Condition":{"IpAddress":{"aws:SourceIp":"bad"}}`, s3errs.ErrMalformedPolicy},
+		{"huge exponent", `"Principal":"*","Action":"s3:*","Resource":"*","Condition":{"NumericEquals":{"s3:max-keys":"1e999999999"}}`, s3errs.ErrMalformedPolicy},
+		{"tiny exponent", `"Principal":"*","Action":"s3:*","Resource":"*","Condition":{"NumericEquals":{"s3:max-keys":"1e-999999999"}}`, s3errs.ErrMalformedPolicy},
+		{"null NotResource", `"Principal":"*","Action":"s3:*","Resource":"*","NotResource":null`, s3errs.ErrMalformedPolicy},
+		{"null NotPrincipal", `"Principal":"*","Action":"s3:*","Resource":"*","NotPrincipal":null`, s3errs.ErrMalformedPolicyPrincipal},
+		{"null NotAction", `"Principal":"*","Action":"s3:*","Resource":"*","NotAction":null`, s3errs.ErrMalformedPolicy},
+		{"null Condition", `"Principal":"*","Action":"s3:*","Resource":"*","Condition":null`, s3errs.ErrMalformedPolicy},
+		{"empty Condition", `"Principal":"*","Action":"s3:*","Resource":"*","Condition":{}`, s3errs.ErrMalformedPolicy},
+		{"NullIfExists", `"Principal":"*","Action":"s3:*","Resource":"*","Condition":{"NullIfExists":{"aws:SourceVpc":"true"}}`, s3errs.ErrMalformedPolicy},
+		{"service principal", `"Principal":{"Service":"s3.amazonaws.com"},"Action":"s3:*","Resource":"*"`, s3errs.ErrMalformedPolicyPrincipal},
+		{"null principal", `"Principal":null,"Action":"s3:*","Resource":"*"`, s3errs.ErrMalformedPolicyPrincipal},
+		{"number principal", `"Principal":123,"Action":"s3:*","Resource":"*"`, s3errs.ErrMalformedPolicyPrincipal},
+		{"number AWS principal", `"Principal":{"AWS":123},"Action":"s3:*","Resource":"*"`, s3errs.ErrMalformedPolicyPrincipal},
+		{"IAM user principal", `"Principal":"arn:aws:iam::other:user/name","Action":"s3:*","Resource":"*"`, s3errs.ErrMalformedPolicyPrincipal},
+		{"wildcard user principal", `"Principal":"oth*","Action":"s3:*","Resource":"*"`, s3errs.ErrMalformedPolicyPrincipal},
+		{"empty AWS principal", `"Principal":{"AWS":[]},"Action":"s3:*","Resource":"*"`, s3errs.ErrMalformedPolicyPrincipal},
+		{"wildcard canonical principal", `"Principal":{"CanonicalUser":"*"},"Action":"s3:*","Resource":"*"`, s3errs.ErrMalformedPolicyPrincipal},
+		{"empty principal", `"Principal":{},"Action":"s3:*","Resource":"*"`, s3errs.ErrMalformedPolicyPrincipal},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := parseBucketPolicy("bucket", `{"Version":"2012-10-17","Statement":{"Effect":"Allow",`+test.statement+`}}`)
+			if !errors.Is(err, test.err) {
+				t.Fatalf("expected %v, got %v", test.err, err)
+			}
+		})
+	}
+
+	stmt := `{"Sid":"duplicate","Effect":"Allow","Principal":"*","Action":"s3:*","Resource":"*"}`
+	if _, err := parseBucketPolicy("bucket", `{"Version":"2012-10-17","Statement":[`+stmt+`,`+stmt+`]}`); !errors.Is(err, s3errs.ErrMalformedPolicy) {
+		t.Fatalf("duplicate Sid: expected %v, got %v", s3errs.ErrMalformedPolicy, err)
+	}
+}
+
+// TestPolicyPublicStatus checks which grants GetBucketPolicyStatus reports as
+// public.
+func TestPolicyPublicStatus(t *testing.T) {
+	tests := []struct {
+		name      string
+		principal string
+		condition string
+		want      bool
+	}{
+		{"public", "*", "", true},
+		{"fixed root", `{"AWS":"arn:aws:iam::other:root"}`, "", false},
+		{"canonical", `{"CanonicalUser":"other"}`, "", false},
+		{"narrow IPv4", "*", `"IpAddress":{"aws:SourceIp":"192.0.2.0/24"}`, false},
+		{"broad IPv4", "*", `"IpAddress":{"aws:SourceIp":"0.0.0.0/0"}`, true},
+		{"narrow IPv6", "*", `"IpAddress":{"aws:SourceIp":"2001:db8::/32"}`, false},
+		{"broad IPv6", "*", `"IpAddress":{"aws:SourceIp":"2000::/16"}`, true},
+		{"mixed ranges", "*", `"IpAddress":{"aws:SourceIp":["192.0.2.0/24","0.0.0.0/0"]}`, true},
+		{"negated IP", "*", `"NotIpAddress":{"aws:SourceIp":"192.0.2.0/24"}`, true},
+		{"IfExists IP", "*", `"IpAddressIfExists":{"aws:SourceIp":"192.0.2.0/24"}`, true},
+		{"referer remains public", "*", `"StringEquals":{"aws:Referer":"https://example.com"}`, true},
+		{"fixed VPC", "*", `"StringEquals":{"aws:SourceVpc":"vpc-1"}`, false},
+		{"wildcard VPC", "*", `"StringLike":{"aws:SourceVpc":"vpc-*"}`, true},
+		{"wildcard access point account fixed", "*", `"ArnLike":{"s3:DataAccessPointArn":"arn:aws:s3:us-east-1:123456789012:accesspoint/*"}`, false},
+		{"wildcard access point account", "*", `"ArnLike":{"s3:DataAccessPointArn":"arn:aws:s3:us-east-1:*:accesspoint/*"}`, true},
+		{"ForAny IfExists", "*", `"ForAnyValue:StringEqualsIfExists":{"aws:SourceVpc":"vpc-1"}`, true},
+		{"ForAll missing", "*", `"ForAllValues:StringEquals":{"aws:SourceVpc":"vpc-1"}`, true},
+		{"ForAll guarded", "*", `"ForAllValues:StringEquals":{"aws:SourceVpc":"vpc-1"},"Null":{"aws:SourceVpc":"false"}`, false},
+		{"variable user", "*", `"StringEquals":{"aws:userid":"${aws:username}"}`, true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			principal := test.principal
+			if principal == "*" {
+				principal = `"*"`
+			}
+			condition := ""
+			if test.condition != "" {
+				condition = `,"Condition":{` + test.condition + `}`
+			}
+			p, err := parseBucketPolicy("bucket", `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Principal":`+principal+`,"Action":"s3:*","Resource":"*"`+condition+`}}`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := p.isPublic(); got != test.want {
+				t.Fatalf("expected %v, got %v", test.want, got)
+			}
+		})
 	}
 }

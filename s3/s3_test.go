@@ -393,6 +393,29 @@ func TestRouteValidationOrder(t *testing.T) {
 	}
 }
 
+// TestSignedUploadWithoutPayloadHash checks that a signed request without the
+// X-Amz-Content-Sha256 header is verified against the empty payload it was
+// signed for, so its body can't be swapped.
+func TestSignedUploadWithoutPayloadHash(t *testing.T) {
+	backend, _ := testutil.NewBackend(t)
+	if err := backend.CreateBucket(t.Context(), testutil.AccessKeyID, "bucket", s3.CreateBucketOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	handler := s3.New(backend, s3.WithLogger(zaptest.NewLogger(t)))
+
+	req := httptest.NewRequest(http.MethodPut, "http://localhost/bucket/key", strings.NewReader("value"))
+	emptyHash := sha256.Sum256(nil)
+	creds := aws.Credentials{AccessKeyID: testutil.AccessKeyID, SecretAccessKey: testutil.SecretAccessKey}
+	if err := v4.NewSigner().SignHTTP(t.Context(), creds, req, hex.EncodeToString(emptyHash[:]), "s3", "us-east-1", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusBadRequest, rec.Code, rec.Body)
+	}
+}
+
 // TestHostBucketStyles verifies that path-style and virtual-hosted-style
 // requests both work, with and without a port in the Host header.
 // "localhost" is implicitly available as a host bucket base.

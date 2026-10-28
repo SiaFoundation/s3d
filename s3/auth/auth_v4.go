@@ -36,6 +36,12 @@ type Caller struct {
 	// UserID is the owner ID of the user the access key belongs to, as
 	// reported by the KeyStore. It is compared against a bucket owner's ID.
 	UserID string
+	// Region is the region of the signature's credential scope.
+	Region string
+	// SignedAt is the time the request was signed at.
+	SignedAt time.Time
+	// Presigned is true if the signature is in the query string.
+	Presigned bool
 }
 
 // SecretAccessKey represents a secret access key. It is obtained from a
@@ -277,7 +283,12 @@ func (s v4Signature) verify(req *http.Request, store KeyStore, region string, ma
 		return nil, s3errs.ErrSignatureDoesNotMatch
 	}
 	return &v4SignResult{
-		Caller:     Caller{AccessKeyID: s.Credential.AccessKeyID, UserID: userID},
+		Caller: Caller{
+			AccessKeyID: s.Credential.AccessKeyID,
+			UserID:      userID,
+			Region:      s.Credential.Scope.Region,
+			SignedAt:    s.Date,
+		},
 		SigningKey: signingKey,
 		Scope:      scope,
 		Timestamp:  s.Date.Format(layoutISO8601),

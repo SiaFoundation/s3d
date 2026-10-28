@@ -3,9 +3,11 @@ package s3
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"slices"
 	"strings"
 	"time"
@@ -400,6 +402,7 @@ type s3 struct {
 	hostBucketBases []string
 	logger          *zap.Logger
 	region          string
+	trustedProxies  []netip.Prefix
 }
 
 // Option is a configuration option for the S3 API handler.
@@ -430,6 +433,27 @@ func WithRegion(region string) Option {
 	return func(s *s3) {
 		s.region = region
 	}
+}
+
+// WithTrustedProxies trusts forwarding headers only from the given prefixes.
+// Proxy chains are walked from right to left to the first untrusted hop.
+func WithTrustedProxies(prefixes []netip.Prefix) Option {
+	return func(s *s3) {
+		s.trustedProxies = prefixes
+	}
+}
+
+// ParseTrustedProxies parses IP addresses and CIDRs for [WithTrustedProxies].
+func ParseTrustedProxies(values []string) ([]netip.Prefix, error) {
+	var prefixes []netip.Prefix
+	for _, value := range values {
+		prefix, err := policyIPPrefix(value)
+		if err != nil {
+			return nil, fmt.Errorf("invalid trusted proxy %q: %w", value, err)
+		}
+		prefixes = append(prefixes, prefix)
+	}
+	return prefixes, nil
 }
 
 // New creates an instance of the S3 API handler using the provided backend.
@@ -523,6 +547,8 @@ func (s *s3) authMiddleware(handler auth.AuthenticatedHandler) http.Handler {
 			zap.String(auth.HeaderXAMZContentSHA256, req.Header.Get(auth.HeaderXAMZContentSHA256)),
 			zap.String(auth.HeaderXAMZDate, req.Header.Get(auth.HeaderXAMZDate)))
 
+		sentHash := req.Header.Get(auth.HeaderXAMZContentSHA256)
+
 		// NOTE: If 'region' is empty here, all regions are allowed.
 		caller, err := auth.HandleAuth(req, s.backend, s.region, time.Now())
 		if err != nil {
@@ -530,6 +556,12 @@ func (s *s3) authMiddleware(handler auth.AuthenticatedHandler) http.Handler {
 				zap.String("accessKeyID", auth.AccessKeyIDFromRequest(req)))
 			writeErrorResponse(w, req, err)
 			return
+		}
+
+		// policies see the payload hash header as sent, unless authentication
+		// replaced it
+		if sentHash != "" && req.Header.Get(auth.HeaderXAMZContentSHA256) == sentHash {
+			req = req.WithContext(context.WithValue(req.Context(), contentSHA256Key{}, sentHash))
 		}
 
 		handler.ServeHTTP(w, req, caller)

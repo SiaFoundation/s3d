@@ -355,8 +355,10 @@ func main() {
 	}
 	defer backend.Close()
 
+	trustedProxies, err := s3.ParseTrustedProxies(cfg.S3.TrustedProxies)
+	checkFatalError("failed to parse trusted proxies", err)
 	s3Handler := s3.New(backend, s3.WithHostBucketBases(cfg.S3.HostBases),
-		s3.WithLogger(log))
+		s3.WithLogger(log), s3.WithTrustedProxies(trustedProxies))
 
 	server := http.Server{
 		Handler: s3Handler,
@@ -457,6 +459,9 @@ func validateServerConfig(cfg Config) error {
 		return errors.New("admin address must differ from the S3 HTTPS address")
 	case cfg.ApiHttpsAddress != "" && cfg.ApiAddress == cfg.ApiHttpsAddress:
 		return errors.New("S3 HTTP and HTTPS addresses must differ")
+	}
+	if _, err := s3.ParseTrustedProxies(cfg.S3.TrustedProxies); err != nil {
+		return err
 	}
 
 	totalShards := int(cfg.Sia.DataShards) + int(cfg.Sia.ParityShards)
