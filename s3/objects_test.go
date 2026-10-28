@@ -500,6 +500,62 @@ func TestPutObject(t *testing.T) {
 			t.Fatalf("unexpected checksum type %q", get.ChecksumType)
 		}
 
+		// a presigned URL carries the mode as a query parameter
+		presigner := service.NewPresignClient(s3Tester.Client())
+		httpClient := s3Tester.Client().Options().HTTPClient
+		presigned, err := presigner.PresignGetObject(t.Context(), &service.GetObjectInput{
+			Bucket:       aws.String(bucket),
+			Key:          aws.String(checksummed),
+			ChecksumMode: types.ChecksumModeEnabled,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		presignedReq, err := http.NewRequestWithContext(t.Context(), http.MethodGet, presigned.URL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		presignedResp, err := httpClient.Do(presignedReq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		presignedResp.Body.Close()
+		if presignedResp.StatusCode != http.StatusOK {
+			t.Fatalf("unexpected status %d", presignedResp.StatusCode)
+		} else if got := presignedResp.Header.Get("x-amz-checksum-crc32"); got != crc32Checksum(data) {
+			t.Fatalf("checksum mismatch: expected %s, got %s", crc32Checksum(data), got)
+		} else if got := presignedResp.Header.Get("x-amz-checksum-type"); got != "FULL_OBJECT" {
+			t.Fatalf("unexpected checksum type %q", got)
+		}
+
+		// the SDK presigns with the mode enabled unless response validation
+		// is turned off, so this URL carries no mode at all
+		presigned, err = presigner.PresignGetObject(t.Context(), &service.GetObjectInput{
+			Bucket: aws.String(bucket),
+			Key:    aws.String(checksummed),
+		}, func(o *service.PresignOptions) {
+			o.ClientOptions = append(o.ClientOptions, func(co *service.Options) {
+				co.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
+			})
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		presignedReq, err = http.NewRequestWithContext(t.Context(), http.MethodGet, presigned.URL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		presignedResp, err = httpClient.Do(presignedReq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		presignedResp.Body.Close()
+		if presignedResp.StatusCode != http.StatusOK {
+			t.Fatalf("unexpected status %d", presignedResp.StatusCode)
+		} else if got := presignedResp.Header.Get("x-amz-checksum-crc32"); got != "" {
+			t.Fatalf("unexpected checksum %q on a presigned request without the mode", got)
+		}
+
 		// upload with a checksum that does not match the body
 		_, err = s3Tester.Client().PutObject(t.Context(), &service.PutObjectInput{
 			Bucket:        aws.String(bucket),
