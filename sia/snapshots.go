@@ -150,10 +150,11 @@ func DownloadSnapshot(ctx context.Context, sdk SDK, snap RemoteSnapshot, w io.Wr
 // dueAt returns the most recent instant at the scheduled time of day at or
 // before now.
 func (sched snapshotSchedule) dueAt(now time.Time) time.Time {
-	now = now.Local()
 	due := time.Date(now.Year(), now.Month(), now.Day(), sched.hour, sched.minute, 0, 0, now.Location())
 	if due.After(now) {
-		due = due.AddDate(0, 0, -1)
+		// a time of day inside a daylight saving gap normalizes to a later
+		// clock, which AddDate would carry into the previous day
+		due = time.Date(now.Year(), now.Month(), now.Day()-1, sched.hour, sched.minute, 0, 0, now.Location())
 	}
 	return due
 }

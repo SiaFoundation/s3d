@@ -13,6 +13,7 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
+	_ "time/tzdata"
 
 	"github.com/SiaFoundation/s3d/build"
 	"github.com/SiaFoundation/s3d/internal/testutil"
@@ -825,6 +826,30 @@ func TestFetchRemoteSnapshot(t *testing.T) {
 	// so is an id that does not exist
 	if _, err := sia.FetchRemoteSnapshot(t.Context(), memSDK, types.Hash256(frand.Entropy256())); err == nil {
 		t.Fatal("expected an error")
+	}
+}
+
+// TestSnapshotDueAt verifies the due slot on the day a daylight saving gap
+// swallows the scheduled time of day.
+func TestSnapshotDueAt(t *testing.T) {
+	loc, err := time.LoadLocation("Europe/Berlin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// clocks move from 02:00 to 03:00 on 2026-03-29, so 02:30 normalizes to 03:30
+	yesterday := time.Date(2026, time.March, 28, 2, 30, 0, 0, loc)
+	today := time.Date(2026, time.March, 29, 3, 30, 0, 0, loc)
+	for _, tc := range []struct {
+		now  time.Time
+		want time.Time
+	}{
+		{time.Date(2026, time.March, 29, 0, 0, 0, 0, loc), yesterday},
+		{time.Date(2026, time.March, 29, 3, 29, 0, 0, loc), yesterday},
+		{today, today},
+	} {
+		if due := sia.SnapshotDueAt(tc.now, 2, 30); !due.Equal(tc.want) {
+			t.Fatal("unexpected due slot", tc.now, due)
+		}
 	}
 }
 

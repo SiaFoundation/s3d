@@ -63,3 +63,8 @@ func (s *Sia) CreateScheduledSnapshot(ctx context.Context) (s3.Snapshot, error) 
 func (s *Sia) RunScheduledSnapshot(ctx context.Context, now time.Time, hour, minute, keep int) { //nolint:revive
 	s.runScheduledSnapshot(ctx, now, snapshotSchedule{hour: hour, minute: minute, keep: keep})
 }
+
+// SnapshotDueAt exports snapshotSchedule.dueAt for testing.
+func SnapshotDueAt(now time.Time, hour, minute int) time.Time {
+	return snapshotSchedule{hour: hour, minute: minute}.dueAt(now)
+}
