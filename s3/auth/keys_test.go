@@ -15,14 +15,16 @@ func TestGenerateAccessKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// the ID is split out of the SigV4 credential on slashes and the header on
-	// commas, with spaces stripped beforehand
 	invalid := [][2]string{
 		{strings.Repeat("a", 15), secretKey},
 		{strings.Repeat("a", 129), secretKey},
 		{"AAAAAAAAA/AAAAAAAAAA", secretKey},
 		{"AAAAAAAAA,AAAAAAAAAA", secretKey},
 		{"AAAAAAAAA AAAAAAAAAA", secretKey},
+		{"AAAAAAAAA-AAAAAAAAAA", secretKey},
+		{"AAAAAAAAA%AAAAAAAAAA", secretKey},
+		{"AAAAAAAAA\x7fAAAAAAAAAA", secretKey},
+		{"AAAAAAAAAéAAAAAAAAAA", secretKey},
 		{accessKeyID, strings.Repeat("a", 31)},
 		{accessKeyID, strings.Repeat("a", 129)},
 	}
