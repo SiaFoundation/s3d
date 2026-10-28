@@ -269,7 +269,7 @@ type Store interface {
 	AbortMultipartUpload(bucket s3.BucketID, name string, uploadID s3.UploadID) (int64, error)
 	AddMultipartPart(bucket s3.BucketID, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64, checksum []byte) (string, int64, error)
 	CreateMultipartUpload(bucket s3.BucketID, name string, uploadID s3.UploadID, meta map[string]string, lock *s3.ObjectLockState, checksum objects.MultipartChecksum) error
-	CompleteMultipartUpload(bucket s3.BucketID, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64, checksum *s3.ObjectChecksum, preconditions s3.ObjectPreconditions) (string, objects.OrphanedFile, error)
+	CompleteMultipartUpload(bucket s3.BucketID, name string, uploadID s3.UploadID, parts []objects.Part, checksum *s3.ObjectChecksum, preconditions s3.ObjectPreconditions) (string, objects.OrphanedFile, error)
 	HasMultipartUpload(bucket s3.BucketID, name string, uploadID s3.UploadID) (hasParts bool, err error)
 	ListMultipartUploads(bucket s3.BucketID, prefix s3.Prefix, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error)
 	ListParts(bucket s3.BucketID, name string, uploadID s3.UploadID, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error)

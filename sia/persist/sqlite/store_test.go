@@ -1,11 +1,13 @@
 package sqlite
 
 import (
+	"crypto/md5"
 	"database/sql"
 	"path/filepath"
 	"testing"
 
 	"github.com/SiaFoundation/s3d/s3"
+	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.uber.org/zap"
 )
 
@@ -66,4 +68,26 @@ func initTestDB(t testing.TB, log *zap.Logger) *testStore {
 		t.Fatal(err)
 	}
 	return store
+}
+
+// mustMultipartParts returns the uploaded parts of an upload in part order, as
+// the backend hands them to CompleteMultipartUpload.
+func mustMultipartParts(t testing.TB, store *testStore, bucket s3.BucketID, name string, uploadID s3.UploadID) []objects.Part {
+	t.Helper()
+	parts, err := store.MultipartParts(bucket, name, uploadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parts
+}
+
+// multipartMD5 returns the MD5 a completed multipart object carries, the MD5 of
+// its part MD5s in part order.
+func multipartMD5(parts ...[16]byte) (sum [16]byte) {
+	h := md5.New()
+	for _, part := range parts {
+		h.Write(part[:])
+	}
+	copy(sum[:], h.Sum(nil))
+	return sum
 }
