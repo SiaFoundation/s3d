@@ -702,6 +702,8 @@ func objectChecksumHeader(headers http.Header) (ChecksumAlgorithm, string, error
 
 	if count > 1 {
 		return "", "", fmt.Errorf("%w: found %d checksums, expected at most one", s3errs.ErrInvalidRequest, count)
+	} else if count == 1 && value == "" {
+		return "", "", s3errs.ErrBadDigest
 	}
 	return algorithm, value, nil
 }
