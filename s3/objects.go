@@ -1546,10 +1546,20 @@ func (s *s3) setLifecycleExpirationHeader(w http.ResponseWriter, r *http.Request
 	}
 }
 
+// checksumModeEnabled reports whether the request asks for checksum headers
+// through x-amz-checksum-mode, as a header or as a presigned query parameter.
+func checksumModeEnabled(r *http.Request) bool {
+	mode := r.Header.Get(HeaderXAMZChecksumMode)
+	if mode == "" {
+		mode = r.URL.Query().Get(HeaderXAMZChecksumMode)
+	}
+	return strings.EqualFold(mode, "ENABLED")
+}
+
 // writeGetOrHeadObjectHeaders contains shared logic for constructing headers for
 // a HEAD and a GET request for a /bucket/object URL.
 func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Request) error {
-	checksumRequested := strings.EqualFold(r.Header.Get(HeaderXAMZChecksumMode), "ENABLED")
+	checksumRequested := checksumModeEnabled(r)
 
 	for mk, mv := range obj.Metadata {
 		// stored keys are not guaranteed to be canonically formatted
