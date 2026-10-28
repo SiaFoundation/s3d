@@ -464,7 +464,7 @@ func TestGetObjectPartFields(t *testing.T) {
 	}
 }
 
-func TestObjectParts(t *testing.T) {
+func TestObjectAttributes(t *testing.T) {
 	const (
 		accessKeyID = testAccessKeyID
 		bucket      = "test-bucket"
@@ -480,7 +480,7 @@ func TestObjectParts(t *testing.T) {
 	bid := store.bucketID(bucket)
 
 	// assert [s3errs.ErrNoSuchKey] for a key that has no versions
-	if _, _, err := store.ObjectParts(bid, name, s3.NoVersion(), 0, 1000); !errors.Is(err, s3errs.ErrNoSuchKey) {
+	if _, _, _, err := store.ObjectAttributes(bid, name, s3.NoVersion(), &s3.ObjectAttributesPage{PartNumberMarker: 0, MaxParts: 1000}); !errors.Is(err, s3errs.ErrNoSuchKey) {
 		t.Fatal(err)
 	}
 
@@ -491,24 +491,22 @@ func TestObjectParts(t *testing.T) {
 	}
 
 	expected := make([]objects.Part, totalParts)
-	var totalSize int64
 	for i := range expected {
 		size := s3.MinUploadPartSize
 		if i == totalParts-1 {
 			size = 64
 		}
 		expected[i] = objects.Part{PartNumber: i + 1, Size: size, Checksum: frand.Bytes(32)}
-		totalSize += size
 		if _, _, err := store.AddMultipartPart(bid, name, uploadID, fmt.Sprintf("part-%d", i+1), expected[i].PartNumber, frand.Entropy128(), size, expected[i].Checksum); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, _, err := store.CompleteMultipartUpload(bid, name, uploadID, frand.Entropy128(), totalSize, nil, s3.ObjectPreconditions{}); err != nil {
+	if _, _, err := store.CompleteMultipartUpload(bid, name, uploadID, mustMultipartParts(t, store, bid, name, uploadID), nil, s3.ObjectPreconditions{}); err != nil {
 		t.Fatal(err)
 	}
 
 	// every part of the current version
-	parts, truncated, err := store.ObjectParts(bid, name, s3.NoVersion(), 0, 1000)
+	_, parts, truncated, err := store.ObjectAttributes(bid, name, s3.NoVersion(), &s3.ObjectAttributesPage{PartNumberMarker: 0, MaxParts: 1000})
 	if err != nil {
 		t.Fatal(err)
 	} else if truncated {
@@ -518,7 +516,7 @@ func TestObjectParts(t *testing.T) {
 	}
 
 	// a limit reports the parts that fit and that more remain
-	parts, truncated, err = store.ObjectParts(bid, name, s3.NoVersion(), 0, 2)
+	_, parts, truncated, err = store.ObjectAttributes(bid, name, s3.NoVersion(), &s3.ObjectAttributesPage{PartNumberMarker: 0, MaxParts: 2})
 	if err != nil {
 		t.Fatal(err)
 	} else if !truncated {
@@ -528,7 +526,7 @@ func TestObjectParts(t *testing.T) {
 	}
 
 	// a marker skips the parts up to and including it
-	parts, truncated, err = store.ObjectParts(bid, name, s3.NoVersion(), 2, 2)
+	_, parts, truncated, err = store.ObjectAttributes(bid, name, s3.NoVersion(), &s3.ObjectAttributesPage{PartNumberMarker: 2, MaxParts: 2})
 	if err != nil {
 		t.Fatal(err)
 	} else if truncated {
@@ -538,8 +536,31 @@ func TestObjectParts(t *testing.T) {
 	}
 
 	// assert [s3errs.ErrNoSuchVersion] for a version that is not there
-	if _, _, err := store.ObjectParts(bid, name, s3.SpecificVersion("missing"), 0, 1000); !errors.Is(err, s3errs.ErrNoSuchVersion) {
+	if _, _, _, err := store.ObjectAttributes(bid, name, s3.SpecificVersion("missing"), &s3.ObjectAttributesPage{PartNumberMarker: 0, MaxParts: 1000}); !errors.Is(err, s3errs.ErrNoSuchVersion) {
 		t.Fatal(err)
+	}
+
+	// a nil page reads the object without its parts
+	obj, parts, truncated, err := store.ObjectAttributes(bid, name, s3.NoVersion(), nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if obj.PartsCount != totalParts {
+		t.Fatal("unexpected parts count", obj.PartsCount)
+	} else if len(parts) != 0 || truncated {
+		t.Fatal("unexpected parts", len(parts), truncated)
+	}
+
+	// overwriting the null version replaces the object and its parts together
+	if _, _, err := store.PutObject(bid, name, objects.PutOptions{Length: 0}); err != nil {
+		t.Fatal(err)
+	}
+	obj, parts, truncated, err = store.ObjectAttributes(bid, name, s3.NoVersion(), &s3.ObjectAttributesPage{PartNumberMarker: 0, MaxParts: 1000})
+	if err != nil {
+		t.Fatal(err)
+	} else if obj.PartsCount != 0 || obj.Length != 0 {
+		t.Fatal("unexpected object", obj.PartsCount, obj.Length)
+	} else if len(parts) != 0 || truncated {
+		t.Fatal("unexpected parts", len(parts), truncated)
 	}
 }
 

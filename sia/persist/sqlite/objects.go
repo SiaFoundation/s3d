@@ -266,50 +266,25 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, version s3.
 	return attachSiaObject(tx, obj, partObjID)
 }
 
-// objectVersionID resolves the version of (bid, name) a request addresses,
-// returning sql.ErrNoRows when it is absent. An unspecified version resolves to
-// the current version.
-func objectVersionID(tx *txn, bid int64, name string, version s3.VersionRequest) (string, error) {
-	if version.Specified {
-		var found string
-		err := tx.QueryRow(`
-			SELECT version_id
-			FROM objects
-			WHERE bucket_id = $1 AND name = $2 AND version_id = $3
-		`, bid, name, version.ID).Scan(&found)
-		return found, err
-	}
-	var versionID string
-	err := tx.QueryRow(`
-		SELECT version_id
-		FROM objects
-		WHERE bucket_id = $1 AND name = $2 AND is_latest = TRUE
-	`, bid, name).Scan(&versionID)
-	return versionID, err
-}
-
-// ObjectParts returns the parts of a multipart object ordered by part number,
-// skipping the parts up to and including partNumberMarker and reporting at most
-// maxParts of them. The second return value is true when more parts remain. An
-// object that was not uploaded in parts has none.
-//
-// An unspecified version reads the current version, returning ErrNoSuchKey when
-// the key has no versions. A specified version reads that version, returning
-// ErrNoSuchVersion when it is absent.
-func (s *Store) ObjectParts(bucket s3.BucketID, name string, version s3.VersionRequest, partNumberMarker, maxParts int) ([]objects.Part, bool, error) {
+// ObjectAttributes returns an object together with one page of its parts, read
+// in a single transaction. A nil page skips the parts and reports no truncation.
+func (s *Store) ObjectAttributes(bucket s3.BucketID, name string, version s3.VersionRequest, page *s3.ObjectAttributesPage) (*objects.Object, []objects.Part, bool, error) {
+	var obj objects.Object
 	var parts []objects.Part
 	var truncated bool
 	if err := s.transaction(func(tx *txn) error {
-		parts, truncated = parts[:0], false // reset per attempt
+		obj, parts, truncated = objects.Object{}, parts[:0], false // reset per attempt
 
-		bid, err := existingBucketID(tx, bucket)
+		bid, status, err := bucketIDAndVersioning(tx, bucket)
 		if err != nil {
 			return err
 		}
-
-		versionID, err := objectVersionID(tx, bid, name, version)
-		if err != nil {
+		if err := getObject(tx, &obj, bid, name, version, nil); err != nil {
 			return err
+		}
+		obj.Versioned = status != ""
+		if page == nil || obj.IsDeleteMarker || obj.PartsCount == 0 {
+			return nil
 		}
 
 		rows, err := tx.Query(`
@@ -318,14 +293,14 @@ func (s *Store) ObjectParts(bucket s3.BucketID, name string, version s3.VersionR
 			WHERE bucket_id = $1 AND name = $2 AND version_id = $3 AND part_number > $4
 			ORDER BY part_number ASC
 			LIMIT $5
-		`, bid, name, versionID, partNumberMarker, maxParts+1)
+		`, bid, name, obj.VersionID, page.PartNumberMarker, page.MaxParts+1)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 
 		for rows.Next() {
-			if len(parts) >= maxParts {
+			if len(parts) >= page.MaxParts {
 				truncated = true
 				break
 			}
@@ -338,18 +313,15 @@ func (s *Store) ObjectParts(bucket s3.BucketID, name string, version s3.VersionR
 		return rows.Err()
 	}); errors.Is(err, sql.ErrNoRows) {
 		if version.Specified {
-			return nil, false, s3errs.ErrNoSuchVersion
+			return nil, nil, false, s3errs.ErrNoSuchVersion
 		}
-		return nil, false, s3errs.ErrNoSuchKey
+		return nil, nil, false, s3errs.ErrNoSuchKey
 	} else if err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
-	return parts, truncated, nil
+	return &obj, parts, truncated, nil
 }
 
-// attachSiaObject loads the sealed object referenced by objectID from the
-// normalized sia object tables and attaches it to obj. A null objectID leaves
-// obj untouched.
 func attachSiaObject(tx *txn, obj *objects.Object, objectID sql.Null[sqlHash256]) error {
 	if !objectID.Valid {
 		return nil
