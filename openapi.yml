@@ -242,7 +242,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/AccessKey"
         "400":
-          description: The request body could not be parsed, the user name is empty, or the pair has an invalid length.
+          description: The request body could not be parsed, the user name is empty, a key has an invalid length, or the access key ID contains invalid characters.
         "404":
           description: No user with that name exists.
         "409":
@@ -432,7 +432,7 @@ components:
           description: The user to issue the key to.
         accessKeyID:
           type: string
-          description: The access key ID, between 16 and 128 characters without slashes, commas or whitespace. Generated when omitted together with secretKey.
+          description: The access key ID, between 16 and 128 ASCII letters, digits or underscores. Generated when omitted together with secretKey.
         secretKey:
           type: string
           description: The secret key, between 32 and 128 characters. Generated when omitted together with accessKeyID.
