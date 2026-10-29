@@ -266,9 +266,62 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, version s3.
 	return attachSiaObject(tx, obj, partObjID)
 }
 
-// attachSiaObject loads the sealed object referenced by objectID from the
-// normalized sia object tables and attaches it to obj. A null objectID leaves
-// obj untouched.
+// ObjectAttributes returns an object together with one page of its parts, read
+// in a single transaction. A nil page skips the parts and reports no truncation.
+func (s *Store) ObjectAttributes(bucket s3.BucketID, name string, version s3.VersionRequest, page *s3.ObjectAttributesPage) (*objects.Object, []objects.Part, bool, error) {
+	var obj objects.Object
+	var parts []objects.Part
+	var truncated bool
+	if err := s.transaction(func(tx *txn) error {
+		obj, parts, truncated = objects.Object{}, parts[:0], false // reset per attempt
+
+		bid, status, err := bucketIDAndVersioning(tx, bucket)
+		if err != nil {
+			return err
+		}
+		if err := getObject(tx, &obj, bid, name, version, nil); err != nil {
+			return err
+		}
+		obj.Versioned = status != ""
+		if page == nil || obj.IsDeleteMarker || obj.PartsCount == 0 {
+			return nil
+		}
+
+		rows, err := tx.Query(`
+			SELECT part_number, content_length, checksum
+			FROM object_parts
+			WHERE bucket_id = $1 AND name = $2 AND version_id = $3 AND part_number > $4
+			ORDER BY part_number ASC
+			LIMIT $5
+		`, bid, name, obj.VersionID, page.PartNumberMarker, page.MaxParts+1)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			if len(parts) >= page.MaxParts {
+				truncated = true
+				break
+			}
+			var p objects.Part
+			if err := rows.Scan(&p.PartNumber, &p.Size, &p.Checksum); err != nil {
+				return err
+			}
+			parts = append(parts, p)
+		}
+		return rows.Err()
+	}); errors.Is(err, sql.ErrNoRows) {
+		if version.Specified {
+			return nil, nil, false, s3errs.ErrNoSuchVersion
+		}
+		return nil, nil, false, s3errs.ErrNoSuchKey
+	} else if err != nil {
+		return nil, nil, false, err
+	}
+	return &obj, parts, truncated, nil
+}
+
 func attachSiaObject(tx *txn, obj *objects.Object, objectID sql.Null[sqlHash256]) error {
 	if !objectID.Valid {
 		return nil
