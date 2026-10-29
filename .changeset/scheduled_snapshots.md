@@ -2,4 +2,4 @@
 default: minor
 ---
 
-# Take snapshots on a schedule with a retention count
+# Take snapshots on a cron schedule with daily, weekly and monthly retention

@@ -224,21 +224,30 @@ has, the list may be incomplete.
 
 ### Scheduling
 
-`s3d` can take a snapshot every day at a fixed time and keep only the newest
-ones.
+`s3d` can take snapshots on a cron schedule and keep a number of daily, weekly
+and monthly ones.
 
-```yaml
-sia:
-  snapshotSchedule: "03:00"
-  snapshotRetention: 7
+```sh
+s3d snapshots schedule set "0 3 * * *"
+s3d snapshots retention set --keep-daily 7 --keep-weekly 4 --keep-monthly 12
+s3d snapshots schedule disable
 ```
 
-`snapshotSchedule` is a local time of day, so a daily snapshot also flushes the
-objects buffered on disk every day. If the instance was down at that time, the
-snapshot is taken on the next start. `snapshotRetention` is the number of
-scheduled snapshots kept, `0` keeps all of them. Retention only ever removes
-snapshots the schedule took, a snapshot created with `s3d snapshots create` is
-kept until it is deleted. The `list` output marks scheduled snapshots.
+The expression has the five standard fields or is one of `@hourly`, `@daily`,
+`@weekly`, `@monthly` and `@yearly`, and runs in the instance's local time zone.
+Both settings are stored in the database next to the users and keys, a running
+instance picks up a change within a minute, and they are part of every
+snapshot, so a restored instance resumes them. `schedule` and `retention`
+without a subcommand print the current setting. A scheduled snapshot flushes
+the objects buffered on disk like a manual one. If the instance was down when
+a snapshot was due, it is taken on the next start.
+
+Each count keeps the newest scheduled snapshot of that many days, weeks or
+months, the sets are combined, and all zero keeps every scheduled snapshot.
+`retention set` replaces all three counts, so a count left out is zero.
+Retention runs while a schedule is set and only ever removes snapshots the
+schedule took, a snapshot created with `s3d snapshots create` is kept until it
+is deleted. The `list` output marks scheduled snapshots.
 
 ### Deleting
 
@@ -532,8 +541,6 @@ sia:
   diskUsageLimit: 10737418240 # max bytes buffered on disk pending upload (0 disables the limit, default 10 GiB)
   uploadThreads: 1 # object groups uploaded to Sia concurrently by the background upload loop (default 4)
   uploadDeadline: 24h # upload a group regardless of waste once an object was last modified this long ago (0s disables the deadline, default 24h)
-  snapshotSchedule: "03:00" # local time of day at which a snapshot is taken every day (empty disables scheduled snapshots)
-  snapshotRetention: 7 # scheduled snapshots kept, retention only removes snapshots the schedule took (0 keeps all of them)
   dataShards: 10 # shards each slab is split into (default 10)
   parityShards: 20 # recovery shards added to each slab (default 20)
 s3:

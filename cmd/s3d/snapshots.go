@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"go.sia.tech/core/types"
 	sdk "go.sia.tech/siastorage"
+	"go.uber.org/zap"
 )
 
 const (
@@ -31,6 +33,8 @@ Commands:
 	list		List snapshots
 	delete		Delete a snapshot and unpin its Sia object
 	restore		Restore a database from a snapshot on Sia
+	schedule	Manage the snapshot schedule
+	retention	Manage the retention of scheduled snapshots
 `
 
 	snapshotsCreateUsage = `Usage: s3d snapshots create
@@ -68,6 +72,43 @@ snapshot is created and by 'snapshots list'.
 The destination must be empty or missing, so a restore can never overwrite an
 existing database. Run 's3d config' for the restored directory before starting
 s3d.`
+
+	snapshotsScheduleUsage = `Usage: s3d snapshots schedule [command]
+
+Print the snapshot schedule.
+
+Commands:
+	set		Set the snapshot schedule
+	disable		Disable scheduled snapshots
+`
+
+	snapshotsScheduleSetUsage = `Usage: s3d snapshots schedule set <expression>
+
+Take snapshots on a cron schedule. The expression has five fields, minute,
+hour, day of month, month and day of week, or is one of @hourly, @daily,
+@weekly, @monthly and @yearly. It runs in the local time zone of the instance,
+which picks up a change within a minute. A snapshot missed while the instance
+was down is taken on the next start.`
+
+	snapshotsScheduleDisableUsage = `Usage: s3d snapshots schedule disable
+
+Stop taking scheduled snapshots. Existing snapshots and the retention are kept.`
+
+	snapshotsRetentionUsage = `Usage: s3d snapshots retention [command]
+
+Print the retention applied to scheduled snapshots.
+
+Commands:
+	set		Set the retention of scheduled snapshots
+`
+
+	snapshotsRetentionSetUsage = `Usage: s3d snapshots retention set [--keep-daily <n>] [--keep-weekly <n>] [--keep-monthly <n>]
+
+Each count keeps the newest scheduled snapshot of that many days, weeks or
+months, the sets are combined, and all zero keeps every scheduled snapshot.
+The command replaces all three counts, so a count left out is zero. Retention
+runs while a schedule is set and never prunes a snapshot created with
+'snapshots create'.`
 )
 
 func runSnapshotsCreate(ctx context.Context, cmd *flag.FlagSet) {
@@ -335,4 +376,95 @@ func scheduledMark(scheduled bool) string {
 		return "yes"
 	}
 	return ""
+}
+
+func runSnapshotsSchedule(cmd *flag.FlagSet) {
+	if len(cmd.Args()) != 0 {
+		cmd.Usage()
+		os.Exit(1)
+	}
+
+	store, err := openStore(zap.NewNop())
+	checkFatalError("failed to open database", err)
+	defer store.Close()
+
+	expr, _, err := store.SnapshotSchedule()
+	checkFatalError("failed to load snapshot schedule", err)
+
+	if expr == "" {
+		fmt.Println("Scheduled snapshots are disabled.")
+		return
+	}
+	fmt.Println("Schedule:", expr)
+}
+
+func runSnapshotsScheduleSet(cmd *flag.FlagSet) {
+	if len(cmd.Args()) != 1 {
+		cmd.Usage()
+		os.Exit(1)
+	}
+	expr := strings.TrimSpace(cmd.Arg(0))
+	if expr == "" {
+		cmd.Usage()
+		os.Exit(1)
+	}
+	_, err := sia.ParseSnapshotSchedule(expr)
+	checkFatalError("failed to set snapshot schedule", err)
+
+	store, err := openStore(zap.NewNop())
+	checkFatalError("failed to open database", err)
+	defer store.Close()
+
+	checkFatalError("failed to set snapshot schedule", store.UpdateSnapshotSchedule(expr))
+	fmt.Println("Schedule:", expr)
+}
+
+func runSnapshotsScheduleDisable(cmd *flag.FlagSet) {
+	if len(cmd.Args()) != 0 {
+		cmd.Usage()
+		os.Exit(1)
+	}
+
+	store, err := openStore(zap.NewNop())
+	checkFatalError("failed to open database", err)
+	defer store.Close()
+
+	checkFatalError("failed to disable scheduled snapshots", store.UpdateSnapshotSchedule(""))
+	fmt.Println("Scheduled snapshots are disabled.")
+}
+
+func runSnapshotsRetention(cmd *flag.FlagSet) {
+	if len(cmd.Args()) != 0 {
+		cmd.Usage()
+		os.Exit(1)
+	}
+
+	store, err := openStore(zap.NewNop())
+	checkFatalError("failed to open database", err)
+	defer store.Close()
+
+	_, retention, err := store.SnapshotSchedule()
+	checkFatalError("failed to load snapshot retention", err)
+	printSnapshotRetention(retention)
+}
+
+func runSnapshotsRetentionSet(cmd *flag.FlagSet, retention sia.SnapshotRetention) {
+	if len(cmd.Args()) != 0 {
+		cmd.Usage()
+		os.Exit(1)
+	}
+	checkFatalError("failed to set snapshot retention", retention.Validate())
+
+	store, err := openStore(zap.NewNop())
+	checkFatalError("failed to open database", err)
+	defer store.Close()
+
+	checkFatalError("failed to set snapshot retention", store.UpdateSnapshotRetention(retention))
+	printSnapshotRetention(retention)
+}
+
+func printSnapshotRetention(retention sia.SnapshotRetention) {
+	fmt.Printf("Keep daily:   %d\n", retention.KeepDaily)
+	fmt.Printf("Keep weekly:  %d\n", retention.KeepWeekly)
+	fmt.Printf("Keep monthly: %d\n", retention.KeepMonthly)
 }

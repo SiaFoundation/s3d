@@ -121,9 +121,18 @@ func main() {
 	snapshotsListCmd := flagg.New("list", snapshotsListUsage)
 	snapshotsDeleteCmd := flagg.New("delete", snapshotsDeleteUsage)
 	snapshotsRestoreCmd := flagg.New("restore", snapshotsRestoreUsage)
+	snapshotsScheduleCmd := flagg.New("schedule", snapshotsScheduleUsage)
+	snapshotsScheduleSetCmd := flagg.New("set", snapshotsScheduleSetUsage)
+	snapshotsScheduleDisableCmd := flagg.New("disable", snapshotsScheduleDisableUsage)
+	snapshotsRetentionCmd := flagg.New("retention", snapshotsRetentionUsage)
+	snapshotsRetentionSetCmd := flagg.New("set", snapshotsRetentionSetUsage)
 
 	var snapshotsRestoreOut string
 	snapshotsRestoreCmd.StringVar(&snapshotsRestoreOut, "out", "", "empty or missing directory to restore the database into")
+	var snapshotsRetention sia.SnapshotRetention
+	snapshotsRetentionSetCmd.IntVar(&snapshotsRetention.KeepDaily, "keep-daily", 0, "days of scheduled snapshots kept")
+	snapshotsRetentionSetCmd.IntVar(&snapshotsRetention.KeepWeekly, "keep-weekly", 0, "weeks of scheduled snapshots kept")
+	snapshotsRetentionSetCmd.IntVar(&snapshotsRetention.KeepMonthly, "keep-monthly", 0, "months of scheduled snapshots kept")
 
 	// attempt to load the config file
 	configPath := tryLoadConfig()
@@ -167,6 +176,19 @@ func main() {
 					{Cmd: snapshotsListCmd},
 					{Cmd: snapshotsDeleteCmd},
 					{Cmd: snapshotsRestoreCmd},
+					{
+						Cmd: snapshotsScheduleCmd,
+						Sub: []flagg.Tree{
+							{Cmd: snapshotsScheduleSetCmd},
+							{Cmd: snapshotsScheduleDisableCmd},
+						},
+					},
+					{
+						Cmd: snapshotsRetentionCmd,
+						Sub: []flagg.Tree{
+							{Cmd: snapshotsRetentionSetCmd},
+						},
+					},
 				},
 			},
 		},
@@ -252,6 +274,21 @@ func main() {
 		return
 	case snapshotsRestoreCmd:
 		runSnapshotsRestore(ctx, snapshotsRestoreCmd, snapshotsRestoreOut)
+		return
+	case snapshotsScheduleCmd:
+		runSnapshotsSchedule(snapshotsScheduleCmd)
+		return
+	case snapshotsScheduleSetCmd:
+		runSnapshotsScheduleSet(snapshotsScheduleSetCmd)
+		return
+	case snapshotsScheduleDisableCmd:
+		runSnapshotsScheduleDisable(snapshotsScheduleDisableCmd)
+		return
+	case snapshotsRetentionCmd:
+		runSnapshotsRetention(snapshotsRetentionCmd)
+		return
+	case snapshotsRetentionSetCmd:
+		runSnapshotsRetentionSet(snapshotsRetentionSetCmd, snapshotsRetention)
 		return
 	case rootCmd:
 		if len(cmd.Args()) != 0 {
