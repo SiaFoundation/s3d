@@ -63,10 +63,10 @@ func TestDiskUsage(t *testing.T) {
 
 	// add in-progress multipart parts
 	uid := s3.NewUploadID()
-	if err := store.CreateMultipartUpload(bid, "multipart", uid, nil, nil); err != nil {
+	if err := store.CreateMultipartUpload(bid, "multipart", uid, nil, nil, objects.MultipartChecksum{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.AddMultipartPart(bid, "multipart", uid, "p1", 1, frand.Entropy128(), 500); err != nil {
+	if _, _, err := store.AddMultipartPart(bid, "multipart", uid, "p1", 1, frand.Entropy128(), 500, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -159,7 +159,7 @@ func TestAllFilenames(t *testing.T) {
 
 	// add an in-progress multipart upload
 	uid := s3.NewUploadID()
-	if err := store.CreateMultipartUpload(bid, "mp1", uid, nil, nil); err != nil {
+	if err := store.CreateMultipartUpload(bid, "mp1", uid, nil, nil, objects.MultipartChecksum{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -209,11 +209,12 @@ func TestAllFilenames(t *testing.T) {
 	}
 
 	// complete the multipart upload
-	if _, _, err := store.AddMultipartPart(bid, "mp1", uid, "p1", 1, frand.Entropy128(), s3.MinUploadPartSize); err != nil {
+	p1MD5 := frand.Entropy128()
+	if _, _, err := store.AddMultipartPart(bid, "mp1", uid, "p1", 1, p1MD5, s3.MinUploadPartSize, nil); err != nil {
 		t.Fatal(err)
 	}
-	mpMD5 := frand.Entropy128()
-	if _, _, err := store.CompleteMultipartUpload(bid, "mp1", uid, mpMD5, s3.MinUploadPartSize, s3.ObjectPreconditions{}); err != nil {
+	mpMD5 := multipartMD5(p1MD5)
+	if _, _, err := store.CompleteMultipartUpload(bid, "mp1", uid, mustMultipartParts(t, store, bid, "mp1", uid), nil, s3.ObjectPreconditions{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -267,7 +268,6 @@ func TestGetObject(t *testing.T) {
 		multipartSdkObj  = sdk.Object{}
 		multipartSealed  = multipartSdkObj.Seal(multipartSealKey)
 
-		multipartMD5      = frand.Entropy128()
 		multipartUploadID = s3.NewUploadID()
 		multipartMeta     = map[string]string{"baz": "qux"}
 	)
@@ -287,22 +287,23 @@ func TestGetObject(t *testing.T) {
 	}
 
 	// create multipart object
-	err = store.CreateMultipartUpload(bid, multipart, multipartUploadID, multipartMeta, nil)
+	err = store.CreateMultipartUpload(bid, multipart, multipartUploadID, multipartMeta, nil, objects.MultipartChecksum{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	// add parts
 	part1MD5 := frand.Entropy128()
 	part2MD5 := frand.Entropy128()
-	if _, _, err := store.AddMultipartPart(bid, multipart, multipartUploadID, "part-1", 1, part1MD5, s3.MinUploadPartSize); err != nil {
+	multipartMD5 := multipartMD5(part1MD5, part2MD5)
+	if _, _, err := store.AddMultipartPart(bid, multipart, multipartUploadID, "part-1", 1, part1MD5, s3.MinUploadPartSize, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.AddMultipartPart(bid, multipart, multipartUploadID, "part-2", 2, part2MD5, 2); err != nil {
+	if _, _, err := store.AddMultipartPart(bid, multipart, multipartUploadID, "part-2", 2, part2MD5, 2, nil); err != nil {
 		t.Fatal(err)
 	}
 	// complete
 	totalSize := int64(s3.MinUploadPartSize + 2)
-	_, _, err = store.CompleteMultipartUpload(bid, multipart, multipartUploadID, multipartMD5, totalSize, s3.ObjectPreconditions{})
+	_, _, err = store.CompleteMultipartUpload(bid, multipart, multipartUploadID, mustMultipartParts(t, store, bid, multipart, multipartUploadID), nil, s3.ObjectPreconditions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -404,17 +405,18 @@ func TestGetObjectPartFields(t *testing.T) {
 	bid := store.bucketID(bucket)
 
 	uploadID := s3.NewUploadID()
-	if err := store.CreateMultipartUpload(bid, name, uploadID, nil, nil); err != nil {
+	if err := store.CreateMultipartUpload(bid, name, uploadID, nil, nil, objects.MultipartChecksum{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.AddMultipartPart(bid, name, uploadID, "part-1", 1, frand.Entropy128(), s3.MinUploadPartSize); err != nil {
+	if _, _, err := store.AddMultipartPart(bid, name, uploadID, "part-1", 1, frand.Entropy128(), s3.MinUploadPartSize, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.AddMultipartPart(bid, name, uploadID, "part-2", 2, frand.Entropy128(), 64); err != nil {
+	if _, _, err := store.AddMultipartPart(bid, name, uploadID, "part-2", 2, frand.Entropy128(), 64, nil); err != nil {
 		t.Fatal(err)
 	}
-	contentMD5 := frand.Entropy128()
-	if _, _, err := store.CompleteMultipartUpload(bid, name, uploadID, contentMD5, s3.MinUploadPartSize+64, s3.ObjectPreconditions{}); err != nil {
+	completedParts := mustMultipartParts(t, store, bid, name, uploadID)
+	contentMD5 := multipartMD5(completedParts[0].ContentMD5, completedParts[1].ContentMD5)
+	if _, _, err := store.CompleteMultipartUpload(bid, name, uploadID, completedParts, nil, s3.ObjectPreconditions{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -459,6 +461,81 @@ func TestGetObjectPartFields(t *testing.T) {
 		t.Fatal("expected nil FileName after pinning")
 	} else if obj.SiaObject == nil {
 		t.Fatal("expected SiaObject to remain set after pinning")
+	}
+}
+
+func TestCopyObject(t *testing.T) {
+	const (
+		accessKeyID = testAccessKeyID
+		bucket      = "test-bucket"
+		name        = "multipart-obj"
+	)
+
+	store := initTestDB(t, zaptest.NewLogger(t))
+
+	if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
+		t.Fatal(err)
+	}
+	bid := store.bucketID(bucket)
+
+	// complete a multipart object carrying a composite checksum
+	uploadID := s3.NewUploadID()
+	upload := objects.MultipartChecksum{Algorithm: s3.ChecksumSHA256, Type: s3.ChecksumTypeComposite}
+	if err := store.CreateMultipartUpload(bid, name, uploadID, nil, nil, upload); err != nil {
+		t.Fatal(err)
+	}
+
+	partChecksums := [][]byte{frand.Bytes(32), frand.Bytes(32)}
+	if _, _, err := store.AddMultipartPart(bid, name, uploadID, "part-1", 1, frand.Entropy128(), s3.MinUploadPartSize, partChecksums[0]); err != nil {
+		t.Fatal(err)
+	} else if _, _, err := store.AddMultipartPart(bid, name, uploadID, "part-2", 2, frand.Entropy128(), 64, partChecksums[1]); err != nil {
+		t.Fatal(err)
+	}
+
+	checksum := &s3.ObjectChecksum{Algorithm: s3.ChecksumSHA256, Type: s3.ChecksumTypeComposite, Value: "x=-2"}
+	if _, _, err := store.CompleteMultipartUpload(bid, name, uploadID, mustMultipartParts(t, store, bid, name, uploadID), checksum, s3.ObjectPreconditions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// a replacing copy keeps the source checksum and leaves the caller's
+	// metadata untouched
+	replacement := map[string]string{"Content-Type": "text/plain"}
+	if _, _, err := store.CopyObject(bid, name, s3.NoVersion(), bid, "copy", s3.CopyObjectOptions{Replace: true, Meta: replacement}); err != nil {
+		t.Fatal(err)
+	}
+
+	obj, err := store.GetObject(bid, "copy", s3.NoVersion(), nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if obj.Meta["Content-Type"] != "text/plain" {
+		t.Fatal("unexpected", obj.Meta)
+	} else if obj.Meta["X-Amz-Checksum-Sha256"] != "x=-2" {
+		t.Fatal("unexpected", obj.Meta)
+	} else if obj.Meta["X-Amz-Checksum-Type"] != "COMPOSITE" {
+		t.Fatal("unexpected", obj.Meta)
+	} else if len(replacement) != 1 {
+		t.Fatal("unexpected", replacement)
+	}
+
+	// the copied parts keep their digests
+	rows, err := store.db.Query(`SELECT checksum FROM object_parts WHERE name = $1 ORDER BY part_number`, "copy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+
+	var copied [][]byte
+	for rows.Next() {
+		var partChecksum []byte
+		if err := rows.Scan(&partChecksum); err != nil {
+			t.Fatal(err)
+		}
+		copied = append(copied, partChecksum)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	} else if !reflect.DeepEqual(copied, partChecksums) {
+		t.Fatalf("unexpected %x", copied)
 	}
 }
 
@@ -1566,17 +1643,17 @@ func TestObjectsForUpload(t *testing.T) {
 
 	// insert a completed multipart upload with 2 parts
 	uid := s3.NewUploadID()
-	if err := store.CreateMultipartUpload(bid, "multipart", uid, nil, nil); err != nil {
+	if err := store.CreateMultipartUpload(bid, "multipart", uid, nil, nil, objects.MultipartChecksum{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.AddMultipartPart(bid, "multipart", uid, "p1", 1, frand.Entropy128(), s3.MinUploadPartSize); err != nil {
+	if _, _, err := store.AddMultipartPart(bid, "multipart", uid, "p1", 1, frand.Entropy128(), s3.MinUploadPartSize, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.AddMultipartPart(bid, "multipart", uid, "p2", 2, frand.Entropy128(), 50); err != nil {
+	if _, _, err := store.AddMultipartPart(bid, "multipart", uid, "p2", 2, frand.Entropy128(), 50, nil); err != nil {
 		t.Fatal(err)
 	}
 	mpSize := int64(s3.MinUploadPartSize + 50)
-	if _, _, err := store.CompleteMultipartUpload(bid, "multipart", uid, frand.Entropy128(), mpSize, s3.ObjectPreconditions{}); err != nil {
+	if _, _, err := store.CompleteMultipartUpload(bid, "multipart", uid, mustMultipartParts(t, store, bid, "multipart", uid), nil, s3.ObjectPreconditions{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1698,7 +1775,7 @@ func TestUploadStats(t *testing.T) {
 
 	// create an in-progress multipart upload
 	uid := s3.NewUploadID()
-	if err := store.CreateMultipartUpload(bid, "mp1", uid, nil, nil); err != nil {
+	if err := store.CreateMultipartUpload(bid, "mp1", uid, nil, nil, objects.MultipartChecksum{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1734,10 +1811,10 @@ func TestUploadStats(t *testing.T) {
 	})
 
 	// complete the multipart upload, turning it into a pending object
-	if _, _, err := store.AddMultipartPart(bid, "mp1", uid, "p1", 1, frand.Entropy128(), 500); err != nil {
+	if _, _, err := store.AddMultipartPart(bid, "mp1", uid, "p1", 1, frand.Entropy128(), 500, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.CompleteMultipartUpload(bid, "mp1", uid, frand.Entropy128(), 500, s3.ObjectPreconditions{}); err != nil {
+	if _, _, err := store.CompleteMultipartUpload(bid, "mp1", uid, mustMultipartParts(t, store, bid, "mp1", uid), nil, s3.ObjectPreconditions{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1778,7 +1855,7 @@ func TestUploadStats(t *testing.T) {
 
 	// creating then aborting a multipart upload leaves the counters unchanged
 	uid2 := s3.NewUploadID()
-	if err := store.CreateMultipartUpload(bid, "mp2", uid2, nil, nil); err != nil {
+	if err := store.CreateMultipartUpload(bid, "mp2", uid2, nil, nil, objects.MultipartChecksum{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.AbortMultipartUpload(bid, "mp2", uid2); err != nil {

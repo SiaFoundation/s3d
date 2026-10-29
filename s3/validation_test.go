@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
 func TestValidateBucketName(t *testing.T) {
@@ -80,14 +81,13 @@ func TestValidateBucketName(t *testing.T) {
 // TestMetadataHeaders checks that only the object's own headers are stored.
 func TestMetadataHeaders(t *testing.T) {
 	kept := map[string]string{
-		"X-Amz-Meta-Colour":    "blue",
-		"X-Amz-Checksum-Crc32": "NhCmhg==",
-		"Content-Type":         "text/plain",
-		"Content-Disposition":  "inline",
-		"Content-Encoding":     "gzip",
-		"Content-Language":     "en-GB",
-		"Cache-Control":        "no-cache",
-		"Expires":              "Thu, 01 Jan 2026 00:00:00 GMT",
+		"X-Amz-Meta-Colour":   "blue",
+		"Content-Type":        "text/plain",
+		"Content-Disposition": "inline",
+		"Content-Encoding":    "gzip",
+		"Content-Language":    "en-GB",
+		"Cache-Control":       "no-cache",
+		"Expires":             "Thu, 01 Jan 2026 00:00:00 GMT",
 	}
 	dropped := []string{
 		// signing
@@ -97,11 +97,18 @@ func TestMetadataHeaders(t *testing.T) {
 		"X-Amz-Sdk-Checksum-Algorithm",
 		"X-Amz-Trailer",
 		"X-Amz-Security-Token",
-		// written by the backend next to the checksum it computed, or read off
-		// the request and never stored
+		// the whole checksum family is written by the backend next to the
+		// digest it computed, or read off the request and never stored
 		"X-Amz-Checksum-Algorithm",
 		"X-Amz-Checksum-Mode",
 		"X-Amz-Checksum-Type",
+		"X-Amz-Checksum-Crc32",
+		"X-Amz-Checksum-Crc32c",
+		"X-Amz-Checksum-Crc64nvme",
+		"X-Amz-Checksum-Md5",
+		"X-Amz-Checksum-Sha1",
+		"X-Amz-Checksum-Sha256",
+		"X-Amz-Checksum-Sha512",
 		// routing
 		"X-Amz-Copy-Source",
 		"X-Amz-Metadata-Directive",
@@ -162,6 +169,7 @@ func TestWriteGetOrHeadObjectHeaders(t *testing.T) {
 			"x-amz-meta-keep":                           "kept",
 			"Content-Type":                              "text/plain",
 			"X-Amz-Checksum-Type":                       "FULL_OBJECT",
+			"X-Amz-Checksum-Crc32":                      "NhCmhg==",
 		},
 	}
 
@@ -190,8 +198,11 @@ func TestWriteGetOrHeadObjectHeaders(t *testing.T) {
 	if got := w.Header().Get("Content-Type"); got != "text/plain" {
 		t.Fatal("mismatch", got)
 	}
-	// the checksum type is served back even though a request cannot store it
+	// the stored checksum is served back even though a request cannot store it
 	if got := w.Header().Get("X-Amz-Checksum-Type"); got != "FULL_OBJECT" {
+		t.Fatal("mismatch", got)
+	}
+	if got := w.Header().Get("X-Amz-Checksum-Crc32"); got != "NhCmhg==" {
 		t.Fatal("mismatch", got)
 	}
 
@@ -201,6 +212,39 @@ func TestWriteGetOrHeadObjectHeaders(t *testing.T) {
 	}
 	if got := w.Header().Get("X-Amz-Checksum-Type"); got != "" {
 		t.Fatal("served", got)
+	}
+	if got := w.Header().Get("X-Amz-Checksum-Crc32"); got != "" {
+		t.Fatal("served", got)
+	}
+
+	// a part read of a multipart object that stored no part digest reports
+	// nothing, since the object checksum covers more than the part served
+	obj.Range = &ObjectRange{Start: 0, Length: 10}
+	obj.Size = 30
+	obj.PartsCount = aws.Int32(3)
+	obj.Metadata["X-Amz-Checksum-Sha256"] = "arcu6553sHVAiX4MjW0j7I7vD4w6R+Gz9Ok0Q9lTa+0="
+
+	partRequest := httptest.NewRequest(http.MethodGet, "/bucket/object?partNumber=1", nil)
+	partRequest.Header.Set(HeaderXAMZChecksumMode, "ENABLED")
+
+	w = httptest.NewRecorder()
+	if err := writeGetOrHeadObjectHeaders(obj, w, partRequest); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.Header().Get("X-Amz-Checksum-Sha256"); got != "" {
+		t.Fatal("served", got)
+	}
+
+	// the same read of a single part object reports the object's digest, which
+	// covers that one part in full
+	obj.PartsCount = aws.Int32(1)
+
+	w = httptest.NewRecorder()
+	if err := writeGetOrHeadObjectHeaders(obj, w, partRequest); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.Header().Get("X-Amz-Checksum-Sha256"); got == "" {
+		t.Fatal("served nothing")
 	}
 }
 

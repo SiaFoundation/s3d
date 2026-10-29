@@ -549,4 +549,12 @@ INSERT INTO bucket_lifecycle_configurations (bucket_id, configuration)
 DROP TABLE bucket_lifecycle_configurations_backup;`)
 		return err
 	},
+	func(tx *txn, _ *zap.Logger) error {
+		_, err := tx.Exec(`
+ALTER TABLE multipart_uploads ADD COLUMN checksum_algorithm TEXT NOT NULL DEFAULT '' CHECK (checksum_algorithm IN ('', 'CRC32', 'CRC32C', 'CRC64NVME', 'SHA1', 'SHA256'));
+ALTER TABLE multipart_uploads ADD COLUMN checksum_type TEXT NOT NULL DEFAULT '' CHECK (checksum_type IN ('', 'COMPOSITE', 'FULL_OBJECT')) CHECK ((checksum_algorithm = '') = (checksum_type = ''));
+ALTER TABLE multipart_parts ADD COLUMN checksum BLOB;
+ALTER TABLE object_parts ADD COLUMN checksum BLOB;`)
+		return err
+	},
 }

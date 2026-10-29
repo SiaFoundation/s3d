@@ -1,6 +1,8 @@
 package sqlite
 
 import (
+	"bytes"
+	"crypto/md5"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -14,7 +16,7 @@ import (
 )
 
 // CreateMultipartUpload persists metadata for a new multipart upload.
-func (s *Store) CreateMultipartUpload(bucket s3.BucketID, name string, uploadID s3.UploadID, meta map[string]string, lock *s3.ObjectLockState) error {
+func (s *Store) CreateMultipartUpload(bucket s3.BucketID, name string, uploadID s3.UploadID, meta map[string]string, lock *s3.ObjectLockState, checksum objects.MultipartChecksum) error {
 	if meta == nil {
 		meta = make(map[string]string) // force '{}' instead of 'null' in JSON
 	}
@@ -36,9 +38,9 @@ func (s *Store) CreateMultipartUpload(bucket s3.BucketID, name string, uploadID 
 		stored := objectLockColumns(lock)
 
 		if _, err := tx.Exec(`
-				INSERT INTO multipart_uploads (upload_id, bucket_id, name, metadata, created_at, object_lock_mode, object_lock_retain_until, object_lock_legal_hold)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-			`, sqlUploadID(uploadID), bid, name, sqlMetaJSON(meta), sqlTime(time.Now()), stored.Mode, stored.RetainUntil, stored.LegalHold); err != nil {
+				INSERT INTO multipart_uploads (upload_id, bucket_id, name, metadata, created_at, object_lock_mode, object_lock_retain_until, object_lock_legal_hold, checksum_algorithm, checksum_type)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			`, sqlUploadID(uploadID), bid, name, sqlMetaJSON(meta), sqlTime(time.Now()), stored.Mode, stored.RetainUntil, stored.LegalHold, string(checksum.Algorithm), string(checksum.Type)); err != nil {
 			return fmt.Errorf("failed to insert multipart upload: %w", err)
 		}
 		return incrementStat(tx, statMultipartUploads, 1)
@@ -50,7 +52,7 @@ func (s *Store) CreateMultipartUpload(bucket s3.BucketID, name string, uploadID 
 // object's ID has no remaining references, it is inserted into the
 // orphaned_objects table. If the overwrite leaves a previously pending file
 // unreferenced, its filename is returned so the caller can remove it from disk.
-func (s *Store) CompleteMultipartUpload(bucket s3.BucketID, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64, preconditions s3.ObjectPreconditions) (versionID string, orphan objects.OrphanedFile, _ error) {
+func (s *Store) CompleteMultipartUpload(bucket s3.BucketID, name string, uploadID s3.UploadID, parts []objects.Part, checksum *s3.ObjectChecksum, preconditions s3.ObjectPreconditions) (versionID string, orphan objects.OrphanedFile, _ error) {
 	err := s.transaction(func(tx *txn) error {
 		versionID, orphan = "", objects.OrphanedFile{} // reset per attempt
 		bid, status, err := bucketIDAndVersioning(tx, bucket)
@@ -72,40 +74,30 @@ func (s *Store) CompleteMultipartUpload(bucket s3.BucketID, name string, uploadI
 		}
 
 		// validate parts exist
-		var partCount, maxPartNumber int
-		var totalSize int64
-		err = tx.QueryRow(`
-			SELECT COUNT(*), MAX(part_number), SUM(content_length)
-			FROM multipart_parts
-			WHERE upload_id = $1
-		`, sqlUploadID(uploadID)).Scan(&partCount, &maxPartNumber, &totalSize)
-		if err != nil {
-			return err
-		} else if partCount == 0 {
+		if len(parts) == 0 {
 			return errors.New("cannot complete multipart upload with no parts")
-		} else if totalSize != contentLength {
-			return fmt.Errorf("total part size (%d) does not match content length (%d)", totalSize, contentLength)
 		}
+		md5Hash := md5.New()
+		var contentLength int64
+		for i, part := range parts {
+			var row objects.Part
+			err := tx.QueryRow(`SELECT filename, content_md5, content_length, checksum FROM multipart_parts WHERE upload_id = $1 AND part_number = $2`,
+				sqlUploadID(uploadID), part.PartNumber).Scan(&row.Filename, (*sqlMD5)(&row.ContentMD5), &row.Size, &row.Checksum)
+			if errors.Is(err, sql.ErrNoRows) {
+				return s3errs.ErrInvalidPart
+			} else if err != nil {
+				return err
+			} else if row.Filename != part.Filename || row.ContentMD5 != part.ContentMD5 || row.Size != part.Size || !bytes.Equal(row.Checksum, part.Checksum) {
+				return s3errs.ErrInvalidPart
+			} else if i < len(parts)-1 && row.Size < s3.MinUploadPartSize {
+				return s3errs.ErrEntityTooSmall
+			}
+			md5Hash.Write(row.ContentMD5[:])
+			contentLength += row.Size
+		}
+		var contentMD5 [16]byte
+		copy(contentMD5[:], md5Hash.Sum(nil))
 
-		// verify all parts except last meet minimum size
-		var smallParts int
-		err = tx.QueryRow(`
-			SELECT COUNT(*)
-			FROM multipart_parts
-			WHERE upload_id = $1
-			  AND part_number < $2
-			  AND content_length < $3
-		`, sqlUploadID(uploadID), maxPartNumber, s3.MinUploadPartSize).Scan(&smallParts)
-		if err != nil {
-			return err
-		}
-		if smallParts > 0 {
-			return fmt.Errorf("found %d parts smaller than minimum size (%d bytes)", smallParts, s3.MinUploadPartSize)
-		}
-
-		// write the completed object, carrying the upload's metadata. The
-		// upload_id serves as the filename, since the assembled parts live under
-		// the upload directory until the object is uploaded to Sia.
 		var meta map[string]string
 		var stored objectLock
 		if err := tx.QueryRow(`SELECT metadata, object_lock_mode, object_lock_retain_until, object_lock_legal_hold FROM multipart_uploads WHERE upload_id = $1`,
@@ -116,24 +108,24 @@ func (s *Store) CompleteMultipartUpload(bucket s3.BucketID, name string, uploadI
 		if err != nil {
 			return err
 		}
+		if checksum != nil {
+			checksum.StoreInMeta(meta)
+		}
 		filename := uploadID.String()
-		res, err := putObject(tx, bid, name, status, contentMD5, meta, contentLength, int32(partCount), &filename, nil, lock)
+		res, err := putObject(tx, bid, name, status, contentMD5, meta, contentLength, int32(len(parts)), &filename, nil, lock)
 		if err != nil {
 			return err
 		}
 
-		// move parts to object_parts
-		_, err = tx.Exec(`
-			INSERT INTO object_parts (bucket_id, name, version_id, part_number, filename, content_md5, content_length, offset)
-			SELECT $1, $2, $3, part_number, filename, content_md5, content_length,
-				(SELECT COALESCE(SUM(content_length), 0)
-				FROM multipart_parts mp
-				WHERE mp.upload_id = $4 AND mp.part_number < multipart_parts.part_number)
-			FROM multipart_parts
-			WHERE upload_id = $4
-		`, bid, name, res.dbVersionID, sqlUploadID(uploadID))
-		if err != nil {
-			return err
+		var offset int64
+		for _, part := range parts {
+			if _, err := tx.Exec(`
+				INSERT INTO object_parts (bucket_id, name, version_id, part_number, filename, content_md5, content_length, offset, checksum)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			`, bid, name, res.dbVersionID, part.PartNumber, part.Filename, sqlMD5(part.ContentMD5), part.Size, offset, part.Checksum); err != nil {
+				return err
+			}
+			offset += part.Size
 		}
 
 		// delete the multipart upload
@@ -183,7 +175,7 @@ func (s *Store) AbortMultipartUpload(bucket s3.BucketID, name string, uploadID s
 // AddMultipartPart adds metadata for a multipart part to the store. It returns
 // the previous part's filename and content length if a part with the same
 // number already existed.
-func (s *Store) AddMultipartPart(bucket s3.BucketID, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (prev string, size int64, _ error) {
+func (s *Store) AddMultipartPart(bucket s3.BucketID, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64, checksum []byte) (prev string, size int64, _ error) {
 	if err := s.transaction(func(tx *txn) error {
 		prev = "" // reset per transaction attempt
 
@@ -209,14 +201,15 @@ func (s *Store) AddMultipartPart(bucket s3.BucketID, name string, uploadID s3.Up
 		}
 
 		_, err = tx.Exec(`
-			INSERT INTO multipart_parts (upload_id, part_number, filename, content_md5, content_length, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6)
+			INSERT INTO multipart_parts (upload_id, part_number, filename, content_md5, content_length, created_at, checksum)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
 			ON CONFLICT(upload_id, part_number) DO UPDATE SET
 				filename      = EXCLUDED.filename,
 				content_md5    = EXCLUDED.content_md5,
 				content_length = EXCLUDED.content_length,
-				created_at     = EXCLUDED.created_at
-		`, sqlUploadID(uploadID), partNumber, filename, sqlMD5(contentMD5), contentLength, sqlTime(time.Now()))
+				created_at     = EXCLUDED.created_at,
+				checksum       = EXCLUDED.checksum
+		`, sqlUploadID(uploadID), partNumber, filename, sqlMD5(contentMD5), contentLength, sqlTime(time.Now()), checksum)
 		return err
 	}); err != nil {
 		return "", 0, err
@@ -271,7 +264,7 @@ func (s *Store) MultipartParts(bucket s3.BucketID, name string, uploadID s3.Uplo
 		}
 
 		rows, err := tx.Query(`
-			SELECT part_number, filename, content_md5, content_length
+			SELECT part_number, filename, content_md5, content_length, checksum
 			FROM multipart_parts
 			WHERE upload_id = $1
 			ORDER BY part_number ASC`, sqlUploadID(uploadID))
@@ -282,7 +275,7 @@ func (s *Store) MultipartParts(bucket s3.BucketID, name string, uploadID s3.Uplo
 
 		for rows.Next() {
 			var part objects.Part
-			if err := rows.Scan(&part.PartNumber, &part.Filename, (*sqlMD5)(&part.ContentMD5), &part.Size); err != nil {
+			if err := rows.Scan(&part.PartNumber, &part.Filename, (*sqlMD5)(&part.ContentMD5), &part.Size, &part.Checksum); err != nil {
 				return err
 			}
 			parts = append(parts, part)
@@ -292,6 +285,23 @@ func (s *Store) MultipartParts(bucket s3.BucketID, name string, uploadID s3.Uplo
 		return nil, err
 	}
 	return parts, nil
+}
+
+// MultipartUploadChecksum returns the additional checksum the upload was
+// created with, zero when it carries none.
+func (s *Store) MultipartUploadChecksum(bucket s3.BucketID, name string, uploadID s3.UploadID) (checksum objects.MultipartChecksum, _ error) {
+	err := s.transaction(func(tx *txn) error {
+		bid, err := existingBucketID(tx, bucket)
+		if err != nil {
+			return err
+		}
+		checksum, err = uploadChecksum(tx, bid, name, uploadID)
+		return err
+	})
+	if err != nil {
+		return objects.MultipartChecksum{}, err
+	}
+	return checksum, nil
 }
 
 // ListParts lists uploaded parts for a multipart upload.
@@ -310,18 +320,14 @@ func (s *Store) ListParts(bucket s3.BucketID, name string, uploadID s3.UploadID,
 			return err
 		}
 
-		var exists bool
-		err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM multipart_uploads WHERE upload_id = $1 AND bucket_id = $2 AND name = $3)`,
-			sqlUploadID(uploadID), bid, name).Scan(&exists)
+		checksum, err := uploadChecksum(tx, bid, name, uploadID)
 		if err != nil {
 			return err
 		}
-		if !exists {
-			return s3errs.ErrNoSuchUpload
-		}
+		res.ChecksumAlgorithm, res.ChecksumType = checksum.Algorithm, checksum.Type
 
 		rows, err := tx.Query(`
-			SELECT part_number, content_length, content_md5, created_at
+			SELECT part_number, content_length, content_md5, created_at, checksum
 			FROM multipart_parts
 			WHERE upload_id = $1 AND part_number > $2
 			ORDER BY part_number ASC
@@ -340,7 +346,7 @@ func (s *Store) ListParts(bucket s3.BucketID, name string, uploadID s3.UploadID,
 			}
 
 			var p s3.UploadPart
-			if err := rows.Scan(&p.PartNumber, &p.Size, (*sqlMD5)(&p.ContentMD5), (*sqlTime)(&p.LastModified)); err != nil {
+			if err := rows.Scan(&p.PartNumber, &p.Size, (*sqlMD5)(&p.ContentMD5), (*sqlTime)(&p.LastModified), &p.Checksum); err != nil {
 				return err
 			}
 			res.Parts = append(res.Parts, p)
@@ -466,6 +472,19 @@ func (s *Store) ListMultipartUploads(bucket s3.BucketID, prefix s3.Prefix, page 
 		return nil, err
 	}
 	return res, nil
+}
+
+// uploadChecksum reads the checksum columns of an upload owned by the bucket,
+// returning [s3errs.ErrNoSuchUpload] when no such upload exists.
+func uploadChecksum(tx *txn, bucketID int64, name string, uploadID s3.UploadID) (checksum objects.MultipartChecksum, _ error) {
+	err := tx.QueryRow(`SELECT checksum_algorithm, checksum_type FROM multipart_uploads WHERE upload_id = $1 AND bucket_id = $2 AND name = $3`,
+		sqlUploadID(uploadID), bucketID, name).Scan(&checksum.Algorithm, &checksum.Type)
+	if errors.Is(err, sql.ErrNoRows) {
+		return objects.MultipartChecksum{}, s3errs.ErrNoSuchUpload
+	} else if err != nil {
+		return objects.MultipartChecksum{}, err
+	}
+	return checksum, nil
 }
 
 func buildUploadsQuery(bucketID int64, prefix, keyMarker string, uploadIDMarker [16]byte, limit int64) (string, []any) {

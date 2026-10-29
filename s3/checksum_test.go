@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"lukechampine.com/frand"
 )
 
 func TestRequestChecksum(t *testing.T) {
@@ -310,5 +311,155 @@ func TestObjectChecksumMeta(t *testing.T) {
 	ObjectChecksum{Type: ChecksumTypeFullObject}.StoreInMeta(empty)
 	if len(empty) != 0 {
 		t.Fatalf("expected no metadata, got %v", empty)
+	}
+}
+
+func partChecksum(t *testing.T, a ChecksumAlgorithm, data []byte) PartChecksum {
+	t.Helper()
+	h := a.NewHash()
+	if h == nil {
+		t.Fatalf("no hash for %q", a)
+	}
+	h.Write(data)
+	return PartChecksum{Sum: h.Sum(nil), Length: int64(len(data))}
+}
+
+// the three 5 MiB parts the s3-tests multipart checksum vectors upload
+func repeatedParts(t *testing.T, a ChecksumAlgorithm) []PartChecksum {
+	t.Helper()
+	parts := make([]PartChecksum, 0, 3)
+	for _, b := range []byte("ABC") {
+		parts = append(parts, partChecksum(t, a, bytes.Repeat([]byte{b}, 5*1024*1024)))
+	}
+	return parts
+}
+
+func assertPartDigests(t *testing.T, parts []PartChecksum, want []string) {
+	t.Helper()
+	if len(parts) != len(want) {
+		t.Fatalf("expected %d parts, got %d", len(want), len(parts))
+	}
+	for i, digest := range want {
+		if got := base64.StdEncoding.EncodeToString(parts[i].Sum); got != digest {
+			t.Fatalf("part %d: expected %q, got %q", i+1, digest, got)
+		}
+	}
+}
+
+func TestCompositeChecksum(t *testing.T) {
+	single := partChecksum(t, ChecksumSHA256, bytes.Repeat([]byte{'A'}, 1024))
+	assertPartDigests(t, []PartChecksum{single}, []string{"arcu6553sHVAiX4MjW0j7I7vD4w6R+Gz9Ok0Q9lTa+0="})
+	if got := CompositeChecksum(ChecksumSHA256, []PartChecksum{single}); got != "Ok6Cs5b96ux6+MWQkJO7UBT5sKPBeXBLwvj/hK89smg=-1" {
+		t.Fatalf("unexpected composite %q", got)
+	}
+	if got := CompositeChecksum(ChecksumSHA256, []PartChecksum{single, {Length: single.Length}}); got != "" {
+		t.Fatalf("expected no composite, got %q", got)
+	}
+
+	tests := []struct {
+		algorithm ChecksumAlgorithm
+		digests   []string
+		want      string
+	}{
+		{
+			algorithm: ChecksumSHA256,
+			digests: []string{
+				"275VF5loJr1YYawit0XSHREhkFXYkkPKGuoK0x9VKxI=",
+				"mrHwOfjTL5Zwfj74F05HOQGLdUb7E5szdCbxgUSq6NM=",
+				"Vw7oB/nKQ5xWb3hNgbyfkvDiivl+U+/Dft48nfJfDow=",
+			},
+			want: "uWBwpe1dxI4Vw8Gf0X9ynOdw/SS6VBzfWm9giiv1sf4=-3",
+		},
+		{
+			algorithm: ChecksumSHA1,
+			digests: []string{
+				"iIaTCGbm+vdVjNqIMF2S0T7ibMk=",
+				"LS/TJ32bAVKEwRu+sE3X7awh/lk=",
+				"6DDwovUaHwrKNXDMzOGbuvj9kxI=",
+			},
+			want: "sizjvY4eud3MrcHdZM3cQ/ol39o=-3",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.algorithm), func(t *testing.T) {
+			parts := repeatedParts(t, tt.algorithm)
+			assertPartDigests(t, parts, tt.digests)
+			if got := CompositeChecksum(tt.algorithm, parts); got != tt.want {
+				t.Fatalf("expected %q, got %q", tt.want, got)
+			}
+		})
+	}
+}
+
+func TestCombineChecksums(t *testing.T) {
+	tests := []struct {
+		algorithm ChecksumAlgorithm
+		digests   []string
+		want      string
+	}{
+		{
+			algorithm: ChecksumCRC32,
+			digests:   []string{"JRTCyQ==", "QoZTGg==", "YAgjqw=="},
+			want:      "WgDhBQ==",
+		},
+		{
+			algorithm: ChecksumCRC32C,
+			digests:   []string{"MDaLrw==", "TH4EZg==", "Z7mBIQ=="},
+			want:      "xU+Krw==",
+		},
+		{
+			algorithm: ChecksumCRC64NVME,
+			digests:   []string{"L/E4WYn8v98=", "xW1l19VobYM=", "cK5MnNaWrW4="},
+			want:      "i+6LR0y3eFo=",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.algorithm), func(t *testing.T) {
+			parts := repeatedParts(t, tt.algorithm)
+			assertPartDigests(t, parts, tt.digests)
+
+			combined, err := CombineChecksums(tt.algorithm, parts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := base64.StdEncoding.EncodeToString(combined); got != tt.want {
+				t.Fatalf("expected %q, got %q", tt.want, got)
+			}
+		})
+	}
+
+	sha1Parts := []PartChecksum{{Sum: make([]byte, 20), Length: 1}}
+	if _, err := CombineChecksums(ChecksumSHA1, sha1Parts); !errors.Is(err, s3errs.ErrInvalidRequest) {
+		t.Fatalf("expected %v, got %v", s3errs.ErrInvalidRequest, err)
+	}
+	if _, err := CombineChecksums(ChecksumCRC32, nil); !errors.Is(err, s3errs.ErrInvalidRequest) {
+		t.Fatalf("expected %v, got %v", s3errs.ErrInvalidRequest, err)
+	}
+}
+
+func TestCrcCombineRandom(t *testing.T) {
+	algorithms := []ChecksumAlgorithm{ChecksumCRC32, ChecksumCRC32C, ChecksumCRC64NVME}
+
+	for _, algorithm := range algorithms {
+		t.Run(string(algorithm), func(t *testing.T) {
+			for range 50 {
+				data := frand.Bytes(frand.Intn(1 << 20))
+				split := frand.Intn(len(data) + 1)
+
+				parts := []PartChecksum{
+					partChecksum(t, algorithm, data[:split]),
+					partChecksum(t, algorithm, data[split:]),
+				}
+				combined, err := CombineChecksums(algorithm, parts)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if want := partChecksum(t, algorithm, data).Sum; !bytes.Equal(combined, want) {
+					t.Fatalf("%d bytes split at %d: expected %x, got %x", len(data), split, want, combined)
+				}
+			}
+		})
 	}
 }

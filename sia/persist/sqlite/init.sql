@@ -117,6 +117,8 @@ CREATE TABLE multipart_uploads (
     object_lock_mode TEXT NOT NULL DEFAULT '' CHECK (object_lock_mode IN ('', 'GOVERNANCE', 'COMPLIANCE')),
     object_lock_retain_until INTEGER CHECK ((object_lock_mode = '' AND object_lock_retain_until IS NULL) OR (object_lock_mode != '' AND object_lock_retain_until IS NOT NULL)), -- unix milliseconds
     object_lock_legal_hold TEXT NOT NULL DEFAULT '' CHECK (object_lock_legal_hold IN ('', 'ON', 'OFF')),
+    checksum_algorithm TEXT NOT NULL DEFAULT '' CHECK (checksum_algorithm IN ('', 'CRC32', 'CRC32C', 'CRC64NVME', 'SHA1', 'SHA256')),
+    checksum_type TEXT NOT NULL DEFAULT '' CHECK (checksum_type IN ('', 'COMPOSITE', 'FULL_OBJECT')) CHECK ((checksum_algorithm = '') = (checksum_type = '')),
     FOREIGN KEY (bucket_id) REFERENCES buckets(id)
 );
 CREATE INDEX multipart_uploads_bucket_id_name_idx ON multipart_uploads(bucket_id, name);
@@ -130,6 +132,7 @@ CREATE TABLE multipart_parts (
     content_md5 BLOB NOT NULL,
     content_length INTEGER NOT NULL,
     created_at INTEGER NOT NULL,
+    checksum BLOB,
     FOREIGN KEY (upload_id) REFERENCES multipart_uploads(upload_id) ON DELETE CASCADE,
     PRIMARY KEY (upload_id, part_number)
 );
@@ -143,6 +146,7 @@ CREATE TABLE object_parts (
     content_md5 BLOB NOT NULL,
     content_length INTEGER NOT NULL,
     offset INTEGER NOT NULL,
+    checksum BLOB,
     FOREIGN KEY (bucket_id, name, version_id) REFERENCES objects(bucket_id, name, version_id) ON DELETE CASCADE,
     PRIMARY KEY (bucket_id, name, version_id, part_number)
 );

@@ -44,6 +44,10 @@ type Object struct {
 	// if a multipart part number is specified.
 	PartsCount *int32
 
+	// PartChecksum is the digest of the part a part number selected, nil when
+	// the read named no part or the part carries none.
+	PartChecksum []byte
+
 	// ObjectLock is the version's lock state, nil when it carries none.
 	ObjectLock *ObjectLockState
 }
@@ -1095,19 +1099,12 @@ func parseSource(source string) (bucket, object string, version VersionRequest, 
 // with the request that carried it. User defined metadata arrives under
 // metaPrefix instead.
 var objectMetadataHeaders = map[string]struct{}{
-	"Cache-Control":            {},
-	"Content-Disposition":      {},
-	"Content-Encoding":         {},
-	"Content-Language":         {},
-	"Content-Type":             {},
-	"Expires":                  {},
-	"X-Amz-Checksum-Crc32":     {},
-	"X-Amz-Checksum-Crc32c":    {},
-	"X-Amz-Checksum-Crc64nvme": {},
-	"X-Amz-Checksum-Md5":       {},
-	"X-Amz-Checksum-Sha1":      {},
-	"X-Amz-Checksum-Sha256":    {},
-	"X-Amz-Checksum-Sha512":    {},
+	"Cache-Control":       {},
+	"Content-Disposition": {},
+	"Content-Encoding":    {},
+	"Content-Language":    {},
+	"Content-Type":        {},
+	"Expires":             {},
 
 	// X-Amz-Website-Redirect-Location is an object header, but s3d does not
 	// implement static website hosting, so storing it would report a redirect
@@ -1126,11 +1123,11 @@ func isObjectMetadataHeader(name string) bool {
 }
 
 // isServedMetadataHeader reports whether the canonically formatted header name
-// is served back with the object. The checksum type is written by the backend
-// alongside the checksum it computed, so it is served without being storable
-// from a request.
+// is served back with the object. The X-Amz-Checksum-* family is written by the
+// backend alongside the checksum it computed, so it is served without being
+// storable from a request.
 func isServedMetadataHeader(name string) bool {
-	return isObjectMetadataHeader(name) || name == HeaderXAMZChecksumType
+	return isObjectMetadataHeader(name) || strings.HasPrefix(name, checksumPrefix)
 }
 
 // metadataHeaders extracts S3 metadata headers from the given HTTP headers.
@@ -1560,6 +1557,15 @@ func checksumModeEnabled(r *http.Request) bool {
 // a HEAD and a GET request for a /bucket/object URL.
 func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Request) error {
 	checksumRequested := checksumModeEnabled(r)
+	partRead := r.URL.Query().Get("partNumber") != ""
+
+	// a part read reports the part's digest, falling back to the object's only
+	// on a single part object, whose one part the object checksum covers in
+	// full. every other partial read reports no digest, since one would let the
+	// client check a slice against the whole object's checksum
+	singlePart := obj.PartsCount == nil || *obj.PartsCount <= 1
+	servePartChecksum := checksumRequested && partRead && obj.PartChecksum != nil
+	serveObjectChecksum := checksumRequested && !servePartChecksum && (obj.Range == nil || (partRead && singlePart))
 
 	for mk, mv := range obj.Metadata {
 		// stored keys are not guaranteed to be canonically formatted
@@ -1569,10 +1575,7 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 			continue
 		}
 
-		// checksum headers are served only to a client that asked for them,
-		// and never on a ranged response, which would let a client check a
-		// partial object against the full object checksum
-		if strings.HasPrefix(mk, checksumPrefix) && (!checksumRequested || obj.Range != nil) {
+		if strings.HasPrefix(mk, checksumPrefix) && !serveObjectChecksum {
 			continue
 		}
 
@@ -1581,6 +1584,15 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 			w.Header()[fmt.Sprintf("%s%s", metaPrefix, strings.ToLower(key))] = []string{mv}
 		} else {
 			w.Header().Set(mk, mv)
+		}
+	}
+
+	if servePartChecksum {
+		if checksum := ObjectChecksumFromMeta(obj.Metadata); checksum != nil {
+			w.Header().Set(checksum.Algorithm.Header(), base64.StdEncoding.EncodeToString(obj.PartChecksum))
+			if checksum.Type != "" {
+				w.Header().Set(HeaderXAMZChecksumType, string(checksum.Type))
+			}
 		}
 	}
 
