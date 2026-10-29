@@ -20,6 +20,7 @@ import (
 // upload.
 type CreateMultipartUploadOptions struct {
 	Meta       map[string]string
+	Tags       TagSet
 	ObjectLock *ObjectLockState
 }
 
@@ -209,7 +210,7 @@ func (s *s3) routeMultipartUpload(r *http.Request, object, uploadID string) (ope
 func (s *s3) routeMultipartUploadBase(r *http.Request, bucket, object string) (operation, error) {
 	switch r.Method {
 	case http.MethodPost:
-		return operation{action: actionPutObject, serve: func(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
+		return operation{action: actionPutObject, headerTagConditions: true, serve: func(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
 			return s.createMultipartUpload(w, r, access, object)
 		}}, nil
 	case http.MethodGet:
@@ -265,8 +266,16 @@ func (s *s3) createMultipartUpload(w http.ResponseWriter, r *http.Request, acces
 		return err
 	}
 
+	tags, err := requestTags(r.Header)
+	if err != nil {
+		return err
+	}
+	if err := access.assertRequestTagsAllowed(object, tags); err != nil {
+		return err
+	}
 	result, err := s.backend.CreateMultipartUpload(r.Context(), access.bucketID, object, CreateMultipartUploadOptions{
 		Meta:       meta,
+		Tags:       tags,
 		ObjectLock: lock,
 	})
 	if err != nil {
@@ -370,13 +379,13 @@ func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, dst *bucketAccess,
 		return err
 	}
 
-	result, err := s.backend.UploadPartCopy(r.Context(), src.bucketID, srcObject, srcVersion, dst.bucketID, dstObject, uploadID, UploadPartCopyOptions{
+	result, err := s.backend.UploadPartCopy(r.Context(), src.access.bucketID, srcObject, src.version, dst.bucketID, dstObject, uploadID, UploadPartCopyOptions{
 		PartNumber:          partNumber,
 		Range:               srcRange,
 		SourcePreconditions: copySourcePreconditions(r.Header),
 	})
 	if err != nil {
-		return src.hideMissingSource(err, srcObject)
+		return src.access.hideMissingSource(err, srcObject)
 	}
 
 	etag := FormatETag(result.ContentMD5[:], 0)

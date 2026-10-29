@@ -488,24 +488,18 @@ type (
 	// LifecycleFilter restricts the objects a rule applies to.
 	LifecycleFilter struct {
 		Prefix                *string               `xml:"Prefix,omitempty"`
-		Tag                   *LifecycleTag         `xml:"Tag,omitempty"`
+		Tag                   *Tag                  `xml:"Tag,omitempty"`
 		And                   *LifecycleAndOperator `xml:"And,omitempty"`
 		ObjectSizeGreaterThan *int64                `xml:"ObjectSizeGreaterThan,omitempty"`
 		ObjectSizeLessThan    *int64                `xml:"ObjectSizeLessThan,omitempty"`
 	}
 
-	// LifecycleTag is an object tag used in a lifecycle filter.
-	LifecycleTag struct {
-		Key   string `xml:"Key"`
-		Value string `xml:"Value"`
-	}
-
 	// LifecycleAndOperator combines multiple filter predicates.
 	LifecycleAndOperator struct {
-		Prefix                *string        `xml:"Prefix,omitempty"`
-		Tags                  []LifecycleTag `xml:"Tag"`
-		ObjectSizeGreaterThan *int64         `xml:"ObjectSizeGreaterThan,omitempty"`
-		ObjectSizeLessThan    *int64         `xml:"ObjectSizeLessThan,omitempty"`
+		Prefix                *string `xml:"Prefix,omitempty"`
+		Tags                  TagSet  `xml:"Tag"`
+		ObjectSizeGreaterThan *int64  `xml:"ObjectSizeGreaterThan,omitempty"`
+		ObjectSizeLessThan    *int64  `xml:"ObjectSizeLessThan,omitempty"`
 	}
 
 	// LifecycleExpiration describes when current object versions expire.
@@ -616,5 +610,25 @@ type (
 		Xmlns   string   `xml:"xmlns,attr,omitempty"`
 		// Status is "ON" or "OFF".
 		Status string `xml:"Status,omitempty"`
+	}
+
+	// Tag is a case-sensitive S3 tag key and value.
+	Tag struct {
+		Key   string `xml:"Key"`
+		Value string `xml:"Value"`
+	}
+
+	// TagSet is the complete set of tags attached to a bucket or object
+	// version.
+	TagSet []Tag
+
+	// Tagging is the tag set of a bucket or object version, used by the
+	// bucket and object tagging APIs.
+	//
+	// https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObjectTagging.html
+	Tagging struct {
+		XMLName xml.Name `xml:"Tagging"`
+		Xmlns   string   `xml:"xmlns,attr,omitempty"`
+		TagSet  TagSet   `xml:"TagSet>Tag"`
 	}
 )

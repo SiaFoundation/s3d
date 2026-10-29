@@ -227,6 +227,11 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, version s3.
 	}
 	obj.VersionID = versionID
 	obj.ObjectLock = storedObjectLock(lock)
+	tags, err := objectTags(tx, bid, name, versionID)
+	if err != nil {
+		return err
+	}
+	obj.Tags = tags
 
 	// return full object if no part specified, or this is a delete marker
 	if partNumber == nil || obj.PartsCount == 0 || obj.IsDeleteMarker {
@@ -254,7 +259,7 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, version s3.
 	// part specified, return part info. the MD5 read is the object's, not the
 	// part's, because ContentMD5 and PartsCount are the object's ETag inputs
 	var partObjID sql.Null[sqlHash256]
-	err := tx.QueryRow(`
+	err = tx.QueryRow(`
 		SELECT o.filename, o.sia_object_id, o.metadata, o.updated_at, o.size, p.offset, p.content_length, o.content_md5
 		FROM object_parts p
 		JOIN objects o ON o.bucket_id = p.bucket_id AND o.name = p.name AND o.version_id = p.version_id
@@ -303,7 +308,7 @@ func (s *Store) PutObject(bucket s3.BucketID, name string, opts objects.PutOptio
 		if err != nil {
 			return err
 		}
-		res, err := putObject(tx, bid, name, status, opts.ContentMD5, opts.Meta, opts.Length, 0, opts.FileName, nil, lock)
+		res, err := putObject(tx, bid, name, status, opts.ContentMD5, opts.Meta, opts.Tags, opts.Length, 0, opts.FileName, nil, lock)
 		versionID, orphan = res.reportVersionID, res.orphanFile
 		return err
 	})
@@ -675,6 +680,7 @@ func (s *Store) CopyObject(srcBucket s3.BucketID, srcName string, srcVersion s3.
 			srcVersionWire = s3.FormatVersion(srcInternalVersion)
 		}
 
+		obj.Tags = opts.Tags
 		if opts.Replace {
 			obj.Meta = opts.Meta
 		} else {
@@ -705,12 +711,15 @@ func (s *Store) CopyObject(srcBucket s3.BucketID, srcName string, srcVersion s3.
 				UPDATE objects SET seq = $1, metadata = $2, updated_at = $3, is_latest = TRUE
 				WHERE bucket_id = $4 AND name = $5 AND version_id = $6
 			`, seq, sqlMetaJSON(obj.Meta), sqlTime(time.Now()), dstBid, dstName, srcInternalVersion)
+			if err != nil {
+				return err
+			}
 			obj.VersionID = srcInternalVersion
 			versionID = reportedWriteVersion(dstStatus, srcInternalVersion)
-			return err
+			return setObjectTags(tx, dstBid, dstName, srcInternalVersion, obj.Tags)
 		}
 
-		res, err := putObject(tx, dstBid, dstName, dstStatus, obj.ContentMD5, obj.Meta, obj.Length, obj.PartsCount, obj.FileName, obj.SiaObject, lock)
+		res, err := putObject(tx, dstBid, dstName, dstStatus, obj.ContentMD5, obj.Meta, obj.Tags, obj.Length, obj.PartsCount, obj.FileName, obj.SiaObject, lock)
 		if err != nil {
 			return err
 		}

@@ -53,6 +53,8 @@ type Backend interface {
 	//
 	// - opts.DestinationPreconditions must be evaluated against the current
 	//   version of the destination, via ObjectPreconditions.CheckWrite.
+	//
+	// - The copy's tags are opts.Tags, not the source's.
 	CopyObject(ctx context.Context, srcBucket BucketID, srcObject string, srcVersion VersionRequest, dstBucket BucketID, dstObject string, opts CopyObjectOptions) (*CopyObjectResult, error)
 
 	// CreateBucket creates a new bucket owned by the user identified by the
@@ -367,6 +369,60 @@ type Backend interface {
 	// - If the object or version does not exist, [ErrNoSuchKey] or
 	//   [ErrNoSuchVersion] must be returned.
 	GetObjectLegalHold(ctx context.Context, bucket BucketID, object string, version VersionRequest) (string, error)
+
+	// PutBucketTagging replaces the tag set of the specified bucket. An empty
+	// set removes the tags.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	PutBucketTagging(ctx context.Context, bucket BucketID, tags TagSet) error
+
+	// GetBucketTagging returns the tag set of the specified bucket.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	//
+	// - If the bucket has no tags, [ErrNoSuchTagSet] must be returned.
+	GetBucketTagging(ctx context.Context, bucket BucketID) (TagSet, error)
+
+	// DeleteBucketTagging removes the tag set of the specified bucket.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	DeleteBucketTagging(ctx context.Context, bucket BucketID) error
+
+	// PutObjectTagging replaces the tag set of the addressed version. An empty
+	// set removes the tags. It creates no version and changes neither the
+	// version's last-modified time nor its lock.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	//
+	// - If the object or version does not exist, [ErrNoSuchKey] or
+	//   [ErrNoSuchVersion] must be returned.
+	//
+	// - If the current version is a delete marker, [ErrNoSuchKey] must be
+	//   returned; if an addressed version is one, [ErrMethodNotAllowed].
+	PutObjectTagging(ctx context.Context, bucket BucketID, object string, version VersionRequest, tags TagSet) error
+
+	// GetObjectTagging returns the tag set of the addressed version, with the
+	// version addressed explicitly so a later call acts on the same one.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	//
+	// - If the object or version does not exist, [ErrNoSuchKey] or
+	//   [ErrNoSuchVersion] must be returned.
+	//
+	// - If the current version is a delete marker, [ErrNoSuchKey] must be
+	//   returned; if an addressed version is one, [ErrMethodNotAllowed].
+	GetObjectTagging(ctx context.Context, bucket BucketID, object string, version VersionRequest) (ObjectTagging, error)
+
+	// DeleteObjectTagging removes the tag set of the addressed version.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	//
+	// - If the object or version does not exist, [ErrNoSuchKey] or
+	//   [ErrNoSuchVersion] must be returned.
+	//
+	// - If the current version is a delete marker, [ErrNoSuchKey] must be
+	//   returned; if an addressed version is one, [ErrMethodNotAllowed].
+	DeleteObjectTagging(ctx context.Context, bucket BucketID, object string, version VersionRequest) error
 
 	// ListObjectVersions lists all versions (including delete markers) of the
 	// objects in the specified bucket.
@@ -700,6 +756,8 @@ func (s *s3) route(r *http.Request, bucket, object string) (operation, error) {
 		return s.routeObjectRetention(r, object, VersionFromQuery(query["versionId"]))
 	} else if _, ok := query["legal-hold"]; ok {
 		return s.routeObjectLegalHold(r, object, VersionFromQuery(query["versionId"]))
+	} else if _, ok := query["tagging"]; ok && object != "" {
+		return s.routeObjectTagging(r, object, VersionFromQuery(query["versionId"]))
 	} else if version := VersionFromQuery(query["versionId"]); version.Specified {
 		return s.routeObjectVersion(r, object, version)
 	} else if bucket != "" && object != "" {

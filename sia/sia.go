@@ -247,6 +247,12 @@ type Store interface {
 	PutObjectRetention(bucket s3.BucketID, name string, version s3.VersionRequest, retention s3.ObjectLockState, bypass bool) error
 	PutBucketPolicy(bucket s3.BucketID, document string) error
 	DeleteBucketPolicy(bucket s3.BucketID) error
+	GetBucketTagging(bucket s3.BucketID) (s3.TagSet, error)
+	PutBucketTagging(bucket s3.BucketID, tags s3.TagSet) error
+	DeleteBucketTagging(bucket s3.BucketID) error
+	GetObjectTagging(bucket s3.BucketID, name string, version s3.VersionRequest) (s3.ObjectTagging, error)
+	PutObjectTagging(bucket s3.BucketID, name string, version s3.VersionRequest, tags s3.TagSet) error
+	DeleteObjectTagging(bucket s3.BucketID, name string, version s3.VersionRequest) error
 	ObjectsCursor() (slabs.Cursor, error)
 	SetObjectsCursor(cursor slabs.Cursor) error
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)
@@ -266,7 +272,7 @@ type Store interface {
 	RemoveOrphanedObject(objectID types.Hash256) error
 	AbortMultipartUpload(bucket s3.BucketID, name string, uploadID s3.UploadID) (int64, error)
 	AddMultipartPart(bucket s3.BucketID, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (string, int64, error)
-	CreateMultipartUpload(bucket s3.BucketID, name string, uploadID s3.UploadID, meta map[string]string, lock *s3.ObjectLockState) error
+	CreateMultipartUpload(bucket s3.BucketID, name string, uploadID s3.UploadID, meta map[string]string, tags s3.TagSet, lock *s3.ObjectLockState) error
 	CompleteMultipartUpload(bucket s3.BucketID, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64, preconditions s3.ObjectPreconditions) (string, objects.OrphanedFile, error)
 	HasMultipartUpload(bucket s3.BucketID, name string, uploadID s3.UploadID) (hasParts bool, err error)
 	ListMultipartUploads(bucket s3.BucketID, prefix s3.Prefix, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error)
@@ -279,7 +285,7 @@ type Store interface {
 	DeleteBucketLifecycleConfiguration(bucket s3.BucketID) error
 	AllBucketLifecycleConfigurations() ([]BucketLifecycleConfiguration, error)
 	AbortMultipartUploads(bucket s3.BucketID, prefix string, before time.Time, limit int) ([]AbortedUpload, error)
-	ExpireObjects(bucket s3.BucketID, prefix string, sizeGreaterThan, sizeLessThan *int64, before time.Time, limit int) (int, []objects.OrphanedFile, error)
+	ExpireObjects(bucket s3.BucketID, prefix string, sizeGreaterThan, sizeLessThan *int64, tags s3.TagSet, before time.Time, limit int) (int, []objects.OrphanedFile, error)
 
 	Backup(ctx context.Context, destPath string) (int64, error)
 	DBVersion() int64

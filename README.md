@@ -394,12 +394,13 @@ delete with nothing to delete is a no-op, as an unconditional one is.
 | DeleteBucketPolicy | ✓ | |
 | GetBucketPolicyStatus | ✓ | |
 | GetBucketLifecycle | ✓ | |
-| PutBucketLifecycle | ◐ | Prefix and object-size filters only, with `AbortIncompleteMultipartUpload` and current-object `Expiration` rules |
+| PutBucketLifecycle | ◐ | Prefix, tag and object-size filters, with `AbortIncompleteMultipartUpload` and current-object `Expiration` rules; tag and size filters cannot be used to abort uploads |
 | DeleteBucketLifecycle | ✓ | |
 | GetBucketCors | ✗ | |
 | PutBucketCors | ✗ | |
-| GetBucketTagging | ✗ | |
-| PutBucketTagging | ✗ | |
+| GetBucketTagging | ✓ | |
+| PutBucketTagging | ✓ | Up to 50 tags; replaces the complete set |
+| DeleteBucketTagging | ✓ | |
 | GetBucketEncryption | ✗ | |
 | PutBucketEncryption | ✗ | |
 | PublicAccessBlock | ✗ | |
@@ -418,8 +419,9 @@ delete with nothing to delete is a no-op, as an unconditional one is.
 | ListObjectVersions | ✓ | |
 | GetObjectAcl | ✗ | |
 | PutObjectAcl | ✗ | |
-| GetObjectTagging | ✗ | |
-| PutObjectTagging | ✗ | |
+| GetObjectTagging | ✓ | Current and explicit versions |
+| PutObjectTagging | ✓ | Up to 10 tags per version; replaces the complete set |
+| DeleteObjectTagging | ✓ | Current and explicit versions |
 | GetObjectRetention | ✓ | |
 | PutObjectRetention | ◐ | `EventHold` and `EventHoldDuration` are rejected |
 | GetObjectLegalHold | ✓ | |

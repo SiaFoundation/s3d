@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"math/big"
 	"net/http"
 	"net/netip"
@@ -59,6 +60,12 @@ const (
 	actionGetObjectLegalHold               = "s3:GetObjectLegalHold"
 	actionPutObjectLegalHold               = "s3:PutObjectLegalHold"
 	actionBypassGovernanceRetention        = "s3:BypassGovernanceRetention"
+	actionGetObjectTagging                 = "s3:GetObjectTagging"
+	actionGetObjectVersionTagging          = "s3:GetObjectVersionTagging"
+	actionPutObjectTagging                 = "s3:PutObjectTagging"
+	actionPutObjectVersionTagging          = "s3:PutObjectVersionTagging"
+	actionDeleteObjectTagging              = "s3:DeleteObjectTagging"
+	actionDeleteObjectVersionTagging       = "s3:DeleteObjectVersionTagging"
 	actionListBucket                       = "s3:ListBucket"
 	actionListBucketVersions               = "s3:ListBucketVersions"
 	actionListBucketMultipartUploads       = "s3:ListBucketMultipartUploads"
@@ -68,6 +75,8 @@ const (
 	actionPutBucketVersioning              = "s3:PutBucketVersioning"
 	actionGetLifecycleConfiguration        = "s3:GetLifecycleConfiguration"
 	actionPutLifecycleConfiguration        = "s3:PutLifecycleConfiguration"
+	actionGetBucketTagging                 = "s3:GetBucketTagging"
+	actionPutBucketTagging                 = "s3:PutBucketTagging"
 	actionGetBucketPolicy                  = "s3:GetBucketPolicy"
 	actionPutBucketPolicy                  = "s3:PutBucketPolicy"
 	actionDeleteBucketPolicy               = "s3:DeleteBucketPolicy"
@@ -100,6 +109,15 @@ func deleteAction(version VersionRequest) string {
 		return actionDeleteObjectVersion
 	}
 	return actionDeleteObject
+}
+
+// versionedAction returns versioned when the request addresses a specific
+// version and current otherwise, as [readAction] does for reads.
+func versionedAction(version VersionRequest, current, versioned string) string {
+	if version.Specified {
+		return versioned
+	}
+	return current
 }
 
 // bucketARN returns the resource a bucket action is granted on.
@@ -530,20 +548,35 @@ func (c policyConditions) parse(variables bool) (conditionSet, error) {
 // validVariables reports whether every policy variable in value is terminated
 // and valid, so a misspelled one cannot silently disable a statement.
 func validVariables(value string) bool {
-	for {
-		i := strings.Index(value, "${")
-		if i < 0 {
-			return true
-		}
-		value = value[i+2:]
-		end := strings.IndexByte(value, '}')
-		if end < 0 {
+	for _, ok := range variableKeys(value) {
+		if !ok {
 			return false
 		}
-		if _, _, ok := parseVariable(value[:end]); !ok {
-			return false
+	}
+	return true
+}
+
+// variableKeys yields the key of each policy variable in value, with ok false
+// for one that is invalid or unterminated.
+func variableKeys(value string) iter.Seq2[string, bool] {
+	return func(yield func(string, bool) bool) {
+		for {
+			i := strings.Index(value, "${")
+			if i < 0 {
+				return
+			}
+			value = value[i+2:]
+			end := strings.IndexByte(value, '}')
+			if end < 0 {
+				yield("", false)
+				return
+			}
+			key, _, ok := parseVariable(value[:end])
+			if !yield(key, ok) {
+				return
+			}
+			value = value[end+1:]
 		}
-		value = value[end+1:]
 	}
 }
 

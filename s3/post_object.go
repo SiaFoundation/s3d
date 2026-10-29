@@ -439,7 +439,21 @@ func (s *s3) postObject(w http.ResponseWriter, r *http.Request, header *bucketAc
 	access, err := s.bucketAccess(r, caller, bucket)
 	if err != nil {
 		return err
-	} else if err := access.assertObjectAllowed(actionPutObject, object); err != nil {
+	}
+	// an invalid tag set is reported only once the write is allowed
+	var (
+		tags    TagSet
+		tagsErr error
+	)
+	if document, ok := form.fields["tagging"]; ok {
+		tags, tagsErr = parseTaggingXML([]byte(document), objectTagLimits)
+	}
+	// the tags are in the form rather than the headers
+	if err := access.assertObjectContextAllowed(actionPutObject, object, requestTagPolicyContext(tags)); err != nil {
+		return err
+	} else if tagsErr != nil {
+		return tagsErr
+	} else if err := access.assertRequestTagsAllowed(object, tags); err != nil {
 		return err
 	}
 
@@ -493,12 +507,13 @@ func (s *s3) postObject(w http.ResponseWriter, r *http.Request, header *bucketAc
 		ContentMD5:       contentMD5,
 		Checksum:         checksum,
 		Meta:             meta,
+		Tags:             tags,
 	})
 	if err != nil {
 		return err
 	}
 
-	s.setLifecycleExpirationHeader(w, r, access, object, body.read, time.Now())
+	s.setLifecycleExpirationHeader(w, r, access, object, body.read, time.Now(), tags)
 	if res.VersionID != "" {
 		w.Header().Set("x-amz-version-id", res.VersionID)
 	}

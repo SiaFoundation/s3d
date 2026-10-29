@@ -39,6 +39,8 @@ type bucketAccess struct {
 	isOwner        bool          // false for an anonymous caller
 	requestContext policyContext // nil when the policy has no statements
 	request        *http.Request
+	// headerTagConditions is copied from the routed [operation]
+	headerTagConditions bool
 }
 
 // operation is a routed request: the action it requires and the handler that
@@ -51,6 +53,13 @@ type operation struct {
 	// bodyConditions marks an action whose condition keys are read from the
 	// body, so its handler checks the action once it has read the body.
 	bodyConditions bool
+	// existingTagConditions marks an action whose condition keys include the
+	// addressed version's tags, so its handler checks the action once it has
+	// looked the version up.
+	existingTagConditions bool
+	// headerTagConditions marks a request whose X-Amz-Tagging tags are
+	// condition keys of its action.
+	headerTagConditions bool
 	// formAuth marks a POST Object request, which authenticates through its
 	// form fields. Its handler authorizes the caller once it has verified
 	// them, so it is not given an action.
@@ -80,16 +89,23 @@ func (s *s3) authorize(r *http.Request, caller *auth.Caller, bucket, object stri
 	if err != nil {
 		return nil, err
 	}
+	access.headerTagConditions = op.headerTagConditions
 	switch {
 	case op.multiObjectDelete:
 		// the keys and version IDs are only known once the body is read, so
 		// deleteObjects checks every key, including explicit denies
 		err = access.assertAnyAllowedInBucket(actionDeleteObject, actionDeleteObjectVersion)
-	case op.bodyConditions:
-		// the handler checks the action once the body supplies its keys
+	case op.bodyConditions, op.existingTagConditions:
+		// the handler checks the action once the body or the addressed
+		// version supplies its keys
 		err = access.assertAnyAllowedInBucket(op.action)
 	case isObjectAction(op.action):
-		err = access.assertObjectAllowed(op.action, object)
+		// a read's handler rechecks it against the version it serves
+		var existing TagSet
+		existing, err = s.existingTags(r, access, op.action, object, VersionFromQuery(r.URL.Query()["versionId"]))
+		if err == nil {
+			err = access.assertObjectContextAllowed(op.action, object, existingTagPolicyContext(existing))
+		}
 	default:
 		err = access.assertBucketAllowed(op.action)
 	}
@@ -136,20 +152,35 @@ func (s *s3) bucketAccess(r *http.Request, caller *auth.Caller, bucket string) (
 	return access, nil
 }
 
-// authorizeCopySource checks that the caller may read srcVersion of srcObject,
-// reusing dst's access for a same-bucket copy.
-func (s *s3) authorizeCopySource(r *http.Request, dst *bucketAccess, srcBucket, srcObject string, srcVersion VersionRequest) (*bucketAccess, error) {
+// copySource is a copy's source version, addressed explicitly so the backend
+// copies the version the caller was authorized to read.
+type copySource struct {
+	access  *bucketAccess
+	version VersionRequest
+	tags    TagSet
+}
+
+// authorizeCopySource looks up srcVersion of srcObject and checks that the
+// caller may read it, reusing dst's access for a same-bucket copy.
+func (s *s3) authorizeCopySource(r *http.Request, dst *bucketAccess, srcBucket, srcObject string, srcVersion VersionRequest) (copySource, error) {
 	src := dst
 	if srcBucket != dst.bucket {
 		var err error
 		if src, err = s.bucketAccess(r, dst.caller, srcBucket); err != nil {
-			return nil, err
+			return copySource{}, err
 		}
 	}
-	if err := src.assertVersionAllowed(readAction(srcVersion), srcObject, srcVersion, nil); err != nil {
-		return nil, err
+	tagging, err := s.authorizeVersion(r, src, readAction(srcVersion), srcObject, srcVersion, nil)
+	if isMissingOrDeleteMarker(err) {
+		if errors.Is(err, s3errs.ErrMethodNotAllowed) {
+			// an addressed delete marker cannot be copied
+			err = s3errs.ErrInvalidRequest
+		}
+		return copySource{}, src.hideMissing(CopySourceError{Err: err}, srcObject)
+	} else if err != nil {
+		return copySource{}, err
 	}
-	return src, nil
+	return copySource{access: src, version: tagging.Version, tags: tagging.Tags}, nil
 }
 
 // assertAuth returns the access key ID of a signed caller, or ErrAccessDenied
@@ -189,7 +220,17 @@ func (a *bucketAccess) assertBucketAllowed(action string) error {
 // assertObjectAllowed checks that the caller may perform action on an object
 // in the bucket.
 func (a *bucketAccess) assertObjectAllowed(action, object string) error {
-	return a.assertAllowed(action, objectARN(a.bucket, object))
+	return a.assertObjectContextAllowed(action, object, nil)
+}
+
+// assertObjectContextAllowed is [bucketAccess.assertObjectAllowed] with extra
+// context keys, such as the existing tags of the version in the URL.
+func (a *bucketAccess) assertObjectContextAllowed(action, object string, extra policyContext) error {
+	requestContext, err := a.actionPolicyContext(action)
+	if err != nil {
+		return err
+	}
+	return a.check(requestContext.merge(extra), action, objectARN(a.bucket, object))
 }
 
 // assertAnyAllowedInBucket denies a request up front when no statement could
@@ -206,13 +247,15 @@ func (a *bucketAccess) assertAnyAllowedInBucket(actions ...string) error {
 	return s3errs.ErrAccessDenied
 }
 
-// assertVersionAllowed supplies a version and extra context keys independently
-// of the URL, for copy sources and individual keys in a multi-delete request.
-func (a *bucketAccess) assertVersionAllowed(action, object string, version VersionRequest, extra policyContext) error {
+// assertVersionAllowed checks that the caller may perform action on a version
+// of object with the given existing tags. It supplies the version and extra
+// context keys independently of the URL, for copy sources, tagging and
+// individual keys in a multi-delete request.
+func (a *bucketAccess) assertVersionAllowed(action, object string, version VersionRequest, existing TagSet, extra policyContext) error {
 	if version.Specified {
 		extra = extra.merge(policyContext{"s3:versionid": {FormatVersion(version.ID)}})
 	}
-	return a.check(a.requestContext.merge(extra), action, objectARN(a.bucket, object))
+	return a.check(a.requestContext.merge(existingTagPolicyContext(existing)).merge(extra), action, objectARN(a.bucket, object))
 }
 
 // assertObjectLockAllowed checks that the caller may stamp lock on a new
@@ -233,11 +276,16 @@ func (a *bucketAccess) assertObjectLockAllowed(object string, lock *ObjectLockSt
 // assertLockActionAllowed checks that the caller may perform action on object
 // to apply lock.
 func (a *bucketAccess) assertLockActionAllowed(action, object string, lock *ObjectLockState) error {
-	requestContext, err := a.actionPolicyContext(action)
-	if err != nil {
-		return err
+	return a.assertObjectContextAllowed(action, object, objectLockPolicyContext(lock))
+}
+
+// assertRequestTagsAllowed checks that the caller may stamp tags on a new
+// version of object. The overwritten version's tags are not evaluated.
+func (a *bucketAccess) assertRequestTagsAllowed(object string, tags TagSet) error {
+	if len(tags) == 0 {
+		return nil
 	}
-	return a.check(requestContext.merge(objectLockPolicyContext(lock)), action, objectARN(a.bucket, object))
+	return a.check(a.requestContext.merge(requestTagPolicyContext(tags)), actionPutObjectTagging, objectARN(a.bucket, object))
 }
 
 // visibleObjectLock returns the part of a version's lock state the caller may

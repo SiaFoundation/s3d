@@ -1,9 +1,13 @@
 package s3
 
 import (
+	"bytes"
+	"crypto/md5"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -26,6 +30,7 @@ type Object struct {
 	ContentMD5   [16]byte
 	LastModified time.Time
 	Metadata     map[string]string
+	Tags         TagSet
 	Range        *ObjectRange
 	Size         int64
 
@@ -145,6 +150,7 @@ type PutObjectResult struct {
 // and return an error if they don't match.
 type PutObjectOptions struct {
 	Meta map[string]string
+	Tags TagSet
 
 	// ContentLength is the exact number of bytes to read from the object data.
 	// It is negative when the length is not declared ahead of the read, which
@@ -186,10 +192,12 @@ func (c RequestChecksum) NewHash() hash.Hash {
 // CopyObjectOptions contains options for a CopyObject operation.
 //
 // Meta is the metadata to apply to the copy, replacing the source's when
-// Replace is set and merged into it otherwise.
+// Replace is set and merged into it otherwise. Tags are the copy's tags,
+// already taken from the source or the request.
 type CopyObjectOptions struct {
 	Meta                     map[string]string
 	Replace                  bool
+	Tags                     TagSet
 	SourcePreconditions      ObjectPreconditions
 	DestinationPreconditions ObjectPreconditions
 
@@ -220,7 +228,6 @@ var unsupportedObjectSubresources = map[string]struct{}{
 	"renameObject": {},
 	"restore":      {},
 	"select":       {},
-	"tagging":      {},
 	"torrent":      {},
 }
 
@@ -234,7 +241,11 @@ func (s *s3) routeObject(r *http.Request, object string) (operation, error) {
 	}
 
 	if r.Method == http.MethodPut {
-		return operation{action: actionPutObject, serve: func(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
+		// a CopyObject applies X-Amz-Tagging only when it replaces the
+		// source's tags
+		_, copied := r.Header["X-Amz-Copy-Source"]
+		headerTags := !copied || r.Header.Get(HeaderTaggingDirective) == TaggingDirectiveReplace
+		return operation{action: actionPutObject, headerTagConditions: headerTags, serve: func(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
 			return s.putObject(w, r, access, object)
 		}}, nil
 	}
@@ -260,8 +271,14 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, dst *bucketAcces
 		return err
 	}
 
+	directive := r.Header.Get(HeaderTaggingDirective)
+	if directive != "" && directive != TaggingDirectiveCopy && directive != TaggingDirectiveReplace {
+		return fmt.Errorf("unknown tagging directive %q: %w", directive, s3errs.ErrInvalidArgument)
+	}
+
 	// copying to the same key without REPLACE is not allowed, unless a specific
-	// source version is addressed (a version restore).
+	// source version is addressed (a version restore). Replacing only the tags
+	// does not count.
 	replace := r.Header.Get("x-amz-metadata-directive") == "REPLACE"
 	if srcBucket == dstBucket && srcObject == dstObject && !replace && !srcVersion.Specified {
 		return s3errs.ErrInvalidRequest
@@ -272,15 +289,28 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, dst *bucketAcces
 		return err
 	}
 
-	result, err := s.backend.CopyObject(r.Context(), src.bucketID, srcObject, srcVersion, dst.bucketID, dstObject, CopyObjectOptions{
+	tags := src.tags
+	if directive == TaggingDirectiveReplace {
+		tags, err = requestTags(r.Header)
+		if err != nil {
+			return err
+		}
+	}
+	// copying the source's tags needs no tagging permission on the source
+	if err := dst.assertRequestTagsAllowed(dstObject, tags); err != nil {
+		return err
+	}
+
+	result, err := s.backend.CopyObject(r.Context(), src.access.bucketID, srcObject, src.version, dst.bucketID, dstObject, CopyObjectOptions{
 		Meta:                     meta,
 		Replace:                  replace,
+		Tags:                     tags,
 		SourcePreconditions:      copySourcePreconditions(r.Header),
 		DestinationPreconditions: requestPreconditions(r.Header),
 		ObjectLock:               lock,
 	})
 	if err != nil {
-		return src.hideMissingSource(err, srcObject)
+		return src.access.hideMissingSource(err, srcObject)
 	}
 
 	if result.VersionID != "" {
@@ -364,7 +394,7 @@ func (s *s3) deleteObjects(w http.ResponseWriter, r *http.Request, access *bucke
 			// supplies to DeleteObject
 			extra = policyContext{"s3:if-match": {*obj.ETag}}
 		}
-		if err := access.assertVersionAllowed(deleteAction(version), obj.Key, version, extra); err != nil {
+		if err := access.assertVersionAllowed(deleteAction(version), obj.Key, version, nil, extra); err != nil {
 			errResult := ErrorResult{Key: obj.Key, Code: s3errs.ErrorCode(err), Message: err.Error()}
 			if version.Specified {
 				errResult.VersionID = FormatVersion(version.ID)
@@ -453,9 +483,17 @@ func (s *s3) serveObject(w http.ResponseWriter, r *http.Request, access *bucketA
 		return deleteMarkerError(w, obj, version)
 	}
 
+	// recheck the read against the tags of the version served
+	if err := access.assertObjectContextAllowed(readAction(version), object, existingTagPolicyContext(obj.Tags)); err != nil {
+		return err
+	}
+
 	// write headers
 	setVersionHeaders(w, obj)
-	s.setLifecycleExpirationHeader(w, r, access, object, obj.Size, obj.LastModified)
+	s.setLifecycleExpirationHeader(w, r, access, object, obj.Size, obj.LastModified, obj.Tags)
+	if len(obj.Tags) > 0 && access.assertVersionAllowed(versionedAction(version, actionGetObjectTagging, actionGetObjectVersionTagging), object, version, obj.Tags, nil) == nil {
+		w.Header().Set(HeaderTaggingCount, strconv.Itoa(len(obj.Tags)))
+	}
 	obj.ObjectLock = access.visibleObjectLock(object, obj.ObjectLock)
 	if err := writeGetOrHeadObjectHeaders(obj, w, r); err != nil {
 		return err
@@ -891,12 +929,20 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, access *bucketAcc
 		return fmt.Errorf("a retention requires Content-MD5 or a checksum: %w", s3errs.ErrInvalidRequest)
 	}
 
+	tags, err := requestTags(r.Header)
+	if err != nil {
+		return err
+	}
+	if err := access.assertRequestTagsAllowed(object, tags); err != nil {
+		return err
+	}
 	res, err := s.backend.PutObject(r.Context(), access.bucketID, object, r.Body, PutObjectOptions{
 		ContentLength: r.ContentLength,
 		ContentMD5:    contentMD5,
 		ContentSHA256: contentSHA256,
 		Checksum:      checksum,
 		Meta:          meta,
+		Tags:          tags,
 		Preconditions: requestPreconditions(r.Header),
 		ObjectLock:    lock,
 	})
@@ -904,7 +950,7 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, access *bucketAcc
 		return err
 	}
 
-	s.setLifecycleExpirationHeader(w, r, access, object, r.ContentLength, time.Now())
+	s.setLifecycleExpirationHeader(w, r, access, object, r.ContentLength, time.Now(), tags)
 	if res.VersionID != "" {
 		w.Header().Set("x-amz-version-id", res.VersionID)
 	}
@@ -960,12 +1006,108 @@ func requestChecksum(headers http.Header) (*RequestChecksum, error) {
 // checksum the backend can compute. The auth layer validates it after the body.
 func declaresTrailingChecksum(headers http.Header) bool {
 	for h := range strings.SplitSeq(headers.Get(auth.HeaderXAMZTrailer), ",") {
-		suffix, ok := strings.CutPrefix(textproto.CanonicalMIMEHeaderKey(strings.TrimSpace(h)), checksumPrefix)
+		suffix, ok := checksumSuffix(h)
 		if ok && auth.NewChecksumHash(suffix) != nil {
 			return true
 		}
 	}
 	return false
+}
+
+// checksumSuffix returns the algorithm suffix of an X-Amz-Checksum-* header
+// name, canonically formatted.
+func checksumSuffix(name string) (string, bool) {
+	return strings.CutPrefix(textproto.CanonicalMIMEHeaderKey(strings.TrimSpace(name)), checksumPrefix)
+}
+
+// s3ChecksumAlgorithms are the X-Amz-Checksum-* suffixes S3 accepts, including
+// those the backend cannot compute.
+var s3ChecksumAlgorithms = map[string]struct{}{
+	"Crc32": {}, "Crc32c": {}, "Crc64nvme": {}, "Md5": {}, "Sha1": {},
+	"Sha256": {}, "Sha512": {}, "Xxhash3": {}, "Xxhash64": {}, "Xxhash128": {},
+}
+
+// declaresChecksum reports whether the request carries a checksum of any S3
+// algorithm, in a header or in a trailer the auth layer reads.
+func declaresChecksum(headers http.Header) bool {
+	isChecksum := func(name string) bool {
+		suffix, ok := checksumSuffix(name)
+		if !ok {
+			return false
+		}
+		_, ok = s3ChecksumAlgorithms[suffix]
+		return ok
+	}
+	for name := range headers {
+		if isChecksum(name) {
+			return true
+		}
+	}
+	// only the trailer payload modes read a trailer
+	switch headers.Get(auth.HeaderXAMZContentSHA256) {
+	case auth.ContentStreamingUnsignedPayloadTrailer, auth.ContentStreamingAWS4HMACSHA256PayloadTrailer:
+		for name := range strings.SplitSeq(headers.Get(auth.HeaderXAMZTrailer), ",") {
+			if isChecksum(name) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// readDigestedBody reads an XML body that S3 requires to carry Content-MD5 or
+// a checksum, and checks every digest the request carries. A checksum the
+// backend cannot compute is left unverified, as in [requestChecksum].
+func readDigestedBody(r *http.Request) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxXMLBodySize+1))
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		return nil, s3errs.ErrIncompleteBody
+	} else if err != nil {
+		return nil, err
+	} else if len(body) > maxXMLBodySize {
+		return nil, s3errs.ErrMalformedXML
+	} else if r.ContentLength >= 0 && int64(len(body)) < r.ContentLength {
+		return nil, s3errs.ErrIncompleteBody
+	}
+
+	payloadHash, err := auth.Sha256HashFromRequest(r)
+	if err != nil {
+		return nil, err
+	} else if payloadHash != nil && sha256.Sum256(body) != *payloadHash {
+		return nil, s3errs.ErrBadDigest
+	}
+
+	checksum, err := requestChecksum(r.Header)
+	if err != nil {
+		return nil, err
+	}
+	declared := declaresChecksum(r.Header)
+	// S3 refuses x-amz-sdk-checksum-algorithm without the checksum it names
+	if r.Header.Get("X-Amz-Sdk-Checksum-Algorithm") != "" && !declared {
+		return nil, s3errs.ErrInvalidRequest
+	}
+
+	if value, ok := r.Header["Content-Md5"]; ok {
+		if len(value) != 1 {
+			return nil, s3errs.ErrInvalidDigest
+		}
+		digest, err := parseContentMD5(value[0])
+		if err != nil {
+			return nil, err
+		} else if md5.Sum(body) != *digest {
+			return nil, s3errs.ErrBadDigest
+		}
+	} else if !declared {
+		return nil, fmt.Errorf("Content-MD5 or a checksum is required: %w", s3errs.ErrInvalidRequest)
+	}
+	if checksum != nil {
+		h := checksum.NewHash()
+		h.Write(body)
+		if !bytes.Equal(h.Sum(nil), checksum.Sum) {
+			return nil, s3errs.ErrBadDigest
+		}
+	}
+	return body, nil
 }
 
 // objectLocation returns the URL an object was addressed by, which a response
@@ -1336,9 +1478,12 @@ func parseCopySourceRange(header string) (*CopySourceRange, error) {
 	return &rng, nil
 }
 
+// maxXMLBodySize bounds an XML request body, which is enough for any S3 one.
+const maxXMLBodySize = 1 << 20
+
 func decodeXMLBody(r io.Reader, v interface{}) error {
 	// limit reader to prevent attacks
-	limited := io.LimitReader(r, 1<<20) // 1 MiB should be enough for any S3 XML body
+	limited := io.LimitReader(r, maxXMLBodySize)
 	decoder := xml.NewDecoder(limited)
 	if err := decoder.Decode(&v); err != nil {
 		return s3errs.ErrMalformedXML
@@ -1487,7 +1632,7 @@ func parseRangeHeader(s string) (*ObjectRangeRequest, error) {
 // setLifecycleExpirationHeader sets the x-amz-expiration response header when an
 // enabled lifecycle expiration rule applies to the object. It is best-effort:
 // any error fetching the configuration is swallowed so the request is unaffected.
-func (s *s3) setLifecycleExpirationHeader(w http.ResponseWriter, r *http.Request, access *bucketAccess, object string, size int64, lastModified time.Time) {
+func (s *s3) setLifecycleExpirationHeader(w http.ResponseWriter, r *http.Request, access *bucketAccess, object string, size int64, lastModified time.Time, tags TagSet) {
 	if err := access.assertBucketAllowed(actionGetLifecycleConfiguration); err != nil {
 		return
 	}
@@ -1495,7 +1640,7 @@ func (s *s3) setLifecycleExpirationHeader(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		return
 	}
-	if v := config.ExpirationHeader(object, size, lastModified); v != "" {
+	if v := config.ExpirationHeader(object, size, lastModified, tags); v != "" {
 		w.Header().Set("x-amz-expiration", v)
 	}
 }
