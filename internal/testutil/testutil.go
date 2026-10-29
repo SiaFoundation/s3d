@@ -926,10 +926,10 @@ func newSiaBackend(t testing.TB, dir string, store sia.Store, sdk sia.SDK, log *
 	// ensure the test users and access keys exist in the store
 	defaultKeyPair := keyPair{owner: Owner, accessKeyID: AccessKeyID, secretKey: SecretAccessKey}
 	for _, kp := range append([]keyPair{defaultKeyPair}, keyPairs...) {
-		if err := store.CreateUser(kp.owner); err != nil && !errors.Is(err, sia.ErrUserAlreadyExists) {
+		if err := store.CreateUser(kp.owner); err != nil && !errors.Is(err, s3.ErrUserAlreadyExists) {
 			t.Fatal(err)
 		}
-		if err := store.CreateAccessKey(kp.owner, kp.accessKeyID, kp.secretKey); err != nil && !errors.Is(err, sia.ErrAccessKeyAlreadyExists) {
+		if err := store.CreateAccessKey(kp.owner, kp.accessKeyID, kp.secretKey); err != nil && !errors.Is(err, s3.ErrAccessKeyAlreadyExists) {
 			t.Fatal(err)
 		}
 	}

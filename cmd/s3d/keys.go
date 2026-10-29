@@ -1,14 +1,12 @@
 package main
 
 import (
-	"encoding/base32"
-	"encoding/base64"
 	"flag"
 	"fmt"
 	"os"
 
+	"github.com/SiaFoundation/s3d/s3/auth"
 	"go.uber.org/zap"
-	"lukechampine.com/frand"
 )
 
 const (
@@ -35,20 +33,6 @@ Delete an access key.`
 List access keys, optionally filtered by username.`
 )
 
-func generateAccessKey() (accessKey, secretKey string) {
-	// 12 random bytes encode to exactly 20 base32 characters
-	akBytes := make([]byte, 12)
-	frand.Read(akBytes)
-	accessKey = base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(akBytes)
-
-	// 30 random bytes encode to exactly 40 base64 characters
-	skBytes := make([]byte, 30)
-	frand.Read(skBytes)
-	secretKey = base64.StdEncoding.EncodeToString(skBytes)
-
-	return
-}
-
 func runKeysCreate(cmd *flag.FlagSet, accessKey, secretKey string) {
 	args := cmd.Args()
 	if len(args) != 1 {
@@ -59,19 +43,12 @@ func runKeysCreate(cmd *flag.FlagSet, accessKey, secretKey string) {
 
 	// validate or generate
 	if accessKey == "" && secretKey == "" {
-		accessKey, secretKey = generateAccessKey()
+		accessKey, secretKey = auth.GenerateAccessKey()
 	} else if accessKey == "" || secretKey == "" {
 		fmt.Fprintln(os.Stderr, "Both --access-key and --secret-key must be provided together, or omit both to auto-generate.")
 		os.Exit(1)
 	} else {
-		if len(accessKey) < 16 || len(accessKey) > 128 {
-			fmt.Fprintln(os.Stderr, "Access key must be between 16 and 128 characters.")
-			os.Exit(1)
-		}
-		if len(secretKey) < 32 || len(secretKey) > 128 {
-			fmt.Fprintln(os.Stderr, "Secret key must be between 32 and 128 characters.")
-			os.Exit(1)
-		}
+		checkFatalError("invalid key pair", auth.ValidateAccessKey(accessKey, secretKey))
 	}
 
 	store, err := openStore(zap.NewNop())

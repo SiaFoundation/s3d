@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/http/httptrace"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -201,6 +202,215 @@ func TestCreateSnapshot(t *testing.T) {
 }
 
 // TestInvalidCredentials tests that API calls with invalid credentials fail.
+// adminRequest sends a request to the admin API test server, encoding body as
+// JSON when it is not nil.
+func adminRequest(t *testing.T, httpClient *http.Client, method, url string, body any) *http.Response {
+	t.Helper()
+	var r io.Reader
+	if body != nil {
+		buf, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r = bytes.NewReader(buf)
+	}
+	req, err := http.NewRequestWithContext(t.Context(), method, url, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+func TestUsers(t *testing.T) {
+	backend, store := testutil.NewBackend(t)
+	server := httptest.NewServer(s3.NewAdmin(backend))
+	t.Cleanup(server.Close)
+	baseURL, httpClient := server.URL, server.Client()
+
+	status := func(method, path string, body any) int {
+		t.Helper()
+		resp := adminRequest(t, httpClient, method, baseURL+path, body)
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	listUsers := func() []string {
+		t.Helper()
+		resp := adminRequest(t, httpClient, http.MethodGet, baseURL+"/users", nil)
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		}
+		var users []string
+		if err := json.UnmarshalRead(resp.Body, &users); err != nil {
+			t.Fatal(err)
+		}
+		return users
+	}
+
+	// the test backend starts with its default user
+	if users := listUsers(); len(users) != 1 || users[0] != testutil.Owner {
+		t.Fatal("unexpected users", users)
+	}
+
+	if s := status(http.MethodPost, "/users", s3.CreateUserRequest{Name: "alice"}); s != http.StatusOK {
+		t.Fatalf("expected 200, got %d", s)
+	}
+	if users := listUsers(); len(users) != 2 || !slices.Contains(users, "alice") {
+		t.Fatal("unexpected users", users)
+	}
+
+	// creating the user again conflicts, and a missing name is rejected
+	if s := status(http.MethodPost, "/users", s3.CreateUserRequest{Name: "alice"}); s != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", s)
+	}
+	if s := status(http.MethodPost, "/users", s3.CreateUserRequest{}); s != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", s)
+	}
+
+	// a user that owns a bucket cannot be deleted
+	resp := adminRequest(t, httpClient, http.MethodPost, baseURL+"/keys", s3.CreateAccessKeyRequest{UserName: "alice"})
+	var key s3.AccessKey
+	if err := json.UnmarshalRead(resp.Body, &key); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if err := store.CreateBucket(key.AccessKeyID, "bucket", false); err != nil {
+		t.Fatal(err)
+	}
+	if s := status(http.MethodDelete, "/users/alice", nil); s != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", s)
+	}
+	info, err := store.BucketAccessInfo("bucket")
+	if err != nil {
+		t.Fatal(err)
+	} else if err := store.DeleteBucket(info.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// deleting the user removes their keys, and deleting again reports not
+	// found
+	if s := status(http.MethodDelete, "/users/alice", nil); s != http.StatusOK {
+		t.Fatalf("expected 200, got %d", s)
+	}
+	if users := listUsers(); len(users) != 1 {
+		t.Fatal("unexpected users", users)
+	}
+	if s := status(http.MethodDelete, "/keys/"+key.AccessKeyID, nil); s != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", s)
+	}
+	if s := status(http.MethodDelete, "/users/alice", nil); s != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", s)
+	}
+}
+
+func TestAccessKeys(t *testing.T) {
+	backend, _ := testutil.NewBackend(t)
+	server := httptest.NewServer(s3.NewAdmin(backend))
+	t.Cleanup(server.Close)
+	baseURL, httpClient := server.URL, server.Client()
+
+	createKey := func(req s3.CreateAccessKeyRequest) (s3.AccessKey, int) {
+		t.Helper()
+		resp := adminRequest(t, httpClient, http.MethodPost, baseURL+"/keys", req)
+		defer resp.Body.Close()
+		var key s3.AccessKey
+		if resp.StatusCode == http.StatusOK {
+			if err := json.UnmarshalRead(resp.Body, &key); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return key, resp.StatusCode
+	}
+	listKeys := func(userName string) ([]s3.AccessKey, string) {
+		t.Helper()
+		url := baseURL + "/keys"
+		if userName != "" {
+			url += "?userName=" + userName
+		}
+		resp := adminRequest(t, httpClient, http.MethodGet, url, nil)
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		}
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var keys []s3.AccessKey
+		if err := json.Unmarshal(body, &keys); err != nil {
+			t.Fatal(err)
+		}
+		return keys, strings.TrimSpace(string(body))
+	}
+
+	// the pair is generated when the request omits it
+	generated, status := createKey(s3.CreateAccessKeyRequest{UserName: testutil.Owner})
+	if status != http.StatusOK {
+		t.Fatalf("expected 200, got %d", status)
+	} else if len(generated.AccessKeyID) != 20 || len(generated.SecretKey) != 40 || generated.UserName != testutil.Owner {
+		t.Fatal("unexpected key", generated)
+	}
+
+	// an explicit pair is stored as given
+	explicit := s3.CreateAccessKeyRequest{UserName: testutil.Owner, AccessKeyID: strings.Repeat("A", 20), SecretKey: strings.Repeat("s", 40)}
+	if key, status := createKey(explicit); status != http.StatusOK {
+		t.Fatalf("expected 200, got %d", status)
+	} else if key.AccessKeyID != explicit.AccessKeyID || key.SecretKey != explicit.SecretKey {
+		t.Fatal("unexpected key", key)
+	}
+
+	// reusing the ID conflicts, a short secret, a missing user name and an
+	// unknown user are rejected
+	if _, status := createKey(explicit); status != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", status)
+	}
+	if _, status := createKey(s3.CreateAccessKeyRequest{UserName: testutil.Owner, AccessKeyID: strings.Repeat("B", 20), SecretKey: "short"}); status != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", status)
+	}
+	if _, status := createKey(s3.CreateAccessKeyRequest{}); status != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", status)
+	}
+	if _, status := createKey(s3.CreateAccessKeyRequest{UserName: "nobody"}); status != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", status)
+	}
+
+	// listing never includes secrets, filters by user, and an unknown user
+	// yields an empty array rather than null
+	keys, _ := listKeys("")
+	if len(keys) != 3 {
+		t.Fatalf("expected 3 keys, got %d", len(keys))
+	}
+	for _, key := range keys {
+		if key.SecretKey != "" {
+			t.Fatal("expected secret to be omitted", key)
+		} else if key.UserName != testutil.Owner {
+			t.Fatal("unexpected user", key)
+		}
+	}
+	if keys, body := listKeys("nobody"); len(keys) != 0 || body != "[]" {
+		t.Fatalf("expected an empty array, got %q", body)
+	}
+
+	// deleting the key makes it unknown
+	resp := adminRequest(t, httpClient, http.MethodDelete, baseURL+"/keys/"+generated.AccessKeyID, nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	resp = adminRequest(t, httpClient, http.MethodDelete, baseURL+"/keys/"+generated.AccessKeyID, nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", resp.StatusCode)
+	}
+	if keys, _ := listKeys(testutil.Owner); len(keys) != 2 {
+		t.Fatalf("expected 2 keys, got %d", len(keys))
+	}
+}
+
 func TestInvalidCredentials(t *testing.T) {
 	s3Tester := testutil.NewTester(t, testutil.WithServiceOptions(func(o *service.Options) {
 		o.Credentials = aws.NewCredentialsCache(&credentials.StaticCredentialsProvider{

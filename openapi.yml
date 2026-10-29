@@ -2,7 +2,7 @@ openapi: "3.0.0"
 info:
   title: s3d Admin API
   description: >
-    s3d serves an admin API on a separate HTTP address for monitoring the background upload pipeline. It is always enabled and defaults to 127.0.0.1:8001. Requests are authenticated via HTTP Basic authentication using the configured admin password; the username is ignored.
+    s3d serves an admin API on a separate HTTP address for monitoring the background upload pipeline and managing users and access keys. It is always enabled and defaults to 127.0.0.1:8001. Requests are authenticated via HTTP Basic authentication using the configured admin password; the username is ignored.
 
   version: 0.2.1
 servers:
@@ -16,6 +16,8 @@ tags:
     description: Background upload pipeline control.
   - name: system
     description: System administration endpoints.
+  - name: users
+    description: User and access key management.
 paths:
   /prometheus:
     get:
@@ -123,6 +125,153 @@ paths:
           description: No snapshot with that Sia object ID exists.
         "500":
           description: The snapshot could not be deleted.
+  /users:
+    get:
+      tags:
+        - users
+      summary: List users
+      description: >
+        Returns the names of all users, sorted by name.
+
+      operationId: listUsers
+      responses:
+        "200":
+          description: The user names.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+        "500":
+          description: The users could not be listed.
+    post:
+      tags:
+        - users
+      summary: Create a user
+      description: >
+        Creates a user. A user owns the buckets they create and the access keys issued to them.
+
+      operationId: createUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUserRequest"
+      responses:
+        "200":
+          description: The user was created.
+        "400":
+          description: The request body could not be parsed, the name is empty, or the name is reserved.
+        "409":
+          description: A user with that name already exists.
+        "500":
+          description: The user could not be created.
+  /users/{name}:
+    delete:
+      tags:
+        - users
+      summary: Delete a user
+      description: >
+        Deletes a user along with their access keys. A user that still owns buckets cannot be deleted.
+
+      operationId: deleteUser
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: The name of the user to delete.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The user was deleted.
+        "404":
+          description: No user with that name exists.
+        "409":
+          description: The user still owns buckets.
+        "500":
+          description: The user could not be deleted.
+  /keys:
+    get:
+      tags:
+        - users
+      summary: List access keys
+      description: >
+        Returns every access key with the user it belongs to, optionally limited to one user. Secret keys are never listed, only the response of POST /keys carries one.
+
+      operationId: listAccessKeys
+      parameters:
+        - name: userName
+          in: query
+          required: false
+          description: Only return the access keys of this user.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The access keys, without their secrets.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AccessKey"
+        "500":
+          description: The access keys could not be listed.
+    post:
+      tags:
+        - users
+      summary: Create an access key
+      description: >
+        Creates an access key pair for a user. The pair is generated when the request omits both accessKeyID and secretKey. The secret key is only returned by this response.
+
+      operationId: createAccessKey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAccessKeyRequest"
+      responses:
+        "200":
+          description: The created access key pair, including the secret key.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccessKey"
+        "400":
+          description: The request body could not be parsed, the user name is empty, a key has an invalid length, or the access key ID contains invalid characters.
+        "404":
+          description: No user with that name exists.
+        "409":
+          description: An access key with that ID already exists.
+        "500":
+          description: The access key could not be created.
+  /keys/{accessKeyID}:
+    delete:
+      tags:
+        - users
+      summary: Delete an access key
+      description: >
+        Deletes an access key.
+
+      operationId: deleteAccessKey
+      parameters:
+        - name: accessKeyID
+          in: path
+          required: true
+          description: The ID of the access key to delete.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The access key was deleted.
+        "404":
+          description: No access key with that ID exists.
+        "500":
+          description: The access key could not be deleted.
 components:
   securitySchemes:
     basicAuth:
@@ -252,3 +401,38 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Snapshot"
+    AccessKey:
+      type: object
+      description: An access key pair and the user it belongs to.
+      properties:
+        accessKeyID:
+          type: string
+          description: The access key ID.
+        secretKey:
+          type: string
+          description: The secret key. Only present in the response of POST /keys.
+        userName:
+          type: string
+          description: The user the key belongs to.
+    CreateUserRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          description: The name of the user to create.
+    CreateAccessKeyRequest:
+      type: object
+      required:
+        - userName
+      properties:
+        userName:
+          type: string
+          description: The user to issue the key to.
+        accessKeyID:
+          type: string
+          description: The access key ID, between 16 and 128 ASCII letters, digits or underscores. Generated when omitted together with secretKey.
+        secretKey:
+          type: string
+          description: The secret key, between 32 and 128 characters. Generated when omitted together with accessKeyID.

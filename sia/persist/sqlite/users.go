@@ -3,11 +3,9 @@ package sqlite
 import (
 	"database/sql"
 	"errors"
-	"fmt"
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
-	"github.com/SiaFoundation/s3d/sia"
 )
 
 // userIDForAccessKey returns the database ID of the user associated with the
@@ -25,7 +23,7 @@ func userIDForAccessKey(tx *txn, accessKeyID string) (int64, error) {
 func (s *Store) CreateUser(name string) error {
 	// a user's name is its S3 user ID
 	if name == s3.AnonymousUserID {
-		return sia.ErrReservedUserName
+		return s3.ErrReservedUserName
 	}
 	return s.transaction(func(tx *txn) error {
 		res, err := tx.Exec("INSERT INTO users (name) VALUES ($1) ON CONFLICT (name) DO NOTHING", name)
@@ -36,7 +34,7 @@ func (s *Store) CreateUser(name string) error {
 		if err != nil {
 			return err
 		} else if n == 0 {
-			return sia.ErrUserAlreadyExists
+			return s3.ErrUserAlreadyExists
 		}
 		return nil
 	})
@@ -50,7 +48,7 @@ func (s *Store) DeleteUser(name string) error {
 		var userID int64
 		err := tx.QueryRow("SELECT id FROM users WHERE name = $1", name).Scan(&userID)
 		if errors.Is(err, sql.ErrNoRows) {
-			return sia.ErrUserNotFound
+			return s3.ErrUserNotFound
 		} else if err != nil {
 			return err
 		}
@@ -59,7 +57,7 @@ func (s *Store) DeleteUser(name string) error {
 		if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM buckets WHERE user_id = $1)", userID).Scan(&hasBuckets); err != nil {
 			return err
 		} else if hasBuckets {
-			return fmt.Errorf("user %q still owns buckets", name)
+			return s3.ErrUserHasBuckets
 		}
 
 		_, err = tx.Exec("DELETE FROM users WHERE id = $1", userID)
@@ -69,7 +67,7 @@ func (s *Store) DeleteUser(name string) error {
 
 // ListUsers returns the names of all users.
 func (s *Store) ListUsers() ([]string, error) {
-	var users []string
+	users := []string{}
 	err := s.transaction(func(tx *txn) error {
 		users = users[:0]
 		rows, err := tx.Query("SELECT name FROM users ORDER BY name ASC")
@@ -96,7 +94,7 @@ func (s *Store) CreateAccessKey(userName, accessKeyID, secretKey string) error {
 		var userID int64
 		err := tx.QueryRow("SELECT id FROM users WHERE name = $1", userName).Scan(&userID)
 		if errors.Is(err, sql.ErrNoRows) {
-			return sia.ErrUserNotFound
+			return s3.ErrUserNotFound
 		} else if err != nil {
 			return err
 		}
@@ -109,7 +107,7 @@ func (s *Store) CreateAccessKey(userName, accessKeyID, secretKey string) error {
 		if err != nil {
 			return err
 		} else if n == 0 {
-			return sia.ErrAccessKeyAlreadyExists
+			return s3.ErrAccessKeyAlreadyExists
 		}
 		return nil
 	})
@@ -126,7 +124,7 @@ func (s *Store) DeleteAccessKey(accessKeyID string) error {
 		if err != nil {
 			return err
 		} else if n == 0 {
-			return fmt.Errorf("access key %q not found", accessKeyID)
+			return s3.ErrAccessKeyNotFound
 		}
 		return nil
 	})
@@ -134,8 +132,8 @@ func (s *Store) DeleteAccessKey(accessKeyID string) error {
 
 // ListAccessKeys returns all access keys for the given user. If userName is
 // nil, all access keys are returned.
-func (s *Store) ListAccessKeys(userName *string) ([]sia.AccessKeyInfo, error) {
-	var keys []sia.AccessKeyInfo
+func (s *Store) ListAccessKeys(userName *string) ([]s3.AccessKey, error) {
+	keys := []s3.AccessKey{}
 	err := s.transaction(func(tx *txn) error {
 		keys = keys[:0]
 
@@ -161,7 +159,7 @@ func (s *Store) ListAccessKeys(userName *string) ([]sia.AccessKeyInfo, error) {
 		defer r.Close()
 
 		for r.Next() {
-			var k sia.AccessKeyInfo
+			var k s3.AccessKey
 			if err := r.Scan(&k.AccessKeyID, &k.SecretKey, &k.UserName); err != nil {
 				return err
 			}
