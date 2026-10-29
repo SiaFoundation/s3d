@@ -14,7 +14,6 @@ import (
 	"github.com/SiaFoundation/s3d/sia"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/slabs"
 	sdk "go.sia.tech/siastorage"
@@ -230,20 +229,21 @@ func TestIndexdSDKSealedObjectSurvivesStore(t *testing.T) {
 		t.Fatalf("seal: %v", err)
 	}
 
+	bid := bucketID(t, store, bucket)
 	contentMD5 := frand.Entropy128()
 	fn := name + ".upload"
-	if _, _, err := store.PutObject(testutil.AccessKeyID, bucket, name, objects.PutOptions{
+	if _, _, err := store.PutObject(bid, name, objects.PutOptions{
 		ContentMD5: contentMD5,
 		Length:     int64(len(data)),
 		FileName:   &fn,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.MarkObjectUploaded(bucket, name, "", contentMD5, sealed, time.Now().Add(time.Hour)); err != nil {
+	if err := store.MarkObjectUploaded(bid, name, "", contentMD5, sealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 
-	stored, err := store.GetObject(aws.String(testutil.AccessKeyID), bucket, name, s3.NoVersion(), nil, s3.ActionGetObject)
+	stored, err := store.GetObject(bid, name, s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if stored.SiaObject == nil {
