@@ -24,7 +24,7 @@ type PostPolicyAuth struct {
 }
 
 // Verify checks the SigV4 signature over the submitted base64 policy and
-// returns the access key ID it was signed with.
+// returns the caller that signed it.
 //
 // Verify does not parse or validate the policy document. Before authorizing
 // the upload, the caller must validate its expiration and all conditions
@@ -38,44 +38,44 @@ type PostPolicyAuth struct {
 // the past. The policy's expiration may impose an earlier deadline.
 // - 'region' is the AWS region the request is targeted to. If the region is an
 // empty string, every region is allowed.
-func (p PostPolicyAuth) Verify(ctx context.Context, store KeyStore, region string, now time.Time) (string, error) {
+func (p PostPolicyAuth) Verify(ctx context.Context, store KeyStore, region string, now time.Time) (*Caller, error) {
 	switch p.Algorithm {
 	case AuthorizationAWS4HMACSHA256:
 	case AuthorizationAWS4ECDSAP256SHA256:
-		return "", s3errs.ErrNotImplemented // Signature Version 4A is not implemented
+		return nil, s3errs.ErrNotImplemented // Signature Version 4A is not implemented
 	default:
-		return "", s3errs.ErrAccessDenied
+		return nil, s3errs.ErrAccessDenied
 	}
 
 	credential, ok := parseCredential(p.Credential)
 	if !ok {
-		return "", s3errs.ErrAccessDenied
+		return nil, s3errs.ErrAccessDenied
 	} else if region != "" && credential.Scope.Region != region {
-		return "", s3errs.ErrAccessDenied
+		return nil, s3errs.ErrAccessDenied
 	}
 
 	date, err := time.Parse(layoutISO8601, p.Date)
 	if err != nil || !sameDay(date, credential.Scope.Date) {
-		return "", s3errs.ErrAccessDenied
+		return nil, s3errs.ErrAccessDenied
 	} else if date.After(now.Add(maxClockSkew)) {
-		return "", s3errs.ErrRequestTimeTooSkewed
+		return nil, s3errs.ErrRequestTimeTooSkewed
 	} else if now.After(date.Add(maxPresignedExpiry)) {
-		return "", s3errs.ErrAccessDeniedExpired
+		return nil, s3errs.ErrAccessDeniedExpired
 	}
 
 	if p.Policy == "" {
-		return "", s3errs.ErrAccessDenied
+		return nil, s3errs.ErrAccessDenied
 	}
 
 	// reject a malformed signature before loading the secret or hashing the
 	// policy
 	if decoded, err := hex.DecodeString(p.Signature); err != nil || len(decoded) != sha256.Size {
-		return "", s3errs.ErrSignatureDoesNotMatch
+		return nil, s3errs.ErrSignatureDoesNotMatch
 	}
 
-	secret, err := store.LoadSecret(ctx, credential.AccessKeyID)
+	secret, userID, err := store.LoadSecret(ctx, credential.AccessKeyID)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer clear(secret)
 
@@ -86,7 +86,7 @@ func (p PostPolicyAuth) Verify(ctx context.Context, store KeyStore, region strin
 	// request, the submitted base64 policy is signed without modification
 	expected := getSignature(signingKey, p.Policy)
 	if subtle.ConstantTimeCompare([]byte(expected), []byte(p.Signature)) != 1 {
-		return "", s3errs.ErrSignatureDoesNotMatch
+		return nil, s3errs.ErrSignatureDoesNotMatch
 	}
-	return credential.AccessKeyID, nil
+	return &Caller{AccessKeyID: credential.AccessKeyID, UserID: userID}, nil
 }

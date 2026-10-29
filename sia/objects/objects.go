@@ -55,8 +55,7 @@ type Object struct {
 	ContentMD5     [16]byte
 	LastModified   time.Time
 
-	// ObjectLock is the version's lock state, nil when it carries none or the
-	// reader does not own the bucket.
+	// ObjectLock is the version's lock state, nil when it carries none.
 	ObjectLock *s3.ObjectLockState
 }
 
@@ -106,6 +105,7 @@ type PutOptions struct {
 
 // ObjectForUpload contains the fields needed to upload an object.
 type ObjectForUpload struct {
+	BucketID     s3.BucketID
 	Bucket       string
 	Name         string
 	VersionID    string

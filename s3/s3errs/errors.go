@@ -177,4 +177,8 @@ var (
 	ErrAccessDeniedExpired         = Error{"AccessDenied", "Request has expired.", http.StatusForbidden}
 	ErrAccessDeniedUnsignedHeaders = Error{"AccessDenied", "There were headers present in the request which were not signed.", http.StatusForbidden}
 	ErrInvalidArgumentMultipleAuth = Error{"InvalidArgument", "Only one auth mechanism allowed; only the X-Amz-Algorithm query parameter, Signature query string parameter or the Authorization header should be specified.", http.StatusBadRequest}
+	ErrMalformedPolicyAction       = Error{"MalformedPolicy", "Policy has invalid action.", http.StatusBadRequest}
+	ErrMalformedPolicyInapplicable = Error{"MalformedPolicy", "Action does not apply to any resource(s) in statement.", http.StatusBadRequest}
+	ErrMalformedPolicyPrincipal    = Error{"MalformedPolicy", "Invalid principal in policy.", http.StatusBadRequest}
+	ErrMalformedPolicyResource     = Error{"MalformedPolicy", "Policy has invalid resource.", http.StatusBadRequest}
 )

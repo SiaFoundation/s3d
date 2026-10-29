@@ -411,7 +411,7 @@ func TestPostObjectResponses(t *testing.T) {
 func TestPostObjectRejections(t *testing.T) {
 	const bucket = "bucket"
 
-	tester := testutil.NewTester(t)
+	tester := testutil.NewTester(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
 	if err := tester.CreateBucket(t.Context(), bucket); err != nil {
 		t.Fatal(err)
 	}
@@ -438,6 +438,11 @@ func TestPostObjectRejections(t *testing.T) {
 	upload = newPostUpload(bucket, "rejected")
 	upload.accessKey = "AKIAIOSFODNN7EXAMPLE"
 	assertRejected(upload, s3errs.ErrInvalidAccessKeyId)
+
+	// a valid form signed by a user who does not own the bucket
+	upload = newPostUpload(bucket, "rejected")
+	upload.accessKey, upload.secretKey = testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey
+	assertRejected(upload, s3errs.ErrAccessDenied)
 
 	// an algorithm other than SigV4
 	upload = newPostUpload(bucket, "rejected")

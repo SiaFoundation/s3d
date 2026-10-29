@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia"
 )
@@ -22,6 +23,10 @@ func userIDForAccessKey(tx *txn, accessKeyID string) (int64, error) {
 
 // CreateUser creates a new user with the given name.
 func (s *Store) CreateUser(name string) error {
+	// a user's name is its S3 user ID
+	if name == s3.AnonymousUserID {
+		return sia.ErrReservedUserName
+	}
 	return s.transaction(func(tx *txn) error {
 		res, err := tx.Exec("INSERT INTO users (name) VALUES ($1) ON CONFLICT (name) DO NOTHING", name)
 		if err != nil {
@@ -167,29 +172,17 @@ func (s *Store) ListAccessKeys(userName *string) ([]sia.AccessKeyInfo, error) {
 	return keys, err
 }
 
-// UserNameForAccessKey returns the user name associated with the given access
-// key ID.
-func (s *Store) UserNameForAccessKey(accessKeyID string) (name string, err error) {
+// LoadSecret returns the secret key for the given access key ID and the name
+// of the user it belongs to.
+func (s *Store) LoadSecret(accessKeyID string) (secret, userName string, err error) {
 	err = s.transaction(func(tx *txn) error {
 		return tx.QueryRow(`
-			SELECT u.name FROM users u
-			INNER JOIN access_keys ak ON ak.user_id = u.id
-			WHERE ak.access_key_id = $1`, accessKeyID).Scan(&name)
+			SELECT ak.secret_key, u.name FROM access_keys ak
+			INNER JOIN users u ON u.id = ak.user_id
+			WHERE ak.access_key_id = $1`, accessKeyID).Scan(&secret, &userName)
 	})
 	if errors.Is(err, sql.ErrNoRows) {
-		err = s3errs.ErrInvalidAccessKeyId
+		return "", "", s3errs.ErrInvalidAccessKeyId
 	}
 	return
-}
-
-// LoadSecret returns the secret key for the given access key ID.
-func (s *Store) LoadSecret(accessKeyID string) (string, error) {
-	var secret string
-	err := s.transaction(func(tx *txn) error {
-		return tx.QueryRow("SELECT secret_key FROM access_keys WHERE access_key_id = $1", accessKeyID).Scan(&secret)
-	})
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", s3errs.ErrInvalidAccessKeyId
-	}
-	return secret, err
 }

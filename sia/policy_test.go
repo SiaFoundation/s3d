@@ -2,25 +2,25 @@ package sia_test
 
 import (
 	"bytes"
-	"errors"
+	"encoding/xml"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/SiaFoundation/s3d/internal/testutil"
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"go.uber.org/zap/zaptest"
 )
 
-// A "*" principal covers unsigned requests and signed requests from non-owners.
-// The two take different paths through the backend, so both are asserted.
-const (
-	otherAccessKeyID = "foo"
-	otherSecretKey   = "bar"
-)
-
-// publicCaller is one kind of caller a "*" principal covers.
+// publicCaller is one kind of caller a "*" principal covers, which includes
+// unsigned requests and signed requests from non-owners. Both are asserted.
 type publicCaller struct {
 	client *testutil.S3Tester
 	// missingBucket is what this caller sees for a bucket that does not exist;
@@ -37,7 +37,7 @@ func forEachPublicCaller(t *testing.T, s3Tester *testutil.S3Tester, fn func(*tes
 		caller publicCaller
 	}{
 		{"anonymous", publicCaller{s3Tester.Anonymous(), &s3errs.ErrAccessDenied}},
-		{"other user", publicCaller{s3Tester.ChangeAccessKey(t, otherAccessKeyID, otherSecretKey), &s3errs.ErrNoSuchBucket}},
+		{"other user", publicCaller{s3Tester.ChangeAccessKey(t, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey), &s3errs.ErrNoSuchBucket}},
 	} {
 		t.Run(c.name, func(t *testing.T) { fn(t, c.caller) })
 	}
@@ -78,6 +78,28 @@ func readAndListPolicy(bucket string) string {
     }
   ]
 }`, bucket, bucket)
+}
+
+// rawRequest sends an anonymous request without the AWS SDK, so it carries no
+// X-Amz-Content-Sha256 header, and returns the response body and headers.
+func rawRequest(t *testing.T, server *httptest.Server, method, path, body string) ([]byte, http.Header) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), method, server.URL+path, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	} else if resp.StatusCode != http.StatusOK {
+		t.Fatalf("%s %s: expected status %d, got %d: %s", method, path, http.StatusOK, resp.StatusCode, data)
+	}
+	return data, resp.Header
 }
 
 func TestBucketPolicyPublicRead(t *testing.T) {
@@ -157,7 +179,7 @@ func TestBucketPolicyPublicReadScope(t *testing.T) {
 		object  = "key"
 	)
 
-	s3Tester := testutil.NewTester(t, testutil.WithKeyPair("other", otherAccessKeyID, otherSecretKey))
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
 
 	for _, b := range []string{bucket, private} {
 		if err := s3Tester.CreateBucket(t.Context(), b); err != nil {
@@ -291,8 +313,8 @@ func TestBucketPolicyPublicReadScope(t *testing.T) {
 func TestBucketPolicyOwnership(t *testing.T) {
 	const bucket = "bucket"
 
-	s3Tester := testutil.NewTester(t, testutil.WithKeyPair("other", otherAccessKeyID, otherSecretKey))
-	other := s3Tester.ChangeAccessKey(t, otherAccessKeyID, otherSecretKey)
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
+	other := s3Tester.ChangeAccessKey(t, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey)
 
 	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 		t.Fatal(err)
@@ -328,8 +350,8 @@ func TestBucketPolicyOwnership(t *testing.T) {
 	}
 }
 
-// TestBucketPolicyRejected checks that a policy s3d cannot honor is refused
-// rather than stored as a weaker one.
+// TestBucketPolicyRejected checks that a malformed policy is refused and leaves
+// no trace.
 func TestBucketPolicyRejected(t *testing.T) {
 	const bucket = "bucket"
 
@@ -347,13 +369,6 @@ func TestBucketPolicyRejected(t *testing.T) {
 			name:   "malformed",
 			policy: `not a policy`,
 			err:    s3errs.ErrMalformedPolicy,
-		},
-		{
-			name: "conditional grant",
-			policy: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*",
-				"Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/*",
-				"Condition":{"IpAddress":{"aws:SourceIp":"10.0.0.0/8"}}}]}`,
-			err: s3errs.ErrNotImplemented,
 		},
 	}
 
@@ -465,7 +480,7 @@ func TestBucketPolicyGrantsAreIndependent(t *testing.T) {
 
 	for _, grant := range grants {
 		t.Run(grant.action, func(t *testing.T) {
-			s3Tester := testutil.NewTester(t, testutil.WithKeyPair("other", otherAccessKeyID, otherSecretKey))
+			s3Tester := testutil.NewTester(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
 			if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 				t.Fatal(err)
 			} else if err := s3Tester.PutBucketVersioning(t.Context(), bucket, types.BucketVersioningStatusEnabled); err != nil {
@@ -526,47 +541,6 @@ func statementPolicy(action, resource string) string {
 		"Action":"%s","Resource":"arn:aws:s3:::%s"}]}`, action, resource)
 }
 
-// TestBucketPolicyListAuthorizesEmptyPage checks that a listing requesting no
-// keys is still authorized. It drives the backend directly because the AWS
-// client omits MaxKeys when it is zero.
-func TestBucketPolicyListAuthorizesEmptyPage(t *testing.T) {
-	const (
-		bucket = "bucket"
-		object = "key"
-	)
-
-	backend, _ := testutil.NewBackend(t, testutil.WithKeyPair("other", otherAccessKeyID, otherSecretKey))
-	if err := backend.CreateBucket(t.Context(), testutil.AccessKeyID, bucket, s3.CreateBucketOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := backend.PutObject(t.Context(), testutil.AccessKeyID, bucket, object,
-		bytes.NewReader([]byte("value")), s3.PutObjectOptions{ContentLength: 5}); err != nil {
-		t.Fatal(err)
-	}
-
-	// the bucket has no policy at all, so neither caller may list it
-	otherKey := otherAccessKeyID
-	for _, caller := range []struct {
-		name        string
-		accessKeyID *string
-	}{
-		{"anonymous", nil},
-		{"other user", &otherKey},
-	} {
-		t.Run(caller.name, func(t *testing.T) {
-			_, err := backend.ListObjects(t.Context(), caller.accessKeyID, bucket, s3.Prefix{}, s3.ListObjectsPage{MaxKeys: 0})
-			if !errors.Is(err, s3errs.ErrAccessDenied) {
-				t.Fatalf("ListObjects: expected %v, got %v", s3errs.ErrAccessDenied, err)
-			}
-
-			_, err = backend.ListObjectVersions(t.Context(), caller.accessKeyID, bucket, s3.Prefix{}, s3.ListObjectVersionsPage{MaxKeys: 0})
-			if !errors.Is(err, s3errs.ErrAccessDenied) {
-				t.Fatalf("ListObjectVersions: expected %v, got %v", s3errs.ErrAccessDenied, err)
-			}
-		})
-	}
-}
-
 // TestBucketPolicyListingReportsBucketOwner checks that a listing attributes
 // objects to the bucket's owner rather than to whoever asked for the listing.
 func TestBucketPolicyListingReportsBucketOwner(t *testing.T) {
@@ -575,7 +549,7 @@ func TestBucketPolicyListingReportsBucketOwner(t *testing.T) {
 		object = "key"
 	)
 
-	s3Tester := testutil.NewTester(t, testutil.WithKeyPair("other", otherAccessKeyID, otherSecretKey))
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
 	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 		t.Fatal(err)
 	} else if err := s3Tester.PutBucketVersioning(t.Context(), bucket, types.BucketVersioningStatusEnabled); err != nil {
@@ -633,8 +607,8 @@ func TestBucketPolicyCopySourceGrants(t *testing.T) {
 		object = "key"
 	)
 
-	s3Tester := testutil.NewTester(t, testutil.WithKeyPair("other", otherAccessKeyID, otherSecretKey))
-	other := s3Tester.ChangeAccessKey(t, otherAccessKeyID, otherSecretKey)
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
+	other := s3Tester.ChangeAccessKey(t, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey)
 
 	if err := s3Tester.CreateBucket(t.Context(), public); err != nil {
 		t.Fatal(err)
@@ -686,12 +660,12 @@ func TestBucketPolicyCopySourceGrants(t *testing.T) {
 func TestBucketPolicyMissingKeyVisibility(t *testing.T) {
 	const bucket = "bucket"
 
-	s3Tester := testutil.NewTester(t, testutil.WithKeyPair("other", otherAccessKeyID, otherSecretKey))
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
 	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 		t.Fatal(err)
 	}
 
-	// the owner may always list, so it still sees a plain 404
+	// the owner may list, so it still sees a plain 404
 	_, err := s3Tester.GetObjectVersion(t.Context(), bucket, "missing", nil)
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchKey, err)
 
@@ -724,7 +698,7 @@ func TestBucketPolicyDeleteMarkerHidden(t *testing.T) {
 		object = "key"
 	)
 
-	s3Tester := testutil.NewTester(t, testutil.WithKeyPair("other", otherAccessKeyID, otherSecretKey))
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
 	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 		t.Fatal(err)
 	} else if err := s3Tester.PutBucketVersioning(t.Context(), bucket, types.BucketVersioningStatusEnabled); err != nil {
@@ -766,7 +740,7 @@ func TestBucketPolicyDeleteMarkerHidden(t *testing.T) {
 func TestBucketPolicyKeepsConfigurationPrivate(t *testing.T) {
 	const bucket = "bucket"
 
-	s3Tester := testutil.NewTester(t, testutil.WithKeyPair("other", otherAccessKeyID, otherSecretKey))
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
 
 	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
 		t.Fatal(err)
@@ -791,4 +765,473 @@ func TestBucketPolicyKeepsConfigurationPrivate(t *testing.T) {
 		_, err = c.client.GetBucketVersioning(t.Context(), bucket)
 		testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
 	})
+}
+
+// TestBucketPolicyCopyHidesOnlySource checks that a copy from a bucket the
+// caller may read but not list hides a missing source, but not a missing
+// destination, which is the caller's own.
+func TestBucketPolicyCopyHidesOnlySource(t *testing.T) {
+	const (
+		public = "public-bucket"
+		own    = "own-bucket"
+		object = "key"
+	)
+
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
+	other := s3Tester.ChangeAccessKey(t, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey)
+
+	if err := s3Tester.CreateBucket(t.Context(), public); err != nil {
+		t.Fatal(err)
+	} else if err := s3Tester.AddObject(public, object, []byte("value"), nil); err != nil {
+		t.Fatal(err)
+	} else if err := s3Tester.PutBucketPolicy(t.Context(), public, publicReadPolicy(public)); err != nil {
+		t.Fatal(err)
+	} else if err := other.CreateBucket(t.Context(), own); err != nil {
+		t.Fatal(err)
+	}
+
+	// the source is missing, which the caller may not learn
+	err := other.ConditionalCopyObject(t.Context(), public, "missing", own, object, testutil.Preconditions{}, testutil.Preconditions{})
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+
+	// the destination is missing, which the caller may learn
+	err = other.ConditionalCopyObject(t.Context(), public, object, own, object, testutil.Preconditions{}, testutil.Preconditions{IfMatch: aws.String("*")})
+	testutil.AssertS3Error(t, s3errs.ErrNoSuchKey, err)
+}
+
+// TestBucketPolicyCopyAuthorizesSource checks that a copy into a bucket the
+// caller owns still requires read access to the source.
+func TestBucketPolicyCopyAuthorizesSource(t *testing.T) {
+	const (
+		private = "private-bucket"
+		own     = "own-bucket"
+		object  = "key"
+	)
+
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
+	other := s3Tester.ChangeAccessKey(t, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey)
+
+	if err := s3Tester.CreateBucket(t.Context(), private); err != nil {
+		t.Fatal(err)
+	} else if err := s3Tester.AddObject(private, object, []byte("value"), nil); err != nil {
+		t.Fatal(err)
+	} else if err := other.CreateBucket(t.Context(), own); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := other.CopyObjectVersion(t.Context(), private, object, nil, own, "copy")
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+
+	upload, err := other.CreateMultipartUpload(t.Context(), own, "multipart", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = other.UploadPartCopy(t.Context(), private, object, own, "multipart", aws.ToString(upload.UploadId),
+		testutil.UploadPartCopyOptions{PartNumber: 1})
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+}
+
+// TestBucketPolicyAnonymousWrites checks that a policy can let anonymous
+// callers write under a prefix, and that the owner owns what they write.
+func TestBucketPolicyAnonymousWrites(t *testing.T) {
+	const bucket = "bucket"
+
+	backend, _ := testutil.NewBackend(t)
+	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
+	anon := s3Tester.Anonymous()
+
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+	policy := fmt.Sprintf(`{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": ["s3:PutObject", "s3:GetObject", "s3:ListBucket", "s3:ListMultipartUploadParts", "s3:AbortMultipartUpload"],
+      "Resource": ["arn:aws:s3:::%s", "arn:aws:s3:::%s/public/*"]
+    }
+  ]
+}`, bucket, bucket)
+	if err := s3Tester.PutBucketPolicy(t.Context(), bucket, policy); err != nil {
+		t.Fatal(err)
+	}
+
+	// an ordinary upload
+	if _, err := anon.PutObject(t.Context(), bucket, "public/ordinary", strings.NewReader("ordinary"), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// a multipart upload
+	upload, err := anon.CreateMultipartUpload(t.Context(), bucket, "public/multipart", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uploadID := aws.ToString(upload.UploadId)
+	part, err := anon.UploadPart(t.Context(), bucket, "public/multipart", uploadID, 1, []byte("multipart"))
+	if err != nil {
+		t.Fatal(err)
+	} else if _, err := anon.ListParts(t.Context(), bucket, "public/multipart", uploadID, nil, nil); err != nil {
+		t.Fatal(err)
+	} else if _, err := anon.CompleteMultipartUpload(t.Context(), bucket, "public/multipart", uploadID, []types.CompletedPart{{ETag: part.ETag, PartNumber: aws.Int32(1)}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// an aborted multipart upload
+	upload, err = anon.CreateMultipartUpload(t.Context(), bucket, "public/aborted", nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if err := anon.AbortMultipartUpload(t.Context(), bucket, "public/aborted", aws.ToString(upload.UploadId)); err != nil {
+		t.Fatal(err)
+	}
+
+	// nothing outside the prefix
+	_, err = anon.PutObject(t.Context(), bucket, "private", strings.NewReader("private"), nil)
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+
+	// uploads from a client that sends no payload hash
+	server := httptest.NewServer(s3.New(backend, s3.WithLogger(zaptest.NewLogger(t))))
+	t.Cleanup(server.Close)
+	rawRequest(t, server, http.MethodPut, "/"+bucket+"/public/raw", "raw")
+
+	path := "/" + bucket + "/public/raw-multipart"
+	body, _ := rawRequest(t, server, http.MethodPost, path+"?uploads", "")
+	var rawUpload s3.InitiateMultipartUploadResponse
+	if err := xml.Unmarshal(body, &rawUpload); err != nil {
+		t.Fatal(err)
+	}
+	_, headers := rawRequest(t, server, http.MethodPut, path+"?partNumber=1&uploadId="+rawUpload.UploadID, "raw multipart")
+	complete, err := xml.Marshal(s3.CompleteMultipartUploadRequest{
+		Parts: []s3.CompleteMultipartPart{{PartNumber: 1, ETag: headers.Get("ETag")}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawRequest(t, server, http.MethodPost, path+"?uploadId="+rawUpload.UploadID, string(complete))
+
+	// the owner owns every object, including those uploaded anonymously
+	listing, err := s3Tester.ListObjects(t.Context(), bucket, nil, nil, s3.ListObjectsPage{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, object := range listing.Contents {
+		if object.Owner == nil || aws.ToString(object.Owner.ID) != testutil.Owner {
+			t.Fatalf("expected owner %q, got %+v", testutil.Owner, object.Owner)
+		}
+	}
+	for object, want := range map[string]string{"public/ordinary": "ordinary", "public/multipart": "multipart", "public/raw": "raw", "public/raw-multipart": "raw multipart"} {
+		if got, err := s3Tester.GetObjectVersion(t.Context(), bucket, object, nil); err != nil {
+			t.Fatal(err)
+		} else if string(got) != want {
+			t.Fatalf("%s: expected %q, got %q", object, want, got)
+		}
+	}
+}
+
+// TestBucketPolicyCrossUser checks a grant to another user scoped by a policy
+// variable.
+func TestBucketPolicyCrossUser(t *testing.T) {
+	const bucket = "bucket"
+
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
+	other := s3Tester.ChangeAccessKey(t, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey)
+
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	} else if _, err := s3Tester.PutObject(t.Context(), bucket, "private/key", strings.NewReader("private"), nil); err != nil {
+		t.Fatal(err)
+	}
+	policy := fmt.Sprintf(`{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {"AWS": "arn:aws:iam::%s:root"},
+      "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"],
+      "Resource": "arn:aws:s3:::%s/${aws:userid}/*"
+    }
+  ]
+}`, testutil.OtherOwner, bucket)
+	if err := s3Tester.PutBucketPolicy(t.Context(), bucket, policy); err != nil {
+		t.Fatal(err)
+	}
+
+	// the other user may use their own prefix
+	if _, err := other.PutObject(t.Context(), bucket, "other/key", strings.NewReader("value"), nil); err != nil {
+		t.Fatal(err)
+	} else if _, err := other.GetObjectVersion(t.Context(), bucket, "other/key", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// but an anonymous caller may not
+	_, err := s3Tester.Anonymous().GetObjectVersion(t.Context(), bucket, "other/key", nil)
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+
+	// a multi-delete request authorizes each key
+	res, err := other.DeleteObjects(t.Context(), bucket, []types.ObjectIdentifier{{Key: aws.String("other/key")}, {Key: aws.String("private/key")}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(res.Deleted) != 1 || len(res.Errors) != 1 || aws.ToString(res.Errors[0].Code) != s3errs.ErrAccessDenied.Code {
+		t.Fatalf("expected one deletion and one AccessDenied, got %+v", res)
+	}
+}
+
+// TestBucketPolicyDeny checks that a Deny overrides even the owner, who can
+// still replace, read and delete the policy.
+func TestBucketPolicyDeny(t *testing.T) {
+	const bucket = "bucket"
+
+	s3Tester := testutil.NewTester(t)
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	} else if _, err := s3Tester.PutObject(t.Context(), bucket, "secret/key", strings.NewReader("secret"), nil); err != nil {
+		t.Fatal(err)
+	}
+	policy := fmt.Sprintf(`{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::%s/secret/*"
+    }
+  ]
+}`, bucket)
+	if err := s3Tester.PutBucketPolicy(t.Context(), bucket, policy); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := s3Tester.GetObjectVersion(t.Context(), bucket, "secret/key", nil)
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+
+	// even a policy denying everything
+	deny := `{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:*",
+      "Resource": "*"
+    }
+  ]
+}`
+	if err := s3Tester.PutBucketPolicy(t.Context(), bucket, deny); err != nil {
+		t.Fatal(err)
+	} else if _, err := s3Tester.GetBucketPolicy(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	} else if err := s3Tester.DeleteBucketPolicy(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestBucketPolicyConditions checks that conditions see the request's listing
+// parameters, and that a key s3d cannot populate is missing.
+func TestBucketPolicyConditions(t *testing.T) {
+	const bucket = "bucket"
+
+	s3Tester := testutil.NewTester(t)
+	anon := s3Tester.Anonymous()
+
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	} else if _, err := s3Tester.PutObject(t.Context(), bucket, "public/key", strings.NewReader("value"), nil); err != nil {
+		t.Fatal(err)
+	}
+	policy := fmt.Sprintf(`{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::%s",
+      "Condition": {
+        "StringLike": {"s3:prefix": "public/*"},
+        "NumericLessThanEquals": {"s3:max-keys": 10}
+      }
+    },
+    {
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::%s/public/*",
+      "Condition": {"StringEqualsIfExists": {"aws:SourceVpc": "vpc-1"}}
+    }
+  ]
+}`, bucket, bucket)
+	if err := s3Tester.PutBucketPolicy(t.Context(), bucket, policy); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := anon.ListObjectsV2(t.Context(), bucket, aws.String("public/"), nil, s3.ListObjectsPage{MaxKeys: 10}); err != nil {
+		t.Fatal(err)
+	}
+
+	// the prefix and the limit must both satisfy the conditions
+	_, err := anon.ListObjectsV2(t.Context(), bucket, aws.String("private/"), nil, s3.ListObjectsPage{MaxKeys: 10})
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+	_, err = anon.ListObjectsV2(t.Context(), bucket, aws.String("public/"), nil, s3.ListObjectsPage{MaxKeys: 11})
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+
+	// a request has no VPC, so the IfExists condition holds
+	if _, err := anon.GetObjectVersion(t.Context(), bucket, "public/key", nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestBucketPolicyVersionConditions checks that s3:VersionId conditions apply
+// to reads, copies and multi-delete requests of a version.
+func TestBucketPolicyVersionConditions(t *testing.T) {
+	const (
+		bucket = "bucket"
+		dest   = "dest"
+		object = "key"
+	)
+
+	s3Tester := testutil.NewTester(t)
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	} else if err := s3Tester.CreateBucket(t.Context(), dest); err != nil {
+		t.Fatal(err)
+	} else if err := s3Tester.PutBucketVersioning(t.Context(), bucket, types.BucketVersioningStatusEnabled); err != nil {
+		t.Fatal(err)
+	}
+	v1, err := s3Tester.PutObjectVersion(t.Context(), bucket, object, []byte("one"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2, err := s3Tester.PutObjectVersion(t.Context(), bucket, object, []byte("two"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// deny access to the first version only
+	policy := fmt.Sprintf(`{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": ["s3:GetObjectVersion", "s3:DeleteObjectVersion"],
+      "Resource": "arn:aws:s3:::%s/*",
+      "Condition": {"StringEquals": {"s3:VersionId": %q}}
+    }
+  ]
+}`, bucket, v1)
+	if err := s3Tester.PutBucketPolicy(t.Context(), bucket, policy); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = s3Tester.GetObjectVersion(t.Context(), bucket, object, aws.String(v1))
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+	if _, err := s3Tester.GetObjectVersion(t.Context(), bucket, object, aws.String(v2)); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = s3Tester.CopyObjectVersion(t.Context(), bucket, object, aws.String(v1), dest, "copy")
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+	if _, err := s3Tester.CopyObjectVersion(t.Context(), bucket, object, aws.String(v2), dest, "copy"); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := s3Tester.DeleteObjects(t.Context(), bucket, []types.ObjectIdentifier{{Key: aws.String(object), VersionId: aws.String(v1)}, {Key: aws.String(object), VersionId: aws.String(v2)}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(res.Errors) != 1 || len(res.Deleted) != 1 || aws.ToString(res.Errors[0].VersionId) != v1 {
+		t.Fatalf("expected only version %s to be denied, got %+v", v1, res)
+	}
+}
+
+// TestBucketPolicyOwnerOnlyAPIs checks that, as in S3, a policy cannot grant
+// the bucket policy APIs to another user.
+func TestBucketPolicyOwnerOnlyAPIs(t *testing.T) {
+	const bucket = "bucket"
+
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
+	other := s3Tester.ChangeAccessKey(t, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey)
+
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+	grant := fmt.Sprintf(`{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": %q,
+      "Action": ["s3:GetBucketPolicy", "s3:PutBucketPolicy"],
+      "Resource": "arn:aws:s3:::%s"
+    }
+  ]
+}`, testutil.OtherOwner, bucket)
+	if err := s3Tester.PutBucketPolicy(t.Context(), bucket, grant); err != nil {
+		t.Fatal(err)
+	}
+
+	// S3 answers a granted user other than the owner with 405
+	_, err := other.GetBucketPolicy(t.Context(), bucket)
+	testutil.AssertS3Error(t, s3errs.ErrMethodNotAllowed, err)
+	err = other.PutBucketPolicy(t.Context(), bucket, publicReadPolicy(bucket))
+	testutil.AssertS3Error(t, s3errs.ErrMethodNotAllowed, err)
+
+	// and one without a grant with 403
+	err = other.DeleteBucketPolicy(t.Context(), bucket)
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+
+	if got, err := s3Tester.GetBucketPolicy(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	} else if got != grant {
+		t.Fatalf("expected policy %q, got %q", grant, got)
+	}
+}
+
+// TestBucketPolicyObjectLockConditions checks that retention conditions see
+// the retention a PutObjectRetention body applies.
+func TestBucketPolicyObjectLockConditions(t *testing.T) {
+	const bucket = "bucket"
+
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
+	other := s3Tester.ChangeAccessKey(t, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey)
+
+	if err := s3Tester.CreateBucketWithObjectLock(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	} else if _, err := s3Tester.PutObject(t.Context(), bucket, "key", strings.NewReader("value"), nil); err != nil {
+		t.Fatal(err)
+	}
+	policy := fmt.Sprintf(`{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": %q,
+      "Action": "s3:PutObjectRetention",
+      "Resource": "arn:aws:s3:::%s/*",
+      "Condition": {"NumericLessThanEquals": {"s3:object-lock-remaining-retention-days": 10}}
+    },
+    {
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:PutObjectRetention",
+      "Resource": "arn:aws:s3:::%s/*",
+      "Condition": {"NumericGreaterThan": {"s3:object-lock-remaining-retention-days": 30}}
+    }
+  ]
+}`, testutil.OtherOwner, bucket, bucket)
+	if err := s3Tester.PutBucketPolicy(t.Context(), bucket, policy); err != nil {
+		t.Fatal(err)
+	}
+
+	retention := func(days int) *types.ObjectLockRetention {
+		return &types.ObjectLockRetention{Mode: types.ObjectLockRetentionModeCompliance, RetainUntilDate: aws.Time(time.Now().AddDate(0, 0, days))}
+	}
+	if err := other.PutObjectRetention(t.Context(), bucket, "key", nil, retention(5), false); err != nil {
+		t.Fatal(err)
+	}
+	err := other.PutObjectRetention(t.Context(), bucket, "key", nil, retention(20), false)
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+	err = s3Tester.PutObjectRetention(t.Context(), bucket, "key", nil, retention(40), false)
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
 }

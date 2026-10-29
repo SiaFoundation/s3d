@@ -382,8 +382,14 @@ func (b *postBody) Read(p []byte) (int, error) {
 // authenticates through its form fields.
 //
 // https://docs.aws.amazon.com/AmazonS3/latest/API/RESTObjectPOST.html
-func (s *s3) postObject(w http.ResponseWriter, r *http.Request, headerKeyID *string, bucket string) error {
-	if headerKeyID != nil {
+func (s *s3) postObject(w http.ResponseWriter, r *http.Request, header *bucketAccess) error {
+	bucket := header.bucket
+	if header.caller != nil {
+		// a signed POST that is not a form is one of the other bucket POSTs,
+		// none of which is implemented
+		if !isPostForm(r) {
+			return s3errs.ErrNotImplemented
+		}
 		return s3errs.ErrInvalidArgumentMultipleAuth
 	} else if r.ContentLength < 0 {
 		return s3errs.ErrMissingContentLength
@@ -394,7 +400,7 @@ func (s *s3) postObject(w http.ResponseWriter, r *http.Request, headerKeyID *str
 		return err
 	}
 
-	accessKeyID, err := auth.PostPolicyAuth{
+	caller, err := auth.PostPolicyAuth{
 		Algorithm:  form.get(postFieldAlgorithm),
 		Credential: form.get(postFieldCredential),
 		Date:       form.get(postFieldDate),
@@ -428,6 +434,13 @@ func (s *s3) postObject(w http.ResponseWriter, r *http.Request, headerKeyID *str
 		return s3errs.ErrUserKeyMustBeSpecified
 	} else if len(object) > KeySizeLimit {
 		return s3errs.ErrKeyTooLongError
+	}
+
+	access, err := s.bucketAccess(r, caller, bucket)
+	if err != nil {
+		return err
+	} else if err := access.assertObjectAllowed(actionPutObject, object); err != nil {
+		return err
 	}
 
 	// the request body bounds the file from above, and a content-length-range
@@ -470,10 +483,11 @@ func (s *s3) postObject(w http.ResponseWriter, r *http.Request, headerKeyID *str
 	log := s.logger.With(zap.String("bucket", bucket), zap.String("object", object))
 	log.Debug("post object")
 
-	res, err := s.backend.PutObject(r.Context(), accessKeyID, bucket, object, &postBody{
+	body := &postBody{
 		reader: file,
 		min:    policy.minSize,
-	}, PutObjectOptions{
+	}
+	res, err := s.backend.PutObject(r.Context(), access.bucketID, object, body, PutObjectOptions{
 		ContentLength:    -1,
 		MaxContentLength: maxSize,
 		ContentMD5:       contentMD5,
@@ -484,7 +498,7 @@ func (s *s3) postObject(w http.ResponseWriter, r *http.Request, headerKeyID *str
 		return err
 	}
 
-	s.setLifecycleExpirationHeader(r.Context(), w, accessKeyID, bucket, object, time.Now())
+	s.setLifecycleExpirationHeader(w, r, access, object, body.read, time.Now())
 	if res.VersionID != "" {
 		w.Header().Set("x-amz-version-id", res.VersionID)
 	}

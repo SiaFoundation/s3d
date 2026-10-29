@@ -178,27 +178,23 @@ func (d DefaultRetention) validate() error {
 	return nil
 }
 
-// routeBucketObjectLock dispatches the ?object-lock bucket subresource.
-func (s *s3) routeBucketObjectLock(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket string) error {
-	validatedKey, err := assertAuth(accessKeyID)
-	if err != nil {
-		return err
-	}
+// routeBucketObjectLock routes the ?object-lock bucket subresource.
+func (s *s3) routeBucketObjectLock(r *http.Request) (operation, error) {
 	switch r.Method {
 	case http.MethodPut:
-		return s.putBucketObjectLock(w, r, validatedKey, bucket)
+		return operation{action: actionPutBucketObjectLockConfiguration, serve: s.putBucketObjectLock}, nil
 	case http.MethodGet:
-		return s.getBucketObjectLock(w, r, validatedKey, bucket)
+		return operation{action: actionGetBucketObjectLockConfiguration, serve: s.getBucketObjectLock}, nil
 	default:
-		return s3errs.ErrMethodNotAllowed
+		return operation{}, s3errs.ErrMethodNotAllowed
 	}
 }
 
 // putBucketObjectLock handles PUT Bucket object-lock requests.
 //
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObjectLockConfiguration.html
-func (s *s3) putBucketObjectLock(w http.ResponseWriter, r *http.Request, accessKeyID, bucket string) error {
-	s.logger.Debug("putting bucket object lock configuration", zap.String("bucket", bucket))
+func (s *s3) putBucketObjectLock(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
+	s.logger.Debug("putting bucket object lock configuration", zap.String("bucket", access.bucket))
 
 	var config ObjectLockConfiguration
 	if err := decodeXMLBody(r.Body, &config); err != nil {
@@ -208,16 +204,16 @@ func (s *s3) putBucketObjectLock(w http.ResponseWriter, r *http.Request, accessK
 		return err
 	}
 
-	return s.backend.PutBucketObjectLockConfiguration(r.Context(), accessKeyID, bucket, config)
+	return s.backend.PutBucketObjectLockConfiguration(r.Context(), access.bucketID, config)
 }
 
 // getBucketObjectLock handles GET Bucket object-lock requests.
 //
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObjectLockConfiguration.html
-func (s *s3) getBucketObjectLock(w http.ResponseWriter, r *http.Request, accessKeyID, bucket string) error {
-	s.logger.Debug("getting bucket object lock configuration", zap.String("bucket", bucket))
+func (s *s3) getBucketObjectLock(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
+	s.logger.Debug("getting bucket object lock configuration", zap.String("bucket", access.bucket))
 
-	config, err := s.backend.GetBucketObjectLockConfiguration(r.Context(), accessKeyID, bucket)
+	config, err := s.backend.GetBucketObjectLockConfiguration(r.Context(), access.bucketID)
 	if err != nil {
 		return err
 	}
@@ -267,29 +263,30 @@ func (l ObjectLegalHold) Validate() error {
 	return nil
 }
 
-func (s *s3) routeObjectRetention(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket, object string, version VersionRequest) error {
+// routeObjectRetention routes the ?retention object subresource.
+func (s *s3) routeObjectRetention(r *http.Request, object string, version VersionRequest) (operation, error) {
 	if object == "" {
-		return s3errs.ErrMethodNotAllowed
-	}
-	validatedKey, err := assertAuth(accessKeyID)
-	if err != nil {
-		return err
+		return operation{}, s3errs.ErrMethodNotAllowed
 	}
 	switch r.Method {
 	case http.MethodPut:
-		return s.putObjectRetention(w, r, validatedKey, bucket, object, version)
+		return operation{action: actionPutObjectRetention, bodyConditions: true, serve: func(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
+			return s.putObjectRetention(w, r, access, object, version)
+		}}, nil
 	case http.MethodGet:
-		return s.getObjectRetention(w, r, validatedKey, bucket, object, version)
+		return operation{action: actionGetObjectRetention, serve: func(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
+			return s.getObjectRetention(w, r, access, object, version)
+		}}, nil
 	default:
-		return s3errs.ErrMethodNotAllowed
+		return operation{}, s3errs.ErrMethodNotAllowed
 	}
 }
 
 // putObjectRetention handles PUT Object retention requests.
 //
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObjectRetention.html
-func (s *s3) putObjectRetention(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object string, version VersionRequest) error {
-	s.logger.Debug("putting object retention", zap.String("bucket", bucket), zap.String("object", object))
+func (s *s3) putObjectRetention(w http.ResponseWriter, r *http.Request, access *bucketAccess, object string, version VersionRequest) error {
+	s.logger.Debug("putting object retention", zap.String("bucket", access.bucket), zap.String("object", object))
 
 	var doc ObjectRetention
 	if err := decodeXMLBody(r.Body, &doc); err != nil {
@@ -301,20 +298,26 @@ func (s *s3) putObjectRetention(w http.ResponseWriter, r *http.Request, accessKe
 	state, err := doc.state()
 	if err != nil {
 		return err
+	} else if err := access.assertLockActionAllowed(actionPutObjectRetention, object, &state); err != nil {
+		return err
 	}
 
-	return s.backend.PutObjectRetention(r.Context(), accessKeyID, bucket, object, version, state, bypassGovernanceRetention(r.Header))
+	bypass := access.bypassGovernanceRetention(r.Header, object)
+	if err := s.backend.PutObjectRetention(r.Context(), access.bucketID, object, version, state, bypass); err != nil {
+		return access.hideMissing(err, object)
+	}
+	return nil
 }
 
 // getObjectRetention handles GET Object retention requests.
 //
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObjectRetention.html
-func (s *s3) getObjectRetention(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object string, version VersionRequest) error {
-	s.logger.Debug("getting object retention", zap.String("bucket", bucket), zap.String("object", object))
+func (s *s3) getObjectRetention(w http.ResponseWriter, r *http.Request, access *bucketAccess, object string, version VersionRequest) error {
+	s.logger.Debug("getting object retention", zap.String("bucket", access.bucket), zap.String("object", object))
 
-	state, err := s.backend.GetObjectRetention(r.Context(), accessKeyID, bucket, object, version)
+	state, err := s.backend.GetObjectRetention(r.Context(), access.bucketID, object, version)
 	if err != nil {
-		return err
+		return access.hideMissing(err, object)
 	}
 	return writeXMLResponse(w, http.StatusOK, ObjectRetention{
 		Xmlns:           "http://s3.amazonaws.com/doc/2006-03-01/",
@@ -323,29 +326,30 @@ func (s *s3) getObjectRetention(w http.ResponseWriter, r *http.Request, accessKe
 	})
 }
 
-func (s *s3) routeObjectLegalHold(w http.ResponseWriter, r *http.Request, accessKeyID *string, bucket, object string, version VersionRequest) error {
+// routeObjectLegalHold routes the ?legal-hold object subresource.
+func (s *s3) routeObjectLegalHold(r *http.Request, object string, version VersionRequest) (operation, error) {
 	if object == "" {
-		return s3errs.ErrMethodNotAllowed
-	}
-	validatedKey, err := assertAuth(accessKeyID)
-	if err != nil {
-		return err
+		return operation{}, s3errs.ErrMethodNotAllowed
 	}
 	switch r.Method {
 	case http.MethodPut:
-		return s.putObjectLegalHold(w, r, validatedKey, bucket, object, version)
+		return operation{action: actionPutObjectLegalHold, bodyConditions: true, serve: func(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
+			return s.putObjectLegalHold(w, r, access, object, version)
+		}}, nil
 	case http.MethodGet:
-		return s.getObjectLegalHold(w, r, validatedKey, bucket, object, version)
+		return operation{action: actionGetObjectLegalHold, serve: func(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
+			return s.getObjectLegalHold(w, r, access, object, version)
+		}}, nil
 	default:
-		return s3errs.ErrMethodNotAllowed
+		return operation{}, s3errs.ErrMethodNotAllowed
 	}
 }
 
 // putObjectLegalHold handles PUT Object legal-hold requests.
 //
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObjectLegalHold.html
-func (s *s3) putObjectLegalHold(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object string, version VersionRequest) error {
-	s.logger.Debug("putting object legal hold", zap.String("bucket", bucket), zap.String("object", object))
+func (s *s3) putObjectLegalHold(w http.ResponseWriter, r *http.Request, access *bucketAccess, object string, version VersionRequest) error {
+	s.logger.Debug("putting object legal hold", zap.String("bucket", access.bucket), zap.String("object", object))
 
 	var doc ObjectLegalHold
 	if err := decodeXMLBody(r.Body, &doc); err != nil {
@@ -353,20 +357,25 @@ func (s *s3) putObjectLegalHold(w http.ResponseWriter, r *http.Request, accessKe
 	}
 	if err := doc.Validate(); err != nil {
 		return err
+	} else if err := access.assertLockActionAllowed(actionPutObjectLegalHold, object, &ObjectLockState{LegalHold: doc.Status}); err != nil {
+		return err
 	}
 
-	return s.backend.PutObjectLegalHold(r.Context(), accessKeyID, bucket, object, version, doc.Status)
+	if err := s.backend.PutObjectLegalHold(r.Context(), access.bucketID, object, version, doc.Status); err != nil {
+		return access.hideMissing(err, object)
+	}
+	return nil
 }
 
 // getObjectLegalHold handles GET Object legal-hold requests.
 //
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObjectLegalHold.html
-func (s *s3) getObjectLegalHold(w http.ResponseWriter, r *http.Request, accessKeyID, bucket, object string, version VersionRequest) error {
-	s.logger.Debug("getting object legal hold", zap.String("bucket", bucket), zap.String("object", object))
+func (s *s3) getObjectLegalHold(w http.ResponseWriter, r *http.Request, access *bucketAccess, object string, version VersionRequest) error {
+	s.logger.Debug("getting object legal hold", zap.String("bucket", access.bucket), zap.String("object", object))
 
-	status, err := s.backend.GetObjectLegalHold(r.Context(), accessKeyID, bucket, object, version)
+	status, err := s.backend.GetObjectLegalHold(r.Context(), access.bucketID, object, version)
 	if err != nil {
-		return err
+		return access.hideMissing(err, object)
 	}
 	if status == "" {
 		return s3errs.ErrNoSuchObjectLockConfiguration

@@ -329,6 +329,15 @@ func TestCreateSnapshotPendingUploadMissing(t *testing.T) {
 		t.Fatal("unexpected", len(snapshots))
 	} else if snapshots[0].SiaObjectID != snap.SiaObjectID {
 		t.Fatal("mismatch", snapshots[0].SiaObjectID)
+	} else if snapshots[0].ObjectCount != 0 || snap.ObjectCount != 0 {
+		t.Fatal("expected the snapshot to leave the buffered object out", snapshots[0].ObjectCount, snap.ObjectCount)
+	}
+
+	// the live database still lists the object
+	if stats, err := store.UploadStats(); err != nil {
+		t.Fatal(err)
+	} else if stats.PendingObjects != 1 {
+		t.Fatal("unexpected", stats.PendingObjects)
 	}
 }
 
@@ -385,7 +394,7 @@ func TestStuckPinningSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	unconfirmed := frand.Entropy256()
-	if err := store.MarkSnapshotPinning(snap.ID, unconfirmed); err != nil {
+	if err := store.MarkSnapshotPinning(snap.ID, unconfirmed, snap.ObjectCount); err != nil {
 		t.Fatal(err)
 	}
 
@@ -395,7 +404,7 @@ func TestStuckPinningSnapshot(t *testing.T) {
 	if err := backend.PinObjects(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := store.DeleteObject(testutil.AccessKeyID, bucket, s3.ObjectID{Key: "a"}, false); err != nil {
+	if _, _, _, err := store.DeleteObject(bucketID(t, store, bucket), s3.ObjectID{Key: "a"}, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -496,7 +505,7 @@ func TestSnapshotStartup(t *testing.T) {
 		t.Fatal(err)
 	}
 	landedObjID := pinSnapshotObject(t, memSDK, storeA, landed, landedGen)
-	if err := storeA.MarkSnapshotPinning(landed.ID, landedObjID); err != nil {
+	if err := storeA.MarkSnapshotPinning(landed.ID, landedObjID, landed.ObjectCount); err != nil {
 		t.Fatal(err)
 	}
 
@@ -506,7 +515,7 @@ func TestSnapshotStartup(t *testing.T) {
 		t.Fatal(err)
 	}
 	lostObjID := frand.Entropy256()
-	if err := storeA.MarkSnapshotPinning(lost.ID, lostObjID); err != nil {
+	if err := storeA.MarkSnapshotPinning(lost.ID, lostObjID, lost.ObjectCount); err != nil {
 		t.Fatal(err)
 	}
 	if err := backendA.Close(); err != nil {

@@ -36,6 +36,15 @@ const (
 
 	// Owner is the default owner name for objects created by S3Tester
 	Owner = "s3tester"
+
+	// OtherOwner is the name of a second user, for use with WithKeyPair.
+	OtherOwner = "other"
+
+	// OtherAccessKeyID is the access key of OtherOwner.
+	OtherAccessKeyID = "foo"
+
+	// OtherSecretAccessKey is the secret key of OtherOwner.
+	OtherSecretAccessKey = "bar"
 )
 
 // S3Tester wraps an AWS S3 client configured to talk to an S3 backend.
@@ -135,7 +144,11 @@ func (t *S3Tester) GetBucketPolicyStatus(ctx context.Context, bucket string) (bo
 
 // AddObject adds an object to the S3 backend.
 func (t *S3Tester) AddObject(bucket, object string, data []byte, metadata map[string]string) error {
-	_, err := t.backend.PutObject(context.Background(), AccessKeyID, bucket, object, bytes.NewReader(data), s3.PutObjectOptions{
+	info, err := t.backend.BucketAccessInfo(context.Background(), bucket)
+	if err != nil {
+		return err
+	}
+	_, err = t.backend.PutObject(context.Background(), info.ID, object, bytes.NewReader(data), s3.PutObjectOptions{
 		ContentLength: int64(len(data)),
 		Meta:          metadata,
 	})

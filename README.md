@@ -262,7 +262,8 @@ snapshots it finds there.
 
 A restore brings back the database as it was when the snapshot was taken.
 Objects written after that are not recovered. Objects still buffered on disk at
-the time had not reached Sia, so they stay listed but cannot be read.
+the time had not reached Sia and are not part of the snapshot, nor are
+multipart uploads still in progress.
 
 ## HTTPS
 
@@ -296,7 +297,7 @@ AWS Signature V4 exclusively. SigV4A is not implemented. Supported
 (`s3.example.com/bucket/object`) and virtual-hosted-style
 (`bucket.s3.example.com/object`) addressing are supported.
 
-Bucket lifecycle configuration supports prefix-based `AbortIncompleteMultipartUpload` rules and current-object `Expiration` rules.
+Bucket lifecycle configuration supports prefix-based `AbortIncompleteMultipartUpload` rules and current-object `Expiration` rules. Rules may also filter by object size with `ObjectSizeGreaterThan` and `ObjectSizeLessThan`, which exclude their own values, and a filter combining a non-empty prefix with size bounds must wrap them in `And`.
 
 Object Lock is supported in both `GOVERNANCE` and `COMPLIANCE` mode, with
 retention periods, legal holds and bucket default retention rules. Creating a
@@ -322,20 +323,22 @@ request. The legacy SigV2 form fields `AWSAccessKeyId` and `signature` are not
 accepted. A form may carry `acl`, which is matched against the policy and then
 ignored, since ACLs are unimplemented.
 
-Bucket policies are supported only to grant read access to everyone.
-`PutBucketPolicy` accepts `Allow` statements whose principal is `*` and whose
-actions are drawn from this set:
+Bucket policies are supported. Each user is treated as an AWS account root
+user. A principal can be a username, `arn:aws:iam::<username>:root`, or
+`{"CanonicalUser":"<username>"}`. The `*` principal includes anonymous
+requests. IAM users, roles, and service principals are not supported.
 
-| Action | Resource | Grants |
-|--------|----------|--------|
-| `s3:GetObject` | `arn:aws:s3:::<bucket>/*` | `GetObject`, `HeadObject` |
-| `s3:GetObjectVersion` | `arn:aws:s3:::<bucket>/*` | `GetObject`, `HeadObject` for a specific `versionId` |
-| `s3:ListBucket` | `arn:aws:s3:::<bucket>` | `ListObjects` v1 and v2, `HeadBucket` |
-| `s3:ListBucketVersions` | `arn:aws:s3:::<bucket>` | `ListObjectVersions` |
+Only the bucket owner can get, put, or delete a bucket policy. The bucket owner
+owns all objects in the bucket. A `Deny` statement can block the owner from
+objects but not from the bucket policy. Buckets shared with other users are not
+included in their `ListBuckets` response.
 
-Each action is granted on its own, so a policy that allows listing does not also
-allow reading. An action paired with the wrong resource grants nothing, as in
-S3. A policy granting everything looks like this:
+`aws:userid` and `aws:PrincipalAccount` are the username, or `anonymous` for
+unsigned requests. `aws:PrincipalArn` is `arn:aws:iam::<username>:root`.
+Condition keys for unsupported features evaluate as missing. Unknown condition
+keys are rejected.
+
+This policy allows `alice` to read and write objects under `alice/`:
 
 ```json
 {
@@ -343,32 +346,19 @@ S3. A policy granting everything looks like this:
   "Statement": [
     {
       "Effect": "Allow",
-      "Principal": "*",
-      "Action": ["s3:GetObject", "s3:GetObjectVersion"],
-      "Resource": "arn:aws:s3:::<bucket>/*"
-    },
-    {
-      "Effect": "Allow",
-      "Principal": "*",
-      "Action": ["s3:ListBucket", "s3:ListBucketVersions"],
-      "Resource": "arn:aws:s3:::<bucket>"
+      "Principal": {"AWS": "arn:aws:iam::alice:root"},
+      "Action": ["s3:GetObject", "s3:PutObject"],
+      "Resource": "arn:aws:s3:::<bucket>/${aws:userid}/*"
     }
   ]
 }
 ```
 
-A `*` principal covers every caller, so the grant applies to signed requests
-from other users as well as to unsigned ones. Nothing beyond those four actions
-follows from it: writes, deletes, and the bucket's own configuration all still
-require the owner's credentials, only the owner can read, change or remove the
-policy, and the bucket does not appear in anyone else's `ListBuckets`. A
-listing reports the bucket's owner, which is not necessarily the caller.
+ACLs, IAM identity policies, and `PublicAccessBlock` are not implemented.
 
-Any policy s3d cannot honor exactly is rejected rather than partially applied,
-so an accepted policy never grants more access than it describes: `Deny`
-statements, `Condition` blocks, named principals, other actions, resources
-scoped to a key prefix, and unrecognised members of any kind are all refused.
-ACLs remain unimplemented, as does `PublicAccessBlock`.
+When running behind a reverse proxy, add its address to `s3.trustedProxies`.
+`X-Forwarded-For` and `X-Forwarded-Proto` are only used from trusted proxies.
+The proxy must overwrite these headers.
 
 Conditional requests are supported. `GetObject` and `HeadObject` honor
 `If-Match`, `If-None-Match`, `If-Modified-Since` and `If-Unmodified-Since`, and
@@ -404,7 +394,7 @@ delete with nothing to delete is a no-op, as an unconditional one is.
 | DeleteBucketPolicy | ✓ | |
 | GetBucketPolicyStatus | ✓ | |
 | GetBucketLifecycle | ✓ | |
-| PutBucketLifecycle | ◐ | Prefix-based `AbortIncompleteMultipartUpload` and current-object `Expiration` rules only |
+| PutBucketLifecycle | ◐ | Prefix and object-size filters only, with `AbortIncompleteMultipartUpload` and current-object `Expiration` rules |
 | DeleteBucketLifecycle | ✓ | |
 | GetBucketCors | ✗ | |
 | PutBucketCors | ✗ | |
@@ -527,6 +517,7 @@ sia:
   dataShards: 10 # shards each slab is split into (default 10)
   parityShards: 20 # recovery shards added to each slab (default 20)
 s3:
+  trustedProxies: [] # e.g. ["127.0.0.1", "::1"] for a local reverse proxy
   hostBases: # bases for virtual-hosted-style addressing ("localhost" is always included)
     - s3.example.com
 ```

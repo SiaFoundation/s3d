@@ -58,11 +58,11 @@ func (s *Store) DiskUsage() (usage uint64, err error) {
 // marker, a suspended bucket replaces the null version with a null delete
 // marker, and an unversioned bucket deletes outright. A removed object's
 // filename is returned for cleanup if no longer referenced.
-func (s *Store) DeleteObject(accessKeyID, bucket string, objectID s3.ObjectID, bypass bool) (versionID string, isDeleteMarker bool, orphan objects.OrphanedFile, _ error) {
+func (s *Store) DeleteObject(bucket s3.BucketID, objectID s3.ObjectID, bypass bool) (versionID string, isDeleteMarker bool, orphan objects.OrphanedFile, _ error) {
 	err := s.transaction(func(tx *txn) error {
 		versionID, isDeleteMarker, orphan = "", false, objects.OrphanedFile{} // reset per attempt
 
-		bid, status, err := bucketIDAndVersioning(tx, accessKeyID, bucket)
+		bid, status, err := bucketIDAndVersioning(tx, bucket)
 		if err != nil {
 			return err
 		}
@@ -170,53 +170,30 @@ func checkWritePreconditions(tx *txn, bid int64, name string, p s3.ObjectPrecond
 	return p.CheckWrite(&attrs)
 }
 
-// hidesDeleteMarker reports whether a resolved object must be hidden from the
-// caller. A delete marker proves the key once existed, so a caller that may not
-// list the bucket must not be able to tell it apart from a key that never did.
-func hidesDeleteMarker(mayList bool, obj objects.Object, version s3.VersionRequest) bool {
-	return !mayList && obj.IsDeleteMarker && !version.Specified
-}
-
 // GetObject retrieves an object. An unspecified version returns the current
 // version (ErrNoSuchKey if the key has no versions); a specified version returns
 // that version (ErrNoSuchVersion if absent). The result may be a delete marker.
-//
-// A nil accessKeyID is an anonymous read, which only succeeds when the bucket's
-// policy grants action. The caller picks action so that a read resolving a
-// version internally stays authorized by what the original request asked for.
-func (s *Store) GetObject(accessKeyID *string, bucket, name string, version s3.VersionRequest, partNumber *int32, action s3.PolicyActions) (*objects.Object, error) {
+func (s *Store) GetObject(bucket s3.BucketID, name string, version s3.VersionRequest, partNumber *int32) (*objects.Object, error) {
 	var obj objects.Object
-	var mayList bool
-	if err := s.transaction(func(tx *txn) error {
-		b, err := bucketForRead(tx, accessKeyID, bucket, action)
+	err := s.transaction(func(tx *txn) error {
+		bid, status, err := bucketIDAndVersioning(tx, bucket)
 		if err != nil {
 			return err
 		}
-		mayList = b.mayList
-		if err := getObject(tx, &obj, b.id, name, version, partNumber); err != nil {
+		if err := getObject(tx, &obj, bid, name, version, partNumber); err != nil {
 			return err
 		}
-		if hidesDeleteMarker(mayList, obj, version) {
-			return s3errs.ErrAccessDenied
-		}
-		obj.Versioned = b.versioning != ""
-		if !b.isOwner {
-			// AWS gates the lock headers on s3:GetObjectRetention and
-			// s3:GetObjectLegalHold, which s3d policies do not carry
-			obj.ObjectLock = nil
-		}
+		obj.Versioned = status != ""
 		return nil
-	}); errors.Is(err, sql.ErrNoRows) {
-		if !mayList {
-			return nil, s3errs.ErrAccessDenied
-		} else if version.Specified {
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		if version.Specified {
 			return nil, s3errs.ErrNoSuchVersion
 		}
 		return nil, s3errs.ErrNoSuchKey
 	} else if err != nil {
 		return nil, err
 	}
-
 	return &obj, nil
 }
 
@@ -312,10 +289,10 @@ func attachSiaObject(tx *txn, obj *objects.Object, objectID sql.Null[sqlHash256]
 // version). An enabled bucket creates a new version; otherwise the null version
 // is overwritten, orphaning any prior object ID or pending file that is no
 // longer referenced (the latter returned so the caller can remove it from disk).
-func (s *Store) PutObject(accessKeyID, bucket, name string, opts objects.PutOptions) (versionID string, orphan objects.OrphanedFile, _ error) {
+func (s *Store) PutObject(bucket s3.BucketID, name string, opts objects.PutOptions) (versionID string, orphan objects.OrphanedFile, _ error) {
 	err := s.transaction(func(tx *txn) error {
 		versionID, orphan = "", objects.OrphanedFile{} // reset per attempt
-		bid, status, err := bucketIDAndVersioning(tx, accessKeyID, bucket)
+		bid, status, err := bucketIDAndVersioning(tx, bucket)
 		if err != nil {
 			return err
 		}
@@ -343,9 +320,9 @@ func (s *Store) PutObject(accessKeyID, bucket, name string, opts objects.PutOpti
 // seen. Returns ErrObjectNotFound if no pending object exists for the bucket
 // and name or ErrObjectModified if the stored content MD5 does not match the
 // provided contentMD5.
-func (s *Store) MarkObjectUploaded(bucket, name, versionID string, contentMD5 [16]byte, sealed sdk.SealedObject, pinBefore time.Time) error {
+func (s *Store) MarkObjectUploaded(bucket s3.BucketID, name, versionID string, contentMD5 [16]byte, sealed sdk.SealedObject, pinBefore time.Time) error {
 	return s.transaction(func(tx *txn) error {
-		bid, err := bucketIDByName(tx, bucket)
+		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
@@ -666,44 +643,32 @@ func (s *Store) UpdateSiaObjects(siaObjects []objects.SiaObject) (updated int64,
 // destination within a single transaction, applying opts.Meta per opts.Replace.
 // The result carries the wire-encoded version IDs of the new copy and the
 // source copied; an orphaned pending file is returned for the caller to remove.
-func (s *Store) CopyObject(accessKeyID, srcBucket, srcName string, srcVersion s3.VersionRequest, dstBucket, dstName string, opts s3.CopyObjectOptions) (_ *s3.CopyObjectResult, orphan objects.OrphanedFile, err error) {
+func (s *Store) CopyObject(srcBucket s3.BucketID, srcName string, srcVersion s3.VersionRequest, dstBucket s3.BucketID, dstName string, opts s3.CopyObjectOptions) (_ *s3.CopyObjectResult, orphan objects.OrphanedFile, err error) {
 	var obj objects.Object
 	var versionID, srcVersionWire string
-	var srcMayList bool
 	err = s.transaction(func(tx *txn) error {
 		obj = objects.Object{} // reset per transaction attempt
 		versionID, srcVersionWire, orphan = "", "", objects.OrphanedFile{}
 
-		// the destination is written, so it must be owned by the caller. It is
-		// resolved first so the same-bucket shortcut below can never inherit a
-		// bucket the caller only has read access to.
-		dstBid, dstStatus, err := bucketIDAndVersioning(tx, accessKeyID, dstBucket)
+		dstBid, dstStatus, err := bucketIDAndVersioning(tx, dstBucket)
 		if err != nil {
 			return err
 		}
-
-		// the source is only read, so a policy granting that read is enough,
-		// matching UploadPartCopy
 		srcBid, srcStatus := dstBid, dstStatus
-		srcMayList = true // a same-bucket copy is made by the bucket's owner
 		if srcBucket != dstBucket {
-			src, err := bucketForRead(tx, &accessKeyID, srcBucket, s3.ReadAction(srcVersion))
+			srcBid, srcStatus, err = bucketIDAndVersioning(tx, srcBucket)
 			if err != nil {
 				return err
 			}
-			srcBid, srcStatus, srcMayList = src.id, src.versioning, src.mayList
 		}
 
 		// copy the requested source version, or the current version when
 		// unspecified
 		if err := getObject(tx, &obj, srcBid, srcName, srcVersion, nil); err != nil {
-			return err
-		}
-		if hidesDeleteMarker(srcMayList, obj, srcVersion) {
-			return s3errs.ErrAccessDenied
+			return s3.CopySourceError{Err: err}
 		}
 		if err := opts.SourcePreconditions.CheckCopySource(obj.Attrs(), srcVersion); err != nil {
-			return err
+			return s3.CopySourceError{Err: err}
 		}
 		srcInternalVersion := obj.VersionID
 		if srcStatus != "" {
@@ -770,12 +735,10 @@ func (s *Store) CopyObject(accessKeyID, srcBucket, srcName string, srcVersion s3
 	if errors.Is(err, sql.ErrNoRows) {
 		// a missing source maps to ErrNoSuchVersion when a specific version was
 		// requested, otherwise ErrNoSuchKey.
-		if !srcMayList {
-			return nil, objects.OrphanedFile{}, s3errs.ErrAccessDenied
-		} else if srcVersion.Specified {
-			return nil, objects.OrphanedFile{}, s3errs.ErrNoSuchVersion
+		if srcVersion.Specified {
+			return nil, objects.OrphanedFile{}, s3.CopySourceError{Err: s3errs.ErrNoSuchVersion}
 		}
-		return nil, objects.OrphanedFile{}, s3errs.ErrNoSuchKey
+		return nil, objects.OrphanedFile{}, s3.CopySourceError{Err: s3errs.ErrNoSuchKey}
 	}
 	if err != nil {
 		return nil, objects.OrphanedFile{}, err
@@ -790,13 +753,12 @@ func (s *Store) CopyObject(accessKeyID, srcBucket, srcName string, srcVersion s3
 }
 
 // ObjectPartsByName returns the parts for a completed multipart object. It is
-// intended for internal callers (the upload loop and downstream of an
-// ownership-scoped GetObject) and does not perform an access check.
-func (s *Store) ObjectPartsByName(bucket, name, versionID string) ([]objects.Part, error) {
+// used by the upload loop and when reading completed multipart objects.
+func (s *Store) ObjectPartsByName(bucket s3.BucketID, name, versionID string) ([]objects.Part, error) {
 	var parts []objects.Part
 	err := s.transaction(func(tx *txn) error {
 		parts = parts[:0] // reuse same slice if transaction retries
-		bid, err := bucketIDByName(tx, bucket)
+		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
@@ -924,7 +886,7 @@ func (s *Store) ObjectsForUpload() ([]objects.ObjectForUpload, error) {
 	if err := s.transaction(func(tx *txn) error {
 		objs = objs[:0] // reuse same slice if transaction retries
 		rows, err := tx.Query(`
-			SELECT b.name, o.name, o.version_id, o.filename, o.content_md5, o.size, o.parts_count > 0 AS has_parts, o.updated_at
+			SELECT b.id, b.name, o.name, o.version_id, o.filename, o.content_md5, o.size, o.parts_count > 0 AS has_parts, o.updated_at
 			FROM objects o
 			JOIN buckets b ON b.id = o.bucket_id
 			WHERE o.filename IS NOT NULL AND o.sia_object_id IS NULL
@@ -937,7 +899,7 @@ func (s *Store) ObjectsForUpload() ([]objects.ObjectForUpload, error) {
 
 		for rows.Next() {
 			var obj objects.ObjectForUpload
-			if err := rows.Scan(&obj.Bucket, &obj.Name, &obj.VersionID, &obj.Filename, (*sqlMD5)(&obj.ContentMD5), &obj.Length, &obj.Multipart, (*sqlTime)(&obj.LastModified)); err != nil {
+			if err := rows.Scan(&obj.BucketID, &obj.Bucket, &obj.Name, &obj.VersionID, &obj.Filename, (*sqlMD5)(&obj.ContentMD5), &obj.Length, &obj.Multipart, (*sqlTime)(&obj.LastModified)); err != nil {
 				return err
 			}
 			objs = append(objs, obj)
@@ -984,7 +946,11 @@ func deleteObject(tx *txn, bid int64, name string, version string, bypass bool) 
 	if err := checkObjectLock(tx, bid, name, version, bypass); err != nil {
 		return deletedRow{}, false, err
 	}
+	return deleteObjectRow(tx, bid, name, version)
+}
 
+// deleteObjectRow removes the version regardless of its object lock.
+func deleteObjectRow(tx *txn, bid int64, name string, version string) (row deletedRow, found bool, _ error) {
 	var id sql.Null[sqlHash256]
 	var wasLatest bool
 	err := tx.QueryRow(`
@@ -1176,7 +1142,7 @@ WHERE o.bucket_id = ?
 
 // ListObjects lists objects in the specified bucket, filtered by prefix and
 // pagination settings.
-func (s *Store) ListObjects(accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectsPage) (result *s3.ObjectsListResult, err error) {
+func (s *Store) ListObjects(bucket s3.BucketID, prefix s3.Prefix, page s3.ListObjectsPage) (result *s3.ObjectsListResult, err error) {
 	result = s3.NewObjectsListResult(page.MaxKeys)
 
 	// adjust marker if it falls inside a common prefix
@@ -1192,13 +1158,12 @@ func (s *Store) ListObjects(accessKeyID *string, bucket string, prefix s3.Prefix
 	err = s.transaction(func(tx *txn) error {
 		*result = *s3.NewObjectsListResult(page.MaxKeys) // reset per transaction attempt
 
-		b, err := bucketForRead(tx, accessKeyID, bucket, s3.ActionListBucket)
+		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
 			return fmt.Errorf("failed to get bucket ID: %w", err)
 		}
-		bid := b.id
 
-		// a caller that asked for no keys still has to be allowed to list
+		// a request for no keys still reports a missing bucket
 		if page.MaxKeys == 0 {
 			return nil
 		}
@@ -1217,12 +1182,6 @@ func (s *Store) ListObjects(accessKeyID *string, bucket string, prefix s3.Prefix
 
 		if !result.IsTruncated {
 			result.NextMarker = ""
-		}
-		if page.FetchOwner != nil && *page.FetchOwner {
-			owner := b.userInfo()
-			for i := range result.Contents {
-				result.Contents[i].Owner = owner
-			}
 		}
 		return nil
 	})
@@ -1358,20 +1317,19 @@ func listVersionPage(tx *txn, bid int64, prefix s3.Prefix, m versionMarker, limi
 // objects in the bucket, ordered by key ascending then by version creation
 // order descending (newest first), applying prefix, delimiter and the
 // (key-marker, version-id-marker) cursor.
-func (s *Store) ListObjectVersions(accessKeyID *string, bucket string, prefix s3.Prefix, page s3.ListObjectVersionsPage) (*s3.ObjectVersionsListResult, error) {
+func (s *Store) ListObjectVersions(bucket s3.BucketID, prefix s3.Prefix, page s3.ListObjectVersionsPage) (*s3.ObjectVersionsListResult, error) {
 	result := s3.NewObjectVersionsListResult(page.MaxKeys)
 
 	const maxRowsPerQuery = 100
 	err := s.transaction(func(tx *txn) error {
 		*result = *s3.NewObjectVersionsListResult(page.MaxKeys) // reset per attempt
 
-		b, err := bucketForRead(tx, accessKeyID, bucket, s3.ActionListBucketVersions)
+		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
-		bid := b.id
 
-		// a caller that asked for no keys still has to be allowed to list
+		// a request for no keys still reports a missing bucket
 		if page.MaxKeys == 0 {
 			return nil
 		}
@@ -1394,12 +1352,6 @@ func (s *Store) ListObjectVersions(accessKeyID *string, bucket string, prefix s3
 
 		if !result.IsTruncated {
 			result.NextKeyMarker, result.NextVersionIDMarker = "", ""
-		}
-		if page.FetchOwner != nil && *page.FetchOwner {
-			owner := b.userInfo()
-			for k := range result.Versions {
-				result.Versions[k].Owner = owner
-			}
 		}
 		return nil
 	})

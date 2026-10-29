@@ -21,14 +21,15 @@ func TestSnapshots(t *testing.T) {
 	if err := store.CreateBucket(testAccessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
+	bid := store.bucketID(bucket)
 
 	// upload and pin an object
 	sealed := newTestObject()
 	objID := sealed.ID()
 	md5 := frand.Entropy128()
-	if _, _, err := store.PutObject(testAccessKeyID, bucket, "a", objects.PutOptions{ContentMD5: md5, Length: 1, FileName: new(string)}); err != nil {
+	if _, _, err := store.PutObject(bid, "a", objects.PutOptions{ContentMD5: md5, Length: 1, FileName: new(string)}); err != nil {
 		t.Fatal(err)
-	} else if err := store.MarkObjectUploaded(bucket, "a", "", md5, sealed, time.Now().Add(time.Hour)); err != nil {
+	} else if err := store.MarkObjectUploaded(bid, "a", "", md5, sealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	} else if _, err := store.MarkObjectPinned(objID); err != nil {
 		t.Fatal(err)
@@ -36,7 +37,7 @@ func TestSnapshots(t *testing.T) {
 
 	// a pending object with only an on-disk file
 	pending := "pending-file"
-	if _, _, err := store.PutObject(testAccessKeyID, bucket, "pending", objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 5, FileName: &pending}); err != nil {
+	if _, _, err := store.PutObject(bid, "pending", objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 5, FileName: &pending}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -65,7 +66,7 @@ func TestSnapshots(t *testing.T) {
 	// a snapshot is listed once it is marked pinned
 	var siaObjectID types.Hash256
 	frand.Read(siaObjectID[:])
-	if err := store.MarkSnapshotPinning(s1.ID, siaObjectID); err != nil {
+	if err := store.MarkSnapshotPinning(s1.ID, siaObjectID, s1.ObjectCount); err != nil {
 		t.Fatal(err)
 	} else if err := store.MarkSnapshotPinned(siaObjectID); err != nil {
 		t.Fatal(err)
@@ -96,7 +97,7 @@ func TestSnapshots(t *testing.T) {
 	}
 
 	// delete the object while the first snapshot still references it
-	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "a"}, false); err != nil {
+	if _, _, _, err := store.DeleteObject(bid, s3.ObjectID{Key: "a"}, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -201,9 +202,9 @@ func TestSnapshots(t *testing.T) {
 		t.Helper()
 		sealed := newTestObject()
 		md5 := frand.Entropy128()
-		if _, _, err := store.PutObject(testAccessKeyID, bucket, key, objects.PutOptions{ContentMD5: md5, Length: 1, FileName: new(string)}); err != nil {
+		if _, _, err := store.PutObject(bid, key, objects.PutOptions{ContentMD5: md5, Length: 1, FileName: new(string)}); err != nil {
 			t.Fatal(err)
-		} else if err := store.MarkObjectUploaded(bucket, key, "", md5, sealed, time.Now().Add(time.Hour)); err != nil {
+		} else if err := store.MarkObjectUploaded(bid, key, "", md5, sealed, time.Now().Add(time.Hour)); err != nil {
 			t.Fatal(err)
 		} else if _, err := store.MarkObjectPinned(sealed.ID()); err != nil {
 			t.Fatal(err)
@@ -238,9 +239,9 @@ func TestSnapshots(t *testing.T) {
 	// withheld, the one that predates it and the one created during it may
 	// both be captured in the snapshot
 	bID := addObject("b")
-	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "b"}, false); err != nil {
+	if _, _, _, err := store.DeleteObject(bid, s3.ObjectID{Key: "b"}, false); err != nil {
 		t.Fatal(err)
-	} else if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "a2"}, false); err != nil {
+	} else if _, _, _, err := store.DeleteObject(bid, s3.ObjectID{Key: "a2"}, false); err != nil {
 		t.Fatal(err)
 	}
 	if orphans, err := store.OrphanedObjects(100); err != nil {
@@ -252,7 +253,7 @@ func TestSnapshots(t *testing.T) {
 	// completing the third snapshot keeps it withheld, it existed before the
 	// snapshot finished
 	snap3ObjID := frand.Entropy256()
-	if err := store.MarkSnapshotPinning(snap3.ID, snap3ObjID); err != nil {
+	if err := store.MarkSnapshotPinning(snap3.ID, snap3ObjID, snap3.ObjectCount); err != nil {
 		t.Fatal(err)
 	} else if err := store.MarkSnapshotPinned(snap3ObjID); err != nil {
 		t.Fatal(err)
@@ -269,7 +270,7 @@ func TestSnapshots(t *testing.T) {
 	// an object created after the snapshot completed is provably absent from
 	// it, deleting it releases it immediately
 	cID := addObject("c")
-	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "c"}, false); err != nil {
+	if _, _, _, err := store.DeleteObject(bid, s3.ObjectID{Key: "c"}, false); err != nil {
 		t.Fatal(err)
 	}
 	if orphans, err := store.OrphanedObjects(100); err != nil {
@@ -287,17 +288,17 @@ func TestSnapshots(t *testing.T) {
 	snap4ObjID := frand.Entropy256()
 	if snap4, _, err := store.CreateSnapshot(); err != nil {
 		t.Fatal(err)
-	} else if err := store.MarkSnapshotPinning(snap4.ID, snap4ObjID); err != nil {
+	} else if err := store.MarkSnapshotPinning(snap4.ID, snap4ObjID, snap4.ObjectCount); err != nil {
 		t.Fatal(err)
 	} else if err := store.MarkSnapshotPinned(snap4ObjID); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.CopyObject(testAccessKeyID, bucket, "d", s3.NoVersion(), bucket, "d-copy", s3.CopyObjectOptions{}); err != nil {
+	if _, _, err := store.CopyObject(bid, "d", s3.NoVersion(), bid, "d-copy", s3.CopyObjectOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "d"}, false); err != nil {
+	if _, _, _, err := store.DeleteObject(bid, s3.ObjectID{Key: "d"}, false); err != nil {
 		t.Fatal(err)
-	} else if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "d-copy"}, false); err != nil {
+	} else if _, _, _, err := store.DeleteObject(bid, s3.ObjectID{Key: "d-copy"}, false); err != nil {
 		t.Fatal(err)
 	}
 	if orphans, err := store.OrphanedObjects(100); err != nil {
@@ -313,7 +314,7 @@ func TestSnapshots(t *testing.T) {
 		t.Fatal(err)
 	}
 	eID := addObject("e")
-	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "e"}, false); err != nil {
+	if _, _, _, err := store.DeleteObject(bid, s3.ObjectID{Key: "e"}, false); err != nil {
 		t.Fatal(err)
 	}
 	if orphans, err := store.OrphanedObjects(100); err != nil {
@@ -329,9 +330,9 @@ func TestSnapshots(t *testing.T) {
 	// an object the completed backup references stays withheld
 	fSealed := newTestObject()
 	fMD5 := frand.Entropy128()
-	if _, _, err := store.PutObject(testAccessKeyID, bucket, "f", objects.PutOptions{ContentMD5: fMD5, Length: 1, FileName: new(string)}); err != nil {
+	if _, _, err := store.PutObject(bid, "f", objects.PutOptions{ContentMD5: fMD5, Length: 1, FileName: new(string)}); err != nil {
 		t.Fatal(err)
-	} else if err := store.MarkObjectUploaded(bucket, "f", "", fMD5, fSealed, time.Now().Add(time.Hour)); err != nil {
+	} else if err := store.MarkObjectUploaded(bid, "f", "", fMD5, fSealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	} else if _, err := store.MarkObjectPinned(fSealed.ID()); err != nil {
 		t.Fatal(err)
@@ -339,7 +340,7 @@ func TestSnapshots(t *testing.T) {
 	snap5ObjID := frand.Entropy256()
 	if snap5, _, err := store.CreateSnapshot(); err != nil {
 		t.Fatal(err)
-	} else if err := store.MarkSnapshotPinning(snap5.ID, snap5ObjID); err != nil {
+	} else if err := store.MarkSnapshotPinning(snap5.ID, snap5ObjID, snap5.ObjectCount); err != nil {
 		t.Fatal(err)
 	} else if err := store.MarkSnapshotPinned(snap5ObjID); err != nil {
 		t.Fatal(err)
@@ -347,7 +348,7 @@ func TestSnapshots(t *testing.T) {
 	if _, err := store.UpdateSiaObjects([]objects.SiaObject{{ID: fSealed.ID(), Sealed: fSealed}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "f"}, false); err != nil {
+	if _, _, _, err := store.DeleteObject(bid, s3.ObjectID{Key: "f"}, false); err != nil {
 		t.Fatal(err)
 	}
 	if orphans, err := store.OrphanedObjects(100); err != nil {
@@ -391,9 +392,9 @@ func TestSnapshots(t *testing.T) {
 		t.Fatal(err)
 	}
 	rb2ObjID := frand.Entropy256()
-	if err := store.MarkSnapshotPinning(rb2.ID, rb2ObjID); err != nil {
+	if err := store.MarkSnapshotPinning(rb2.ID, rb2ObjID, rb2.ObjectCount); err != nil {
 		t.Fatal(err)
-	} else if err := store.MarkSnapshotPinning(rb2.ID, rb2ObjID); !errors.Is(err, s3.ErrSnapshotNotFound) {
+	} else if err := store.MarkSnapshotPinning(rb2.ID, rb2ObjID, rb2.ObjectCount); !errors.Is(err, s3.ErrSnapshotNotFound) {
 		t.Fatal("unexpected", err)
 	}
 	if err := store.RollbackSnapshot(rb2.ID); err != nil {
@@ -441,7 +442,7 @@ func TestSnapshots(t *testing.T) {
 		t.Fatal(err)
 	}
 	rb3ObjID := frand.Entropy256()
-	if err := store.MarkSnapshotPinning(rb3.ID, rb3ObjID); err != nil {
+	if err := store.MarkSnapshotPinning(rb3.ID, rb3ObjID, rb3.ObjectCount); err != nil {
 		t.Fatal(err)
 	}
 	if deleted, err := store.RollbackIncompleteSnapshots(); err != nil {
@@ -495,14 +496,15 @@ func TestAdoptSnapshotWithholdsExistingOrphans(t *testing.T) {
 	if err := store.CreateBucket(testAccessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
 	}
+	bid := store.bucketID(bucket)
 
 	// upload and pin an object that exists in the database being restored
 	sealed := newTestObject()
 	objID := sealed.ID()
 	md5 := frand.Entropy128()
-	if _, _, err := store.PutObject(testAccessKeyID, bucket, "a", objects.PutOptions{ContentMD5: md5, Length: 1, FileName: new(string)}); err != nil {
+	if _, _, err := store.PutObject(bid, "a", objects.PutOptions{ContentMD5: md5, Length: 1, FileName: new(string)}); err != nil {
 		t.Fatal(err)
-	} else if err := store.MarkObjectUploaded(bucket, "a", "", md5, sealed, time.Now().Add(time.Hour)); err != nil {
+	} else if err := store.MarkObjectUploaded(bid, "a", "", md5, sealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	} else if _, err := store.MarkObjectPinned(objID); err != nil {
 		t.Fatal(err)
@@ -523,7 +525,7 @@ func TestAdoptSnapshotWithholdsExistingOrphans(t *testing.T) {
 
 	// this history deletes the object before discovering the snapshots still
 	// present on the network
-	if _, _, _, err := store.DeleteObject(testAccessKeyID, bucket, s3.ObjectID{Key: "a"}, false); err != nil {
+	if _, _, _, err := store.DeleteObject(bid, s3.ObjectID{Key: "a"}, false); err != nil {
 		t.Fatal(err)
 	}
 

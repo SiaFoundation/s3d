@@ -36,13 +36,13 @@ func (s *Store) CreateSnapshot() (snap s3.Snapshot, gen int64, err error) {
 	return
 }
 
-// MarkSnapshotPinning records the Sia object ID for the created snapshot and
-// marks it as awaiting its pin. It must be called before the pin request is
-// issued.
-func (s *Store) MarkSnapshotPinning(snapshotID int64, objectID types.Hash256) error {
+// MarkSnapshotPinning records the Sia object ID and the object count of the
+// created snapshot and marks it as awaiting its pin. It must be called before
+// the pin request is issued.
+func (s *Store) MarkSnapshotPinning(snapshotID int64, objectID types.Hash256, objectCount int64) error {
 	return s.transaction(func(tx *txn) error {
-		res, err := tx.Exec("UPDATE snapshots SET state = $1, sia_object_id = $2, state_since = $3 WHERE id = $4 AND state = $5",
-			snapshotStatePinning, sqlHash256(objectID), sqlTime(time.Now()), snapshotID, snapshotStateCreated)
+		res, err := tx.Exec("UPDATE snapshots SET state = $1, sia_object_id = $2, state_since = $3, object_count = $4 WHERE id = $5 AND state = $6",
+			snapshotStatePinning, sqlHash256(objectID), sqlTime(time.Now()), objectCount, snapshotID, snapshotStateCreated)
 		if err != nil {
 			return err
 		}
