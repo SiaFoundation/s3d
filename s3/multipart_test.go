@@ -3,10 +3,15 @@ package s3_test
 import (
 	"bytes"
 	"crypto/md5"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"hash/crc32"
 	"io"
 	"math"
+	"net/http"
 	"strconv"
 	"strings"
 	"testing"
@@ -17,6 +22,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	service "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"lukechampine.com/frand"
 )
 
 func TestCreateMultipartUpload(t *testing.T) {
@@ -145,6 +151,54 @@ func TestUploadPart(t *testing.T) {
 		t.Fatalf("expected ETag %x, got %q", expectedMD5, *part.ETag)
 	}
 
+	crc32Checksum := func(b []byte) string {
+		var sum [4]byte
+		binary.BigEndian.PutUint32(sum[:], crc32.ChecksumIEEE(b))
+		return base64.StdEncoding.EncodeToString(sum[:])
+	}
+
+	// upload a part with a checksum that does not match the data
+	_, err = s3Tester.Client().UploadPart(t.Context(), &service.UploadPartInput{
+		Bucket:        aws.String(bucket),
+		Key:           aws.String(object),
+		UploadId:      aws.String(uploadID),
+		PartNumber:    aws.Int32(1),
+		Body:          bytes.NewReader(data),
+		ContentLength: aws.Int64(int64(len(data))),
+		ChecksumCRC32: aws.String(crc32Checksum(frand.Bytes(100))),
+	})
+	testutil.AssertS3Error(t, s3errs.ErrBadDigest, err)
+
+	// upload a part with a checksum the client computed itself
+	checksummed, err := s3Tester.Client().UploadPart(t.Context(), &service.UploadPartInput{
+		Bucket:        aws.String(bucket),
+		Key:           aws.String(object),
+		UploadId:      aws.String(uploadID),
+		PartNumber:    aws.Int32(1),
+		Body:          bytes.NewReader(data),
+		ContentLength: aws.Int64(int64(len(data))),
+		ChecksumCRC32: aws.String(crc32Checksum(data)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if got := aws.ToString(checksummed.ChecksumCRC32); got != crc32Checksum(data) {
+		t.Fatalf("checksum mismatch: expected %s, got %s", crc32Checksum(data), got)
+	}
+
+	// assert [s3errs.ErrInvalidRequest] is returned for two checksums
+	sha256Sum := sha256.Sum256(data)
+	_, err = s3Tester.Client().UploadPart(t.Context(), &service.UploadPartInput{
+		Bucket:         aws.String(bucket),
+		Key:            aws.String(object),
+		UploadId:       aws.String(uploadID),
+		PartNumber:     aws.Int32(1),
+		Body:           bytes.NewReader(data),
+		ContentLength:  aws.Int64(int64(len(data))),
+		ChecksumCRC32:  aws.String(crc32Checksum(data)),
+		ChecksumSHA256: aws.String(base64.StdEncoding.EncodeToString(sha256Sum[:])),
+	})
+	testutil.AssertS3Error(t, s3errs.ErrInvalidRequest, err)
+
 	// assert [s3errs.ErrInvalidArgument] is returned for invalid part number
 	_, err = s3Tester.UploadPart(t.Context(), bucket, object, *res.UploadId, 0, data)
 	testutil.AssertS3Error(t, s3errs.ErrInvalidArgument, err)
@@ -161,6 +215,60 @@ func TestUploadPart(t *testing.T) {
 	// assert [s3errs.ErrNoSuchBucket] is returned for nonexistent bucket
 	_, err = s3Tester.UploadPart(t.Context(), "missing-bucket", object, *res.UploadId, 1, data)
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchBucket, err)
+}
+
+// TestUploadPartTrailingChecksum asserts a checksum the client sends after the
+// body is computed by the backend and echoed on the response.
+func TestUploadPartTrailingChecksum(t *testing.T) {
+	rt := &recordingTransport{}
+	s3Tester := testutil.NewTester(t,
+		testutil.WithTLS(),
+		testutil.WithServiceOptions(func(o *service.Options) {
+			inner, ok := o.HTTPClient.(*http.Client)
+			if !ok {
+				t.Fatal("HTTPClient is not *http.Client")
+			}
+			rt.base = inner.Transport
+			o.HTTPClient = &recordingHTTPClient{rt: rt}
+		}),
+	)
+
+	const (
+		bucket = "trailing-checksum"
+		object = "object"
+	)
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := s3Tester.CreateMultipartUpload(t.Context(), bucket, object, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data := frand.Bytes(100)
+	var sum [4]byte
+	binary.BigEndian.PutUint32(sum[:], crc32.ChecksumIEEE(data))
+	want := base64.StdEncoding.EncodeToString(sum[:])
+
+	// an unseekable body leaves the client no way to send the checksum ahead of
+	// the data, so it arrives as a trailer
+	part, err := s3Tester.Client().UploadPart(t.Context(), &service.UploadPartInput{
+		Bucket:            aws.String(bucket),
+		Key:               aws.String(object),
+		UploadId:          res.UploadId,
+		PartNumber:        aws.Int32(1),
+		Body:              readerOnly{bytes.NewReader(data)},
+		ContentLength:     aws.Int64(int64(len(data))),
+		ChecksumAlgorithm: types.ChecksumAlgorithmCrc32,
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if got := rt.last(); got != "STREAMING-UNSIGNED-PAYLOAD-TRAILER" {
+		t.Fatalf("expected the upload to use STREAMING-UNSIGNED-PAYLOAD-TRAILER, got %q", got)
+	} else if got := aws.ToString(part.ChecksumCRC32); got != want {
+		t.Fatalf("checksum mismatch: expected %s, got %s", want, got)
+	}
 }
 
 func TestUploadPartCopy(t *testing.T) {

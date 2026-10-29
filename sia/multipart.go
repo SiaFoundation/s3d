@@ -1,6 +1,7 @@
 package sia
 
 import (
+	"bytes"
 	"context"
 	"crypto/md5"
 	"crypto/sha256"
@@ -158,6 +159,15 @@ func (s *Sia) UploadPart(ctx context.Context, bucket s3.BucketID, object string,
 		writers = append(writers, sha256Hash)
 	}
 
+	var checksumHash hash.Hash
+	if opts.Checksum != nil {
+		checksumHash = opts.Checksum.NewHash()
+		if checksumHash == nil {
+			return nil, s3errs.ErrInvalidRequest
+		}
+		writers = append(writers, checksumHash)
+	}
+
 	// copy data and validate size
 	contentLength, err := io.Copy(io.MultiWriter(writers...), io.LimitReader(r, s3.MaxUploadPartSize+1))
 	if err != nil {
@@ -180,6 +190,14 @@ func (s *Sia) UploadPart(ctx context.Context, bucket s3.BucketID, object string,
 		contentSHA256 = new([32]byte)
 		copy(contentSHA256[:], sha256Hash.Sum(nil))
 		if *opts.ContentSHA256 != *contentSHA256 {
+			return nil, s3errs.ErrBadDigest
+		}
+	}
+
+	var checksum *s3.RequestChecksum
+	if checksumHash != nil {
+		checksum = &s3.RequestChecksum{Algorithm: opts.Checksum.Algorithm, Sum: checksumHash.Sum(nil)}
+		if opts.Checksum.Sum != nil && !bytes.Equal(checksum.Sum, opts.Checksum.Sum) {
 			return nil, s3errs.ErrBadDigest
 		}
 	}
@@ -207,7 +225,7 @@ func (s *Sia) UploadPart(ctx context.Context, bucket s3.BucketID, object string,
 		s.releaseDiskUsage(0)
 	}
 
-	return &s3.UploadPartResult{ContentMD5: contentMD5}, nil
+	return &s3.UploadPartResult{ContentMD5: contentMD5, Checksum: checksum}, nil
 }
 
 // UploadPartCopy uploads a part by copying data from an existing object.
