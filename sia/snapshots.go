@@ -26,20 +26,29 @@ import (
 // while enumerating the account.
 const remoteSnapshotBatchSize = api.MaxLimit
 
-// SnapshotRetention is the number of calendar days, weeks and months of
-// scheduled snapshots kept. All zero keeps every scheduled snapshot.
-type SnapshotRetention struct {
+// SnapshotSchedule is the cron expression on which snapshots are taken and the
+// number of calendar days, weeks and months of scheduled snapshots kept. An
+// empty expression disables scheduled snapshots and all zero counts keep every
+// scheduled snapshot.
+type SnapshotSchedule struct {
+	Expression  string
 	KeepDaily   int
 	KeepWeekly  int
 	KeepMonthly int
 }
 
-// Validate rejects a negative count.
-func (r SnapshotRetention) Validate() error {
-	if r.KeepDaily < 0 || r.KeepWeekly < 0 || r.KeepMonthly < 0 {
+// Validate rejects a schedule the snapshot loop cannot apply.
+func (sched SnapshotSchedule) Validate() error {
+	if sched.KeepDaily < 0 || sched.KeepWeekly < 0 || sched.KeepMonthly < 0 {
 		return errors.New("snapshot retention counts must not be negative")
+	} else if sched.Expression == "" {
+		if sched.KeepDaily != 0 || sched.KeepWeekly != 0 || sched.KeepMonthly != 0 {
+			return errors.New("snapshot retention requires a snapshot schedule")
+		}
+		return nil
 	}
-	return nil
+	_, err := ParseSnapshotSchedule(sched.Expression)
+	return err
 }
 
 // ParseSnapshotSchedule parses a standard five field cron expression or one of
@@ -197,14 +206,14 @@ func (s *Sia) snapshotsLoop(ctx context.Context) {
 // the last one and prunes the scheduled snapshots retention no longer keeps,
 // once object metadata is synced.
 func (s *Sia) runScheduledSnapshot(ctx context.Context, now time.Time) {
-	expr, retention, err := s.store.SnapshotSchedule()
+	sched, err := s.store.SnapshotSchedule()
 	if err != nil {
 		s.logger.Error("failed to load snapshot schedule", zap.Error(err))
 		return
-	} else if expr == "" {
+	} else if sched.Expression == "" {
 		return
 	}
-	sched, err := ParseSnapshotSchedule(expr)
+	cronSched, err := ParseSnapshotSchedule(sched.Expression)
 	if err != nil {
 		s.logger.Error("failed to parse snapshot schedule", zap.Error(err))
 		return
@@ -214,9 +223,9 @@ func (s *Sia) runScheduledSnapshot(ctx context.Context, now time.Time) {
 		return
 	}
 	if !now.Before(s.snapshotRetryAt) {
-		s.takeScheduledSnapshot(ctx, now, sched)
+		s.takeScheduledSnapshot(ctx, now, cronSched)
 	}
-	s.pruneScheduledSnapshots(ctx, now, retention)
+	s.pruneScheduledSnapshots(ctx, now, sched)
 }
 
 // takeScheduledSnapshot takes a snapshot when the schedule fired since the
@@ -245,13 +254,13 @@ func (s *Sia) takeScheduledSnapshot(ctx context.Context, now time.Time, sched cr
 
 // pruneScheduledSnapshots deletes the scheduled snapshots the retention counts
 // do not keep.
-func (s *Sia) pruneScheduledSnapshots(ctx context.Context, now time.Time, retention SnapshotRetention) {
+func (s *Sia) pruneScheduledSnapshots(ctx context.Context, now time.Time, sched SnapshotSchedule) {
 	snapshots, err := s.store.ListSnapshots()
 	if err != nil {
 		s.logger.Error("failed to list snapshots", zap.Error(err))
 		return
 	}
-	for _, snap := range expiredScheduledSnapshots(snapshots, retention, now.Location()) {
+	for _, snap := range expiredScheduledSnapshots(snapshots, sched, now.Location()) {
 		if ctx.Err() != nil {
 			return
 		} else if err := s.DeleteSnapshot(ctx, snap.SiaObjectID); err != nil {
@@ -264,17 +273,17 @@ func (s *Sia) pruneScheduledSnapshots(ctx context.Context, now time.Time, retent
 // first, that the retention counts do not keep. Each count keeps the newest
 // snapshot of that many calendar days, ISO weeks or months in loc, all zero
 // counts keep every scheduled snapshot.
-func expiredScheduledSnapshots(snapshots []s3.Snapshot, retention SnapshotRetention, loc *time.Location) []s3.Snapshot {
-	if retention == (SnapshotRetention{}) {
+func expiredScheduledSnapshots(snapshots []s3.Snapshot, sched SnapshotSchedule, loc *time.Location) []s3.Snapshot {
+	if sched.KeepDaily == 0 && sched.KeepWeekly == 0 && sched.KeepMonthly == 0 {
 		return nil
 	}
 	periods := []struct {
 		keep int
 		key  func(time.Time) [3]int
 	}{
-		{retention.KeepDaily, func(t time.Time) [3]int { return [3]int{t.Year(), int(t.Month()), t.Day()} }},
-		{retention.KeepWeekly, func(t time.Time) [3]int { y, w := t.ISOWeek(); return [3]int{y, w, 0} }},
-		{retention.KeepMonthly, func(t time.Time) [3]int { return [3]int{t.Year(), int(t.Month()), 0} }},
+		{sched.KeepDaily, func(t time.Time) [3]int { return [3]int{t.Year(), int(t.Month()), t.Day()} }},
+		{sched.KeepWeekly, func(t time.Time) [3]int { y, w := t.ISOWeek(); return [3]int{y, w, 0} }},
+		{sched.KeepMonthly, func(t time.Time) [3]int { return [3]int{t.Year(), int(t.Month()), 0} }},
 	}
 	kept := make(map[types.Hash256]bool)
 	for _, p := range periods {

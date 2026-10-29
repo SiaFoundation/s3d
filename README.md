@@ -228,26 +228,26 @@ has, the list may be incomplete.
 and monthly ones.
 
 ```sh
-s3d snapshots schedule set "0 3 * * *"
-s3d snapshots retention set --keep-daily 7 --keep-weekly 4 --keep-monthly 12
+s3d snapshots schedule set --keep-daily 7 --keep-weekly 4 --keep-monthly 12 "0 3 * * *"
+s3d snapshots schedule
 s3d snapshots schedule disable
 ```
 
 The expression has the five standard fields or is one of `@hourly`, `@daily`,
 `@weekly`, `@monthly` and `@yearly`, and runs in the instance's local time zone.
-Both settings are stored in the database next to the users and keys, a running
-instance picks up a change within a minute, and they are part of every
-snapshot, so a restored instance resumes them. `schedule` and `retention`
-without a subcommand print the current setting. A scheduled snapshot flushes
-the objects buffered on disk like a manual one. If the instance was down when
-a snapshot was due, it is taken on the next start.
+The schedule is stored in the database next to the users and keys, a running
+instance picks up a change within a minute, and it is part of every snapshot,
+so a restored instance resumes it. `schedule` without a subcommand prints the
+current schedule and counts. A scheduled snapshot flushes the objects buffered
+on disk like a manual one. If the instance was down when a snapshot was due, it
+is taken on the next start.
 
 Each count keeps the newest scheduled snapshot of that many days, weeks or
 months, the sets are combined, and all zero keeps every scheduled snapshot.
-`retention set` replaces all three counts, so a count left out is zero.
-Retention runs while a schedule is set and only ever removes snapshots the
-schedule took, a snapshot created with `s3d snapshots create` is kept until it
-is deleted. The `list` output marks scheduled snapshots.
+`set` replaces the whole schedule, so a count left out is zero. Retention only
+ever removes snapshots the schedule took, a snapshot created with
+`s3d snapshots create` is kept until it is deleted. The `list` output marks
+scheduled snapshots.
 
 ### Deleting
 

@@ -195,7 +195,8 @@ type Sia struct {
 	failedUploads atomic.Int64
 
 	// synced reports whether a metadata sync drained the event stream without
-	// failing, it gates orphan processing and snapshot deletions
+	// failing, it gates orphan processing, snapshot deletions and scheduled
+	// snapshots
 	synced     atomic.Bool
 	orphanWake chan struct{}
 
@@ -303,7 +304,7 @@ type Store interface {
 	MarkSnapshotPinning(id int64, objectID types.Hash256, objectCount int64) error
 	RollbackIncompleteSnapshots() (int64, error)
 	RollbackSnapshot(id int64) error
-	SnapshotSchedule() (string, SnapshotRetention, error)
+	SnapshotSchedule() (SnapshotSchedule, error)
 	SnapshotsForDeletion(before time.Time) ([]types.Hash256, error)
 }
 

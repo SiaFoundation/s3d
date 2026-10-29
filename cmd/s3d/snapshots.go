@@ -34,7 +34,6 @@ Commands:
 	delete		Delete a snapshot and unpin its Sia object
 	restore		Restore a database from a snapshot on Sia
 	schedule	Manage the snapshot schedule
-	retention	Manage the retention of scheduled snapshots
 `
 
 	snapshotsCreateUsage = `Usage: s3d snapshots create
@@ -75,40 +74,29 @@ s3d.`
 
 	snapshotsScheduleUsage = `Usage: s3d snapshots schedule [command]
 
-Print the snapshot schedule.
+Print the snapshot schedule and its retention.
 
 Commands:
-	set		Set the snapshot schedule
+	set		Set the snapshot schedule and its retention
 	disable		Disable scheduled snapshots
 `
 
-	snapshotsScheduleSetUsage = `Usage: s3d snapshots schedule set <expression>
+	snapshotsScheduleSetUsage = `Usage: s3d snapshots schedule set [--keep-daily <n>] [--keep-weekly <n>] [--keep-monthly <n>] <expression>
 
 Take snapshots on a cron schedule. The expression has five fields, minute,
 hour, day of month, month and day of week, or is one of @hourly, @daily,
 @weekly, @monthly and @yearly. It runs in the local time zone of the instance,
 which picks up a change within a minute. A snapshot missed while the instance
-was down is taken on the next start.`
-
-	snapshotsScheduleDisableUsage = `Usage: s3d snapshots schedule disable
-
-Stop taking scheduled snapshots. Existing snapshots and the retention are kept.`
-
-	snapshotsRetentionUsage = `Usage: s3d snapshots retention [command]
-
-Print the retention applied to scheduled snapshots.
-
-Commands:
-	set		Set the retention of scheduled snapshots
-`
-
-	snapshotsRetentionSetUsage = `Usage: s3d snapshots retention set [--keep-daily <n>] [--keep-weekly <n>] [--keep-monthly <n>]
+was down is taken on the next start.
 
 Each count keeps the newest scheduled snapshot of that many days, weeks or
 months, the sets are combined, and all zero keeps every scheduled snapshot.
-The command replaces all three counts, so a count left out is zero. Retention
-runs while a schedule is set and never prunes a snapshot created with
-'snapshots create'.`
+The command replaces the whole schedule, so a count left out is zero. Snapshots
+created with 'snapshots create' are never pruned.`
+
+	snapshotsScheduleDisableUsage = `Usage: s3d snapshots schedule disable
+
+Stop taking scheduled snapshots. Existing snapshots are kept.`
 )
 
 func runSnapshotsCreate(ctx context.Context, cmd *flag.FlagSet) {
@@ -245,6 +233,60 @@ func runSnapshotsRestore(ctx context.Context, cmd *flag.FlagSet, out string) {
 	fmt.Println("Run 's3d config' for this directory, then start s3d to reconcile it with the network.")
 }
 
+func runSnapshotsSchedule(cmd *flag.FlagSet) {
+	if len(cmd.Args()) != 0 {
+		cmd.Usage()
+		os.Exit(1)
+	}
+
+	store, err := openStore(zap.NewNop())
+	checkFatalError("failed to open database", err)
+	defer store.Close()
+
+	sched, err := store.SnapshotSchedule()
+	checkFatalError("failed to load snapshot schedule", err)
+
+	if sched.Expression == "" {
+		fmt.Println("Scheduled snapshots are disabled.")
+		return
+	}
+	printSnapshotSchedule(sched)
+}
+
+func runSnapshotsScheduleSet(cmd *flag.FlagSet, sched sia.SnapshotSchedule) {
+	if len(cmd.Args()) != 1 {
+		cmd.Usage()
+		os.Exit(1)
+	}
+	sched.Expression = strings.TrimSpace(cmd.Arg(0))
+	if sched.Expression == "" {
+		cmd.Usage()
+		os.Exit(1)
+	}
+	checkFatalError("failed to set snapshot schedule", sched.Validate())
+
+	store, err := openStore(zap.NewNop())
+	checkFatalError("failed to open database", err)
+	defer store.Close()
+
+	checkFatalError("failed to set snapshot schedule", store.UpdateSnapshotSchedule(sched))
+	printSnapshotSchedule(sched)
+}
+
+func runSnapshotsScheduleDisable(cmd *flag.FlagSet) {
+	if len(cmd.Args()) != 0 {
+		cmd.Usage()
+		os.Exit(1)
+	}
+
+	store, err := openStore(zap.NewNop())
+	checkFatalError("failed to open database", err)
+	defer store.Close()
+
+	checkFatalError("failed to disable scheduled snapshots", store.UpdateSnapshotSchedule(sia.SnapshotSchedule{}))
+	fmt.Println("Scheduled snapshots are disabled.")
+}
+
 // openRestoreSDK builds an SDK client from the app key recorded in the
 // configured data directory and prompts the user to log in when that key is
 // missing or no longer authorized. No database is created either way.
@@ -378,93 +420,9 @@ func scheduledMark(scheduled bool) string {
 	return ""
 }
 
-func runSnapshotsSchedule(cmd *flag.FlagSet) {
-	if len(cmd.Args()) != 0 {
-		cmd.Usage()
-		os.Exit(1)
-	}
-
-	store, err := openStore(zap.NewNop())
-	checkFatalError("failed to open database", err)
-	defer store.Close()
-
-	expr, _, err := store.SnapshotSchedule()
-	checkFatalError("failed to load snapshot schedule", err)
-
-	if expr == "" {
-		fmt.Println("Scheduled snapshots are disabled.")
-		return
-	}
-	fmt.Println("Schedule:", expr)
-}
-
-func runSnapshotsScheduleSet(cmd *flag.FlagSet) {
-	if len(cmd.Args()) != 1 {
-		cmd.Usage()
-		os.Exit(1)
-	}
-	expr := strings.TrimSpace(cmd.Arg(0))
-	if expr == "" {
-		cmd.Usage()
-		os.Exit(1)
-	}
-	_, err := sia.ParseSnapshotSchedule(expr)
-	checkFatalError("failed to set snapshot schedule", err)
-
-	store, err := openStore(zap.NewNop())
-	checkFatalError("failed to open database", err)
-	defer store.Close()
-
-	checkFatalError("failed to set snapshot schedule", store.UpdateSnapshotSchedule(expr))
-	fmt.Println("Schedule:", expr)
-}
-
-func runSnapshotsScheduleDisable(cmd *flag.FlagSet) {
-	if len(cmd.Args()) != 0 {
-		cmd.Usage()
-		os.Exit(1)
-	}
-
-	store, err := openStore(zap.NewNop())
-	checkFatalError("failed to open database", err)
-	defer store.Close()
-
-	checkFatalError("failed to disable scheduled snapshots", store.UpdateSnapshotSchedule(""))
-	fmt.Println("Scheduled snapshots are disabled.")
-}
-
-func runSnapshotsRetention(cmd *flag.FlagSet) {
-	if len(cmd.Args()) != 0 {
-		cmd.Usage()
-		os.Exit(1)
-	}
-
-	store, err := openStore(zap.NewNop())
-	checkFatalError("failed to open database", err)
-	defer store.Close()
-
-	_, retention, err := store.SnapshotSchedule()
-	checkFatalError("failed to load snapshot retention", err)
-	printSnapshotRetention(retention)
-}
-
-func runSnapshotsRetentionSet(cmd *flag.FlagSet, retention sia.SnapshotRetention) {
-	if len(cmd.Args()) != 0 {
-		cmd.Usage()
-		os.Exit(1)
-	}
-	checkFatalError("failed to set snapshot retention", retention.Validate())
-
-	store, err := openStore(zap.NewNop())
-	checkFatalError("failed to open database", err)
-	defer store.Close()
-
-	checkFatalError("failed to set snapshot retention", store.UpdateSnapshotRetention(retention))
-	printSnapshotRetention(retention)
-}
-
-func printSnapshotRetention(retention sia.SnapshotRetention) {
-	fmt.Printf("Keep daily:   %d\n", retention.KeepDaily)
-	fmt.Printf("Keep weekly:  %d\n", retention.KeepWeekly)
-	fmt.Printf("Keep monthly: %d\n", retention.KeepMonthly)
+func printSnapshotSchedule(sched sia.SnapshotSchedule) {
+	fmt.Printf("Schedule:     %s\n", sched.Expression)
+	fmt.Printf("Keep daily:   %d\n", sched.KeepDaily)
+	fmt.Printf("Keep weekly:  %d\n", sched.KeepWeekly)
+	fmt.Printf("Keep monthly: %d\n", sched.KeepMonthly)
 }

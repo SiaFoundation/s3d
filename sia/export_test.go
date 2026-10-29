@@ -65,6 +65,6 @@ func (s *Sia) RunScheduledSnapshot(ctx context.Context, now time.Time) { //nolin
 }
 
 // ExpiredScheduledSnapshots exports expiredScheduledSnapshots for testing.
-func ExpiredScheduledSnapshots(snapshots []s3.Snapshot, retention SnapshotRetention, loc *time.Location) []s3.Snapshot {
-	return expiredScheduledSnapshots(snapshots, retention, loc)
+func ExpiredScheduledSnapshots(snapshots []s3.Snapshot, sched SnapshotSchedule, loc *time.Location) []s3.Snapshot {
+	return expiredScheduledSnapshots(snapshots, sched, loc)
 }

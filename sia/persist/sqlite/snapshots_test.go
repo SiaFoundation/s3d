@@ -619,31 +619,29 @@ func TestListSnapshotsOrderBy(t *testing.T) {
 func TestSnapshotSchedule(t *testing.T) {
 	store := initTestDB(t, zaptest.NewLogger(t))
 
-	// a fresh database has no schedule and keeps everything
-	expr, retention, err := store.SnapshotSchedule()
+	// a fresh database has no schedule
+	sched, err := store.SnapshotSchedule()
 	if err != nil {
 		t.Fatal(err)
-	} else if expr != "" || retention != (sia.SnapshotRetention{}) {
-		t.Fatal("unexpected", expr, retention)
+	} else if sched != (sia.SnapshotSchedule{}) {
+		t.Fatal("unexpected", sched)
 	}
 
-	want := sia.SnapshotRetention{KeepDaily: 7, KeepWeekly: 4, KeepMonthly: 12}
-	if err := store.UpdateSnapshotSchedule("0 3 * * *"); err != nil {
+	want := sia.SnapshotSchedule{Expression: "0 3 * * *", KeepDaily: 7, KeepWeekly: 4, KeepMonthly: 12}
+	if err := store.UpdateSnapshotSchedule(want); err != nil {
 		t.Fatal(err)
-	} else if err := store.UpdateSnapshotRetention(want); err != nil {
+	} else if sched, err = store.SnapshotSchedule(); err != nil {
 		t.Fatal(err)
-	} else if expr, retention, err = store.SnapshotSchedule(); err != nil {
-		t.Fatal(err)
-	} else if expr != "0 3 * * *" || retention != want {
-		t.Fatal("mismatch", expr, retention)
+	} else if sched != want {
+		t.Fatal("mismatch", sched, want)
 	}
 
-	// disabling the schedule leaves the retention in place
-	if err := store.UpdateSnapshotSchedule(""); err != nil {
+	// clear it again
+	if err := store.UpdateSnapshotSchedule(sia.SnapshotSchedule{}); err != nil {
 		t.Fatal(err)
-	} else if expr, retention, err = store.SnapshotSchedule(); err != nil {
+	} else if sched, err = store.SnapshotSchedule(); err != nil {
 		t.Fatal(err)
-	} else if expr != "" || retention != want {
-		t.Fatal("unexpected", expr, retention)
+	} else if sched != (sia.SnapshotSchedule{}) {
+		t.Fatal("unexpected", sched)
 	}
 }
