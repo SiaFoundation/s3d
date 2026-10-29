@@ -136,6 +136,10 @@ type PutObjectResult struct {
 	// VersionID is the wire-encoded version to report, or "" on a suspended or
 	// unversioned bucket.
 	VersionID string
+
+	// Checksum is the digest the backend computed for the request's algorithm,
+	// nil when none was asked for.
+	Checksum *RequestChecksum
 }
 
 // PutObjectOptions contains options for a PutObject operation.
@@ -166,14 +170,18 @@ type PutObjectOptions struct {
 	ObjectLock *ObjectLockState
 }
 
-// RequestChecksum is an additional checksum a client asked to have validated,
-// taken from an X-Amz-Checksum-* request header. The backend validates it the
-// same way it validates ContentMD5 and returns ErrBadDigest on a mismatch.
+// RequestChecksum is an additional checksum a client asked for, taken from an
+// X-Amz-Checksum-* request header or from the trailer the request declares.
+// The backend computes it over the object data, stores it with the object and
+// returns it. A sum the request carried up front is validated the same way
+// ContentMD5 is, and a mismatch returns ErrBadDigest.
 type RequestChecksum struct {
 	// Algorithm is the header suffix, canonically formatted, such as "Crc32".
 	Algorithm string
 
-	// Sum is the expected checksum, decoded from the header's base64.
+	// Sum is the expected checksum, decoded from the header's base64. It is nil
+	// when the checksum arrives as a trailer, which the auth layer validates
+	// once the body has been read.
 	Sum []byte
 }
 
@@ -880,14 +888,18 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, access *bucketAcc
 		return err
 	}
 
-	// extract the checksum from an "X-Amz-Checksum-*" header if present
+	// extract the checksum from an "X-Amz-Checksum-*" header or the trailer the
+	// request declares, if either is present
 	checksum, err := requestChecksum(r.Header)
 	if err != nil {
 		return err
 	}
+	if checksum == nil {
+		checksum = trailingChecksum(r.Header)
+	}
 
 	// AWS requires a body checksum on an upload that carries a retention
-	if lock.Retained() && contentMD5 == nil && checksum == nil && !declaresTrailingChecksum(r.Header) {
+	if lock.Retained() && contentMD5 == nil && checksum == nil {
 		return fmt.Errorf("a retention requires Content-MD5 or a checksum: %w", s3errs.ErrInvalidRequest)
 	}
 
@@ -908,6 +920,7 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, access *bucketAcc
 	if res.VersionID != "" {
 		w.Header().Set("x-amz-version-id", res.VersionID)
 	}
+	writeChecksumHeader(w, res.Checksum)
 	w.Header().Set("ETag", FormatETag(res.ContentMD5[:], 0))
 	return nil
 }
@@ -923,11 +936,12 @@ const (
 // Streaming trailers carry their checksum after the body instead and are
 // validated in the auth layer.
 func requestChecksum(headers http.Header) (*RequestChecksum, error) {
-	var found *RequestChecksum
+	var algorithm string
+	var size int
+	var count int
 
 	for name := range headers {
-		name = textproto.CanonicalMIMEHeaderKey(name)
-		suffix, ok := strings.CutPrefix(name, checksumPrefix)
+		suffix, ok := strings.CutPrefix(textproto.CanonicalMIMEHeaderKey(name), checksumPrefix)
 		if !ok {
 			continue
 		}
@@ -937,35 +951,59 @@ func requestChecksum(headers http.Header) (*RequestChecksum, error) {
 		if newHash == nil {
 			continue
 		}
-
-		// AWS refuses a request naming more than one checksum rather than
-		// guessing which one the client meant
-		if found != nil {
-			return nil, s3errs.ErrInvalidRequest
-		}
-
-		// AWS answers a malformed value with InvalidRequest and reserves
-		// InvalidDigest for Content-MD5
-		sum, err := base64.StdEncoding.DecodeString(headers.Get(name))
-		if err != nil || len(sum) != newHash.Size() {
-			return nil, s3errs.ErrInvalidRequest
-		}
-		found = &RequestChecksum{Algorithm: suffix, Sum: sum}
+		algorithm = suffix
+		size = newHash.Size()
+		count++
 	}
 
-	return found, nil
+	// AWS refuses a request naming more than one checksum rather than guessing
+	// which one the client meant. Counting before decoding keeps that answer
+	// independent of header order.
+	if count > 1 {
+		return nil, s3errs.ErrInvalidRequest
+	} else if count == 0 {
+		return nil, nil
+	}
+
+	// a value that does not decode to a digest of the right length answers
+	// BadDigest, while InvalidDigest stays reserved for Content-MD5
+	sum, err := base64.StdEncoding.DecodeString(headers.Get(checksumPrefix + algorithm))
+	if err != nil || len(sum) != size {
+		return nil, s3errs.ErrBadDigest
+	}
+	return &RequestChecksum{Algorithm: algorithm, Sum: sum}, nil
 }
 
-// declaresTrailingChecksum reports whether the request declares a trailing
-// checksum the backend can compute. The auth layer validates it after the body.
-func declaresTrailingChecksum(headers http.Header) bool {
+// trailingChecksum returns the checksum the request declares as a trailer, or
+// nil when it declares none the backend can compute. The sum is nil since the
+// auth layer validates it after the body.
+func trailingChecksum(headers http.Header) *RequestChecksum {
 	for h := range strings.SplitSeq(headers.Get(auth.HeaderXAMZTrailer), ",") {
 		suffix, ok := strings.CutPrefix(textproto.CanonicalMIMEHeaderKey(strings.TrimSpace(h)), checksumPrefix)
 		if ok && auth.NewChecksumHash(suffix) != nil {
-			return true
+			return &RequestChecksum{Algorithm: suffix}
 		}
 	}
-	return false
+	return nil
+}
+
+// writeChecksumValueHeader echoes the checksum the backend computed for the
+// data it just stored.
+func writeChecksumValueHeader(w http.ResponseWriter, checksum *RequestChecksum) {
+	if checksum == nil {
+		return
+	}
+	w.Header().Set(checksumPrefix+checksum.Algorithm, base64.StdEncoding.EncodeToString(checksum.Sum))
+}
+
+// writeChecksumHeader echoes the checksum the backend computed for the object
+// it just stored, which always covers the object in full.
+func writeChecksumHeader(w http.ResponseWriter, checksum *RequestChecksum) {
+	if checksum == nil {
+		return
+	}
+	writeChecksumValueHeader(w, checksum)
+	w.Header().Set(HeaderXAMZChecksumType, string(ChecksumTypeFullObject))
 }
 
 // objectLocation returns the URL an object was addressed by, which a response
@@ -1085,6 +1123,14 @@ func isObjectMetadataHeader(name string) bool {
 	}
 	_, ok := objectMetadataHeaders[name]
 	return ok
+}
+
+// isServedMetadataHeader reports whether the canonically formatted header name
+// is served back with the object. The checksum type is written by the backend
+// alongside the checksum it computed, so it is served without being storable
+// from a request.
+func isServedMetadataHeader(name string) bool {
+	return isObjectMetadataHeader(name) || name == HeaderXAMZChecksumType
 }
 
 // metadataHeaders extracts S3 metadata headers from the given HTTP headers.
@@ -1500,21 +1546,33 @@ func (s *s3) setLifecycleExpirationHeader(w http.ResponseWriter, r *http.Request
 	}
 }
 
+// checksumModeEnabled reports whether the request asks for checksum headers
+// through x-amz-checksum-mode, as a header or as a presigned query parameter.
+func checksumModeEnabled(r *http.Request) bool {
+	mode := r.Header.Get(HeaderXAMZChecksumMode)
+	if mode == "" {
+		mode = r.URL.Query().Get(HeaderXAMZChecksumMode)
+	}
+	return strings.EqualFold(mode, "ENABLED")
+}
+
 // writeGetOrHeadObjectHeaders contains shared logic for constructing headers for
 // a HEAD and a GET request for a /bucket/object URL.
 func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Request) error {
+	checksumRequested := checksumModeEnabled(r)
+
 	for mk, mv := range obj.Metadata {
 		// stored keys are not guaranteed to be canonically formatted
 		mk = textproto.CanonicalMIMEHeaderKey(mk)
 
-		if !isObjectMetadataHeader(mk) {
+		if !isServedMetadataHeader(mk) {
 			continue
 		}
 
-		// ranged responses should not include checksum headers, this prevents
-		// clients from checking the checksum of a partial object against the
-		// full object checksum
-		if obj.Range != nil && strings.HasPrefix(mk, checksumPrefix) {
+		// checksum headers are served only to a client that asked for them,
+		// and never on a ranged response, which would let a client check a
+		// partial object against the full object checksum
+		if strings.HasPrefix(mk, checksumPrefix) && (!checksumRequested || obj.Range != nil) {
 			continue
 		}
 

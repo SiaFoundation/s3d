@@ -502,6 +502,7 @@ func (s *s3) postObject(w http.ResponseWriter, r *http.Request, header *bucketAc
 	if res.VersionID != "" {
 		w.Header().Set("x-amz-version-id", res.VersionID)
 	}
+	writeChecksumHeader(w, res.Checksum)
 	etag := FormatETag(res.ContentMD5[:], 0)
 	w.Header().Set("ETag", etag)
 
