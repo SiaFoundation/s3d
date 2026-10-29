@@ -11,6 +11,7 @@ import (
 	"hash/crc32"
 	"io"
 	"math"
+	"net/http"
 	"strconv"
 	"strings"
 	"testing"
@@ -214,6 +215,60 @@ func TestUploadPart(t *testing.T) {
 	// assert [s3errs.ErrNoSuchBucket] is returned for nonexistent bucket
 	_, err = s3Tester.UploadPart(t.Context(), "missing-bucket", object, *res.UploadId, 1, data)
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchBucket, err)
+}
+
+// TestUploadPartTrailingChecksum asserts a checksum the client sends after the
+// body is computed by the backend and echoed on the response.
+func TestUploadPartTrailingChecksum(t *testing.T) {
+	rt := &recordingTransport{}
+	s3Tester := testutil.NewTester(t,
+		testutil.WithTLS(),
+		testutil.WithServiceOptions(func(o *service.Options) {
+			inner, ok := o.HTTPClient.(*http.Client)
+			if !ok {
+				t.Fatal("HTTPClient is not *http.Client")
+			}
+			rt.base = inner.Transport
+			o.HTTPClient = &recordingHTTPClient{rt: rt}
+		}),
+	)
+
+	const (
+		bucket = "trailing-checksum"
+		object = "object"
+	)
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := s3Tester.CreateMultipartUpload(t.Context(), bucket, object, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data := frand.Bytes(100)
+	var sum [4]byte
+	binary.BigEndian.PutUint32(sum[:], crc32.ChecksumIEEE(data))
+	want := base64.StdEncoding.EncodeToString(sum[:])
+
+	// an unseekable body leaves the client no way to send the checksum ahead of
+	// the data, so it arrives as a trailer
+	part, err := s3Tester.Client().UploadPart(t.Context(), &service.UploadPartInput{
+		Bucket:            aws.String(bucket),
+		Key:               aws.String(object),
+		UploadId:          res.UploadId,
+		PartNumber:        aws.Int32(1),
+		Body:              readerOnly{bytes.NewReader(data)},
+		ContentLength:     aws.Int64(int64(len(data))),
+		ChecksumAlgorithm: types.ChecksumAlgorithmCrc32,
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if got := rt.last(); got != "STREAMING-UNSIGNED-PAYLOAD-TRAILER" {
+		t.Fatalf("expected the upload to use STREAMING-UNSIGNED-PAYLOAD-TRAILER, got %q", got)
+	} else if got := aws.ToString(part.ChecksumCRC32); got != want {
+		t.Fatalf("checksum mismatch: expected %s, got %s", want, got)
+	}
 }
 
 func TestUploadPartCopy(t *testing.T) {
