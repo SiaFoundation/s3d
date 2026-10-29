@@ -9,9 +9,12 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strings"
 	"time"
 
+	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/sia/objects"
+	"github.com/robfig/cron/v3"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/api"
 	"go.sia.tech/indexd/slabs"
@@ -23,12 +26,38 @@ import (
 // while enumerating the account.
 const remoteSnapshotBatchSize = api.MaxLimit
 
-// snapshotSchedule is the local time of day at which a snapshot is taken and
-// the number of scheduled snapshots kept, zero keeps all of them.
-type snapshotSchedule struct {
-	hour   int
-	minute int
-	keep   int
+// SnapshotRetention is the number of calendar days, weeks and months of
+// scheduled snapshots kept. All zero keeps every scheduled snapshot.
+type SnapshotRetention struct {
+	KeepDaily   int
+	KeepWeekly  int
+	KeepMonthly int
+}
+
+// Validate rejects a negative count.
+func (r SnapshotRetention) Validate() error {
+	if r.KeepDaily < 0 || r.KeepWeekly < 0 || r.KeepMonthly < 0 {
+		return errors.New("snapshot retention counts must not be negative")
+	}
+	return nil
+}
+
+// ParseSnapshotSchedule parses a standard five field cron expression or one of
+// the @hourly, @daily, @weekly, @monthly and @yearly descriptors. The schedule
+// fires in the location of the time it is evaluated against.
+func ParseSnapshotSchedule(expr string) (cron.Schedule, error) {
+	// the parser panics on a bare time zone prefix and accepts a zero @every
+	// interval, which would fire on every tick
+	if expr = strings.TrimSpace(expr); strings.Contains(expr, "=") || strings.HasPrefix(expr, "@every") {
+		return nil, fmt.Errorf("invalid snapshot schedule %q, expected a cron expression or a descriptor like @daily", expr)
+	}
+	sched, err := cron.ParseStandard(expr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid snapshot schedule %q: %w", expr, err)
+	} else if sched.Next(time.Now()).IsZero() {
+		return nil, fmt.Errorf("invalid snapshot schedule %q, it never fires", expr)
+	}
+	return sched, nil
 }
 
 // RemoteSnapshot is a snapshot stored on the Sia network.
@@ -147,42 +176,39 @@ func DownloadSnapshot(ctx context.Context, sdk SDK, snap RemoteSnapshot, w io.Wr
 	return ctx.Err()
 }
 
-// dueAt returns the most recent instant at the scheduled time of day at or
-// before now.
-func (sched snapshotSchedule) dueAt(now time.Time) time.Time {
-	due := time.Date(now.Year(), now.Month(), now.Day(), sched.hour, sched.minute, 0, 0, now.Location())
-	if due.After(now) {
-		// a time of day inside a daylight saving gap normalizes to a later
-		// clock, which AddDate would carry into the previous day
-		due = time.Date(now.Year(), now.Month(), now.Day()-1, sched.hour, sched.minute, 0, 0, now.Location())
-	}
-	return due
-}
-
-// snapshotsLoop takes snapshots on the configured schedule.
+// snapshotsLoop takes snapshots on the stored schedule and applies its
+// retention.
 func (s *Sia) snapshotsLoop(ctx context.Context) {
-	if s.snapshotSchedule == nil {
-		return
-	}
-	sched := *s.snapshotSchedule
 	t := time.NewTicker(scheduledSnapshotInterval)
 	defer t.Stop()
 
 	for {
-		s.runScheduledSnapshot(ctx, time.Now(), sched)
-
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 		}
+
+		s.runScheduledSnapshot(ctx, time.Now())
 	}
 }
 
-// runScheduledSnapshot takes a snapshot when none was taken since the
-// schedule's last slot and applies the retention count once object metadata
-// is synced.
-func (s *Sia) runScheduledSnapshot(ctx context.Context, now time.Time, sched snapshotSchedule) {
+// runScheduledSnapshot takes a snapshot when the stored schedule fired since
+// the last one and prunes the scheduled snapshots retention no longer keeps,
+// once object metadata is synced.
+func (s *Sia) runScheduledSnapshot(ctx context.Context, now time.Time) {
+	expr, retention, err := s.store.SnapshotSchedule()
+	if err != nil {
+		s.logger.Error("failed to load snapshot schedule", zap.Error(err))
+		return
+	} else if expr == "" {
+		return
+	}
+	sched, err := ParseSnapshotSchedule(expr)
+	if err != nil {
+		s.logger.Error("failed to parse snapshot schedule", zap.Error(err))
+		return
+	}
 	if !s.synced.Load() {
 		s.logger.Debug("deferring scheduled snapshots until object metadata is synced")
 		return
@@ -190,27 +216,25 @@ func (s *Sia) runScheduledSnapshot(ctx context.Context, now time.Time, sched sna
 	if !now.Before(s.snapshotRetryAt) {
 		s.takeScheduledSnapshot(ctx, now, sched)
 	}
-	s.pruneScheduledSnapshots(ctx, sched.keep)
+	s.pruneScheduledSnapshots(ctx, now, retention)
 }
 
-// takeScheduledSnapshot takes a snapshot when none was taken since the
-// schedule's last slot.
-func (s *Sia) takeScheduledSnapshot(ctx context.Context, now time.Time, sched snapshotSchedule) {
+// takeScheduledSnapshot takes a snapshot when the schedule fired since the
+// newest scheduled snapshot was taken.
+func (s *Sia) takeScheduledSnapshot(ctx context.Context, now time.Time, sched cron.Schedule) {
 	snapshots, err := s.store.ListSnapshots()
 	if err != nil {
 		s.logger.Error("failed to list snapshots", zap.Error(err))
 		return
 	}
 	// the listing is newest first
-	var newest time.Time
 	for _, snap := range snapshots {
-		if snap.Scheduled {
-			newest = snap.CreatedAt
-			break
+		if !snap.Scheduled {
+			continue
+		} else if next := sched.Next(snap.CreatedAt.In(now.Location())); next.IsZero() || next.After(now) {
+			return
 		}
-	}
-	if !newest.Before(sched.dueAt(now)) {
-		return
+		break
 	}
 
 	if _, err := s.createSnapshot(ctx, true); err != nil {
@@ -219,28 +243,63 @@ func (s *Sia) takeScheduledSnapshot(ctx context.Context, now time.Time, sched sn
 	}
 }
 
-// pruneScheduledSnapshots deletes every scheduled snapshot past the newest
-// keep.
-func (s *Sia) pruneScheduledSnapshots(ctx context.Context, keep int) {
-	if keep == 0 {
-		return
-	}
+// pruneScheduledSnapshots deletes the scheduled snapshots the retention counts
+// do not keep.
+func (s *Sia) pruneScheduledSnapshots(ctx context.Context, now time.Time, retention SnapshotRetention) {
 	snapshots, err := s.store.ListSnapshots()
 	if err != nil {
 		s.logger.Error("failed to list snapshots", zap.Error(err))
 		return
 	}
-	var kept int
-	for _, snap := range snapshots {
+	for _, snap := range expiredScheduledSnapshots(snapshots, retention, now.Location()) {
 		if ctx.Err() != nil {
 			return
-		} else if !snap.Scheduled {
-			continue
-		} else if kept++; kept <= keep {
-			continue
-		}
-		if err := s.DeleteSnapshot(ctx, snap.SiaObjectID); err != nil {
+		} else if err := s.DeleteSnapshot(ctx, snap.SiaObjectID); err != nil {
 			s.logger.Error("failed to prune scheduled snapshot", zap.Stringer("objectID", &snap.SiaObjectID), zap.Error(err))
 		}
 	}
+}
+
+// expiredScheduledSnapshots returns the scheduled snapshots, listed newest
+// first, that the retention counts do not keep. Each count keeps the newest
+// snapshot of that many calendar days, ISO weeks or months in loc, all zero
+// counts keep every scheduled snapshot.
+func expiredScheduledSnapshots(snapshots []s3.Snapshot, retention SnapshotRetention, loc *time.Location) []s3.Snapshot {
+	if retention == (SnapshotRetention{}) {
+		return nil
+	}
+	periods := []struct {
+		keep int
+		key  func(time.Time) [3]int
+	}{
+		{retention.KeepDaily, func(t time.Time) [3]int { return [3]int{t.Year(), int(t.Month()), t.Day()} }},
+		{retention.KeepWeekly, func(t time.Time) [3]int { y, w := t.ISOWeek(); return [3]int{y, w, 0} }},
+		{retention.KeepMonthly, func(t time.Time) [3]int { return [3]int{t.Year(), int(t.Month()), 0} }},
+	}
+	kept := make(map[types.Hash256]bool)
+	for _, p := range periods {
+		var last [3]int
+		var n int
+		for _, snap := range snapshots {
+			if !snap.Scheduled {
+				continue
+			}
+			key := p.key(snap.CreatedAt.In(loc))
+			if n > 0 && key == last {
+				continue
+			} else if n == p.keep {
+				break
+			}
+			kept[snap.SiaObjectID] = true
+			last, n = key, n+1
+		}
+	}
+
+	var expired []s3.Snapshot
+	for _, snap := range snapshots {
+		if snap.Scheduled && !kept[snap.SiaObjectID] {
+			expired = append(expired, snap)
+		}
+	}
+	return expired
 }

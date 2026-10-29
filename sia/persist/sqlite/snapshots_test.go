@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
+	"github.com/SiaFoundation/s3d/sia"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.sia.tech/core/types"
 	"go.uber.org/zap/zaptest"
@@ -612,5 +613,37 @@ func TestListSnapshotsOrderBy(t *testing.T) {
 	}
 	if snapshots[1].ID < snapshots[0].ID {
 		t.Fatal("expected the older snapshot to hold the higher id")
+	}
+}
+
+func TestSnapshotSchedule(t *testing.T) {
+	store := initTestDB(t, zaptest.NewLogger(t))
+
+	// a fresh database has no schedule and keeps everything
+	expr, retention, err := store.SnapshotSchedule()
+	if err != nil {
+		t.Fatal(err)
+	} else if expr != "" || retention != (sia.SnapshotRetention{}) {
+		t.Fatal("unexpected", expr, retention)
+	}
+
+	want := sia.SnapshotRetention{KeepDaily: 7, KeepWeekly: 4, KeepMonthly: 12}
+	if err := store.UpdateSnapshotSchedule("0 3 * * *"); err != nil {
+		t.Fatal(err)
+	} else if err := store.UpdateSnapshotRetention(want); err != nil {
+		t.Fatal(err)
+	} else if expr, retention, err = store.SnapshotSchedule(); err != nil {
+		t.Fatal(err)
+	} else if expr != "0 3 * * *" || retention != want {
+		t.Fatal("mismatch", expr, retention)
+	}
+
+	// disabling the schedule leaves the retention in place
+	if err := store.UpdateSnapshotSchedule(""); err != nil {
+		t.Fatal(err)
+	} else if expr, retention, err = store.SnapshotSchedule(); err != nil {
+		t.Fatal(err)
+	} else if expr != "" || retention != want {
+		t.Fatal("unexpected", expr, retention)
 	}
 }

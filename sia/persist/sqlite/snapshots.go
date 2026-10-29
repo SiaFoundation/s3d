@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
+	"github.com/SiaFoundation/s3d/sia"
 	"go.sia.tech/core/types"
 )
 
@@ -226,6 +227,34 @@ func (s *Store) HasSnapshotObject(objectID types.Hash256) (known bool, err error
 			sqlHash256(objectID)).Scan(&known)
 	})
 	return
+}
+
+// SnapshotSchedule returns the cron expression snapshots are taken on, empty
+// when scheduled snapshots are disabled, and the retention applied to them.
+func (s *Store) SnapshotSchedule() (expr string, retention sia.SnapshotRetention, err error) {
+	err = s.transaction(func(tx *txn) error {
+		return tx.QueryRow(`SELECT snapshot_schedule, snapshot_keep_daily, snapshot_keep_weekly, snapshot_keep_monthly FROM global_settings`).
+			Scan(&expr, &retention.KeepDaily, &retention.KeepWeekly, &retention.KeepMonthly)
+	})
+	return
+}
+
+// UpdateSnapshotRetention sets the retention applied to scheduled snapshots.
+func (s *Store) UpdateSnapshotRetention(retention sia.SnapshotRetention) error {
+	return s.transaction(func(tx *txn) error {
+		_, err := tx.Exec(`UPDATE global_settings SET snapshot_keep_daily = $1, snapshot_keep_weekly = $2, snapshot_keep_monthly = $3`,
+			retention.KeepDaily, retention.KeepWeekly, retention.KeepMonthly)
+		return err
+	})
+}
+
+// UpdateSnapshotSchedule sets the cron expression snapshots are taken on, empty
+// disables scheduled snapshots.
+func (s *Store) UpdateSnapshotSchedule(expr string) error {
+	return s.transaction(func(tx *txn) error {
+		_, err := tx.Exec(`UPDATE global_settings SET snapshot_schedule = $1`, expr)
+		return err
+	})
 }
 
 func bumpSnapshotGen(tx *txn) (gen int64, err error) {

@@ -42,31 +42,6 @@ func TestValidateServerConfig(t *testing.T) {
 			t.Fatal("expected error", tc.dataShards, tc.parityShards)
 		}
 	}
-
-	// a schedule is a time of day and retention needs one
-	scheduled := valid
-	scheduled.Sia.SnapshotSchedule = "03:00"
-	scheduled.Sia.SnapshotRetention = 7
-	if err := validateServerConfig(scheduled); err != nil {
-		t.Fatal(err)
-	}
-	for _, tc := range []struct {
-		schedule  string
-		retention int
-	}{
-		{"3pm", 7},
-		{"24:00", 7},
-		{"03:60", 7},
-		{"03:00", -1},
-		{"", 7},
-	} {
-		c := valid
-		c.Sia.SnapshotSchedule = tc.schedule
-		c.Sia.SnapshotRetention = tc.retention
-		if err := validateServerConfig(c); err == nil {
-			t.Fatal("expected error", tc.schedule, tc.retention)
-		}
-	}
 }
 
 func TestTryLoadConfig(t *testing.T) {

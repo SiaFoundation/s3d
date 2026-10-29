@@ -60,11 +60,11 @@ func (s *Sia) CreateScheduledSnapshot(ctx context.Context) (s3.Snapshot, error) 
 }
 
 // RunScheduledSnapshot exports runScheduledSnapshot for testing.
-func (s *Sia) RunScheduledSnapshot(ctx context.Context, now time.Time, hour, minute, keep int) { //nolint:revive
-	s.runScheduledSnapshot(ctx, now, snapshotSchedule{hour: hour, minute: minute, keep: keep})
+func (s *Sia) RunScheduledSnapshot(ctx context.Context, now time.Time) { //nolint:revive
+	s.runScheduledSnapshot(ctx, now)
 }
 
-// SnapshotDueAt exports snapshotSchedule.dueAt for testing.
-func SnapshotDueAt(now time.Time, hour, minute int) time.Time {
-	return snapshotSchedule{hour: hour, minute: minute}.dueAt(now)
+// ExpiredScheduledSnapshots exports expiredScheduledSnapshots for testing.
+func ExpiredScheduledSnapshots(snapshots []s3.Snapshot, retention SnapshotRetention, loc *time.Location) []s3.Snapshot {
+	return expiredScheduledSnapshots(snapshots, retention, loc)
 }
