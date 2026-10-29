@@ -441,10 +441,14 @@ func (s *s3) addUploadPart(w http.ResponseWriter, r *http.Request, access *bucke
 		return err
 	}
 
-	// extract the checksum from an "X-Amz-Checksum-*" header, if present
+	// extract the checksum from an "X-Amz-Checksum-*" header or the trailer the
+	// request declares, if either is present
 	checksum, err := requestChecksum(r.Header)
 	if err != nil {
 		return err
+	}
+	if checksum == nil {
+		checksum = trailingChecksum(r.Header)
 	}
 
 	res, err := s.backend.UploadPart(r.Context(), access.bucketID, object, uploadID, r.Body, UploadPartOptions{
