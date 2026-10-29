@@ -165,7 +165,8 @@ CREATE TABLE snapshots (
     gen_completed INTEGER, -- generation it completed at, NULL until pinned
 
     state INTEGER NOT NULL, -- lifecycle state, values defined in snapshots.go
-    state_since INTEGER NOT NULL -- when the current state was entered
+    state_since INTEGER NOT NULL, -- when the current state was entered
+    scheduled INTEGER NOT NULL DEFAULT FALSE CHECK (scheduled IN (FALSE, TRUE)) -- taken by the snapshot schedule
 );
 
 -- serves the orphan guard, both halves probe by completion generation
@@ -203,6 +204,10 @@ CREATE TABLE global_settings (
 	last_sync_at INTEGER NOT NULL DEFAULT 0,
 	last_sync_key BLOB NOT NULL DEFAULT X'0000000000000000000000000000000000000000000000000000000000000000',
 	snapshot_gen INTEGER NOT NULL DEFAULT 0,
+	snapshot_schedule TEXT NOT NULL DEFAULT '', -- cron expression, empty disables scheduled snapshots
+	snapshot_keep_daily INTEGER NOT NULL DEFAULT 0,
+	snapshot_keep_weekly INTEGER NOT NULL DEFAULT 0,
+	snapshot_keep_monthly INTEGER NOT NULL DEFAULT 0,
 	-- app_key and indexer_url are always set or nulled together
 	CHECK ((app_key IS NULL AND indexer_url IS NULL) OR (app_key IS NOT NULL AND indexer_url IS NOT NULL))
 );

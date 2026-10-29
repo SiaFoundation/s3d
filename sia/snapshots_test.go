@@ -6,12 +6,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
+	_ "time/tzdata"
 
 	"github.com/SiaFoundation/s3d/build"
 	"github.com/SiaFoundation/s3d/internal/testutil"
@@ -389,7 +392,7 @@ func TestStuckPinningSnapshot(t *testing.T) {
 	}
 
 	// a record left awaiting its pin, the state a crash during PinObject leaves
-	snap, _, err := store.CreateSnapshot()
+	snap, _, err := store.CreateSnapshot(false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -500,7 +503,7 @@ func TestSnapshotStartup(t *testing.T) {
 
 	// a snapshot whose pin landed before the process died, so the indexer
 	// holds its object while the record still awaits the pin
-	landed, landedGen, err := storeA.CreateSnapshot()
+	landed, landedGen, err := storeA.CreateSnapshot(false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -510,7 +513,7 @@ func TestSnapshotStartup(t *testing.T) {
 	}
 
 	// a snapshot whose pin never reached the indexer
-	lost, _, err := storeA.CreateSnapshot()
+	lost, _, err := storeA.CreateSnapshot(false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -619,10 +622,13 @@ func TestSnapshotRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// a third snapshot only exists on the network, not in the second snapshot
-	snap3, err := backendA.CreateSnapshot(t.Context())
+	// a third, scheduled snapshot only exists on the network, not in the
+	// second snapshot
+	snap3, err := backendA.CreateScheduledSnapshot(t.Context())
 	if err != nil {
 		t.Fatal(err)
+	} else if !downloadMetadata(t, memSDK, snap3.SiaObjectID).Scheduled {
+		t.Fatal("expected scheduled metadata")
 	}
 	if err := backendA.Close(); err != nil {
 		t.Fatal(err)
@@ -651,6 +657,8 @@ func TestSnapshotRecovery(t *testing.T) {
 	backendB.SyncMetadata(t.Context())
 	if snapshots := assertSnapshots(storeB, snap3.SiaObjectID, snap2.SiaObjectID); snapshots[1].CreatedAt.Unix() != snap2.CreatedAt.Unix() {
 		t.Fatal("mismatch", snapshots[1].CreatedAt)
+	} else if !snapshots[0].Scheduled || snapshots[1].Scheduled {
+		t.Fatal("scheduled flag not adopted", snapshots[0].Scheduled, snapshots[1].Scheduled)
 	}
 
 	// the generation counter continues past the adopted snapshots and their
@@ -820,4 +828,282 @@ func TestFetchRemoteSnapshot(t *testing.T) {
 	if _, err := sia.FetchRemoteSnapshot(t.Context(), memSDK, types.Hash256(frand.Entropy256())); err == nil {
 		t.Fatal("expected an error")
 	}
+}
+
+// TestSnapshotScheduleValidate verifies the expressions and counts a schedule
+// accepts and the ones the guard in front of the parser rejects.
+func TestSnapshotScheduleValidate(t *testing.T) {
+	for _, expr := range []string{"0 3 * * *", "*/15 * * * *", "0 3 * * MON-FRI", "@hourly", "@daily", "@weekly", "@monthly", "@yearly", " @daily "} {
+		if _, err := sia.ParseSnapshotSchedule(expr); err != nil {
+			t.Fatal(expr, err)
+		}
+	}
+	for _, expr := range []string{"", "03:00", "0 3 * *", "0 3 * * * *", "0 25 * * *", "@every 1h", "@every 0s", "TZ=UTC 0 3 * * *", "CRON_TZ=UTC", "TZ=", "0 3 31 2 *"} {
+		if _, err := sia.ParseSnapshotSchedule(expr); err == nil {
+			t.Fatal("expected error", expr)
+		}
+	}
+
+	for _, sched := range []sia.SnapshotSchedule{
+		{},
+		{Expression: "@daily"},
+		{Expression: "@daily", KeepDaily: 7, KeepWeekly: 4, KeepMonthly: 12},
+	} {
+		if err := sched.Validate(); err != nil {
+			t.Fatal(sched, err)
+		}
+	}
+	for _, sched := range []sia.SnapshotSchedule{
+		{KeepDaily: 7},
+		{Expression: "@daily", KeepWeekly: -1},
+		{Expression: "03:00"},
+	} {
+		if err := sched.Validate(); err == nil {
+			t.Fatal("expected error", sched)
+		}
+	}
+}
+
+// TestExpiredScheduledSnapshots verifies which scheduled snapshots the daily,
+// weekly and monthly counts keep.
+func TestExpiredScheduledSnapshots(t *testing.T) {
+	loc, err := time.LoadLocation("Europe/Berlin")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// hourly snapshots from November into the second week of January, newest
+	// first, so the ISO week of new year belongs to the old year
+	var snapshots []s3.Snapshot
+	for at := time.Date(2027, time.January, 15, 23, 0, 0, 0, loc); !at.Before(time.Date(2026, time.November, 1, 0, 0, 0, 0, loc)); at = at.Add(-time.Hour) {
+		snapshots = append(snapshots, s3.Snapshot{SiaObjectID: frand.Entropy256(), CreatedAt: at, Scheduled: true})
+	}
+	manual := s3.Snapshot{SiaObjectID: frand.Entropy256(), CreatedAt: snapshots[0].CreatedAt}
+	snapshots = append([]s3.Snapshot{manual}, snapshots...)
+
+	kept := func(sched sia.SnapshotSchedule) []time.Time {
+		t.Helper()
+		expired := make(map[types.Hash256]bool)
+		for _, snap := range sia.ExpiredScheduledSnapshots(snapshots, sched, loc) {
+			if !snap.Scheduled {
+				t.Fatal("expected only scheduled snapshots to expire")
+			}
+			expired[snap.SiaObjectID] = true
+		}
+		var out []time.Time
+		for _, snap := range snapshots {
+			if snap.Scheduled && !expired[snap.SiaObjectID] {
+				out = append(out, snap.CreatedAt)
+			}
+		}
+		return out
+	}
+	assertKept := func(sched sia.SnapshotSchedule, want ...time.Time) {
+		t.Helper()
+		got := kept(sched)
+		if len(got) != len(want) {
+			t.Fatal("unexpected", len(got), len(want))
+		}
+		for i := range got {
+			if !got[i].Equal(want[i]) {
+				t.Fatal("mismatch", i, got[i], want[i])
+			}
+		}
+	}
+	lastOf := func(y int, m time.Month, d int) time.Time { return time.Date(y, m, d, 23, 0, 0, 0, loc) }
+
+	// zero counts expire nothing
+	if n := len(kept(sia.SnapshotSchedule{})); n != len(snapshots)-1 {
+		t.Fatal("unexpected", n)
+	}
+
+	// daily keeps the last snapshot of each day
+	assertKept(sia.SnapshotSchedule{KeepDaily: 3}, lastOf(2027, time.January, 15), lastOf(2027, time.January, 14), lastOf(2027, time.January, 13))
+
+	// weekly keeps the last snapshot of each ISO week, week 53 of 2026 ends
+	// on Sunday the 3rd
+	assertKept(sia.SnapshotSchedule{KeepWeekly: 3}, lastOf(2027, time.January, 15), lastOf(2027, time.January, 10), lastOf(2027, time.January, 3))
+
+	// monthly keeps the last snapshot of each month
+	assertKept(sia.SnapshotSchedule{KeepMonthly: 2}, lastOf(2027, time.January, 15), lastOf(2026, time.December, 31))
+
+	// the kept sets are unioned, the newest snapshot satisfies all three
+	assertKept(sia.SnapshotSchedule{KeepDaily: 1, KeepWeekly: 2, KeepMonthly: 2}, lastOf(2027, time.January, 15), lastOf(2027, time.January, 10), lastOf(2026, time.December, 31))
+
+	// a count larger than the history keeps every bucket
+	if n := len(kept(sia.SnapshotSchedule{KeepMonthly: 12})); n != 3 {
+		t.Fatal("unexpected", n)
+	}
+}
+
+// TestScheduledSnapshots verifies the due check, retention and the retry delay
+// of the scheduled snapshot pass.
+func TestScheduledSnapshots(t *testing.T) {
+	memSDK := testutil.NewMemorySDK()
+	backend, store := testutil.NewBackend(t, testutil.WithSDK(memSDK))
+	ctx := t.Context()
+
+	// the listing is complete, retention may run
+	backend.SyncMetadata(ctx)
+
+	// the schedule fired an hour ago, in UTC to stay clear of the host's
+	// daylight saving transitions
+	base := time.Now().UTC()
+	slot := base.Add(-time.Hour)
+	sched := sia.SnapshotSchedule{Expression: fmt.Sprintf("%d %d * * *", slot.Minute(), slot.Hour())}
+	setSchedule := func(sched sia.SnapshotSchedule) {
+		t.Helper()
+		if err := store.UpdateSnapshotSchedule(sched); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setSchedule(sched)
+
+	scheduled := func() []s3.Snapshot {
+		t.Helper()
+		snapshots, err := store.ListSnapshots()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []s3.Snapshot
+		for _, snap := range snapshots {
+			if snap.Scheduled {
+				out = append(out, snap)
+			}
+		}
+		return out
+	}
+	assertScheduled := func(n int) []s3.Snapshot {
+		t.Helper()
+		snapshots := scheduled()
+		if len(snapshots) != n {
+			t.Fatal("unexpected", len(snapshots))
+		}
+		for _, snap := range snapshots {
+			if !memSDK.Pinned(snap.SiaObjectID) {
+				t.Fatal("expected pinned", snap.SiaObjectID)
+			} else if !downloadMetadata(t, memSDK, snap.SiaObjectID).Scheduled {
+				t.Fatal("expected scheduled metadata", snap.SiaObjectID)
+			}
+		}
+		return snapshots
+	}
+
+	// no scheduled snapshot exists, so the first pass takes one at once
+	backend.RunScheduledSnapshot(ctx, base)
+	first := assertScheduled(1)[0]
+
+	// a pass before the schedule fires again does nothing
+	backend.RunScheduledSnapshot(ctx, base.Add(30*time.Minute))
+	assertScheduled(1)
+
+	// the next day's slot takes another
+	backend.RunScheduledSnapshot(ctx, base.AddDate(0, 0, 1))
+	second := assertScheduled(2)[0]
+	if second.SiaObjectID == first.SiaObjectID {
+		t.Fatal("expected a new snapshot")
+	}
+
+	// a missed slot is caught up
+	backend.RunScheduledSnapshot(ctx, base.AddDate(0, 0, 3))
+	third := assertScheduled(3)[0]
+	if third.SiaObjectID == second.SiaObjectID {
+		t.Fatal("expected a new snapshot")
+	}
+
+	// a count is applied without taking a snapshot, every row was created
+	// today so one daily keeps only the newest, and a manual snapshot is
+	// never pruned
+	manual, err := backend.CreateSnapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sched.KeepDaily = 1
+	setSchedule(sched)
+	backend.RunScheduledSnapshot(ctx, base.Add(time.Hour))
+	if snapshots := assertScheduled(1); snapshots[0].SiaObjectID != third.SiaObjectID {
+		t.Fatal("expected the newest snapshot to be kept")
+	} else if memSDK.Pinned(first.SiaObjectID) || memSDK.Pinned(second.SiaObjectID) {
+		t.Fatal("expected the older snapshots to be pruned")
+	} else if !memSDK.Pinned(manual.SiaObjectID) {
+		t.Fatal("expected the manual snapshot to be kept")
+	}
+
+	// zero counts keep every scheduled snapshot
+	sched.KeepDaily = 0
+	setSchedule(sched)
+	backend.RunScheduledSnapshot(ctx, base.AddDate(0, 0, 4))
+	assertScheduled(2)
+
+	// a failed attempt is retried only after the retry delay
+	memSDK.SetPinError(errors.New("pin failed"))
+	failedAt := base.AddDate(0, 0, 5)
+	backend.RunScheduledSnapshot(ctx, failedAt)
+	assertScheduled(2)
+	memSDK.SetPinError(nil)
+	backend.RunScheduledSnapshot(ctx, failedAt.Add(sia.ScheduledSnapshotRetryDelay-time.Minute))
+	assertScheduled(2)
+	backend.RunScheduledSnapshot(ctx, failedAt.Add(sia.ScheduledSnapshotRetryDelay))
+	assertScheduled(3)
+}
+
+// TestScheduledSnapshotLoop verifies the background loop snapshots once the
+// first sync completes, again when the slot passes, and once a day after that,
+// pruning to the retention count each time.
+func TestScheduledSnapshotLoop(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		memSDK := testutil.NewMemorySDK()
+		log := zaptest.NewLogger(t)
+		dir := t.TempDir()
+		store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+
+		// the slot is two minutes away
+		slot := time.Now().Add(2 * time.Minute)
+		if err := store.UpdateSnapshotSchedule(sia.SnapshotSchedule{Expression: fmt.Sprintf("%d %d * * *", slot.Minute(), slot.Hour()), KeepDaily: 1}); err != nil {
+			t.Fatal(err)
+		}
+		backend, err := sia.New(t.Context(), memSDK, store, dir, sia.WithUploadDisabled(), sia.WithLogger(log))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer backend.Close()
+
+		assertSnapshot := func(prev types.Hash256) types.Hash256 {
+			t.Helper()
+			snapshots, err := store.ListSnapshots()
+			if err != nil {
+				t.Fatal(err)
+			} else if len(snapshots) != 1 {
+				t.Fatal("unexpected", len(snapshots))
+			} else if !snapshots[0].Scheduled {
+				t.Fatal("expected a scheduled snapshot")
+			} else if snapshots[0].SiaObjectID == prev {
+				t.Fatal("expected a new snapshot")
+			} else if prev != (types.Hash256{}) && memSDK.Pinned(prev) {
+				t.Fatal("expected the previous snapshot to be pruned")
+			}
+			return snapshots[0].SiaObjectID
+		}
+
+		// the first pass after the sync snapshots at once
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		id := assertSnapshot(types.Hash256{})
+
+		// the slot passing takes another
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		id = assertSnapshot(id)
+
+		// then once a day
+		for range 3 {
+			time.Sleep(24 * time.Hour)
+			synctest.Wait()
+			id = assertSnapshot(id)
+		}
+	})
 }

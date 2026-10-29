@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
+	"github.com/SiaFoundation/s3d/sia"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.sia.tech/core/types"
 	"go.uber.org/zap/zaptest"
@@ -42,7 +43,7 @@ func TestSnapshots(t *testing.T) {
 	}
 
 	// create a snapshot
-	s1, s1Gen, err := store.CreateSnapshot()
+	s1, s1Gen, err := store.CreateSnapshot(false)
 	if err != nil {
 		t.Fatal(err)
 	} else if s1.ID == 0 {
@@ -86,6 +87,8 @@ func TestSnapshots(t *testing.T) {
 		t.Fatal("mismatch", snapshots[0].SiaObjectID)
 	} else if snapshots[0].ObjectCount != 1 {
 		t.Fatal("unexpected", snapshots[0].ObjectCount)
+	} else if snapshots[0].Scheduled {
+		t.Fatal("expected a manual snapshot")
 	}
 
 	// completing an unknown object reports not found, as does completing an
@@ -121,7 +124,7 @@ func TestSnapshots(t *testing.T) {
 	}
 
 	// a later snapshot taken after the object was deleted does not capture it
-	s2, _, err := store.CreateSnapshot()
+	s2, _, err := store.CreateSnapshot(false)
 	if err != nil {
 		t.Fatal(err)
 	} else if s2.ObjectCount != 0 {
@@ -166,15 +169,18 @@ func TestSnapshots(t *testing.T) {
 		t.Fatal("unexpected", orphans)
 	}
 
-	// adopting a snapshot recreates its record and raises the orphan's
-	// generation so the adopted snapshot withholds it again
-	adopted, err := store.AdoptSnapshot(siaObjectID, s1.CreatedAt, s1Gen+10, s1.ObjectCount)
+	// adopting a snapshot recreates its record, with the scheduled flag its
+	// metadata carries, and raises the orphan's generation so the adopted
+	// snapshot withholds it again
+	adopted, err := store.AdoptSnapshot(siaObjectID, s1.CreatedAt, s1Gen+10, s1.ObjectCount, true)
 	if err != nil {
 		t.Fatal(err)
 	} else if adopted.SiaObjectID != siaObjectID {
 		t.Fatal("mismatch", adopted.SiaObjectID)
 	} else if adopted.ObjectCount != s1.ObjectCount {
 		t.Fatal("unexpected", adopted.ObjectCount)
+	} else if !adopted.Scheduled {
+		t.Fatal("expected a scheduled snapshot")
 	}
 	store.assertCount(1, "snapshots")
 	if gen := orphanGen(); gen != s1Gen+10 {
@@ -188,10 +194,12 @@ func TestSnapshots(t *testing.T) {
 
 	// adopting the same object again returns the existing record and leaves
 	// the orphan generation alone
-	if again, err := store.AdoptSnapshot(siaObjectID, s1.CreatedAt, s1Gen+10, s1.ObjectCount); err != nil {
+	if again, err := store.AdoptSnapshot(siaObjectID, s1.CreatedAt, s1Gen+10, s1.ObjectCount, true); err != nil {
 		t.Fatal(err)
 	} else if again.ID != adopted.ID {
 		t.Fatal("mismatch", again.ID)
+	} else if !again.Scheduled {
+		t.Fatal("expected a scheduled snapshot")
 	}
 	store.assertCount(1, "snapshots")
 	if gen := orphanGen(); gen != s1Gen+10 {
@@ -217,7 +225,7 @@ func TestSnapshots(t *testing.T) {
 
 	// the generation counter is bumped past the adopted generation and its
 	// completion bump
-	snap3, gen, err := store.CreateSnapshot()
+	snap3, gen, err := store.CreateSnapshot(false)
 	if err != nil {
 		t.Fatal(err)
 	} else if gen != s1Gen+12 {
@@ -286,7 +294,7 @@ func TestSnapshots(t *testing.T) {
 	// stamp, the shared id predates the snapshot and must stay withheld
 	dID := addObject("d")
 	snap4ObjID := frand.Entropy256()
-	if snap4, _, err := store.CreateSnapshot(); err != nil {
+	if snap4, _, err := store.CreateSnapshot(false); err != nil {
 		t.Fatal(err)
 	} else if err := store.MarkSnapshotPinning(snap4.ID, snap4ObjID, snap4.ObjectCount); err != nil {
 		t.Fatal(err)
@@ -309,7 +317,7 @@ func TestSnapshots(t *testing.T) {
 
 	// an object created after a snapshot is adopted cannot appear in the
 	// adopted snapshot either
-	adopted2, err := store.AdoptSnapshot(frand.Entropy256(), time.Now(), s1Gen+30, 0)
+	adopted2, err := store.AdoptSnapshot(frand.Entropy256(), time.Now(), s1Gen+30, 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,7 +346,7 @@ func TestSnapshots(t *testing.T) {
 		t.Fatal(err)
 	}
 	snap5ObjID := frand.Entropy256()
-	if snap5, _, err := store.CreateSnapshot(); err != nil {
+	if snap5, _, err := store.CreateSnapshot(false); err != nil {
 		t.Fatal(err)
 	} else if err := store.MarkSnapshotPinning(snap5.ID, snap5ObjID, snap5.ObjectCount); err != nil {
 		t.Fatal(err)
@@ -377,7 +385,7 @@ func TestSnapshots(t *testing.T) {
 	}
 
 	// a rollback deletes a snapshot whose object was never uploaded
-	rb1, _, err := store.CreateSnapshot()
+	rb1, _, err := store.CreateSnapshot(false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,7 +395,7 @@ func TestSnapshots(t *testing.T) {
 	store.assertCount(0, "snapshots")
 
 	// a rollback marks a snapshot awaiting its pin for deletion
-	rb2, _, err := store.CreateSnapshot()
+	rb2, _, err := store.CreateSnapshot(false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -434,10 +442,10 @@ func TestSnapshots(t *testing.T) {
 	}
 
 	// startup deletes created snapshots and leaves the ones awaiting a pin
-	if _, _, err := store.CreateSnapshot(); err != nil {
+	if _, _, err := store.CreateSnapshot(false); err != nil {
 		t.Fatal(err)
 	}
-	rb3, _, err := store.CreateSnapshot()
+	rb3, _, err := store.CreateSnapshot(false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -513,7 +521,7 @@ func TestAdoptSnapshotWithholdsExistingOrphans(t *testing.T) {
 	// model the restored database image. Its own snapshot row was incomplete
 	// when the image was made, so startup removes the row but retains the
 	// generation counter.
-	restored, restoredGen, err := store.CreateSnapshot()
+	restored, restoredGen, err := store.CreateSnapshot(false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -531,7 +539,7 @@ func TestAdoptSnapshotWithholdsExistingOrphans(t *testing.T) {
 
 	// adopt the restored image's own snapshot. It withholds the orphan and its
 	// completion bump advances the counter to the next generation.
-	earlier, err := store.AdoptSnapshot(frand.Entropy256(), restored.CreatedAt, restoredGen, restored.ObjectCount)
+	earlier, err := store.AdoptSnapshot(frand.Entropy256(), restored.CreatedAt, restoredGen, restored.ObjectCount, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -539,7 +547,7 @@ func TestAdoptSnapshotWithholdsExistingOrphans(t *testing.T) {
 	// another history created a snapshot immediately after restoring the same
 	// image, so its generation is now equal to the counter advanced above. It
 	// may still reference the locally orphaned object.
-	adopted, err := store.AdoptSnapshot(frand.Entropy256(), time.Now(), restoredGen+1, 1)
+	adopted, err := store.AdoptSnapshot(frand.Entropy256(), time.Now(), restoredGen+1, 1, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -583,10 +591,10 @@ func TestListSnapshotsOrderBy(t *testing.T) {
 
 	// adopting the newer snapshot first leaves the older one holding the
 	// higher row id, so listing cannot fall back on id order
-	if _, err := store.AdoptSnapshot(newer, cut.Add(-time.Hour), 1, 10); err != nil {
+	if _, err := store.AdoptSnapshot(newer, cut.Add(-time.Hour), 1, 10, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AdoptSnapshot(older, cut.Add(-2*time.Hour), 2, 20); err != nil {
+	if _, err := store.AdoptSnapshot(older, cut.Add(-2*time.Hour), 2, 20, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -605,5 +613,35 @@ func TestListSnapshotsOrderBy(t *testing.T) {
 	}
 	if snapshots[1].ID < snapshots[0].ID {
 		t.Fatal("expected the older snapshot to hold the higher id")
+	}
+}
+
+func TestSnapshotSchedule(t *testing.T) {
+	store := initTestDB(t, zaptest.NewLogger(t))
+
+	// a fresh database has no schedule
+	sched, err := store.SnapshotSchedule()
+	if err != nil {
+		t.Fatal(err)
+	} else if sched != (sia.SnapshotSchedule{}) {
+		t.Fatal("unexpected", sched)
+	}
+
+	want := sia.SnapshotSchedule{Expression: "0 3 * * *", KeepDaily: 7, KeepWeekly: 4, KeepMonthly: 12}
+	if err := store.UpdateSnapshotSchedule(want); err != nil {
+		t.Fatal(err)
+	} else if sched, err = store.SnapshotSchedule(); err != nil {
+		t.Fatal(err)
+	} else if sched != want {
+		t.Fatal("mismatch", sched, want)
+	}
+
+	// clear it again
+	if err := store.UpdateSnapshotSchedule(sia.SnapshotSchedule{}); err != nil {
+		t.Fatal(err)
+	} else if sched, err = store.SnapshotSchedule(); err != nil {
+		t.Fatal(err)
+	} else if sched != (sia.SnapshotSchedule{}) {
+		t.Fatal("unexpected", sched)
 	}
 }

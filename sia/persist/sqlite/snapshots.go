@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
+	"github.com/SiaFoundation/s3d/sia"
 	"go.sia.tech/core/types"
 )
 
@@ -22,16 +23,16 @@ const (
 
 // CreateSnapshot bumps the snapshot generation and records a snapshot of the
 // current uploaded object count in the created state.
-func (s *Store) CreateSnapshot() (snap s3.Snapshot, gen int64, err error) {
+func (s *Store) CreateSnapshot(scheduled bool) (snap s3.Snapshot, gen int64, err error) {
 	err = s.transaction(func(tx *txn) error {
 		var err error
 		if gen, err = bumpSnapshotGen(tx); err != nil {
 			return err
 		}
 		return tx.QueryRow(`
-			INSERT INTO snapshots (created_at, state, state_since, gen, object_count)
-			VALUES ($1, $2, $1, $3, (SELECT stat_value FROM stats WHERE stat = $4))
-			RETURNING id, created_at, object_count`, sqlTime(time.Now()), snapshotStateCreated, gen, statUploadedObjects).Scan(&snap.ID, (*sqlTime)(&snap.CreatedAt), &snap.ObjectCount)
+			INSERT INTO snapshots (created_at, state, state_since, gen, object_count, scheduled)
+			VALUES ($1, $2, $1, $3, (SELECT stat_value FROM stats WHERE stat = $4), $5)
+			RETURNING id, created_at, object_count, scheduled`, sqlTime(time.Now()), snapshotStateCreated, gen, statUploadedObjects, scheduled).Scan(&snap.ID, (*sqlTime)(&snap.CreatedAt), &snap.ObjectCount, &snap.Scheduled)
 	})
 	return
 }
@@ -85,12 +86,12 @@ func (s *Store) MarkSnapshotPinned(objectID types.Hash256) error {
 // orphans are raised to it even when the counter is already past it. The
 // counter is then bumped once more and recorded as the completion generation.
 // Adopting an object that already has a record returns the existing snapshot.
-func (s *Store) AdoptSnapshot(objectID types.Hash256, createdAt time.Time, gen, objectCount int64) (snap s3.Snapshot, err error) {
+func (s *Store) AdoptSnapshot(objectID types.Hash256, createdAt time.Time, gen, objectCount int64, scheduled bool) (snap s3.Snapshot, err error) {
 	err = s.transaction(func(tx *txn) error {
 		// return the existing record when the object was already adopted
 		err := tx.QueryRow(`
-			SELECT id, created_at, object_count, sia_object_id FROM snapshots WHERE sia_object_id = $1`,
-			sqlHash256(objectID)).Scan(&snap.ID, (*sqlTime)(&snap.CreatedAt), &snap.ObjectCount, (*sqlHash256)(&snap.SiaObjectID))
+			SELECT id, created_at, object_count, sia_object_id, scheduled FROM snapshots WHERE sia_object_id = $1`,
+			sqlHash256(objectID)).Scan(&snap.ID, (*sqlTime)(&snap.CreatedAt), &snap.ObjectCount, (*sqlHash256)(&snap.SiaObjectID), &snap.Scheduled)
 		if err == nil {
 			return nil
 		} else if !errors.Is(err, sql.ErrNoRows) {
@@ -108,9 +109,9 @@ func (s *Store) AdoptSnapshot(objectID types.Hash256, createdAt time.Time, gen, 
 			return err
 		}
 		return tx.QueryRow(`
-			INSERT INTO snapshots (created_at, state, state_since, gen, object_count, sia_object_id, gen_completed)
-			VALUES ($1, $2, $3, $4, $5, $6, $7)
-			RETURNING id, created_at, object_count, sia_object_id`, sqlTime(createdAt), snapshotStatePinned, sqlTime(time.Now()), gen, objectCount, sqlHash256(objectID), completed).Scan(&snap.ID, (*sqlTime)(&snap.CreatedAt), &snap.ObjectCount, (*sqlHash256)(&snap.SiaObjectID))
+			INSERT INTO snapshots (created_at, state, state_since, gen, object_count, sia_object_id, gen_completed, scheduled)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			RETURNING id, created_at, object_count, sia_object_id, scheduled`, sqlTime(createdAt), snapshotStatePinned, sqlTime(time.Now()), gen, objectCount, sqlHash256(objectID), completed, scheduled).Scan(&snap.ID, (*sqlTime)(&snap.CreatedAt), &snap.ObjectCount, (*sqlHash256)(&snap.SiaObjectID), &snap.Scheduled)
 	})
 	return
 }
@@ -198,7 +199,7 @@ func (s *Store) ListSnapshots() (snapshots []s3.Snapshot, err error) {
 		// they were taken. Creation and generation give the latter, and id
 		// breaks the remaining ties so the order stays total
 		rows, err := tx.Query(`
-			SELECT id, created_at, sia_object_id, object_count
+			SELECT id, created_at, sia_object_id, object_count, scheduled
 			FROM snapshots
 			WHERE state = $1
 			ORDER BY created_at DESC, gen DESC, id DESC`, snapshotStatePinned)
@@ -208,7 +209,7 @@ func (s *Store) ListSnapshots() (snapshots []s3.Snapshot, err error) {
 		defer rows.Close()
 		for rows.Next() {
 			var snap s3.Snapshot
-			if err := rows.Scan(&snap.ID, (*sqlTime)(&snap.CreatedAt), (*sqlHash256)(&snap.SiaObjectID), &snap.ObjectCount); err != nil {
+			if err := rows.Scan(&snap.ID, (*sqlTime)(&snap.CreatedAt), (*sqlHash256)(&snap.SiaObjectID), &snap.ObjectCount, &snap.Scheduled); err != nil {
 				return err
 			}
 			snapshots = append(snapshots, snap)
@@ -226,6 +227,24 @@ func (s *Store) HasSnapshotObject(objectID types.Hash256) (known bool, err error
 			sqlHash256(objectID)).Scan(&known)
 	})
 	return
+}
+
+// SnapshotSchedule returns the snapshot schedule.
+func (s *Store) SnapshotSchedule() (sched sia.SnapshotSchedule, err error) {
+	err = s.transaction(func(tx *txn) error {
+		return tx.QueryRow(`SELECT snapshot_schedule, snapshot_keep_daily, snapshot_keep_weekly, snapshot_keep_monthly FROM global_settings`).
+			Scan(&sched.Expression, &sched.KeepDaily, &sched.KeepWeekly, &sched.KeepMonthly)
+	})
+	return
+}
+
+// UpdateSnapshotSchedule replaces the snapshot schedule.
+func (s *Store) UpdateSnapshotSchedule(sched sia.SnapshotSchedule) error {
+	return s.transaction(func(tx *txn) error {
+		_, err := tx.Exec(`UPDATE global_settings SET snapshot_schedule = $1, snapshot_keep_daily = $2, snapshot_keep_weekly = $3, snapshot_keep_monthly = $4`,
+			sched.Expression, sched.KeepDaily, sched.KeepWeekly, sched.KeepMonthly)
+		return err
+	})
 }
 
 func bumpSnapshotGen(tx *txn) (gen int64, err error) {

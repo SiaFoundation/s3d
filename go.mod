@@ -10,6 +10,7 @@ require (
 	github.com/mattn/go-sqlite3 v1.14.52
 	github.com/minio/crc64nvme v1.1.1
 	github.com/minio/minio-go/v7 v7.4.1
+	github.com/robfig/cron/v3 v3.0.1
 	go.sia.tech/core v0.21.8
 	go.sia.tech/coreutils v0.25.0
 	go.sia.tech/indexd v0.6.1
