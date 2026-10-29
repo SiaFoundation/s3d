@@ -59,15 +59,16 @@ func downloadMetadata(t *testing.T, memSDK *testutil.MemorySDK, id types.Hash256
 	return meta
 }
 
-// snapshotEvent builds the event the indexer emits for a live snapshot object,
-// carrying the object's slabs and metadata.
+// snapshotEvent builds the event the indexer emits for a live snapshot
+// object, carrying the object's metadata.
 func snapshotEvent(t *testing.T, memSDK *testutil.MemorySDK, id types.Hash256, at time.Time) sdk.ObjectEvent {
 	t.Helper()
-	obj, ok := memSDK.StoredObject(id)
+	raw, ok := memSDK.ObjectMetadata(id)
 	if !ok {
 		t.Fatal("snapshot object not found")
 	}
-	return sdk.ObjectEvent{Key: id, UpdatedAt: at, Object: &obj}
+	obj := sdk.NewEmptyObject().WithMetadata(raw)
+	return sdk.ObjectEvent{ID: id, UpdatedAt: at, Object: obj}
 }
 
 func TestCreateSnapshot(t *testing.T) {
@@ -208,10 +209,10 @@ func TestCreateSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := backend.DeleteSnapshot(t.Context(), other.ID()); !errors.Is(err, s3.ErrSnapshotNotFound) {
+	if err := backend.DeleteSnapshot(t.Context(), memSDK.ObjectID(other)); !errors.Is(err, s3.ErrSnapshotNotFound) {
 		t.Fatal("unexpected", err)
-	} else if !memSDK.Pinned(other.ID()) {
-		t.Fatal("unexpected", other.ID())
+	} else if !memSDK.Pinned(memSDK.ObjectID(other)) {
+		t.Fatal("unexpected", memSDK.ObjectID(other))
 	}
 
 	// an object the network has already dropped still clears its record, so a
@@ -348,8 +349,8 @@ func TestCreateSnapshotSyncRace(t *testing.T) {
 	backend, store := testutil.NewBackend(t, testutil.WithSDK(memSDK))
 
 	// the sync loop observes the pin before CreateSnapshot resumes
-	memSDK.SetPinHook(func(obj sdk.Object) {
-		memSDK.SetEvents([]sdk.ObjectEvent{snapshotEvent(t, memSDK, obj.ID(), time.Now())})
+	memSDK.SetPinHook(func(obj *sdk.Object) {
+		memSDK.SetEvents([]sdk.ObjectEvent{snapshotEvent(t, memSDK, memSDK.ObjectID(obj), time.Now())})
 		backend.SyncMetadata(t.Context())
 	})
 
@@ -460,14 +461,15 @@ func pinSnapshotObject(t *testing.T, memSDK *testutil.MemorySDK, store *sqlite.S
 	if err != nil {
 		t.Fatal(err)
 	}
-	obj := sdk.NewEmptyObject()
-	obj.UpdateMetadata(meta)
-	if err := memSDK.Upload(t.Context(), &obj, bytes.NewReader([]byte("backup"))); err != nil {
-		t.Fatal(err)
-	} else if err := memSDK.PinObject(t.Context(), obj); err != nil {
+	obj, err := memSDK.Upload(t.Context(), sdk.NewEmptyObject().WithMetadata(meta),
+		bytes.NewReader([]byte("backup")))
+	if err != nil {
 		t.Fatal(err)
 	}
-	return obj.ID()
+	if err := memSDK.PinObject(t.Context(), obj); err != nil {
+		t.Fatal(err)
+	}
+	return memSDK.ObjectID(obj)
 }
 
 // openBackend opens the store and backend in dir. Reusing a directory
@@ -641,7 +643,7 @@ func TestSnapshotRecovery(t *testing.T) {
 	// the sync replays the first snapshot's deletion and adopts the second
 	// and third from the network
 	events := []sdk.ObjectEvent{
-		{Key: snap1.SiaObjectID, UpdatedAt: eventTime.Add(2 * time.Second), Deleted: true},
+		{ID: snap1.SiaObjectID, UpdatedAt: eventTime.Add(2 * time.Second), Deleted: true},
 		snapshotEvent(t, memSDK, snap2.SiaObjectID, eventTime.Add(3*time.Second)),
 		snapshotEvent(t, memSDK, snap3.SiaObjectID, eventTime.Add(4*time.Second)),
 	}
@@ -700,7 +702,7 @@ func TestListRemoteSnapshots(t *testing.T) {
 	events := []sdk.ObjectEvent{
 		snapshotEvent(t, memSDK, snap2.SiaObjectID, at.Add(2*time.Second)),
 		snapshotEvent(t, memSDK, snap1.SiaObjectID, at.Add(time.Second)),
-		{Key: other.ID(), UpdatedAt: at.Add(3 * time.Second), Object: &other},
+		{ID: memSDK.ObjectID(other), UpdatedAt: at.Add(3 * time.Second), Object: other},
 	}
 	memSDK.SetEvents(events)
 
@@ -729,7 +731,7 @@ func TestListRemoteSnapshots(t *testing.T) {
 	}
 
 	// a deleted snapshot drops out of the listing
-	memSDK.SetEvents(append(events, sdk.ObjectEvent{Key: snap1.SiaObjectID, UpdatedAt: at.Add(4 * time.Second), Deleted: true}))
+	memSDK.SetEvents(append(events, sdk.ObjectEvent{ID: snap1.SiaObjectID, UpdatedAt: at.Add(4 * time.Second), Deleted: true}))
 	if remote, err := sia.ListRemoteSnapshots(t.Context(), memSDK); err != nil {
 		t.Fatal(err)
 	} else if len(remote) != 1 {
@@ -808,7 +810,7 @@ func TestFetchRemoteSnapshot(t *testing.T) {
 	}
 
 	// an object that is not a snapshot is rejected rather than restored
-	if _, err := sia.FetchRemoteSnapshot(t.Context(), memSDK, other.ID()); err == nil {
+	if _, err := sia.FetchRemoteSnapshot(t.Context(), memSDK, memSDK.ObjectID(other)); err == nil {
 		t.Fatal("expected an error")
 	} else if !strings.Contains(err.Error(), "not a snapshot") {
 		t.Fatal("unexpected", err)

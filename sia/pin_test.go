@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 	"testing"
 	"time"
@@ -29,7 +30,10 @@ func stageUpload(t *testing.T, memSDK *testutil.MemorySDK, store *sqlite.Store, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	sealed := memSDK.SealObject(siaObj)
+	sealed, err := memSDK.SealObject(siaObj)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	bid := bucketID(t, store, bucket)
 	fn := name + ".upload"
@@ -206,6 +210,40 @@ func TestPinLoopPinsCopyAfterSourceDeleted(t *testing.T) {
 	}
 }
 
+// TestUnsealStagedObject checks that an object unseals between the upload and
+// the pin, which is the window the pin loop works in. The fixtures above seed
+// through AddObject, which lands in the pinned map and never exercises it.
+func TestUnsealStagedObject(t *testing.T) {
+	memSDK := testutil.NewMemorySDK()
+	data := frand.Bytes(16)
+
+	obj, err := memSDK.Upload(t.Context(), sdk.NewEmptyObject(), bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := memSDK.SealObject(obj)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	unsealed, err := memSDK.UnsealObject(sealed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := memSDK.Download(t.Context(), unsealed, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatal("unsealed object returned different data")
+	}
+}
+
 // TestPinLoopPinsConcurrently verifies that a pin cycle pins objects in
 // parallel instead of one after the other.
 func TestPinLoopPinsConcurrently(t *testing.T) {
@@ -224,7 +262,7 @@ func TestPinLoopPinsConcurrently(t *testing.T) {
 	var inflight sync.WaitGroup
 	inflight.Add(sia.PinThreads)
 	release := make(chan struct{})
-	memSDK.SetPinHook(func(sdk.Object) {
+	memSDK.SetPinHook(func(*sdk.Object) {
 		inflight.Done()
 		<-release
 	})

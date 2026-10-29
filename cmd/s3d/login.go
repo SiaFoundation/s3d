@@ -21,9 +21,9 @@ func openStore(log *zap.Logger) (*sqlite.Store, error) {
 	return sqlite.OpenDatabase(filepath.Join(cfg.Directory, "s3d.db"), log)
 }
 
-func newSDKBuilder(indexerURL string) *sdk.Builder {
+func newSDKBuilder(indexerURL string) (*sdk.Builder, error) {
 	return sdk.NewBuilder(indexerURL, sdk.AppMetadata{
-		ID:          types.HashBytes([]byte("s3d")),
+		AppID:       types.HashBytes([]byte("s3d")),
 		Name:        "S3d",
 		Description: "A S3-compatible storage service backed by Sia",
 		LogoURL:     "https://example.com/logo.png",
@@ -60,6 +60,7 @@ func runLoginCmd(ctx context.Context, configPath string) {
 
 	sdkClient, err := registerSDK(ctx, indexerURL, phrase)
 	checkFatalError("failed to register app", err)
+	defer sdkClient.Close()
 
 	checkFatalError("failed to store app key", store.SetAppKey(sdkClient.AppKey(), indexerURL))
 
@@ -89,7 +90,11 @@ func existingAppKey() (types.PrivateKey, string, bool, error) {
 // registerSDK walks the user through approving an app connection and returns
 // the registered client. The app key it derives is not persisted.
 func registerSDK(ctx context.Context, indexerURL, phrase string) (*sdk.SDK, error) {
-	builder := newSDKBuilder(indexerURL)
+	builder, err := newSDKBuilder(indexerURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create SDK builder: %w", err)
+	}
+	defer builder.Close()
 
 	respURL, err := builder.RequestConnection(ctx)
 	if err != nil {

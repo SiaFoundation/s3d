@@ -161,7 +161,7 @@ func siaObject(tx *txn, id types.Hash256) (sdk.SealedObject, error) {
 	if err := rows.Err(); err != nil {
 		return sdk.SealedObject{}, err
 	}
-	return sdk.SealedObject{SealedObject: so}, nil
+	return so, nil
 }
 
 // deleteSiaObject removes the sealed object with the given id along with its

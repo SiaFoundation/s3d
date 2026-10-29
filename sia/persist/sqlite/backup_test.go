@@ -12,7 +12,6 @@ import (
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.sia.tech/indexd/slabs"
-	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap/zaptest"
 	"lukechampine.com/frand"
 )
@@ -48,17 +47,12 @@ func TestBackup(t *testing.T) {
 		} else if !uploaded {
 			return
 		}
-		sealed := sdk.SealedObject{SealedObject: slabs.SealedObject{
-			EncryptedDataKey: frand.Bytes(32),
-			Slabs: []slabs.SlabSlice{{
-				EncryptionKey: frand.Entropy256(),
-				MinShards:     1,
-				Length:        16,
-				Sectors:       []slabs.PinnedSector{{Root: frand.Entropy256(), HostKey: frand.Entropy256()}},
-			}},
-			CreatedAt: time.Now(),
-			UpdatedAt: time.Now(),
-		}}
+		sealed := sealedObject(slabs.SlabSlice{
+			EncryptionKey: frand.Entropy256(),
+			MinShards:     1,
+			Length:        16,
+			Sectors:       []slabs.PinnedSector{{Root: frand.Entropy256(), HostKey: frand.Entropy256()}},
+		})
 		if err := store.MarkObjectUploaded(ids[bucket], name, versionID, md5, sealed, time.Now().Add(time.Hour)); err != nil {
 			t.Fatal(err)
 		} else if !pinned {

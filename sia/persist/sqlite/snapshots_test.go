@@ -9,7 +9,6 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.sia.tech/core/types"
-	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap/zaptest"
 	"lukechampine.com/frand"
 )
@@ -25,8 +24,7 @@ func TestSnapshots(t *testing.T) {
 	bid := store.bucketID(bucket)
 
 	// upload and pin an object
-	obj := sdk.Object{}
-	sealed := obj.Seal(types.GeneratePrivateKey())
+	sealed := newTestObject()
 	objID := sealed.ID()
 	md5 := frand.Entropy128()
 	if _, _, err := store.PutObject(bid, "a", objects.PutOptions{ContentMD5: md5, Length: 1, FileName: new(string)}); err != nil {
@@ -202,8 +200,7 @@ func TestSnapshots(t *testing.T) {
 
 	addObject := func(key string) types.Hash256 {
 		t.Helper()
-		obj := newTestObject()
-		sealed := obj.Seal(types.GeneratePrivateKey())
+		sealed := newTestObject()
 		md5 := frand.Entropy128()
 		if _, _, err := store.PutObject(bid, key, objects.PutOptions{ContentMD5: md5, Length: 1, FileName: new(string)}); err != nil {
 			t.Fatal(err)
@@ -330,9 +327,8 @@ func TestSnapshots(t *testing.T) {
 	}
 
 	// a metadata sync re-seals an object without moving its creation stamp, so
-	// an object the completed snapshot references stays withheld
-	fObj := newTestObject()
-	fSealed := fObj.Seal(types.GeneratePrivateKey())
+	// an object the completed backup references stays withheld
+	fSealed := newTestObject()
 	fMD5 := frand.Entropy128()
 	if _, _, err := store.PutObject(bid, "f", objects.PutOptions{ContentMD5: fMD5, Length: 1, FileName: new(string)}); err != nil {
 		t.Fatal(err)
@@ -503,8 +499,7 @@ func TestAdoptSnapshotWithholdsExistingOrphans(t *testing.T) {
 	bid := store.bucketID(bucket)
 
 	// upload and pin an object that exists in the database being restored
-	obj := newTestObject()
-	sealed := obj.Seal(types.GeneratePrivateKey())
+	sealed := newTestObject()
 	objID := sealed.ID()
 	md5 := frand.Entropy128()
 	if _, _, err := store.PutObject(bid, "a", objects.PutOptions{ContentMD5: md5, Length: 1, FileName: new(string)}); err != nil {

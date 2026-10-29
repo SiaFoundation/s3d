@@ -4,7 +4,6 @@ import (
 	"errors"
 	"reflect"
 	"testing"
-	"unsafe"
 
 	"fmt"
 	"slices"
@@ -94,8 +93,7 @@ func TestDiskUsage(t *testing.T) {
 	if _, _, err := store.PutObject(bid, "uploaded", objects.PutOptions{ContentMD5: contentMD5, Length: 200, FileName: new(string)}); err != nil {
 		t.Fatal(err)
 	}
-	sealObj := sdk.Object{}
-	sealed := sealObj.Seal(types.GeneratePrivateKey())
+	sealed := sealedObject()
 	if err := store.MarkObjectUploaded(bid, "uploaded", "", contentMD5, sealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -174,8 +172,7 @@ func TestAllFilenames(t *testing.T) {
 	}
 
 	// mark the regular upload as uploaded to Sia
-	obj := sdk.Object{}
-	sealed := obj.Seal(types.GeneratePrivateKey())
+	sealed := sealedObject()
 	md5 := frand.Entropy128()
 	if _, _, err := store.PutObject(bid, "obj1", objects.PutOptions{ContentMD5: md5, Length: 100, FileName: &fn}); err != nil {
 		t.Fatal(err)
@@ -229,8 +226,7 @@ func TestAllFilenames(t *testing.T) {
 
 	// mark the completed multipart as uploaded to Sia and then pinned so the
 	// filename is released
-	mpObj := sdk.Object{}
-	mpSealed := mpObj.Seal(types.GeneratePrivateKey())
+	mpSealed := sealedObject()
 	if err := store.MarkObjectUploaded(bid, "mp1", "", mpMD5, mpSealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	} else if _, err := store.MarkObjectPinned(mpSealed.ID()); err != nil {
@@ -259,13 +255,9 @@ func TestGetObject(t *testing.T) {
 		objMeta   = map[string]string{"foo": "bar"}
 		objLength = frand.Intn(10) + 1
 
-		objSealKey = types.GeneratePrivateKey()
-		objSdkObj  = sdk.Object{}
-		objSealed  = objSdkObj.Seal(objSealKey)
+		objSealed = sealedObject()
 
-		multipartSealKey = types.GeneratePrivateKey()
-		multipartSdkObj  = sdk.Object{}
-		multipartSealed  = multipartSdkObj.Seal(multipartSealKey)
+		multipartSealed = sealedObject()
 
 		multipartMD5      = frand.Entropy128()
 		multipartUploadID = s3.NewUploadID()
@@ -429,9 +421,7 @@ func TestGetObjectPartFields(t *testing.T) {
 	}
 
 	// mark as uploaded to Sia
-	sealKey := types.GeneratePrivateKey()
-	sdkObj := sdk.NewEmptyObject()
-	sealed := sdkObj.Seal(sealKey)
+	sealed := sealedObject()
 	if err := store.MarkObjectUploaded(bid, name, "", contentMD5, sealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -871,8 +861,7 @@ func BenchmarkListObjects(b *testing.B) {
 
 	store := initTestDB(b, zaptest.NewLogger(b))
 
-	obj := sdk.Object{}
-	sealed := obj.Seal(types.GeneratePrivateKey())
+	sealed := sealedObject()
 	objID := sealed.ID()
 	contentMD5 := [16]byte(frand.Bytes(16))
 
@@ -1061,8 +1050,7 @@ func TestOrphanedObjects(t *testing.T) {
 	}
 	bid := store.bucketID(bucket)
 
-	sealObj := sdk.Object{}
-	sealed := sealObj.Seal(types.GeneratePrivateKey())
+	sealed := sealedObject()
 	objID := sealed.ID()
 
 	// no orphans initially
@@ -1159,10 +1147,8 @@ func TestPutObjectOrphan(t *testing.T) {
 	}
 	bid := store.bucketID(bucket)
 
-	oldObj := (sdk.Object{})
-	oldSealed := oldObj.Seal(types.GeneratePrivateKey())
-	newObj := sdk.Object{}
-	newSealed := newObj.Seal(types.GeneratePrivateKey())
+	oldSealed := sealedObject()
+	newSealed := sealedObject()
 
 	// put initial object, mark it uploaded, then pin it
 	md5old := frand.Entropy128()
@@ -1280,14 +1266,7 @@ func TestSiaObjectSlabGC(t *testing.T) {
 		}
 		return ss
 	}
-	seal := func(ss ...slabs.SlabSlice) sdk.SealedObject {
-		return sdk.SealedObject{SealedObject: slabs.SealedObject{
-			EncryptedDataKey: frand.Bytes(32),
-			Slabs:            ss,
-			CreatedAt:        time.Unix(1000, 0),
-			UpdatedAt:        time.Unix(2000, 0),
-		}}
-	}
+	seal := sealedObject
 
 	// two sealed objects slicing one shared slab
 	shared := newSlab(3)
@@ -1387,8 +1366,7 @@ func TestUpdateSiaObjects(t *testing.T) {
 	addTestObject := func(key string) sdk.SealedObject {
 		t.Helper()
 
-		obj := newTestObject()
-		sealed := obj.Seal(types.GeneratePrivateKey())
+		sealed := newTestObject()
 		contentMD5 := frand.Entropy128()
 		if _, _, err := store.PutObject(bid, key, objects.PutOptions{ContentMD5: contentMD5, Length: 1, FileName: new(string)}); err != nil {
 			t.Fatal(err)
@@ -1407,7 +1385,7 @@ func TestUpdateSiaObjects(t *testing.T) {
 	updated, err = store.UpdateSiaObjects([]objects.SiaObject{
 		{ID: sealed1.ID(), Sealed: sealed1},
 		{ID: sealed2.ID(), Sealed: sealed2},
-		{ID: missing.ID(), Sealed: missing.Seal(types.GeneratePrivateKey())},
+		{ID: missing.ID(), Sealed: missing},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1426,7 +1404,7 @@ func TestUpdateSiaObjects(t *testing.T) {
 	updated, err = store.UpdateSiaObjects([]objects.SiaObject{
 		{ID: sealed1.ID(), Sealed: sealed1},
 		{ID: sealed2.ID(), Sealed: sealed2},
-		{ID: missing.ID(), Sealed: missing.Seal(types.GeneratePrivateKey())},
+		{ID: missing.ID(), Sealed: missing},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1466,8 +1444,7 @@ func TestMarkObjectUploaded(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sdkObj := sdk.Object{}
-	sealed := sdkObj.Seal(types.GeneratePrivateKey())
+	sealed := sealedObject()
 
 	// marking with a different content MD5 should return ErrObjectModified
 	wrongMD5 := frand.Entropy128()
@@ -1494,8 +1471,7 @@ func TestMarkObjectUploaded(t *testing.T) {
 
 	// marking again should return ErrObjectNotFound since the object is
 	// already uploaded
-	sdkObj2 := sdk.Object{}
-	sealed2 := sdkObj2.Seal(types.GeneratePrivateKey())
+	sealed2 := sealedObject()
 	err = store.MarkObjectUploaded(bid, object, "", contentMD5, sealed2, time.Now().Add(time.Hour))
 	if !errors.Is(err, objects.ErrObjectNotFound) {
 		t.Fatalf("expected ErrObjectNotFound, got %v", err)
@@ -1558,8 +1534,7 @@ func TestObjectsForUpload(t *testing.T) {
 	if _, _, err := store.PutObject(bid, "uploaded", objects.PutOptions{ContentMD5: uploadedMD5, Length: 200, FileName: &fn}); err != nil {
 		t.Fatal(err)
 	}
-	sealObj := sdk.Object{}
-	sealed := sealObj.Seal(types.GeneratePrivateKey())
+	sealed := sealedObject()
 	if err := store.MarkObjectUploaded(bid, "uploaded", "", uploadedMD5, sealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -1669,8 +1644,7 @@ func TestUploadStats(t *testing.T) {
 	if _, _, err := store.PutObject(bid, "obj3", objects.PutOptions{ContentMD5: contentMD5, Length: 500, FileName: new(string)}); err != nil {
 		t.Fatal(err)
 	}
-	sealObj := sdk.Object{}
-	sealed := sealObj.Seal(types.GeneratePrivateKey())
+	sealed := sealedObject()
 	if err := store.MarkObjectUploaded(bid, "obj3", "", contentMD5, sealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -1826,8 +1800,7 @@ func TestMarkObjectPinned(t *testing.T) {
 	if _, _, err := store.PutObject(bid, name, objects.PutOptions{ContentMD5: md5, Length: 42, FileName: &fileName}); err != nil {
 		t.Fatal(err)
 	}
-	sdkObj := sdk.Object{}
-	sealed := sdkObj.Seal(types.GeneratePrivateKey())
+	sealed := sealedObject()
 	if err := store.MarkObjectUploaded(bid, name, "", md5, sealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -1866,8 +1839,7 @@ func TestMarkObjectPinned(t *testing.T) {
 	if _, _, err := store.PutObject(bid, "b", objects.PutOptions{ContentMD5: otherMD52, Length: 10, FileName: &fileName}); err != nil {
 		t.Fatal(err)
 	}
-	sdkObjA := sdk.Object{}
-	sealedA := sdkObjA.Seal(types.GeneratePrivateKey())
+	sealedA := sealedObject()
 	if err := store.MarkObjectUploaded(bid, "a", "", otherMD5, sealedA, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -1887,8 +1859,7 @@ func TestMarkObjectPinned(t *testing.T) {
 	if _, _, err := store.PutObject(bid, "c", objects.PutOptions{ContentMD5: md5C, Length: 7, FileName: &fnC}); err != nil {
 		t.Fatal(err)
 	}
-	sdkObjC := newTestObject()
-	sealedC := sdkObjC.Seal(types.GeneratePrivateKey())
+	sealedC := newTestObject()
 	if err := store.MarkObjectUploaded(bid, "c", "", md5C, sealedC, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -1942,8 +1913,7 @@ func TestObjectsForPinning(t *testing.T) {
 		if _, _, err := store.PutObject(bid, name, objects.PutOptions{ContentMD5: md5, Length: 1, FileName: &fn}); err != nil {
 			t.Fatal(err)
 		}
-		o := newTestObject()
-		sealed := o.Seal(types.GeneratePrivateKey())
+		sealed := newTestObject()
 		if err := store.MarkObjectUploaded(bid, name, "", md5, sealed, time.Now().Add(time.Hour)); err != nil {
 			t.Fatal(err)
 		}
@@ -2054,8 +2024,7 @@ func TestScheduleObjectForReupload(t *testing.T) {
 	if _, _, err := store.PutObject(bid, name, objects.PutOptions{ContentMD5: md5, Length: 7, FileName: &fileName}); err != nil {
 		t.Fatal(err)
 	}
-	sdkObj := sdk.Object{}
-	sealed := sdkObj.Seal(types.GeneratePrivateKey())
+	sealed := sealedObject()
 	if err := store.MarkObjectUploaded(bid, name, "", md5, sealed, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -2121,8 +2090,7 @@ func TestScheduleObjectForReupload(t *testing.T) {
 	if _, _, err := store.PutObject(bid, "obj2", objects.PutOptions{ContentMD5: md52, Length: 7, FileName: &fileName2}); err != nil {
 		t.Fatal(err)
 	}
-	sdkObj2 := newTestObject()
-	sealed2 := sdkObj2.Seal(types.GeneratePrivateKey())
+	sealed2 := newTestObject()
 	if err := store.MarkObjectUploaded(bid, "obj2", "", md52, sealed2, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -2633,13 +2601,25 @@ func TestListObjectVersions(t *testing.T) {
 	})
 }
 
-func newTestObject() sdk.Object {
-	obj := sdk.NewEmptyObject()
-	ss := []slabs.SlabSlice{{EncryptionKey: frand.Entropy256(), Length: 1}}
-	v := reflect.ValueOf(&obj).Elem()
-	f := v.FieldByName("slabs")
-	reflect.NewAt(f.Type(), unsafe.Pointer(f.UnsafeAddr())).Elem().Set(reflect.ValueOf(ss))
-	return obj
+// sealedObject builds the sealed form the store persists. The SDK's objects
+// cannot be built from Go, so the store only ever sees the sealed struct, which
+// can. The encrypted fields are random bytes rather than real ciphertext,
+// since nothing in the store reads them.
+func sealedObject(ss ...slabs.SlabSlice) sdk.SealedObject {
+	now := time.Now().UTC().Truncate(time.Second)
+	return sdk.SealedObject{
+		EncryptedDataKey: frand.Bytes(32),
+		Slabs:            ss,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+}
+
+// newTestObject returns a sealed object with an ID of its own, for tests that
+// need to tell several apart. The ID is a digest of the slices, so every object
+// without any shares the empty one's.
+func newTestObject() sdk.SealedObject {
+	return sealedObject(slabs.SlabSlice{EncryptionKey: frand.Entropy256(), Length: 1})
 }
 
 func BenchmarkOrphanedObjects(b *testing.B) {

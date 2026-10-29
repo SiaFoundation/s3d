@@ -26,7 +26,7 @@ type RemoteSnapshot struct {
 	ObjectID types.Hash256
 	Metadata objects.SnapshotMetadata
 
-	object sdk.Object
+	object *sdk.Object
 }
 
 // ListRemoteSnapshots enumerates every object in the account and returns those
@@ -47,7 +47,7 @@ func ListRemoteSnapshots(ctx context.Context, sdk SDK) ([]RemoteSnapshot, error)
 			// an object can appear more than once with a later timestamp, so
 			// the newest event for a key wins
 			if ev.Deleted {
-				delete(found, ev.Key)
+				delete(found, ev.ID)
 				continue
 			} else if ev.Object == nil {
 				continue
@@ -57,15 +57,15 @@ func ListRemoteSnapshots(ctx context.Context, sdk SDK) ([]RemoteSnapshot, error)
 			if !ok || meta.Validate() != nil {
 				continue
 			}
-			found[ev.Key] = RemoteSnapshot{
-				ObjectID: ev.Key,
+			found[ev.ID] = RemoteSnapshot{
+				ObjectID: ev.ID,
 				Metadata: meta,
-				object:   *ev.Object,
+				object:   ev.Object,
 			}
 		}
 
 		last := events[len(events)-1]
-		cursor = slabs.Cursor{After: last.UpdatedAt, Key: last.Key}
+		cursor = slabs.Cursor{After: last.UpdatedAt, Key: last.ID}
 	}
 
 	snapshots := make([]RemoteSnapshot, 0, len(found))
@@ -91,7 +91,7 @@ func FetchRemoteSnapshot(ctx context.Context, sdk SDK, objectID types.Hash256) (
 		return RemoteSnapshot{}, fmt.Errorf("failed to fetch object: %w", err)
 	}
 
-	meta, ok := snapshotMetadata(&obj)
+	meta, ok := snapshotMetadata(obj)
 	if !ok {
 		return RemoteSnapshot{}, fmt.Errorf("object %v is not a snapshot", objectID)
 	} else if err := meta.Validate(); err != nil {
@@ -107,7 +107,7 @@ func DownloadSnapshot(ctx context.Context, sdk SDK, snap RemoteSnapshot, w io.Wr
 		return fmt.Errorf("unsupported snapshot encoding %q", snap.Metadata.Encoding)
 	}
 
-	r, err := sdk.Download(snap.object, nil)
+	r, err := sdk.Download(ctx, snap.object, nil)
 	if err != nil {
 		return fmt.Errorf("failed to download snapshot object: %w", err)
 	}
