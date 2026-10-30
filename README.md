@@ -410,8 +410,9 @@ to `ENABLED`, and a ranged response never carries one. An object assembled by
 | DeleteBucketLifecycle | ✓ | |
 | GetBucketCors | ✗ | |
 | PutBucketCors | ✗ | |
-| GetBucketTagging | ✗ | |
-| PutBucketTagging | ✗ | |
+| GetBucketTagging | ✓ | |
+| PutBucketTagging | ✓ | Up to 50 tags; replaces the complete set |
+| DeleteBucketTagging | ✓ | |
 | GetBucketEncryption | ✗ | |
 | PutBucketEncryption | ✗ | |
 | PublicAccessBlock | ✗ | |
@@ -430,8 +431,9 @@ to `ENABLED`, and a ranged response never carries one. An object assembled by
 | ListObjectVersions | ✓ | |
 | GetObjectAcl | ✗ | |
 | PutObjectAcl | ✗ | |
-| GetObjectTagging | ✗ | |
-| PutObjectTagging | ✗ | |
+| GetObjectTagging | ✓ | Current and explicit versions |
+| PutObjectTagging | ✓ | Up to 10 tags per version; replaces the complete set |
+| DeleteObjectTagging | ✓ | Current and explicit versions |
 | GetObjectRetention | ✓ | |
 | PutObjectRetention | ◐ | `EventHold` and `EventHoldDuration` are rejected |
 | GetObjectLegalHold | ✓ | |

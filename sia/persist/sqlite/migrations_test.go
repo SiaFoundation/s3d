@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/SiaFoundation/s3d/s3"
 	"go.sia.tech/core/types"
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
@@ -766,5 +768,33 @@ func TestMigrationDropPublicActions(t *testing.T) {
 		t.Fatal(err)
 	} else if status != "Enabled" {
 		t.Fatalf("expected versioning to be kept, got %q", status)
+	}
+}
+
+// TestMigrationTagging checks that the seeded object can be tagged after the
+// migration.
+func TestMigrationTagging(t *testing.T) {
+	log := zaptest.NewLogger(t)
+	fp := filepath.Join(t.TempDir(), "s3d.sqlite3")
+
+	const taggingVersion = 16
+	store := initDBVersion(t, fp, taggingVersion-1, log)
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	migrated, err := OpenDatabase(fp, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer migrated.Close()
+
+	tags := s3.TagSet{{Key: "project", Value: "one"}}
+	if err := migrated.PutObjectTagging(1, "obj", s3.NoVersion(), tags); err != nil {
+		t.Fatal(err)
+	} else if tagging, err := migrated.GetObjectTagging(1, "obj", s3.NoVersion()); err != nil {
+		t.Fatal(err)
+	} else if !reflect.DeepEqual(tagging.Tags, tags) {
+		t.Fatalf("expected tags %v, got %v", tags, tagging.Tags)
 	}
 }

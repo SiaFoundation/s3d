@@ -25,7 +25,6 @@ var unsupportedBucketSubresources = map[string]struct{}{
 	"publicAccessBlock":   {},
 	"replication":         {},
 	"requestPayment":      {},
-	"tagging":             {},
 	"website":             {},
 }
 
@@ -54,6 +53,8 @@ func (s *s3) routeBucket(r *http.Request) (operation, error) {
 		return operation{action: actionGetBucketLocation, serve: s.getBucketLocation}, nil
 	case q.Has("object-lock"):
 		return s.routeBucketObjectLock(r)
+	case q.Has("tagging"):
+		return s.routeBucketTagging(r)
 	}
 
 	switch r.Method {

@@ -706,6 +706,73 @@ func (t *S3Tester) GetObjectLegalHold(ctx context.Context, bucket, object string
 	return resp.LegalHold.Status, nil
 }
 
+// PutBucketTagging is a convenience wrapper around the AWS SDK's
+// PutBucketTagging API.
+func (t *S3Tester) PutBucketTagging(ctx context.Context, bucket string, tags []types.Tag) error {
+	_, err := t.client.PutBucketTagging(ctx, &service.PutBucketTaggingInput{
+		Bucket:  aws.String(bucket),
+		Tagging: &types.Tagging{TagSet: tags},
+	})
+	return err
+}
+
+// GetBucketTagging is a convenience wrapper around the AWS SDK's
+// GetBucketTagging API.
+func (t *S3Tester) GetBucketTagging(ctx context.Context, bucket string) ([]types.Tag, error) {
+	resp, err := t.client.GetBucketTagging(ctx, &service.GetBucketTaggingInput{
+		Bucket: aws.String(bucket),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.TagSet, nil
+}
+
+// DeleteBucketTagging is a convenience wrapper around the AWS SDK's
+// DeleteBucketTagging API.
+func (t *S3Tester) DeleteBucketTagging(ctx context.Context, bucket string) error {
+	_, err := t.client.DeleteBucketTagging(ctx, &service.DeleteBucketTaggingInput{
+		Bucket: aws.String(bucket),
+	})
+	return err
+}
+
+// PutObjectTagging is a convenience wrapper around the AWS SDK's
+// PutObjectTagging API. It returns the version ID the response reports.
+func (t *S3Tester) PutObjectTagging(ctx context.Context, bucket, object string, versionID *string, tags []types.Tag) (*string, error) {
+	resp, err := t.client.PutObjectTagging(ctx, &service.PutObjectTaggingInput{
+		Bucket:    aws.String(bucket),
+		Key:       aws.String(object),
+		VersionId: versionID,
+		Tagging:   &types.Tagging{TagSet: tags},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.VersionId, nil
+}
+
+// GetObjectTagging is a convenience wrapper around the AWS SDK's
+// GetObjectTagging API.
+func (t *S3Tester) GetObjectTagging(ctx context.Context, bucket, object string, versionID *string) (*service.GetObjectTaggingOutput, error) {
+	return t.client.GetObjectTagging(ctx, &service.GetObjectTaggingInput{
+		Bucket:    aws.String(bucket),
+		Key:       aws.String(object),
+		VersionId: versionID,
+	})
+}
+
+// DeleteObjectTagging is a convenience wrapper around the AWS SDK's
+// DeleteObjectTagging API.
+func (t *S3Tester) DeleteObjectTagging(ctx context.Context, bucket, object string, versionID *string) error {
+	_, err := t.client.DeleteObjectTagging(ctx, &service.DeleteObjectTaggingInput{
+		Bucket:    aws.String(bucket),
+		Key:       aws.String(object),
+		VersionId: versionID,
+	})
+	return err
+}
+
 // PutBucketVersioning sets the versioning status of a bucket.
 func (t *S3Tester) PutBucketVersioning(ctx context.Context, bucket string, status types.BucketVersioningStatus) error {
 	_, err := t.client.PutBucketVersioning(ctx, &service.PutBucketVersioningInput{
