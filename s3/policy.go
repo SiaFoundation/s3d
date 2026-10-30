@@ -59,6 +59,12 @@ const (
 	actionGetObjectLegalHold               = "s3:GetObjectLegalHold"
 	actionPutObjectLegalHold               = "s3:PutObjectLegalHold"
 	actionBypassGovernanceRetention        = "s3:BypassGovernanceRetention"
+	actionGetObjectTagging                 = "s3:GetObjectTagging"
+	actionGetObjectVersionTagging          = "s3:GetObjectVersionTagging"
+	actionPutObjectTagging                 = "s3:PutObjectTagging"
+	actionPutObjectVersionTagging          = "s3:PutObjectVersionTagging"
+	actionDeleteObjectTagging              = "s3:DeleteObjectTagging"
+	actionDeleteObjectVersionTagging       = "s3:DeleteObjectVersionTagging"
 	actionListBucket                       = "s3:ListBucket"
 	actionListBucketVersions               = "s3:ListBucketVersions"
 	actionListBucketMultipartUploads       = "s3:ListBucketMultipartUploads"
@@ -68,6 +74,8 @@ const (
 	actionPutBucketVersioning              = "s3:PutBucketVersioning"
 	actionGetLifecycleConfiguration        = "s3:GetLifecycleConfiguration"
 	actionPutLifecycleConfiguration        = "s3:PutLifecycleConfiguration"
+	actionGetBucketTagging                 = "s3:GetBucketTagging"
+	actionPutBucketTagging                 = "s3:PutBucketTagging"
 	actionGetBucketPolicy                  = "s3:GetBucketPolicy"
 	actionPutBucketPolicy                  = "s3:PutBucketPolicy"
 	actionDeleteBucketPolicy               = "s3:DeleteBucketPolicy"
@@ -100,6 +108,15 @@ func deleteAction(version VersionRequest) string {
 		return actionDeleteObjectVersion
 	}
 	return actionDeleteObject
+}
+
+// versionedAction returns versioned when the request addresses a specific
+// version and current otherwise, as [readAction] does for reads.
+func versionedAction(version VersionRequest, current, versioned string) string {
+	if version.Specified {
+		return versioned
+	}
+	return current
 }
 
 // bucketARN returns the resource a bucket action is granted on.

@@ -158,7 +158,8 @@ func (a *bucketAccess) actionPolicyContext(action string) (policyContext, error)
 			}
 			extra["s3:max-keys"] = []string{strconv.FormatInt(maxKeys, 10)}
 		}
-	case actionGetObjectVersion, actionDeleteObjectVersion:
+	case actionGetObjectVersion, actionDeleteObjectVersion,
+		actionGetObjectVersionTagging, actionPutObjectVersionTagging, actionDeleteObjectVersionTagging:
 		if version := VersionFromQuery(query["versionId"]); version.Specified {
 			extra["s3:versionid"] = []string{FormatVersion(version.ID)}
 		}
@@ -210,6 +211,22 @@ func objectLockPolicyContext(lock *ObjectLockState) policyContext {
 	if lock != nil && lock.LegalHold != "" {
 		extra["s3:object-lock-legal-hold"] = []string{lock.LegalHold}
 	}
+	return extra
+}
+
+// requestObjectTagPolicyContext returns the condition keys of a tag set the
+// request applies to an object.
+func requestObjectTagPolicyContext(tags TagSet) policyContext {
+	extra := make(policyContext)
+	keys := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		keys = append(keys, tag.Key)
+		// condition keys are case insensitive but tag keys are not, so keys
+		// differing only in case share a condition key
+		key := "s3:requestobjecttag/" + strings.ToLower(tag.Key)
+		extra[key] = append(extra[key], tag.Value)
+	}
+	extra["s3:requestobjecttagkeys"] = keys
 	return extra
 }
 

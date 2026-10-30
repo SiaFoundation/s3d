@@ -398,8 +398,9 @@ delete with nothing to delete is a no-op, as an unconditional one is.
 | DeleteBucketLifecycle | ✓ | |
 | GetBucketCors | ✗ | |
 | PutBucketCors | ✗ | |
-| GetBucketTagging | ✗ | |
-| PutBucketTagging | ✗ | |
+| GetBucketTagging | ✓ | |
+| PutBucketTagging | ✓ | Up to 50 tags; replaces the complete set |
+| DeleteBucketTagging | ✓ | |
 | GetBucketEncryption | ✗ | |
 | PutBucketEncryption | ✗ | |
 | PublicAccessBlock | ✗ | |
@@ -418,8 +419,9 @@ delete with nothing to delete is a no-op, as an unconditional one is.
 | ListObjectVersions | ✓ | |
 | GetObjectAcl | ✗ | |
 | PutObjectAcl | ✗ | |
-| GetObjectTagging | ✗ | |
-| PutObjectTagging | ✗ | |
+| GetObjectTagging | ✓ | Current and explicit versions |
+| PutObjectTagging | ✓ | Up to 10 tags per version; replaces the complete set |
+| DeleteObjectTagging | ✓ | Current and explicit versions |
 | GetObjectRetention | ✓ | |
 | PutObjectRetention | ◐ | `EventHold` and `EventHoldDuration` are rejected |
 | GetObjectLegalHold | ✓ | |
