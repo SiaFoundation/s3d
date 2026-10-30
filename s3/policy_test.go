@@ -2,6 +2,7 @@ package s3
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -423,6 +424,47 @@ func TestPolicyPublicStatus(t *testing.T) {
 				t.Fatal(err)
 			}
 			if got := p.isPublic(); got != test.want {
+				t.Fatalf("expected %v, got %v", test.want, got)
+			}
+		})
+	}
+}
+
+func TestUsesExistingTags(t *testing.T) {
+	statement := func(version, action, resource, condition string) string {
+		return fmt.Sprintf(`{"Version":%q,"Statement":[{"Effect":"Allow","Principal":"*","Action":%q,"Resource":%q%s}]}`, version, action, resource, condition)
+	}
+	keyCondition := `,"Condition":{"StringEquals":{"s3:ExistingObjectTag/project":"one"}}`
+	tests := []struct {
+		name     string
+		document string
+		action   string
+		want     bool
+	}{
+		{"condition key", statement("2012-10-17", "s3:GetObject", "arn:aws:s3:::bucket/*", keyCondition), actionGetObject, true},
+		{"tagging action", statement("2012-10-17", "s3:*", "arn:aws:s3:::bucket/*", keyCondition), actionPutObjectVersionTagging, true},
+		{"other action named", statement("2012-10-17", "s3:GetObjectVersion", "arn:aws:s3:::bucket/*", keyCondition), actionGetObject, false},
+		{"unconditioned", statement("2012-10-17", "s3:GetObject", "arn:aws:s3:::bucket/*", ""), actionGetObject, false},
+		// S3 does not supply existing tags to these actions
+		{"retention", statement("2012-10-17", "s3:*", "arn:aws:s3:::bucket/*", keyCondition), actionGetObjectRetention, false},
+		{"bypass", statement("2012-10-17", "s3:*", "arn:aws:s3:::bucket/*", keyCondition), actionBypassGovernanceRetention, false},
+		{"put", statement("2012-10-17", "s3:*", "arn:aws:s3:::bucket/*", keyCondition), actionPutObject, false},
+		{"delete", statement("2012-10-17", "s3:*", "arn:aws:s3:::bucket/*", keyCondition), actionDeleteObjectVersion, false},
+		{"condition variable", statement("2012-10-17", "s3:GetObject", "arn:aws:s3:::bucket/*", `,"Condition":{"StringEquals":{"aws:userid":"${S3:ExistingObjectTag/owner}"}}`), actionGetObject, true},
+		{"defaulted variable", statement("2012-10-17", "s3:GetObject", "arn:aws:s3:::bucket/*", `,"Condition":{"StringLike":{"aws:userid":"x-${ s3:ExistingObjectTag/owner , 'none'}"}}`), actionGetObject, true},
+		{"resource variable", statement("2012-10-17", "s3:GetObject", "arn:aws:s3:::bucket/${s3:ExistingObjectTag/folder}/*", ""), actionGetObject, true},
+		{"other variable", statement("2012-10-17", "s3:GetObject", "arn:aws:s3:::bucket/${aws:userid}/*", ""), actionGetObject, false},
+		// the legacy version reads variables literally
+		{"legacy variable", statement("2008-10-17", "s3:GetObject", "arn:aws:s3:::bucket/${s3:ExistingObjectTag/folder}/*", ""), actionGetObject, false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			policy, err := parseBucketPolicy("bucket", test.document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			access := &bucketAccess{policy: policy}
+			if got := access.usesExistingTags(test.action); got != test.want {
 				t.Fatalf("expected %v, got %v", test.want, got)
 			}
 		})

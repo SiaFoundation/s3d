@@ -394,7 +394,7 @@ delete with nothing to delete is a no-op, as an unconditional one is.
 | DeleteBucketPolicy | ✓ | |
 | GetBucketPolicyStatus | ✓ | |
 | GetBucketLifecycle | ✓ | |
-| PutBucketLifecycle | ◐ | Prefix and object-size filters only, with `AbortIncompleteMultipartUpload` and current-object `Expiration` rules |
+| PutBucketLifecycle | ◐ | Prefix, tag and object-size filters, with `AbortIncompleteMultipartUpload` and current-object `Expiration` rules; tag and size filters cannot be used to abort uploads |
 | DeleteBucketLifecycle | ✓ | |
 | GetBucketCors | ✗ | |
 | PutBucketCors | ✗ | |

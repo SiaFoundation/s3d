@@ -610,7 +610,9 @@ func TestPostObjectRejections(t *testing.T) {
 	}
 }
 
-// TestPostObjectTagging checks that a form's tagging field tags the object.
+// TestPostObjectTagging checks that a form's tagging field tags the object and
+// that an X-Amz-Tagging header, which a form upload ignores, cannot satisfy a
+// condition on those tags.
 func TestPostObjectTagging(t *testing.T) {
 	const (
 		bucket         = "post-tags"
@@ -667,7 +669,13 @@ func TestPostObjectTagging(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// the other user's upload is allowed by its tags
+	// a header does not supply the tags
+	upload = newPostUpload(bucket, "header")
+	upload.accessKey, upload.secretKey = testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey
+	upload.header = http.Header{s3.HeaderTagging: {"classification=public"}}
+	upload.assertRejected(t, s3Tester, s3errs.ErrAccessDenied)
+
+	// the form does
 	upload = newPostUpload(bucket, "other")
 	upload.accessKey, upload.secretKey = testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey
 	upload.fields = append(upload.fields, [2]string{"tagging", publicDocument})

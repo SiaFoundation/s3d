@@ -244,7 +244,7 @@ func (s *s3) routeObject(r *http.Request, object string) (operation, error) {
 	if r.Method == http.MethodPut {
 		// a copy's tags may be its source's, which only its handler knows
 		_, copies := r.Header["X-Amz-Copy-Source"]
-		return operation{action: actionPutObject, bodyConditions: copies, serve: func(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
+		return operation{action: actionPutObject, bodyConditions: copies, headerTagConditions: !copies, serve: func(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
 			return s.putObject(w, r, access, object)
 		}}, nil
 	}
@@ -394,7 +394,7 @@ func (s *s3) deleteObjects(w http.ResponseWriter, r *http.Request, access *bucke
 			// supplies to DeleteObject
 			extra = policyContext{"s3:if-match": {*obj.ETag}}
 		}
-		if err := access.assertVersionAllowed(deleteAction(version), obj.Key, version, extra); err != nil {
+		if err := access.assertVersionAllowed(deleteAction(version), obj.Key, version, nil, extra); err != nil {
 			errResult := ErrorResult{Key: obj.Key, Code: s3errs.ErrorCode(err), Message: err.Error()}
 			if version.Specified {
 				errResult.VersionID = FormatVersion(version.ID)
@@ -483,10 +483,15 @@ func (s *s3) serveObject(w http.ResponseWriter, r *http.Request, access *bucketA
 		return deleteMarkerError(w, obj, version)
 	}
 
+	// recheck the read against the tags of the version served
+	if err := access.assertObjectContextAllowed(readAction(version), object, existingTagPolicyContext(obj.Tags)); err != nil {
+		return err
+	}
+
 	// write headers
 	setVersionHeaders(w, obj)
-	s.setLifecycleExpirationHeader(w, r, access, object, obj.Size, obj.LastModified)
-	if len(obj.Tags) > 0 && access.assertVersionAllowed(versionedAction(version, actionGetObjectTagging, actionGetObjectVersionTagging), object, version, nil) == nil {
+	s.setLifecycleExpirationHeader(w, r, access, object, obj.Size, obj.LastModified, obj.Tags)
+	if len(obj.Tags) > 0 && access.assertVersionAllowed(versionedAction(version, actionGetObjectTagging, actionGetObjectVersionTagging), object, version, obj.Tags, nil) == nil {
 		w.Header().Set(HeaderTaggingCount, strconv.Itoa(len(obj.Tags)))
 	}
 	obj.ObjectLock = access.visibleObjectLock(object, obj.ObjectLock)
@@ -945,7 +950,7 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, access *bucketAcc
 		return err
 	}
 
-	s.setLifecycleExpirationHeader(w, r, access, object, r.ContentLength, time.Now())
+	s.setLifecycleExpirationHeader(w, r, access, object, r.ContentLength, time.Now(), tags)
 	if res.VersionID != "" {
 		w.Header().Set("x-amz-version-id", res.VersionID)
 	}
@@ -1627,7 +1632,7 @@ func parseRangeHeader(s string) (*ObjectRangeRequest, error) {
 // setLifecycleExpirationHeader sets the x-amz-expiration response header when an
 // enabled lifecycle expiration rule applies to the object. It is best-effort:
 // any error fetching the configuration is swallowed so the request is unaffected.
-func (s *s3) setLifecycleExpirationHeader(w http.ResponseWriter, r *http.Request, access *bucketAccess, object string, size int64, lastModified time.Time) {
+func (s *s3) setLifecycleExpirationHeader(w http.ResponseWriter, r *http.Request, access *bucketAccess, object string, size int64, lastModified time.Time, tags TagSet) {
 	if err := access.assertBucketAllowed(actionGetLifecycleConfiguration); err != nil {
 		return
 	}
@@ -1635,7 +1640,7 @@ func (s *s3) setLifecycleExpirationHeader(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		return
 	}
-	if v := config.ExpirationHeader(object, size, lastModified); v != "" {
+	if v := config.ExpirationHeader(object, size, lastModified, tags); v != "" {
 		w.Header().Set("x-amz-expiration", v)
 	}
 }
