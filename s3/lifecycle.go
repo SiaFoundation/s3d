@@ -2,6 +2,7 @@ package s3
 
 import (
 	"encoding/hex"
+	"encoding/xml"
 	"fmt"
 	"net/http"
 	"strings"
@@ -50,6 +51,11 @@ func (r LifecycleRule) EffectiveSizeRange() (greaterThan, lessThan *int64) {
 		return r.Filter.And.ObjectSizeGreaterThan, r.Filter.And.ObjectSizeLessThan
 	}
 	return r.Filter.ObjectSizeGreaterThan, r.Filter.ObjectSizeLessThan
+}
+
+// EffectiveTags returns every tag the rule's filter requires.
+func (r LifecycleRule) EffectiveTags() TagSet {
+	return r.Filter.tags()
 }
 
 // matchesSize reports whether an object of the given size falls within the
@@ -152,17 +158,17 @@ func ceilToMidnightUTC(t time.Time) time.Time {
 }
 
 // ExpirationHeader returns the x-amz-expiration response header value for an
-// object with the given key, size and last-modified time, or "" if no enabled
-// expiration rule applies. When several rules match, the soonest expiration
-// wins.
-func (c LifecycleConfiguration) ExpirationHeader(objectKey string, size int64, lastModified time.Time) string {
+// object with the given key, size, last-modified time and tags, or "" if no
+// enabled expiration rule applies. When several rules match, the soonest
+// expiration wins.
+func (c LifecycleConfiguration) ExpirationHeader(objectKey string, size int64, lastModified time.Time, tags TagSet) string {
 	var (
 		soonest time.Time
 		ruleID  string
 		found   bool
 	)
 	for _, rule := range c.Rules {
-		if !rule.Enabled() || !strings.HasPrefix(objectKey, rule.EffectivePrefix()) || !rule.matchesSize(size) {
+		if !rule.Enabled() || !strings.HasPrefix(objectKey, rule.EffectivePrefix()) || !rule.matchesSize(size) || !rule.EffectiveTags().Matches(tags) {
 			continue
 		}
 		expiry, ok := rule.Expiration.expiryDate(lastModified)
@@ -272,9 +278,24 @@ func (r LifecycleRule) Validate() error {
 	if a := r.AbortIncompleteMultipartUpload; a != nil {
 		if a.DaysAfterInitiation <= 0 {
 			return fmt.Errorf("DaysAfterInitiation must be a positive integer: %w", s3errs.ErrMalformedXML)
+		} else if len(r.EffectiveTags()) > 0 {
+			return fmt.Errorf("AbortIncompleteMultipartUpload cannot use tag filters: %w", s3errs.ErrInvalidRequest)
 		} else if r.Filter.hasSizeBounds() {
 			return fmt.Errorf("AbortIncompleteMultipartUpload cannot be specified with object size filters: %w", s3errs.ErrInvalidRequest)
 		}
+	}
+	return nil
+}
+
+// tags returns every tag the filter requires, from its Tag or its And
+// operator.
+func (f *LifecycleFilter) tags() TagSet {
+	if f == nil {
+		return nil
+	} else if f.Tag != nil {
+		return TagSet{*f.Tag}
+	} else if f.And != nil {
+		return f.And.Tags
 	}
 	return nil
 }
@@ -289,16 +310,33 @@ func (f *LifecycleFilter) hasSizeBounds() bool {
 	return f.And != nil && (f.And.ObjectSizeGreaterThan != nil || f.And.ObjectSizeLessThan != nil)
 }
 
-// validate rejects filter predicates that this server cannot honor. Filtering
-// by tag is unsupported, and silently ignoring such a predicate would cause a
-// rule to match more objects than intended, so we reject it outright.
+// UnmarshalXML rejects sibling Tag elements, which decoding directly into Tag
+// would silently collapse into the last one.
+func (f *LifecycleFilter) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
+	type filter LifecycleFilter
+	var decoded struct {
+		filter
+		Tags TagSet `xml:"Tag"`
+	}
+	if err := d.DecodeElement(&decoded, &start); err != nil {
+		return err
+	} else if len(decoded.Tags) > 1 {
+		return fmt.Errorf("multiple lifecycle tags must be wrapped in And: %w", s3errs.ErrMalformedXML)
+	}
+	*f = LifecycleFilter(decoded.filter)
+	if len(decoded.Tags) == 1 {
+		f.Tag = &decoded.Tags[0]
+	}
+	return nil
+}
+
+// validate checks lifecycle predicates, including unique tag keys.
 func (f *LifecycleFilter) validate() error {
 	if f == nil {
 		return nil
-	} else if f.Tag != nil {
-		return fmt.Errorf("tag lifecycle filters are not supported: %w", s3errs.ErrNotImplemented)
-	} else if f.And != nil && len(f.And.Tags) > 0 {
-		return fmt.Errorf("tag lifecycle filters are not supported: %w", s3errs.ErrNotImplemented)
+	}
+	if err := f.tags().validate(objectTagLimits); err != nil {
+		return err
 	}
 
 	if f.Prefix != nil && f.And != nil {
@@ -306,6 +344,9 @@ func (f *LifecycleFilter) validate() error {
 	}
 
 	predicates := 0
+	if f.Tag != nil {
+		predicates++
+	}
 	if f.Prefix != nil && *f.Prefix != "" {
 		predicates++
 	}
@@ -317,7 +358,7 @@ func (f *LifecycleFilter) validate() error {
 	}
 	if f.And != nil {
 		predicates++
-		if f.And.Prefix == nil && f.And.ObjectSizeGreaterThan == nil && f.And.ObjectSizeLessThan == nil {
+		if f.And.Prefix == nil && f.And.ObjectSizeGreaterThan == nil && f.And.ObjectSizeLessThan == nil && len(f.And.Tags) == 0 {
 			return fmt.Errorf("lifecycle And filter must contain a supported predicate: %w", s3errs.ErrMalformedXML)
 		}
 		if err := validateSizeRange(f.And.ObjectSizeGreaterThan, f.And.ObjectSizeLessThan); err != nil {

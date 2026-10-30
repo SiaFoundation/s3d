@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -603,7 +604,9 @@ func TestPostObjectRejections(t *testing.T) {
 	}
 }
 
-// TestPostObjectTagging checks that a form's tagging field tags the object.
+// TestPostObjectTagging checks that a form's tagging field tags the object and
+// that an X-Amz-Tagging header, which a form upload ignores, cannot satisfy a
+// condition on those tags.
 func TestPostObjectTagging(t *testing.T) {
 	const (
 		bucket   = "post-tags"
@@ -628,4 +631,37 @@ func TestPostObjectTagging(t *testing.T) {
 		t.Fatalf("expected tags %v, got %v", want, tagMap(tagging.TagSet))
 	}
 
+	// another user may write only objects tagged project=one
+	policy := fmt.Sprintf(`{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::%[1]s/*",
+      "Condition": {"StringEquals": {"s3:RequestObjectTag/project": "one"}}
+    },
+    {"Effect": "Allow", "Principal": "*", "Action": "s3:PutObjectTagging", "Resource": "arn:aws:s3:::%[1]s/*"}
+  ]
+}`, bucket)
+	if err := s3Tester.PutBucketPolicy(t.Context(), bucket, policy); err != nil {
+		t.Fatal(err)
+	}
+
+	// a header does not supply the tags
+	form = newPostUpload(bucket, "header")
+	form.accessKey, form.secretKey = testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey
+	form.header = http.Header{s3.HeaderTagging: {"project=one"}}
+	if resp, body := form.post(t, s3Tester); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusForbidden, resp.StatusCode, body)
+	}
+
+	// the form does
+	form = newPostUpload(bucket, "form")
+	form.accessKey, form.secretKey = testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey
+	form.fields = append(form.fields, [2]string{"tagging", document})
+	if resp, body := form.post(t, s3Tester); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusNoContent, resp.StatusCode, body)
+	}
 }

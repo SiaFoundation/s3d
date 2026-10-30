@@ -267,7 +267,7 @@ func TestLifecycleConfigurationValidate(t *testing.T) {
 		{"expired delete marker unsupported", enabled(s3.LifecycleRule{Expiration: &s3.LifecycleExpiration{ExpiredObjectDeleteMarker: aws.Bool(true)}}), s3errs.ErrNotImplemented},
 		{"days and expired delete marker", enabled(s3.LifecycleRule{Expiration: &s3.LifecycleExpiration{Days: 1, ExpiredObjectDeleteMarker: aws.Bool(true)}}), s3errs.ErrMalformedXML},
 		{"abort zero days", enabled(s3.LifecycleRule{AbortIncompleteMultipartUpload: &s3.AbortIncompleteMultipartUpload{DaysAfterInitiation: 0}}), s3errs.ErrMalformedXML},
-		{"tag filter", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{Tag: &s3.LifecycleTag{Key: "k", Value: "v"}}, Expiration: &s3.LifecycleExpiration{Days: 1}}), s3errs.ErrNotImplemented},
+		{"tag filter", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{Tag: &s3.Tag{Key: "k", Value: "v"}}, Expiration: &s3.LifecycleExpiration{Days: 1}}), nil},
 		{"filter prefix and and", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{Prefix: aws.String("a/"), And: &s3.LifecycleAndOperator{Prefix: aws.String("b/")}}, Expiration: &s3.LifecycleExpiration{Days: 1}}), s3errs.ErrMalformedXML},
 		{"empty and filter", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{And: &s3.LifecycleAndOperator{}}, Expiration: &s3.LifecycleExpiration{Days: 1}}), s3errs.ErrMalformedXML},
 		{"size greater than filter", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{ObjectSizeGreaterThan: aws.Int64(128)}, Expiration: &s3.LifecycleExpiration{Days: 1}}), nil},
@@ -290,7 +290,9 @@ func TestLifecycleConfigurationValidate(t *testing.T) {
 		{"inverted size range", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{And: &s3.LifecycleAndOperator{ObjectSizeGreaterThan: aws.Int64(1024), ObjectSizeLessThan: aws.Int64(128)}}, Expiration: &s3.LifecycleExpiration{Days: 1}}), s3errs.ErrInvalidArgument},
 		{"empty size range", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{And: &s3.LifecycleAndOperator{ObjectSizeGreaterThan: aws.Int64(128), ObjectSizeLessThan: aws.Int64(128)}}, Expiration: &s3.LifecycleExpiration{Days: 1}}), s3errs.ErrInvalidArgument},
 		{"negative size bound", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{ObjectSizeGreaterThan: aws.Int64(-1)}, Expiration: &s3.LifecycleExpiration{Days: 1}}), s3errs.ErrInvalidArgument},
-		{"and tag filter", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{And: &s3.LifecycleAndOperator{Prefix: aws.String("logs/"), Tags: []s3.LifecycleTag{{Key: "k", Value: "v"}}}}, Expiration: &s3.LifecycleExpiration{Days: 1}}), s3errs.ErrNotImplemented},
+		{"and tag filter", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{And: &s3.LifecycleAndOperator{Prefix: aws.String("logs/"), Tags: s3.TagSet{{Key: "k", Value: "v"}}}}, Expiration: &s3.LifecycleExpiration{Days: 1}}), nil},
+		{"duplicate tag keys", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{And: &s3.LifecycleAndOperator{Tags: s3.TagSet{{Key: "k", Value: "v"}, {Key: "k", Value: "w"}}}}, Expiration: &s3.LifecycleExpiration{Days: 1}}), s3errs.ErrInvalidTag},
+		{"abort with tag filter", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{Tag: &s3.Tag{Key: "k", Value: "v"}}, AbortIncompleteMultipartUpload: &s3.AbortIncompleteMultipartUpload{DaysAfterInitiation: 1}}), s3errs.ErrInvalidRequest},
 		{"transition action", enabled(s3.LifecycleRule{Expiration: &s3.LifecycleExpiration{Days: 1}, Transitions: []s3.LifecycleUnsupportedAction{{}}}), s3errs.ErrNotImplemented},
 		{"noncurrent version expiration action", enabled(s3.LifecycleRule{Expiration: &s3.LifecycleExpiration{Days: 1}, NoncurrentVersionExpiration: &s3.LifecycleUnsupportedAction{}}), s3errs.ErrNotImplemented},
 	}
@@ -317,12 +319,12 @@ func TestLifecycleExpirationHeader(t *testing.T) {
 	// the soonest applicable enabled rule wins: 2026-06-11 09:30 + 3 days =
 	// 2026-06-14 09:30, rounded up to the next midnight = 2026-06-15.
 	want := `expiry-date="Mon, 15 Jun 2026 00:00:00 GMT", rule-id="soon"`
-	if got := config.ExpirationHeader("logs/app.log", 512, mod); got != want {
+	if got := config.ExpirationHeader("logs/app.log", 512, mod, nil); got != want {
 		t.Fatalf("expected %q, got %q", want, got)
 	}
 
 	// no rule matches a different prefix
-	if got := config.ExpirationHeader("data/app.log", 512, mod); got != "" {
+	if got := config.ExpirationHeader("data/app.log", 512, mod, nil); got != "" {
 		t.Fatalf("expected no header, got %q", got)
 	}
 
@@ -331,14 +333,32 @@ func TestLifecycleExpirationHeader(t *testing.T) {
 	sized := s3.LifecycleConfiguration{Rules: []s3.LifecycleRule{
 		{ID: "big", Status: s3.LifecycleStatusEnabled, Filter: &s3.LifecycleFilter{ObjectSizeGreaterThan: aws.Int64(1024)}, Expiration: &s3.LifecycleExpiration{Days: 3}},
 	}}
-	if got := sized.ExpirationHeader("logs/app.log", 2048, mod); got == "" {
+	if got := sized.ExpirationHeader("logs/app.log", 2048, mod, nil); got == "" {
 		t.Fatal("expected a header for an object above the lower bound")
 	}
-	if got := sized.ExpirationHeader("logs/app.log", 1024, mod); got != "" {
+	if got := sized.ExpirationHeader("logs/app.log", 1024, mod, nil); got != "" {
 		t.Fatalf("expected no header at the excluded bound, got %q", got)
 	}
-	if got := sized.ExpirationHeader("logs/app.log", -1, mod); got != "" {
+	if got := sized.ExpirationHeader("logs/app.log", -1, mod, nil); got != "" {
 		t.Fatalf("expected no header for an unknown size, got %q", got)
+	}
+
+	// a rule filtering by tags is reported only for an object carrying all of
+	// them, as well as matching the rule's prefix
+	tagged := s3.LifecycleConfiguration{Rules: []s3.LifecycleRule{
+		{ID: "tagged", Status: s3.LifecycleStatusEnabled, Filter: &s3.LifecycleFilter{And: &s3.LifecycleAndOperator{Prefix: aws.String("logs/"), Tags: s3.TagSet{{Key: "project", Value: "one"}, {Key: "empty", Value: ""}}}}, Expiration: &s3.LifecycleExpiration{Days: 3}},
+	}}
+	if got := tagged.ExpirationHeader("logs/app.log", 512, mod, s3.TagSet{{Key: "empty", Value: ""}, {Key: "project", Value: "one"}, {Key: "extra", Value: "x"}}); got == "" {
+		t.Fatal("expected a header for an object carrying every tag")
+	}
+	if got := tagged.ExpirationHeader("logs/app.log", 512, mod, s3.TagSet{{Key: "project", Value: "one"}}); got != "" {
+		t.Fatalf("expected no header for an object missing a tag, got %q", got)
+	}
+	if got := tagged.ExpirationHeader("logs/app.log", 512, mod, s3.TagSet{{Key: "project", Value: "two"}, {Key: "empty", Value: ""}}); got != "" {
+		t.Fatalf("expected no header for a different tag value, got %q", got)
+	}
+	if got := tagged.ExpirationHeader("data/app.log", 512, mod, s3.TagSet{{Key: "project", Value: "one"}, {Key: "empty", Value: ""}}); got != "" {
+		t.Fatalf("expected no header for a different prefix, got %q", got)
 	}
 }
 

@@ -168,6 +168,13 @@ func (a *bucketAccess) actionPolicyContext(action string) (policyContext, error)
 			extra["s3:if-match"] = []string{value}
 		}
 	case actionPutObject:
+		// a POST Object's handler supplies its form's tags. Invalid tags are
+		// left to the handler.
+		if a.headerTagConditions {
+			if tags, err := requestTags(a.request.Header); err == nil {
+				maps.Copy(extra, requestTagPolicyContext(tags))
+			}
+		}
 		// only CopyObject and UploadPartCopy, both PUTs, have a copy source
 		if source := a.request.Header.Get("X-Amz-Copy-Source"); source != "" && a.request.Method == http.MethodPut {
 			if bucket, object, _, err := parseSource(source); err == nil {
@@ -209,6 +216,39 @@ func objectLockPolicyContext(lock *ObjectLockState) policyContext {
 	}
 	if lock != nil && lock.LegalHold != "" {
 		extra["s3:object-lock-legal-hold"] = []string{lock.LegalHold}
+	}
+	return extra
+}
+
+// The condition key prefixes of a tag the request applies and of a tag already
+// on the version, each followed by the lowercase tag key.
+const (
+	requestObjectTagPrefix  = "s3:requestobjecttag/"
+	existingObjectTagPrefix = "s3:existingobjecttag/"
+)
+
+// requestTagPolicyContext returns the condition keys of the tags the request
+// applies.
+func requestTagPolicyContext(tags TagSet) policyContext {
+	extra := make(policyContext)
+	for _, tag := range tags {
+		key := requestObjectTagPrefix + strings.ToLower(tag.Key)
+		extra[key] = append(extra[key], tag.Value)
+		extra["s3:requestobjecttagkeys"] = append(extra["s3:requestobjecttagkeys"], tag.Key)
+	}
+	return extra
+}
+
+// existingTagPolicyContext returns the condition keys of the existing tags of
+// the version a request acts on.
+func existingTagPolicyContext(tags TagSet) policyContext {
+	if len(tags) == 0 {
+		return nil
+	}
+	extra := make(policyContext)
+	for _, tag := range tags {
+		key := existingObjectTagPrefix + strings.ToLower(tag.Key)
+		extra[key] = append(extra[key], tag.Value)
 	}
 	return extra
 }
@@ -341,8 +381,8 @@ var conditionKeyPrefixes = []string{
 	"aws:resourcetag/",
 	"s3:accesspointtag/",
 	"s3:buckettag/",
-	"s3:existingobjecttag/",
-	"s3:requestobjecttag/",
+	existingObjectTagPrefix,
+	requestObjectTagPrefix,
 }
 
 // validConditionKey reports whether key is a known condition key, ignoring

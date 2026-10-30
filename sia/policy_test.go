@@ -1247,6 +1247,75 @@ func putTaggedObject(t *testing.T, s3Tester *testutil.S3Tester, bucket, object, 
 	return resp
 }
 
+// TestBucketPolicyObjectTagConditions checks that existing and request tags
+// are supplied as condition keys to the tagging actions and GetObject.
+func TestBucketPolicyObjectTagConditions(t *testing.T) {
+	const bucket = "bucket"
+
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
+	other := s3Tester.ChangeAccessKey(t, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey)
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+	putTaggedObject(t, s3Tester, bucket, "key", "project=one")
+
+	policy := fmt.Sprintf(`{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": ["s3:GetObject", "s3:GetObjectTagging"],
+      "Resource": "arn:aws:s3:::%[1]s/*",
+      "Condition": {"StringEquals": {"s3:ExistingObjectTag/project": "one"}}
+    },
+    {
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": "s3:PutObjectTagging",
+      "Resource": "arn:aws:s3:::%[1]s/*",
+      "Condition": {"StringEquals": {"s3:RequestObjectTag/project": "two"}, "ForAllValues:StringEquals": {"s3:RequestObjectTagKeys": ["project"]}}
+    }
+  ]
+}`, bucket)
+	if err := s3Tester.PutBucketPolicy(t.Context(), bucket, policy); err != nil {
+		t.Fatal(err)
+	}
+
+	// the existing tag allows the read, and the tag count
+	resp, err := other.Client().GetObject(t.Context(), &service.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String("key")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if aws.ToInt32(resp.TagCount) != 1 {
+		t.Fatalf("expected a tag count of 1, got %d", aws.ToInt32(resp.TagCount))
+	}
+
+	// only the requested tags the policy names may be stored
+	_, err = other.PutObjectTagging(t.Context(), bucket, "key", nil, []types.Tag{{Key: aws.String("project"), Value: aws.String("bad")}})
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+	if _, err := other.PutObjectTagging(t.Context(), bucket, "key", nil, []types.Tag{{Key: aws.String("project"), Value: aws.String("two")}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// the new tags no longer satisfy the read
+	_, err = other.Client().GetObject(t.Context(), &service.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String("key")})
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+	err = other.DeleteObjectTagging(t.Context(), bucket, "key", nil)
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+	_, err = other.GetObjectTagging(t.Context(), bucket, "key", aws.String("null"))
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+
+	// a PutObject grant does not grant stamping tags on the new object
+	policy = statementPolicy("s3:PutObject", bucket+"/*")
+	if err := s3Tester.PutBucketPolicy(t.Context(), bucket, policy); err != nil {
+		t.Fatal(err)
+	}
+	_, err = other.Client().PutObject(t.Context(), &service.PutObjectInput{Bucket: aws.String(bucket), Key: aws.String("key"), Body: strings.NewReader("replacement"), Tagging: aws.String("project=two")})
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+}
+
 // TestBucketPolicyTaggingActions checks that each tagging API is granted by
 // its own action.
 func TestBucketPolicyTaggingActions(t *testing.T) {
@@ -1322,4 +1391,149 @@ func TestBucketPolicyTaggingActions(t *testing.T) {
 	} else if err := other.DeleteBucketTagging(t.Context(), bucket); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestBucketPolicyExistingTagScope checks which requests S3 supplies existing
+// tags to: not a missing object, not an object being overwritten, and not an
+// action outside the reads and tagging actions.
+func TestBucketPolicyExistingTagScope(t *testing.T) {
+	const bucket = "bucket"
+
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
+	other := s3Tester.ChangeAccessKey(t, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey)
+	if err := s3Tester.CreateBucketWithObjectLock(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+	putTaggedObject(t, s3Tester, bucket, "key", "project=one")
+
+	policy := fmt.Sprintf(`{
+  "Version": "2012-10-17",
+  "Statement": [
+    {"Effect": "Allow", "Principal": "*", "Action": "s3:ListBucket", "Resource": "arn:aws:s3:::%[1]s"},
+    {"Effect": "Allow", "Principal": "*", "Action": "s3:PutObject", "Resource": "arn:aws:s3:::%[1]s/*"},
+    {
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": ["s3:GetObject", "s3:GetObjectLegalHold", "s3:GetObjectTagging", "s3:PutObjectTagging"],
+      "Resource": "arn:aws:s3:::%[1]s/*",
+      "Condition": {"StringEquals": {"s3:ExistingObjectTag/project": "one"}}
+    }
+  ]
+}`, bucket)
+	if err := s3Tester.PutBucketPolicy(t.Context(), bucket, policy); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := other.GetObjectTagging(t.Context(), bucket, "key", nil); err != nil {
+		t.Fatal(err)
+	} else if _, err := other.GetObjectVersion(t.Context(), bucket, "key", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// a legal hold read sees the existing tags as missing
+	_, err := other.GetObjectLegalHold(t.Context(), bucket, "key", nil)
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+
+	// a missing object has no tags to satisfy the condition, so the caller
+	// is denied rather than told that it is missing
+	_, err = other.GetObjectTagging(t.Context(), bucket, "missing", nil)
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+
+	// the existing tags of an object being overwritten do not grant
+	// permission to tag the new one
+	_, err = other.Client().PutObject(t.Context(), &service.PutObjectInput{Bucket: aws.String(bucket), Key: aws.String("key"), Body: strings.NewReader("replacement"), Tagging: aws.String("project=one")})
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+	if _, err := other.PutObject(t.Context(), bucket, "key", strings.NewReader("replacement"), nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestBucketPolicyExistingTagVariables checks that existing tags read through
+// policy variables are supplied as condition keys are, in condition values and
+// resources alike.
+func TestBucketPolicyExistingTagVariables(t *testing.T) {
+	const bucket = "bucket"
+
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
+	other := s3Tester.ChangeAccessKey(t, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey)
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+	for object, tags := range map[string]string{
+		"public/match":    "folder=public",
+		"private/nomatch": "folder=public",
+		"principal":       "principal=Account",
+		"anonymous":       "principal=Anonymous",
+	} {
+		putTaggedObject(t, s3Tester, bucket, object, tags)
+	}
+
+	policy := fmt.Sprintf(`{
+  "Version": "2012-10-17",
+  "Statement": [
+    {"Effect": "Allow", "Principal": "*", "Action": "s3:GetObject", "Resource": "arn:aws:s3:::%[1]s/${s3:ExistingObjectTag/folder}/*"},
+    {
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::%[1]s/*",
+      "Condition": {"StringEquals": {"aws:PrincipalType": "${s3:ExistingObjectTag/principal}"}}
+    }
+  ]
+}`, bucket)
+	if err := s3Tester.PutBucketPolicy(t.Context(), bucket, policy); err != nil {
+		t.Fatal(err)
+	}
+
+	for object, allowed := range map[string]bool{"public/match": true, "private/nomatch": false, "principal": true, "anonymous": false} {
+		_, err := other.GetObjectVersion(t.Context(), bucket, object, nil)
+		if allowed && err != nil {
+			t.Fatalf("expected %s to be readable, got %v", object, err)
+		} else if !allowed {
+			testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+		}
+	}
+}
+
+// TestBucketPolicyUploadPartCopyExistingTags checks that UploadPartCopy checks
+// the source read against the tags of the version it copies, as CopyObject
+// does.
+func TestBucketPolicyUploadPartCopyExistingTags(t *testing.T) {
+	const bucket = "bucket"
+
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
+	other := s3Tester.ChangeAccessKey(t, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey)
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+	putTaggedObject(t, s3Tester, bucket, "allowed", "project=one")
+	putTaggedObject(t, s3Tester, bucket, "denied", "project=two")
+
+	policy := fmt.Sprintf(`{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::%[1]s/*",
+      "Condition": {"StringEquals": {"s3:ExistingObjectTag/project": "one"}}
+    },
+    {"Effect": "Allow", "Principal": "*", "Action": "s3:PutObject", "Resource": "arn:aws:s3:::%[1]s/*"}
+  ]
+}`, bucket)
+	if err := s3Tester.PutBucketPolicy(t.Context(), bucket, policy); err != nil {
+		t.Fatal(err)
+	}
+
+	upload, err := other.CreateMultipartUpload(t.Context(), bucket, "destination", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := testutil.UploadPartCopyOptions{PartNumber: 1}
+	if _, err := other.UploadPartCopy(t.Context(), bucket, "allowed", bucket, "destination", *upload.UploadId, opts); err != nil {
+		t.Fatal(err)
+	}
+	_, err = other.UploadPartCopy(t.Context(), bucket, "denied", bucket, "destination", *upload.UploadId, opts)
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
 }

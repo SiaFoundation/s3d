@@ -210,7 +210,7 @@ func (s *s3) routeMultipartUpload(r *http.Request, object, uploadID string) (ope
 func (s *s3) routeMultipartUploadBase(r *http.Request, bucket, object string) (operation, error) {
 	switch r.Method {
 	case http.MethodPost:
-		return operation{action: actionPutObject, serve: func(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
+		return operation{action: actionPutObject, headerTagConditions: true, serve: func(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
 			return s.createMultipartUpload(w, r, access, object)
 		}}, nil
 	case http.MethodGet:

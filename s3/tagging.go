@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf16"
@@ -103,6 +104,16 @@ func validateTagString(s string, maxLength int, limits tagLimits) error {
 		}
 	}
 	return nil
+}
+
+// Matches reports whether all tags in the filter occur in tags.
+func (filter TagSet) Matches(tags TagSet) bool {
+	for _, required := range filter {
+		if !slices.Contains(tags, required) {
+			return false
+		}
+	}
+	return true
 }
 
 // tagXMLNode decodes a Tagging document strictly. A tag set replaces the
@@ -293,10 +304,11 @@ func (s *s3) deleteBucketTagging(w http.ResponseWriter, r *http.Request, access 
 	return nil
 }
 
-// routeObjectTagging routes the ?tagging object subresource.
+// routeObjectTagging routes the ?tagging object subresource. Each action is
+// checked by its handler against the existing tags of the addressed version.
 func (s *s3) routeObjectTagging(r *http.Request, object string, version VersionRequest) (operation, error) {
 	var action string
-	var handler func(http.ResponseWriter, *http.Request, *bucketAccess, string, VersionRequest) error
+	var handler func(http.ResponseWriter, *http.Request, *bucketAccess, string, string, VersionRequest) error
 	switch r.Method {
 	case http.MethodPut:
 		action, handler = versionedAction(version, actionPutObjectTagging, actionPutObjectVersionTagging), s.putObjectTagging
@@ -307,24 +319,24 @@ func (s *s3) routeObjectTagging(r *http.Request, object string, version VersionR
 	default:
 		return operation{}, s3errs.ErrMethodNotAllowed
 	}
-	return operation{action: action, serve: func(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
-		return handler(w, r, access, object, version)
+	return operation{action: action, existingTagConditions: true, serve: func(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
+		return handler(w, r, access, action, object, version)
 	}}, nil
 }
 
 // putObjectTagging handles PUT Object tagging requests.
 //
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObjectTagging.html
-func (s *s3) putObjectTagging(w http.ResponseWriter, r *http.Request, access *bucketAccess, object string, version VersionRequest) error {
+func (s *s3) putObjectTagging(w http.ResponseWriter, r *http.Request, access *bucketAccess, action, object string, version VersionRequest) error {
 	s.logger.Debug("putting object tagging", zap.String("bucket", access.bucket), zap.String("object", object))
 
-	tags, err := readTagging(r, objectTagLimits)
+	// an invalid body is reported only once the action is allowed
+	tags, bodyErr := readTagging(r, objectTagLimits)
+	tagging, err := s.authorizeObjectTagging(r, access, action, object, version, requestTagPolicyContext(tags))
 	if err != nil {
 		return err
-	}
-	tagging, err := s.objectTagging(r, access, object, version)
-	if err != nil {
-		return err
+	} else if bodyErr != nil {
+		return bodyErr
 	} else if err := s.backend.PutObjectTagging(r.Context(), access.bucketID, object, tagging.Version, tags); err != nil {
 		return err
 	}
@@ -335,10 +347,10 @@ func (s *s3) putObjectTagging(w http.ResponseWriter, r *http.Request, access *bu
 // getObjectTagging handles GET Object tagging requests.
 //
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObjectTagging.html
-func (s *s3) getObjectTagging(w http.ResponseWriter, r *http.Request, access *bucketAccess, object string, version VersionRequest) error {
+func (s *s3) getObjectTagging(w http.ResponseWriter, r *http.Request, access *bucketAccess, action, object string, version VersionRequest) error {
 	s.logger.Debug("getting object tagging", zap.String("bucket", access.bucket), zap.String("object", object))
 
-	tagging, err := s.objectTagging(r, access, object, version)
+	tagging, err := s.authorizeObjectTagging(r, access, action, object, version, nil)
 	if err != nil {
 		return err
 	}
@@ -352,10 +364,10 @@ func (s *s3) getObjectTagging(w http.ResponseWriter, r *http.Request, access *bu
 // deleteObjectTagging handles DELETE Object tagging requests.
 //
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjectTagging.html
-func (s *s3) deleteObjectTagging(w http.ResponseWriter, r *http.Request, access *bucketAccess, object string, version VersionRequest) error {
+func (s *s3) deleteObjectTagging(w http.ResponseWriter, r *http.Request, access *bucketAccess, action, object string, version VersionRequest) error {
 	s.logger.Debug("deleting object tagging", zap.String("bucket", access.bucket), zap.String("object", object))
 
-	tagging, err := s.objectTagging(r, access, object, version)
+	tagging, err := s.authorizeObjectTagging(r, access, action, object, version, nil)
 	if err != nil {
 		return err
 	}
@@ -367,25 +379,25 @@ func (s *s3) deleteObjectTagging(w http.ResponseWriter, r *http.Request, access 
 	return nil
 }
 
-// objectTagging looks up the addressed version of object, hiding a missing
-// one from callers that may not list it.
-func (s *s3) objectTagging(r *http.Request, access *bucketAccess, object string, version VersionRequest) (ObjectTagging, error) {
-	tagging, err := s.backend.GetObjectTagging(r.Context(), access.bucketID, object, version)
+// authorizeObjectTagging looks up the addressed version of object and checks
+// that the caller may perform action on it, given its existing tags and the
+// extra context keys.
+func (s *s3) authorizeObjectTagging(r *http.Request, access *bucketAccess, action, object string, version VersionRequest, extra policyContext) (ObjectTagging, error) {
+	tagging, err := s.authorizeVersion(r, access, action, object, version, extra)
 	if isMissingOrDeleteMarker(err) {
 		return ObjectTagging{}, access.hideMissing(err, object)
 	}
 	return tagging, err
 }
 
-// authorizeVersion looks up the addressed version of object and checks that
-// the caller may perform action on it. A missing version is reported only once
-// the caller is allowed the action.
+// authorizeVersion is [s3.authorizeObjectTagging] without hiding a missing
+// version, which it reports only once the caller is allowed the action.
 func (s *s3) authorizeVersion(r *http.Request, access *bucketAccess, action, object string, version VersionRequest, extra policyContext) (ObjectTagging, error) {
 	tagging, err := s.backend.GetObjectTagging(r.Context(), access.bucketID, object, version)
 	if err != nil && !isMissingOrDeleteMarker(err) {
 		return ObjectTagging{}, err
 	}
-	if denied := access.assertVersionAllowed(action, object, version, extra); denied != nil {
+	if denied := access.assertVersionAllowed(action, object, version, tagging.Tags, extra); denied != nil {
 		return ObjectTagging{}, denied
 	} else if err != nil {
 		return ObjectTagging{}, err
@@ -404,4 +416,81 @@ func setTaggingVersionHeader(w http.ResponseWriter, tagging ObjectTagging) {
 // addressed version does not exist or is a delete marker, which has no tags.
 func isMissingOrDeleteMarker(err error) bool {
 	return errors.Is(err, s3errs.ErrNoSuchKey) || errors.Is(err, s3errs.ErrNoSuchVersion) || errors.Is(err, s3errs.ErrMethodNotAllowed)
+}
+
+// existingTagActions are the implemented actions S3 supplies a version's
+// existing tags to.
+//
+// https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazons3.html
+var existingTagActions = map[string]struct{}{
+	actionGetObject:                  {},
+	actionGetObjectVersion:           {},
+	actionGetObjectTagging:           {},
+	actionGetObjectVersionTagging:    {},
+	actionPutObjectTagging:           {},
+	actionPutObjectVersionTagging:    {},
+	actionDeleteObjectTagging:        {},
+	actionDeleteObjectVersionTagging: {},
+}
+
+// usesExistingTags reports whether S3 supplies existing object tags to action
+// and a statement naming action reads them.
+func (a *bucketAccess) usesExistingTags(action string) bool {
+	if _, ok := existingTagActions[action]; !ok {
+		return false
+	}
+	for _, stmt := range a.policy.statements {
+		if stmt.namesAction(action) && stmt.readsExistingTags(a.policy.variables) {
+			return true
+		}
+	}
+	return false
+}
+
+// readsExistingTags reports whether the statement reads existing object tags,
+// through a condition key or, when variables are expanded, a policy variable
+// in a condition value or resource.
+func (stmt policyStatement) readsExistingTags(variables bool) bool {
+	for _, cond := range stmt.conditions {
+		if strings.HasPrefix(cond.key, existingObjectTagPrefix) {
+			return true
+		}
+		for _, value := range cond.values {
+			if variables && referencesExistingTags(value.text) {
+				return true
+			}
+		}
+	}
+	if variables {
+		for _, resource := range slices.Concat(stmt.Resource, stmt.NotResource) {
+			if referencesExistingTags(resource) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// referencesExistingTags reports whether value has a policy variable naming an
+// existing object tag.
+func referencesExistingTags(value string) bool {
+	for key, ok := range variableKeys(value) {
+		if ok && strings.HasPrefix(key, existingObjectTagPrefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// existingTags returns the existing tags of a version of object when the
+// policy conditions action on them. A missing version has none.
+func (s *s3) existingTags(r *http.Request, access *bucketAccess, action, object string, version VersionRequest) (TagSet, error) {
+	if !access.usesExistingTags(action) {
+		return nil, nil
+	}
+	tagging, err := s.backend.GetObjectTagging(r.Context(), access.bucketID, object, version)
+	if isMissingOrDeleteMarker(err) {
+		return nil, nil
+	}
+	return tagging.Tags, err
 }

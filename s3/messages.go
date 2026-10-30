@@ -488,24 +488,18 @@ type (
 	// LifecycleFilter restricts the objects a rule applies to.
 	LifecycleFilter struct {
 		Prefix                *string               `xml:"Prefix,omitempty"`
-		Tag                   *LifecycleTag         `xml:"Tag,omitempty"`
+		Tag                   *Tag                  `xml:"Tag,omitempty"`
 		And                   *LifecycleAndOperator `xml:"And,omitempty"`
 		ObjectSizeGreaterThan *int64                `xml:"ObjectSizeGreaterThan,omitempty"`
 		ObjectSizeLessThan    *int64                `xml:"ObjectSizeLessThan,omitempty"`
 	}
 
-	// LifecycleTag is an object tag used in a lifecycle filter.
-	LifecycleTag struct {
-		Key   string `xml:"Key"`
-		Value string `xml:"Value"`
-	}
-
 	// LifecycleAndOperator combines multiple filter predicates.
 	LifecycleAndOperator struct {
-		Prefix                *string        `xml:"Prefix,omitempty"`
-		Tags                  []LifecycleTag `xml:"Tag"`
-		ObjectSizeGreaterThan *int64         `xml:"ObjectSizeGreaterThan,omitempty"`
-		ObjectSizeLessThan    *int64         `xml:"ObjectSizeLessThan,omitempty"`
+		Prefix                *string `xml:"Prefix,omitempty"`
+		Tags                  TagSet  `xml:"Tag"`
+		ObjectSizeGreaterThan *int64  `xml:"ObjectSizeGreaterThan,omitempty"`
+		ObjectSizeLessThan    *int64  `xml:"ObjectSizeLessThan,omitempty"`
 	}
 
 	// LifecycleExpiration describes when current object versions expire.

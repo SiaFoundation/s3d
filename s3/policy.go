@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"math/big"
 	"net/http"
 	"net/netip"
@@ -547,20 +548,35 @@ func (c policyConditions) parse(variables bool) (conditionSet, error) {
 // validVariables reports whether every policy variable in value is terminated
 // and valid, so a misspelled one cannot silently disable a statement.
 func validVariables(value string) bool {
-	for {
-		i := strings.Index(value, "${")
-		if i < 0 {
-			return true
-		}
-		value = value[i+2:]
-		end := strings.IndexByte(value, '}')
-		if end < 0 {
+	for _, ok := range variableKeys(value) {
+		if !ok {
 			return false
 		}
-		if _, _, ok := parseVariable(value[:end]); !ok {
-			return false
+	}
+	return true
+}
+
+// variableKeys yields the key of each policy variable in value, with ok false
+// for one that is invalid or unterminated.
+func variableKeys(value string) iter.Seq2[string, bool] {
+	return func(yield func(string, bool) bool) {
+		for {
+			i := strings.Index(value, "${")
+			if i < 0 {
+				return
+			}
+			value = value[i+2:]
+			end := strings.IndexByte(value, '}')
+			if end < 0 {
+				yield("", false)
+				return
+			}
+			key, _, ok := parseVariable(value[:end])
+			if !yield(key, ok) {
+				return
+			}
+			value = value[end+1:]
 		}
-		value = value[end+1:]
 	}
 }
 

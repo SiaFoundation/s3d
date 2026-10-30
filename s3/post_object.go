@@ -448,7 +448,8 @@ func (s *s3) postObject(w http.ResponseWriter, r *http.Request, header *bucketAc
 	if document, ok := form.fields["tagging"]; ok {
 		tags, tagsErr = parseTaggingXML([]byte(document), objectTagLimits)
 	}
-	if err := access.assertObjectAllowed(actionPutObject, object); err != nil {
+	// the tags are in the form rather than the headers
+	if err := access.assertObjectContextAllowed(actionPutObject, object, requestTagPolicyContext(tags)); err != nil {
 		return err
 	} else if tagsErr != nil {
 		return tagsErr
@@ -512,7 +513,7 @@ func (s *s3) postObject(w http.ResponseWriter, r *http.Request, header *bucketAc
 		return err
 	}
 
-	s.setLifecycleExpirationHeader(w, r, access, object, body.read, time.Now())
+	s.setLifecycleExpirationHeader(w, r, access, object, body.read, time.Now(), tags)
 	if res.VersionID != "" {
 		w.Header().Set("x-amz-version-id", res.VersionID)
 	}
