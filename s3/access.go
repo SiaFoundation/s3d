@@ -240,6 +240,16 @@ func (a *bucketAccess) assertLockActionAllowed(action, object string, lock *Obje
 	return a.check(requestContext.merge(objectLockPolicyContext(lock)), action, objectARN(a.bucket, object))
 }
 
+// assertTaggingActionAllowed checks that the caller may perform action on
+// object to apply tags.
+func (a *bucketAccess) assertTaggingActionAllowed(action, object string, tags TagSet) error {
+	requestContext, err := a.actionPolicyContext(action)
+	if err != nil {
+		return err
+	}
+	return a.check(requestContext.merge(requestObjectTagPolicyContext(tags)), action, objectARN(a.bucket, object))
+}
+
 // visibleObjectLock returns the part of a version's lock state the caller may
 // read.
 func (a *bucketAccess) visibleObjectLock(object string, lock *ObjectLockState) *ObjectLockState {
