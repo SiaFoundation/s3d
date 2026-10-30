@@ -27,8 +27,9 @@ import (
 )
 
 const (
-	configFileEnvVar = "S3D_CONFIG_FILE"
-	dataDirEnvVar    = "S3D_DATA_DIR"
+	configFileEnvVar       = "S3D_CONFIG_FILE"
+	dataDirEnvVar          = "S3D_DATA_DIR"
+	preAuthorizedKeyEnvVar = "S3D_PREAUTHORIZED_KEY"
 
 	rootUsage = `Usage:
 s3d [flags] [command]
@@ -57,7 +58,9 @@ the file specified by the S3D_CONFIG_FILE environment variable.`
 
 	loginUsage = `Usage: s3d login
 
-Register this s3d instance with the indexer and obtain an app key.`
+Register this s3d instance with the indexer and obtain an app key. Set
+S3D_PREAUTHORIZED_KEY to a pre-authorized key in hex to skip approving the
+connection in the browser.`
 )
 
 var cfg = Config{
