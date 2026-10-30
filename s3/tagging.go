@@ -105,23 +105,14 @@ type tagXMLNode struct {
 // against limits.
 func parseTaggingXML(body []byte, limits tagLimits) (TagSet, error) {
 	d := xml.NewDecoder(bytes.NewReader(body))
-	var root tagXMLNode
-	if err := d.Decode(&root); err != nil {
+	start, err := nextXMLElement(d)
+	if err != nil {
 		return nil, s3errs.ErrMalformedXML
 	}
-	// only whitespace and comments may follow the document
-	for {
-		token, err := d.Token()
-		if err == io.EOF {
-			break
-		} else if err != nil {
-			return nil, s3errs.ErrMalformedXML
-		}
-		if data, ok := token.(xml.CharData); ok && strings.TrimSpace(string(data)) == "" {
-			continue
-		} else if _, ok := token.(xml.Comment); ok {
-			continue
-		}
+	var root tagXMLNode
+	if err := d.DecodeElement(&root, &start); err != nil {
+		return nil, s3errs.ErrMalformedXML
+	} else if _, err := nextXMLElement(d); !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("content after the Tagging element: %w", s3errs.ErrMalformedXML)
 	}
 
@@ -162,6 +153,29 @@ func parseTaggingXML(body []byte, limits tagLimits) (TagSet, error) {
 		return nil, err
 	}
 	return tags, nil
+}
+
+// nextXMLElement returns the next start element, allowing only whitespace,
+// comments and processing instructions before it, or io.EOF at the end of the
+// document. [xml.Decoder.Decode] would skip any text before it.
+func nextXMLElement(d *xml.Decoder) (xml.StartElement, error) {
+	for {
+		token, err := d.Token()
+		if err != nil {
+			return xml.StartElement{}, err
+		}
+		switch token := token.(type) {
+		case xml.StartElement:
+			return token, nil
+		case xml.CharData:
+			if strings.TrimSpace(string(token)) != "" {
+				return xml.StartElement{}, s3errs.ErrMalformedXML
+			}
+		case xml.Comment, xml.ProcInst:
+		default:
+			return xml.StartElement{}, s3errs.ErrMalformedXML
+		}
+	}
 }
 
 // validTagXMLNode reports whether node and its children are in namespace,
@@ -257,21 +271,22 @@ func (s *s3) deleteBucketTagging(w http.ResponseWriter, r *http.Request, access 
 
 // routeObjectTagging routes the ?tagging object subresource.
 func (s *s3) routeObjectTagging(r *http.Request, object string, version VersionRequest) (operation, error) {
-	var action string
-	var handler func(http.ResponseWriter, *http.Request, *bucketAccess, string, VersionRequest) error
 	switch r.Method {
 	case http.MethodPut:
-		action, handler = versionedAction(version, actionPutObjectTagging, actionPutObjectVersionTagging), s.putObjectTagging
+		return operation{action: versionedAction(version, actionPutObjectTagging, actionPutObjectVersionTagging), bodyConditions: true, serve: func(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
+			return s.putObjectTagging(w, r, access, object, version)
+		}}, nil
 	case http.MethodGet:
-		action, handler = versionedAction(version, actionGetObjectTagging, actionGetObjectVersionTagging), s.getObjectTagging
+		return operation{action: versionedAction(version, actionGetObjectTagging, actionGetObjectVersionTagging), serve: func(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
+			return s.getObjectTagging(w, r, access, object, version)
+		}}, nil
 	case http.MethodDelete:
-		action, handler = versionedAction(version, actionDeleteObjectTagging, actionDeleteObjectVersionTagging), s.deleteObjectTagging
+		return operation{action: versionedAction(version, actionDeleteObjectTagging, actionDeleteObjectVersionTagging), serve: func(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
+			return s.deleteObjectTagging(w, r, access, object, version)
+		}}, nil
 	default:
 		return operation{}, s3errs.ErrMethodNotAllowed
 	}
-	return operation{action: action, serve: func(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
-		return handler(w, r, access, object, version)
-	}}, nil
 }
 
 // putObjectTagging handles PUT Object tagging requests.
@@ -282,6 +297,8 @@ func (s *s3) putObjectTagging(w http.ResponseWriter, r *http.Request, access *bu
 
 	tags, err := readTagging(r, objectTagLimits)
 	if err != nil {
+		return err
+	} else if err := access.assertTaggingActionAllowed(versionedAction(version, actionPutObjectTagging, actionPutObjectVersionTagging), object, tags); err != nil {
 		return err
 	}
 	tagging, err := s.objectTagging(r, access, object, version)
