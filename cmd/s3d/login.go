@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -32,6 +33,9 @@ func newSDKBuilder(indexerURL string) (*sdk.Builder, error) {
 }
 
 func runLoginCmd(ctx context.Context, configPath string) {
+	preAuthorizedKey, err := preAuthorizedKeyFromEnv()
+	checkFatalError("failed to read pre-authorized key", err)
+
 	// if no config exists yet, run the config wizard first
 	if configPath == "" {
 		fmt.Println("No existing config found. Launching configuration wizard.")
@@ -41,7 +45,11 @@ func runLoginCmd(ctx context.Context, configPath string) {
 	}
 
 	fmt.Println("This command will register s3d with the Sia indexer.")
-	fmt.Println("You will be prompted for a recovery phrase and asked to visit a URL to approve the app connection.")
+	if preAuthorizedKey != nil {
+		fmt.Println("You will be prompted for a recovery phrase. The app connection is approved with the pre-authorized key from " + preAuthorizedKeyEnvVar + ".")
+	} else {
+		fmt.Println("You will be prompted for a recovery phrase and asked to visit a URL to approve the app connection.")
+	}
 	fmt.Println("")
 
 	store, err := openStore(zap.NewNop())
@@ -58,13 +66,47 @@ func runLoginCmd(ctx context.Context, configPath string) {
 	indexerURL := promptIndexerURL()
 	phrase := promptRecoveryPhrase()
 
-	sdkClient, err := registerSDK(ctx, indexerURL, phrase)
+	var sdkClient *sdk.SDK
+	if preAuthorizedKey != nil {
+		sdkClient, err = connectPreAuthorized(ctx, indexerURL, phrase, preAuthorizedKey)
+	} else {
+		sdkClient, err = registerSDK(ctx, indexerURL, phrase)
+	}
 	checkFatalError("failed to register app", err)
 	defer sdkClient.Close()
 
 	checkFatalError("failed to store app key", store.SetAppKey(sdkClient.AppKey(), indexerURL))
 
 	fmt.Println(ansiStyle("32", "Login successful. You can now start s3d."))
+}
+
+// preAuthorizedKeyFromEnv returns the pre-authorized key set in the
+// environment, or nil when the variable is unset.
+func preAuthorizedKeyFromEnv() (types.PrivateKey, error) {
+	v := os.Getenv(preAuthorizedKeyEnvVar)
+	if v == "" {
+		return nil, nil
+	}
+
+	key, err := hex.DecodeString(v)
+	if err != nil {
+		return nil, fmt.Errorf("%s is not valid hex: %w", preAuthorizedKeyEnvVar, err)
+	} else if len(key) < 32 {
+		return nil, fmt.Errorf("%s must be at least 32 bytes", preAuthorizedKeyEnvVar)
+	}
+	return key, nil
+}
+
+// connectPreAuthorized registers the app with a key the indexer has already
+// authorized, so no approval in the browser is needed.
+func connectPreAuthorized(ctx context.Context, indexerURL, phrase string, key types.PrivateKey) (*sdk.SDK, error) {
+	builder, err := newSDKBuilder(indexerURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create SDK builder: %w", err)
+	}
+	defer builder.Close()
+
+	return builder.ConnectPreAuthorized(ctx, key, phrase)
 }
 
 // existingAppKey returns the app key recorded in the configured data directory

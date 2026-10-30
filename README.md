@@ -50,6 +50,11 @@ s3d login
 register `s3d` with the Sia indexer. Visit the printed URL in your browser to
 approve the app connection and complete setup.
 
+If you have a pre-authorized key, export it as hex in `S3D_PREAUTHORIZED_KEY`
+before running `s3d login`. The app connection is then approved without
+visiting a URL. The key is minted on the indexer, expires and is good for a
+limited number of uses. Your recovery phrase is still prompted for.
+
 To update the configuration later, run
 
 ```sh
@@ -105,6 +110,12 @@ volumes:
 
 ```sh
 docker compose run --rm s3d login
+```
+
+With a pre-authorized key the URL step is skipped:
+
+```sh
+docker compose run --rm -e S3D_PREAUTHORIZED_KEY=<hex> s3d login
 ```
 
 ### 3. Create a user and access key
@@ -454,7 +465,7 @@ generate one.
 |---------|-------------|
 | `version` | Print the version, commit hash, and build date |
 | `config` | Launch the interactive configuration wizard |
-| `login` | Prompts for recovery phrase and registers `s3d` with the Sia indexer |
+| `login` | Prompts for recovery phrase and registers `s3d` with the Sia indexer, approved in the browser or with `S3D_PREAUTHORIZED_KEY` |
 | `status` | Print a basic overview of the background upload pipeline |
 | `users` | Manage S3 users (create, delete, list) |
 | `keys` | Manage S3 access keys (create, delete, list) |
@@ -490,6 +501,7 @@ file and CLI flags. The order of precedence from lowest to highest is:
 |----------|-------------|
 | `S3D_CONFIG_FILE` | Override the config file path |
 | `S3D_DATA_DIR` | Override the data directory |
+| `S3D_PREAUTHORIZED_KEY` | Pre-authorized key in hex, read by `s3d login` to skip the browser approval |
 
 ### Example Config
 
