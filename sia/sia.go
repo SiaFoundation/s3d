@@ -247,6 +247,12 @@ type Store interface {
 	PutObjectRetention(bucket s3.BucketID, name string, version s3.VersionRequest, retention s3.ObjectLockState, bypass bool) error
 	PutBucketPolicy(bucket s3.BucketID, document string) error
 	DeleteBucketPolicy(bucket s3.BucketID) error
+	GetBucketTagging(bucket s3.BucketID) (s3.TagSet, error)
+	PutBucketTagging(bucket s3.BucketID, tags s3.TagSet) error
+	DeleteBucketTagging(bucket s3.BucketID) error
+	GetObjectTagging(bucket s3.BucketID, name string, version s3.VersionRequest) (s3.ObjectTagging, error)
+	PutObjectTagging(bucket s3.BucketID, name string, version s3.VersionRequest, tags s3.TagSet) error
+	DeleteObjectTagging(bucket s3.BucketID, name string, version s3.VersionRequest) error
 	ObjectsCursor() (slabs.Cursor, error)
 	SetObjectsCursor(cursor slabs.Cursor) error
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)

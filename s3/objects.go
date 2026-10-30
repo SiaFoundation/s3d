@@ -1,9 +1,13 @@
 package s3
 
 import (
+	"bytes"
+	"crypto/md5"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -220,7 +224,6 @@ var unsupportedObjectSubresources = map[string]struct{}{
 	"renameObject": {},
 	"restore":      {},
 	"select":       {},
-	"tagging":      {},
 	"torrent":      {},
 }
 
@@ -960,12 +963,108 @@ func requestChecksum(headers http.Header) (*RequestChecksum, error) {
 // checksum the backend can compute. The auth layer validates it after the body.
 func declaresTrailingChecksum(headers http.Header) bool {
 	for h := range strings.SplitSeq(headers.Get(auth.HeaderXAMZTrailer), ",") {
-		suffix, ok := strings.CutPrefix(textproto.CanonicalMIMEHeaderKey(strings.TrimSpace(h)), checksumPrefix)
+		suffix, ok := checksumSuffix(h)
 		if ok && auth.NewChecksumHash(suffix) != nil {
 			return true
 		}
 	}
 	return false
+}
+
+// checksumSuffix returns the algorithm suffix of an X-Amz-Checksum-* header
+// name, canonically formatted.
+func checksumSuffix(name string) (string, bool) {
+	return strings.CutPrefix(textproto.CanonicalMIMEHeaderKey(strings.TrimSpace(name)), checksumPrefix)
+}
+
+// s3ChecksumAlgorithms are the X-Amz-Checksum-* suffixes S3 accepts, including
+// those the backend cannot compute.
+var s3ChecksumAlgorithms = map[string]struct{}{
+	"Crc32": {}, "Crc32c": {}, "Crc64nvme": {}, "Md5": {}, "Sha1": {},
+	"Sha256": {}, "Sha512": {}, "Xxhash3": {}, "Xxhash64": {}, "Xxhash128": {},
+}
+
+// declaresChecksum reports whether the request carries a checksum of any S3
+// algorithm, in a header or in a trailer the auth layer reads.
+func declaresChecksum(headers http.Header) bool {
+	isChecksum := func(name string) bool {
+		suffix, ok := checksumSuffix(name)
+		if !ok {
+			return false
+		}
+		_, ok = s3ChecksumAlgorithms[suffix]
+		return ok
+	}
+	for name := range headers {
+		if isChecksum(name) {
+			return true
+		}
+	}
+	// only the trailer payload modes read a trailer
+	switch headers.Get(auth.HeaderXAMZContentSHA256) {
+	case auth.ContentStreamingUnsignedPayloadTrailer, auth.ContentStreamingAWS4HMACSHA256PayloadTrailer:
+		for name := range strings.SplitSeq(headers.Get(auth.HeaderXAMZTrailer), ",") {
+			if isChecksum(name) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// readDigestedBody reads an XML body that S3 requires to carry Content-MD5 or
+// a checksum, and checks every digest the request carries. A checksum the
+// backend cannot compute is left unverified, as in [requestChecksum].
+func readDigestedBody(r *http.Request) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxXMLBodySize+1))
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		return nil, s3errs.ErrIncompleteBody
+	} else if err != nil {
+		return nil, err
+	} else if len(body) > maxXMLBodySize {
+		return nil, s3errs.ErrMalformedXML
+	} else if r.ContentLength >= 0 && int64(len(body)) < r.ContentLength {
+		return nil, s3errs.ErrIncompleteBody
+	}
+
+	payloadHash, err := auth.Sha256HashFromRequest(r)
+	if err != nil {
+		return nil, err
+	} else if payloadHash != nil && sha256.Sum256(body) != *payloadHash {
+		return nil, s3errs.ErrBadDigest
+	}
+
+	checksum, err := requestChecksum(r.Header)
+	if err != nil {
+		return nil, err
+	}
+	declared := declaresChecksum(r.Header)
+	// S3 refuses x-amz-sdk-checksum-algorithm without the checksum it names
+	if r.Header.Get("X-Amz-Sdk-Checksum-Algorithm") != "" && !declared {
+		return nil, s3errs.ErrInvalidRequest
+	}
+
+	if value, ok := r.Header["Content-Md5"]; ok {
+		if len(value) != 1 {
+			return nil, s3errs.ErrInvalidDigest
+		}
+		digest, err := parseContentMD5(value[0])
+		if err != nil {
+			return nil, err
+		} else if md5.Sum(body) != *digest {
+			return nil, s3errs.ErrBadDigest
+		}
+	} else if !declared {
+		return nil, fmt.Errorf("Content-MD5 or a checksum is required: %w", s3errs.ErrInvalidRequest)
+	}
+	if checksum != nil {
+		h := checksum.NewHash()
+		h.Write(body)
+		if !bytes.Equal(h.Sum(nil), checksum.Sum) {
+			return nil, s3errs.ErrBadDigest
+		}
+	}
+	return body, nil
 }
 
 // objectLocation returns the URL an object was addressed by, which a response
@@ -1336,9 +1435,12 @@ func parseCopySourceRange(header string) (*CopySourceRange, error) {
 	return &rng, nil
 }
 
+// maxXMLBodySize bounds an XML request body, which is enough for any S3 one.
+const maxXMLBodySize = 1 << 20
+
 func decodeXMLBody(r io.Reader, v interface{}) error {
 	// limit reader to prevent attacks
-	limited := io.LimitReader(r, 1<<20) // 1 MiB should be enough for any S3 XML body
+	limited := io.LimitReader(r, maxXMLBodySize)
 	decoder := xml.NewDecoder(limited)
 	if err := decoder.Decode(&v); err != nil {
 		return s3errs.ErrMalformedXML

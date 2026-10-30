@@ -617,4 +617,24 @@ type (
 		// Status is "ON" or "OFF".
 		Status string `xml:"Status,omitempty"`
 	}
+
+	// Tag is a case-sensitive S3 tag key and value.
+	Tag struct {
+		Key   string `xml:"Key"`
+		Value string `xml:"Value"`
+	}
+
+	// TagSet is the complete set of tags attached to a bucket or object
+	// version.
+	TagSet []Tag
+
+	// Tagging is the tag set of a bucket or object version, used by the
+	// bucket and object tagging APIs.
+	//
+	// https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObjectTagging.html
+	Tagging struct {
+		XMLName xml.Name `xml:"Tagging"`
+		Xmlns   string   `xml:"xmlns,attr,omitempty"`
+		TagSet  TagSet   `xml:"TagSet>Tag"`
+	}
 )
