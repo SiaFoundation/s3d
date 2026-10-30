@@ -51,7 +51,8 @@ type operation struct {
 	// each object named in the body, so it is not given an action.
 	multiObjectDelete bool
 	// bodyConditions marks an action whose condition keys are read from the
-	// body, so its handler checks the action once it has read the body.
+	// body or a copy's source, so its handler checks the action once it has
+	// read them.
 	bodyConditions bool
 	// existingTagConditions marks an action whose condition keys include the
 	// addressed version's tags, so its handler checks the action once it has
@@ -96,8 +97,8 @@ func (s *s3) authorize(r *http.Request, caller *auth.Caller, bucket, object stri
 		// deleteObjects checks every key, including explicit denies
 		err = access.assertAnyAllowedInBucket(actionDeleteObject, actionDeleteObjectVersion)
 	case op.bodyConditions, op.existingTagConditions:
-		// the handler checks the action once the body or the addressed
-		// version supplies its keys
+		// the handler checks the action once the body, copy source or
+		// addressed version supplies its keys
 		err = access.assertAnyAllowedInBucket(op.action)
 	case isObjectAction(op.action):
 		// a read's handler rechecks it against the version it serves
@@ -286,6 +287,16 @@ func (a *bucketAccess) assertRequestTagsAllowed(object string, tags TagSet) erro
 		return nil
 	}
 	return a.check(a.requestContext.merge(requestTagPolicyContext(tags)), actionPutObjectTagging, objectARN(a.bucket, object))
+}
+
+// assertWriteAllowed checks that the caller may write a new version of object
+// with tags, for the writes [s3.authorize] leaves to their handlers: copies,
+// whose tags may be their source's, and POST forms.
+func (a *bucketAccess) assertWriteAllowed(object string, tags TagSet) error {
+	if err := a.assertObjectContextAllowed(actionPutObject, object, requestTagPolicyContext(tags)); err != nil {
+		return err
+	}
+	return a.assertRequestTagsAllowed(object, tags)
 }
 
 // visibleObjectLock returns the part of a version's lock state the caller may

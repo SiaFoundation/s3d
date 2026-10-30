@@ -218,6 +218,20 @@ func (u *postUpload) post(t testing.TB, tester *testutil.S3Tester) (*http.Respon
 	return resp, read
 }
 
+// assertRejected posts the form and checks that it fails with expected.
+func (u *postUpload) assertRejected(t testing.TB, tester *testutil.S3Tester, expected s3errs.Error) {
+	t.Helper()
+
+	resp, body := u.post(t, tester)
+	var parsed s3.ErrorResponse
+	if err := xml.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("unparsable error response %q: %v", body, err)
+	} else if resp.StatusCode != expected.HTTPStatus || parsed.Code != expected.Code {
+		t.Fatalf("expected %d %s, got %d %s", expected.HTTPStatus, expected.Code,
+			resp.StatusCode, parsed.Code)
+	}
+}
+
 // TestPostObjectSDKForms covers the two form shapes the AWS SDKs produce. They
 // differ in how they spell the protocol fields and in whether they send the
 // bucket, and both were refused before POST Object was implemented.
@@ -426,15 +440,7 @@ func TestPostObjectRejections(t *testing.T) {
 
 	assertRejected := func(upload *postUpload, expected s3errs.Error) {
 		t.Helper()
-
-		resp, body := upload.post(t, tester)
-		var parsed s3.ErrorResponse
-		if err := xml.Unmarshal(body, &parsed); err != nil {
-			t.Fatalf("unparsable error response %q: %v", body, err)
-		} else if resp.StatusCode != expected.HTTPStatus || parsed.Code != expected.Code {
-			t.Fatalf("expected %d %s, got %d %s", expected.HTTPStatus, expected.Code,
-				resp.StatusCode, parsed.Code)
-		}
+		upload.assertRejected(t, tester, expected)
 	}
 
 	// a wrong signature
@@ -609,8 +615,10 @@ func TestPostObjectRejections(t *testing.T) {
 // condition on those tags.
 func TestPostObjectTagging(t *testing.T) {
 	const (
-		bucket   = "post-tags"
-		document = `<Tagging><TagSet><Tag><Key>project</Key><Value>one</Value></Tag></TagSet></Tagging>`
+		bucket         = "post-tags"
+		document       = `<Tagging><TagSet><Tag><Key>project</Key><Value>one</Value></Tag></TagSet></Tagging>`
+		publicDocument = `<Tagging><TagSet><Tag><Key>classification</Key><Value>public</Value></Tag></TagSet></Tagging>`
+		secretDocument = `<Tagging><TagSet><Tag><Key>classification</Key><Value>secret</Value></Tag></TagSet></Tagging>`
 	)
 
 	s3Tester := testutil.NewTester(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
@@ -619,9 +627,9 @@ func TestPostObjectTagging(t *testing.T) {
 	}
 
 	// the owner's upload is tagged from the form
-	form := newPostUpload(bucket, "owner")
-	form.fields = append(form.fields, [2]string{"tagging", document})
-	if resp, body := form.post(t, s3Tester); resp.StatusCode != http.StatusNoContent {
+	upload := newPostUpload(bucket, "owner")
+	upload.fields = append(upload.fields, [2]string{"tagging", document})
+	if resp, body := upload.post(t, s3Tester); resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("expected status %d, got %d: %s", http.StatusNoContent, resp.StatusCode, body)
 	}
 	tagging, err := s3Tester.GetObjectTagging(t.Context(), bucket, "owner", nil)
@@ -631,37 +639,57 @@ func TestPostObjectTagging(t *testing.T) {
 		t.Fatalf("expected tags %v, got %v", want, tagMap(tagging.TagSet))
 	}
 
-	// another user may write only objects tagged project=one
+	// s3:PutObject sees the form's tags, both to grant and to deny the write
 	policy := fmt.Sprintf(`{
   "Version": "2012-10-17",
   "Statement": [
     {
       "Effect": "Allow",
+      "Principal": %q,
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::%s/*",
+      "Condition": {"StringEquals": {"s3:RequestObjectTag/classification": "public"}}
+    },
+    {
+      "Effect": "Allow",
+      "Principal": %q,
+      "Action": "s3:PutObjectTagging",
+      "Resource": "arn:aws:s3:::%s/*"
+    },
+    {
+      "Effect": "Deny",
       "Principal": "*",
       "Action": "s3:PutObject",
-      "Resource": "arn:aws:s3:::%[1]s/*",
-      "Condition": {"StringEquals": {"s3:RequestObjectTag/project": "one"}}
-    },
-    {"Effect": "Allow", "Principal": "*", "Action": "s3:PutObjectTagging", "Resource": "arn:aws:s3:::%[1]s/*"}
+      "Resource": "arn:aws:s3:::%s/*",
+      "Condition": {"StringEquals": {"s3:RequestObjectTag/classification": "secret"}}
+    }
   ]
-}`, bucket)
+}`, testutil.OtherOwner, bucket, testutil.OtherOwner, bucket, bucket)
 	if err := s3Tester.PutBucketPolicy(t.Context(), bucket, policy); err != nil {
 		t.Fatal(err)
 	}
 
 	// a header does not supply the tags
-	form = newPostUpload(bucket, "header")
-	form.accessKey, form.secretKey = testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey
-	form.header = http.Header{s3.HeaderTagging: {"project=one"}}
-	if resp, body := form.post(t, s3Tester); resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("expected status %d, got %d: %s", http.StatusForbidden, resp.StatusCode, body)
-	}
+	upload = newPostUpload(bucket, "header")
+	upload.accessKey, upload.secretKey = testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey
+	upload.header = http.Header{s3.HeaderTagging: {"classification=public"}}
+	upload.assertRejected(t, s3Tester, s3errs.ErrAccessDenied)
 
 	// the form does
-	form = newPostUpload(bucket, "form")
-	form.accessKey, form.secretKey = testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey
-	form.fields = append(form.fields, [2]string{"tagging", document})
-	if resp, body := form.post(t, s3Tester); resp.StatusCode != http.StatusNoContent {
+	upload = newPostUpload(bucket, "other")
+	upload.accessKey, upload.secretKey = testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey
+	upload.fields = append(upload.fields, [2]string{"tagging", publicDocument})
+	if resp, body := upload.post(t, s3Tester); resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("expected status %d, got %d: %s", http.StatusNoContent, resp.StatusCode, body)
 	}
+
+	// and is denied without them
+	upload = newPostUpload(bucket, "other")
+	upload.accessKey, upload.secretKey = testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey
+	upload.assertRejected(t, s3Tester, s3errs.ErrAccessDenied)
+
+	// the Deny overrides even the owner
+	upload = newPostUpload(bucket, "owner")
+	upload.fields = append(upload.fields, [2]string{"tagging", secretDocument})
+	upload.assertRejected(t, s3Tester, s3errs.ErrAccessDenied)
 }

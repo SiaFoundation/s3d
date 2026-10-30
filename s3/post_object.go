@@ -449,12 +449,10 @@ func (s *s3) postObject(w http.ResponseWriter, r *http.Request, header *bucketAc
 		tags, tagsErr = parseTaggingXML([]byte(document), objectTagLimits)
 	}
 	// the tags are in the form rather than the headers
-	if err := access.assertObjectContextAllowed(actionPutObject, object, requestTagPolicyContext(tags)); err != nil {
+	if err := access.assertWriteAllowed(object, tags); err != nil {
 		return err
 	} else if tagsErr != nil {
 		return tagsErr
-	} else if err := access.assertRequestTagsAllowed(object, tags); err != nil {
-		return err
 	}
 
 	// the request body bounds the file from above, and a content-length-range

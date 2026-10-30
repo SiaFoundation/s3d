@@ -1577,6 +1577,94 @@ func TestBucketPolicyUploadPartCopyExistingTags(t *testing.T) {
 	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
 }
 
+// TestBucketPolicyWriteTagConditions checks that s3:PutObject sees the tags a
+// write applies, both to grant and to deny it.
+func TestBucketPolicyWriteTagConditions(t *testing.T) {
+	const (
+		bucket = "bucket"
+		object = "key"
+	)
+
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
+	other := s3Tester.ChangeAccessKey(t, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey)
+
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+	putTaggedObject(t, s3Tester, bucket, "public", "classification=public")
+	putTaggedObject(t, s3Tester, bucket, "secret", "classification=secret")
+	policy := fmt.Sprintf(`{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": %q,
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::%s/*",
+      "Condition": {"StringEquals": {"s3:RequestObjectTag/classification": "public"}}
+    },
+    {
+      "Effect": "Allow",
+      "Principal": %q,
+      "Action": ["s3:GetObject", "s3:PutObjectTagging"],
+      "Resource": "arn:aws:s3:::%s/*"
+    },
+    {
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::%s/*",
+      "Condition": {"StringEquals": {"s3:RequestObjectTag/classification": "secret"}}
+    }
+  ]
+}`, testutil.OtherOwner, bucket, testutil.OtherOwner, bucket, bucket)
+	if err := s3Tester.PutBucketPolicy(t.Context(), bucket, policy); err != nil {
+		t.Fatal(err)
+	}
+
+	put := func(tester *testutil.S3Tester, tags string) error {
+		_, err := tester.Client().PutObject(t.Context(), &service.PutObjectInput{Bucket: aws.String(bucket), Key: aws.String(object), Body: strings.NewReader("data"), Tagging: aws.String(tags)})
+		return err
+	}
+	if err := put(other, "classification=public"); err != nil {
+		t.Fatal(err)
+	}
+	err := put(other, "project=one")
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+	err = put(other, "classification=secret")
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+	err = put(s3Tester, "classification=secret")
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+
+	createUpload := func(tester *testutil.S3Tester, tags string) error {
+		_, err := tester.Client().CreateMultipartUpload(t.Context(), &service.CreateMultipartUploadInput{Bucket: aws.String(bucket), Key: aws.String(object), Tagging: aws.String(tags)})
+		return err
+	}
+	if err := createUpload(other, "classification=public"); err != nil {
+		t.Fatal(err)
+	}
+	err = createUpload(s3Tester, "classification=secret")
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+
+	// a copy is checked with the tags it applies, its source's unless it
+	// replaces them
+	copyObject := func(tester *testutil.S3Tester, source string, directive types.TaggingDirective, tags *string) error {
+		_, err := tester.Client().CopyObject(t.Context(), &service.CopyObjectInput{Bucket: aws.String(bucket), Key: aws.String("copy"), CopySource: aws.String(bucket + "/" + source), TaggingDirective: directive, Tagging: tags})
+		return err
+	}
+	if err := copyObject(other, "public", types.TaggingDirectiveCopy, nil); err != nil {
+		t.Fatal(err)
+	} else if err := copyObject(other, "secret", types.TaggingDirectiveReplace, aws.String("classification=public")); err != nil {
+		t.Fatal(err)
+	}
+	err = copyObject(other, "secret", types.TaggingDirectiveCopy, nil)
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+	err = copyObject(s3Tester, "secret", types.TaggingDirectiveCopy, nil)
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+	err = copyObject(s3Tester, "public", types.TaggingDirectiveReplace, aws.String("classification=secret"))
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+}
+
 // TestBucketPolicyTaggingConditions checks that tag conditions see the tags a
 // PutObjectTagging body applies.
 func TestBucketPolicyTaggingConditions(t *testing.T) {
