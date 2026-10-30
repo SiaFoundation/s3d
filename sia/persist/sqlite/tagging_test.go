@@ -1,11 +1,13 @@
 package sqlite
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
+	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.uber.org/zap/zaptest"
 )
@@ -40,6 +42,47 @@ func TestTagging(t *testing.T) {
 		t.Fatal(err)
 	} else if len(tagging.Tags) != 0 {
 		t.Fatalf("expected no tags, got %v", tagging.Tags)
+	}
+}
+
+func TestTaggingCopySourceChanged(t *testing.T) {
+	store := initTestDB(t, zaptest.NewLogger(t))
+	if err := store.CreateBucket(testAccessKeyID, "bucket", false); err != nil {
+		t.Fatal(err)
+	}
+	bid := store.bucketID("bucket")
+
+	tags := s3.TagSet{{Key: "project", Value: "one"}}
+	if _, _, err := store.PutObject(bid, "a", objects.PutOptions{Tags: tags}); err != nil {
+		t.Fatal(err)
+	}
+	tagging, err := store.GetObjectTagging(bid, "a", s3.NoVersion())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// a write between looking up the source's version and the copy overwrites
+	// the null version in place, so the copy must not pair the new content with
+	// the old tags
+	if _, _, err := store.PutObject(bid, "a", objects.PutOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	opts := s3.CopyObjectOptions{Tags: tagging.Tags, CopyTags: true}
+	if _, _, err := store.CopyObject(bid, "a", tagging.Version, bid, "a-copy", opts); !errors.Is(err, s3errs.ErrConditionalRequestConflict) {
+		t.Fatalf("expected %v, got %v", s3errs.ErrConditionalRequestConflict, err)
+	}
+
+	// once the tags match again the copy takes them
+	if err := store.PutObjectTagging(bid, "a", s3.NoVersion(), tags); err != nil {
+		t.Fatal(err)
+	} else if _, _, err := store.CopyObject(bid, "a", tagging.Version, bid, "a-copy", opts); err != nil {
+		t.Fatal(err)
+	}
+	obj, err := store.GetObject(bid, "a-copy", s3.NoVersion(), nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if !reflect.DeepEqual(obj.Tags, tags) {
+		t.Fatalf("expected tags %v, got %v", tags, obj.Tags)
 	}
 }
 

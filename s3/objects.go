@@ -192,12 +192,13 @@ func (c RequestChecksum) NewHash() hash.Hash {
 // CopyObjectOptions contains options for a CopyObject operation.
 //
 // Meta is the metadata to apply to the copy, replacing the source's when
-// Replace is set and merged into it otherwise. Tags are the copy's tags,
-// already taken from the source or the request.
+// Replace is set and merged into it otherwise. Tags are the copy's tags, taken
+// from the request, or from the source when CopyTags is set.
 type CopyObjectOptions struct {
 	Meta                     map[string]string
 	Replace                  bool
 	Tags                     TagSet
+	CopyTags                 bool
 	SourcePreconditions      ObjectPreconditions
 	DestinationPreconditions ObjectPreconditions
 
@@ -289,8 +290,8 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, dst *bucketAcces
 		return err
 	}
 
-	tags := src.tags
-	if directive == TaggingDirectiveReplace {
+	tags, copyTags := src.tags, directive != TaggingDirectiveReplace
+	if !copyTags {
 		tags, err = requestTags(r.Header)
 		if err != nil {
 			return err
@@ -305,6 +306,7 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, dst *bucketAcces
 		Meta:                     meta,
 		Replace:                  replace,
 		Tags:                     tags,
+		CopyTags:                 copyTags,
 		SourcePreconditions:      copySourcePreconditions(r.Header),
 		DestinationPreconditions: requestPreconditions(r.Header),
 		ObjectLock:               lock,

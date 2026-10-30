@@ -352,7 +352,10 @@ func TestParseTaggingXML(t *testing.T) {
 	}{
 		{"empty tag set", `<Tagging><TagSet/></Tagging>`, nil},
 		{"namespaced", `<Tagging xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><TagSet><Tag><Key>k</Key><Value/></Tag></TagSet></Tagging>`, nil},
+		{"prolog", "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!-- comment -->\n<Tagging><TagSet/></Tagging>\n", nil},
 		{"empty document", ``, s3errs.ErrMalformedXML},
+		{"leading text", `junk<Tagging><TagSet/></Tagging>`, s3errs.ErrMalformedXML},
+		{"doctype", `<!DOCTYPE Tagging><Tagging><TagSet/></Tagging>`, s3errs.ErrMalformedXML},
 		{"wrong namespace", `<Tagging xmlns="urn:wrong"><TagSet/></Tagging>`, s3errs.ErrMalformedXML},
 		{"unknown attribute", `<Tagging extra="no"><TagSet/></Tagging>`, s3errs.ErrMalformedXML},
 		{"wrong root", `<Other><TagSet/></Other>`, s3errs.ErrMalformedXML},
@@ -393,6 +396,7 @@ func TestRequestTags(t *testing.T) {
 		{"duplicate key", "a=1&a=2", nil, s3errs.ErrInvalidTag},
 		{"semicolon", "a=1;b=2", nil, s3errs.ErrInvalidTag},
 		{"bad escape", "a=%zz", nil, s3errs.ErrInvalidTag},
+		{"too many", "a&b&c&d&e&f&g&h&i&j&k", nil, s3errs.ErrInvalidTag},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

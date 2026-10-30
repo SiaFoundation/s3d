@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"slices"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
@@ -680,6 +681,11 @@ func (s *Store) CopyObject(srcBucket s3.BucketID, srcName string, srcVersion s3.
 			srcVersionWire = s3.FormatVersion(srcInternalVersion)
 		}
 
+		// the caller was authorized against the source's tags outside this
+		// transaction
+		if opts.CopyTags && !slices.Equal(obj.Tags, opts.Tags) {
+			return s3.CopySourceError{Err: fmt.Errorf("the source's tags changed during the copy: %w", s3errs.ErrConditionalRequestConflict)}
+		}
 		obj.Tags = opts.Tags
 		if opts.Replace {
 			obj.Meta = opts.Meta
