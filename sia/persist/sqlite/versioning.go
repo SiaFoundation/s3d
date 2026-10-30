@@ -59,7 +59,7 @@ type objectMutationResult struct {
 // fresh version and retains existing ones; otherwise the null version is
 // replaced. The replaced null version's data is orphaned only after the new row
 // exists, so data shared with it (a dedup or self-copy) is retained.
-func putObject(tx *txn, bid int64, name string, status string, contentMD5 [16]byte, meta map[string]string, length int64, partsCount int32, fileName *string, siaObject *objects.SiaObject, lock objectLock) (objectMutationResult, error) {
+func putObject(tx *txn, bid int64, name string, status string, contentMD5 [16]byte, meta map[string]string, tags s3.TagSet, length int64, partsCount int32, fileName *string, siaObject *objects.SiaObject, lock objectLock) (objectMutationResult, error) {
 	if meta == nil {
 		meta = make(map[string]string) // force '{}' instead of 'null' in JSON
 	}
@@ -97,6 +97,8 @@ func putObject(tx *txn, bid int64, name string, status string, contentMD5 [16]by
 		sqlMetaJSON(meta), length, partsCount, sqlTime(time.Now()),
 		fileName, lock.Mode, lock.RetainUntil, lock.LegalHold); err != nil {
 		return objectMutationResult{}, fmt.Errorf("failed to insert object: %w", err)
+	} else if err := insertObjectTags(tx, bid, name, version, tags); err != nil {
+		return objectMutationResult{}, err
 	}
 
 	// a sia_object_id counts as uploaded even when a filename is kept as backup;

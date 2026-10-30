@@ -377,3 +377,31 @@ func TestParseTaggingXML(t *testing.T) {
 		})
 	}
 }
+
+func TestRequestTags(t *testing.T) {
+	tests := []struct {
+		name    string
+		header  string
+		want    TagSet
+		wantErr error
+	}{
+		{"empty", "", nil, nil},
+		// the client's order is kept
+		{"order", "b=2&a=1", TagSet{{Key: "b", Value: "2"}, {Key: "a", Value: "1"}}, nil},
+		{"empty values", "key&&other=", TagSet{{Key: "key", Value: ""}, {Key: "other", Value: ""}}, nil},
+		{"escaped", "spaced+key=a%20b", TagSet{{Key: "spaced key", Value: "a b"}}, nil},
+		{"duplicate key", "a=1&a=2", nil, s3errs.ErrInvalidTag},
+		{"semicolon", "a=1;b=2", nil, s3errs.ErrInvalidTag},
+		{"bad escape", "a=%zz", nil, s3errs.ErrInvalidTag},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := requestTags(http.Header{HeaderTagging: {tc.header}})
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("expected %v, got %v", tc.wantErr, err)
+			} else if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("expected %v, got %v", tc.want, got)
+			}
+		})
+	}
+}

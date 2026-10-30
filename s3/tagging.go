@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"unicode"
 	"unicode/utf16"
@@ -14,6 +15,19 @@ import (
 
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"go.uber.org/zap"
+)
+
+// the tagging headers a write or a GET Object may carry
+const (
+	HeaderTagging          = "X-Amz-Tagging"
+	HeaderTaggingDirective = "X-Amz-Tagging-Directive"
+	HeaderTaggingCount     = "X-Amz-Tagging-Count"
+)
+
+// the values of [HeaderTaggingDirective]
+const (
+	TaggingDirectiveCopy    = "COPY"
+	TaggingDirectiveReplace = "REPLACE"
 )
 
 // ObjectTagging is the tag set of an object version, as returned by
@@ -184,6 +198,30 @@ func validTagXMLNode(node tagXMLNode, namespace string) bool {
 	return true
 }
 
+// requestTags parses the X-Amz-Tagging header, keeping the client's order,
+// which [url.ParseQuery] would not.
+func requestTags(h http.Header) (TagSet, error) {
+	var tags TagSet
+	for pair := range strings.SplitSeq(h.Get(HeaderTagging), "&") {
+		if pair == "" {
+			continue
+		} else if strings.Contains(pair, ";") {
+			return nil, fmt.Errorf("%s must not contain ';': %w", HeaderTagging, s3errs.ErrInvalidTag)
+		}
+		key, value, _ := strings.Cut(pair, "=")
+		key, keyErr := url.QueryUnescape(key)
+		value, valueErr := url.QueryUnescape(value)
+		if err := errors.Join(keyErr, valueErr); err != nil {
+			return nil, fmt.Errorf("invalid %s: %v: %w", HeaderTagging, err, s3errs.ErrInvalidTag)
+		}
+		tags = append(tags, Tag{Key: key, Value: value})
+	}
+	if err := tags.validate(objectTagLimits); err != nil {
+		return nil, err
+	}
+	return tags, nil
+}
+
 // readTagging reads a tag set from a request body, which S3 requires to carry
 // Content-MD5 or a checksum.
 func readTagging(r *http.Request, limits tagLimits) (TagSet, error) {
@@ -337,6 +375,22 @@ func (s *s3) objectTagging(r *http.Request, access *bucketAccess, object string,
 		return ObjectTagging{}, access.hideMissing(err, object)
 	}
 	return tagging, err
+}
+
+// authorizeVersion looks up the addressed version of object and checks that
+// the caller may perform action on it. A missing version is reported only once
+// the caller is allowed the action.
+func (s *s3) authorizeVersion(r *http.Request, access *bucketAccess, action, object string, version VersionRequest, extra policyContext) (ObjectTagging, error) {
+	tagging, err := s.backend.GetObjectTagging(r.Context(), access.bucketID, object, version)
+	if err != nil && !isMissingOrDeleteMarker(err) {
+		return ObjectTagging{}, err
+	}
+	if denied := access.assertVersionAllowed(action, object, version, extra); denied != nil {
+		return ObjectTagging{}, denied
+	} else if err != nil {
+		return ObjectTagging{}, err
+	}
+	return tagging, nil
 }
 
 // setTaggingVersionHeader reports the version a tagging request acted on.

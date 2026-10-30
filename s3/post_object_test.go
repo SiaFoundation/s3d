@@ -11,6 +11,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -62,6 +63,9 @@ type postUpload struct {
 	// chunked sends it without a Content-Length
 	signHeader bool
 	chunked    bool
+
+	// header is added to the request's HTTP headers
+	header http.Header
 
 	file     []byte
 	filename string
@@ -182,6 +186,9 @@ func (u *postUpload) post(t testing.TB, tester *testutil.S3Tester) (*http.Respon
 		t.Fatal(err)
 	}
 	req.Header.Set("Content-Type", contentType)
+	for name, values := range u.header {
+		req.Header[name] = values
+	}
 	if u.chunked {
 		req.ContentLength = -1
 	}
@@ -594,4 +601,31 @@ func TestPostObjectRejections(t *testing.T) {
 		t.Fatalf("expected %d %s, got %d %s", expected.HTTPStatus, expected.Code,
 			resp.StatusCode, parsed.Code)
 	}
+}
+
+// TestPostObjectTagging checks that a form's tagging field tags the object.
+func TestPostObjectTagging(t *testing.T) {
+	const (
+		bucket   = "post-tags"
+		document = `<Tagging><TagSet><Tag><Key>project</Key><Value>one</Value></Tag></TagSet></Tagging>`
+	)
+
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// the owner's upload is tagged from the form
+	form := newPostUpload(bucket, "owner")
+	form.fields = append(form.fields, [2]string{"tagging", document})
+	if resp, body := form.post(t, s3Tester); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusNoContent, resp.StatusCode, body)
+	}
+	tagging, err := s3Tester.GetObjectTagging(t.Context(), bucket, "owner", nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if want := map[string]string{"project": "one"}; !reflect.DeepEqual(tagMap(tagging.TagSet), want) {
+		t.Fatalf("expected tags %v, got %v", want, tagMap(tagging.TagSet))
+	}
+
 }

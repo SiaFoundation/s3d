@@ -136,20 +136,35 @@ func (s *s3) bucketAccess(r *http.Request, caller *auth.Caller, bucket string) (
 	return access, nil
 }
 
-// authorizeCopySource checks that the caller may read srcVersion of srcObject,
-// reusing dst's access for a same-bucket copy.
-func (s *s3) authorizeCopySource(r *http.Request, dst *bucketAccess, srcBucket, srcObject string, srcVersion VersionRequest) (*bucketAccess, error) {
+// copySource is a copy's source version, addressed explicitly so the backend
+// copies the version the caller was authorized to read.
+type copySource struct {
+	access  *bucketAccess
+	version VersionRequest
+	tags    TagSet
+}
+
+// authorizeCopySource looks up srcVersion of srcObject and checks that the
+// caller may read it, reusing dst's access for a same-bucket copy.
+func (s *s3) authorizeCopySource(r *http.Request, dst *bucketAccess, srcBucket, srcObject string, srcVersion VersionRequest) (copySource, error) {
 	src := dst
 	if srcBucket != dst.bucket {
 		var err error
 		if src, err = s.bucketAccess(r, dst.caller, srcBucket); err != nil {
-			return nil, err
+			return copySource{}, err
 		}
 	}
-	if err := src.assertVersionAllowed(readAction(srcVersion), srcObject, srcVersion, nil); err != nil {
-		return nil, err
+	tagging, err := s.authorizeVersion(r, src, readAction(srcVersion), srcObject, srcVersion, nil)
+	if isMissingOrDeleteMarker(err) {
+		if errors.Is(err, s3errs.ErrMethodNotAllowed) {
+			// an addressed delete marker cannot be copied
+			err = s3errs.ErrInvalidRequest
+		}
+		return copySource{}, src.hideMissing(CopySourceError{Err: err}, srcObject)
+	} else if err != nil {
+		return copySource{}, err
 	}
-	return src, nil
+	return copySource{access: src, version: tagging.Version, tags: tagging.Tags}, nil
 }
 
 // assertAuth returns the access key ID of a signed caller, or ErrAccessDenied
@@ -238,6 +253,15 @@ func (a *bucketAccess) assertLockActionAllowed(action, object string, lock *Obje
 		return err
 	}
 	return a.check(requestContext.merge(objectLockPolicyContext(lock)), action, objectARN(a.bucket, object))
+}
+
+// assertRequestTagsAllowed checks that the caller may stamp tags on a new
+// version of object.
+func (a *bucketAccess) assertRequestTagsAllowed(object string, tags TagSet) error {
+	if len(tags) == 0 {
+		return nil
+	}
+	return a.check(a.requestContext, actionPutObjectTagging, objectARN(a.bucket, object))
 }
 
 // visibleObjectLock returns the part of a version's lock state the caller may

@@ -17,25 +17,25 @@ func TestTagging(t *testing.T) {
 	}
 	bid := store.bucketID("bucket")
 
-	// a version keeps the tags it is given, in order
+	// objects keep the tags they are stored with
 	tags := s3.TagSet{{Key: "project", Value: "one"}, {Key: "empty", Value: ""}}
-	if _, _, err := store.PutObject(bid, "key", objects.PutOptions{}); err != nil {
+	if _, _, err := store.PutObject(bid, "match", objects.PutOptions{Tags: tags}); err != nil {
 		t.Fatal(err)
-	} else if err := store.PutObjectTagging(bid, "key", s3.NoVersion(), tags); err != nil {
+	} else if _, _, err := store.PutObject(bid, "other", objects.PutOptions{Tags: s3.TagSet{{Key: "project", Value: "two"}}}); err != nil {
 		t.Fatal(err)
 	}
-	tagging, err := store.GetObjectTagging(bid, "key", s3.NoVersion())
+	obj, err := store.GetObject(bid, "match", s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
-	} else if !reflect.DeepEqual(tagging.Tags, tags) {
-		t.Fatalf("expected tags %v, got %v", tags, tagging.Tags)
+	} else if !reflect.DeepEqual(obj.Tags, tags) {
+		t.Fatalf("expected object tags %v, got %v", tags, obj.Tags)
 	}
 
 	// overwriting an unversioned object clears its previous tags
-	if _, _, err := store.PutObject(bid, "key", objects.PutOptions{}); err != nil {
+	if _, _, err := store.PutObject(bid, "other", objects.PutOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	tagging, err = store.GetObjectTagging(bid, "key", s3.NoVersion())
+	tagging, err := store.GetObjectTagging(bid, "other", s3.NoVersion())
 	if err != nil {
 		t.Fatal(err)
 	} else if len(tagging.Tags) != 0 {
