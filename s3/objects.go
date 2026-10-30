@@ -242,7 +242,9 @@ func (s *s3) routeObject(r *http.Request, object string) (operation, error) {
 	}
 
 	if r.Method == http.MethodPut {
-		return operation{action: actionPutObject, serve: func(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
+		// a copy's tags may be its source's, which only its handler knows
+		_, copies := r.Header["X-Amz-Copy-Source"]
+		return operation{action: actionPutObject, bodyConditions: copies, serve: func(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
 			return s.putObject(w, r, access, object)
 		}}, nil
 	}
@@ -294,7 +296,7 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, dst *bucketAcces
 		}
 	}
 	// copying the source's tags needs no tagging permission on the source
-	if err := dst.assertRequestTagsAllowed(dstObject, tags); err != nil {
+	if err := dst.assertWriteAllowed(dstObject, tags); err != nil {
 		return err
 	}
 

@@ -49,7 +49,8 @@ type operation struct {
 	// each object named in the body, so it is not given an action.
 	multiObjectDelete bool
 	// bodyConditions marks an action whose condition keys are read from the
-	// body, so its handler checks the action once it has read the body.
+	// body or a copy's source, so its handler checks the action once it has
+	// read them.
 	bodyConditions bool
 	// formAuth marks a POST Object request, which authenticates through its
 	// form fields. Its handler authorizes the caller once it has verified
@@ -86,7 +87,8 @@ func (s *s3) authorize(r *http.Request, caller *auth.Caller, bucket, object stri
 		// deleteObjects checks every key, including explicit denies
 		err = access.assertAnyAllowedInBucket(actionDeleteObject, actionDeleteObjectVersion)
 	case op.bodyConditions:
-		// the handler checks the action once the body supplies its keys
+		// the handler checks the action once the body or copy source supplies
+		// its keys
 		err = access.assertAnyAllowedInBucket(op.action)
 	case isObjectAction(op.action):
 		err = access.assertObjectAllowed(op.action, object)
@@ -261,7 +263,19 @@ func (a *bucketAccess) assertRequestTagsAllowed(object string, tags TagSet) erro
 	if len(tags) == 0 {
 		return nil
 	}
-	return a.check(a.requestContext.merge(requestObjectTagPolicyContext(tags)), actionPutObjectTagging, objectARN(a.bucket, object))
+	return a.assertTaggingActionAllowed(actionPutObjectTagging, object, tags)
+}
+
+// assertWriteAllowed checks that the caller may write a new version of object
+// with tags, for the writes [s3.authorize] leaves to their handlers: copies,
+// whose tags may be their source's, and POST forms.
+func (a *bucketAccess) assertWriteAllowed(object string, tags TagSet) error {
+	if len(tags) == 0 {
+		return a.assertObjectAllowed(actionPutObject, object)
+	} else if err := a.assertTaggingActionAllowed(actionPutObject, object, tags); err != nil {
+		return err
+	}
+	return a.assertRequestTagsAllowed(object, tags)
 }
 
 // assertTaggingActionAllowed checks that the caller may perform action on
