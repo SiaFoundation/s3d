@@ -393,6 +393,7 @@ func TestRequestTags(t *testing.T) {
 		{"duplicate key", "a=1&a=2", nil, s3errs.ErrInvalidTag},
 		{"semicolon", "a=1;b=2", nil, s3errs.ErrInvalidTag},
 		{"bad escape", "a=%zz", nil, s3errs.ErrInvalidTag},
+		{"too many", "a&b&c&d&e&f&g&h&i&j&k", nil, s3errs.ErrInvalidTag},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

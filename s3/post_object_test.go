@@ -627,5 +627,4 @@ func TestPostObjectTagging(t *testing.T) {
 	} else if want := map[string]string{"project": "one"}; !reflect.DeepEqual(tagMap(tagging.TagSet), want) {
 		t.Fatalf("expected tags %v, got %v", want, tagMap(tagging.TagSet))
 	}
-
 }
