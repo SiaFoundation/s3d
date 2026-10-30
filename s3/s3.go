@@ -53,6 +53,10 @@ type Backend interface {
 	//
 	// - opts.DestinationPreconditions must be evaluated against the current
 	//   version of the destination, via ObjectPreconditions.CheckWrite.
+	//
+	// - The copy's tags are opts.Tags. When opts.CopyTags is set they are the
+	//   source's tags the caller was authorized against. If the source's tags no
+	//   longer match, [ErrConditionalRequestConflict] must be returned.
 	CopyObject(ctx context.Context, srcBucket BucketID, srcObject string, srcVersion VersionRequest, dstBucket BucketID, dstObject string, opts CopyObjectOptions) (*CopyObjectResult, error)
 
 	// CreateBucket creates a new bucket owned by the user identified by the

@@ -170,7 +170,9 @@ func (a *bucketAccess) actionPolicyContext(action string) (policyContext, error)
 		}
 	case actionPutObject:
 		// only CopyObject and UploadPartCopy, both PUTs, have a copy source
-		if source := a.request.Header.Get("X-Amz-Copy-Source"); source != "" && a.request.Method == http.MethodPut {
+		source := a.request.Header.Get("X-Amz-Copy-Source")
+		copies := source != "" && a.request.Method == http.MethodPut
+		if copies {
 			if bucket, object, _, err := parseSource(source); err == nil {
 				extra["s3:x-amz-copy-source"] = []string{bucket + "/" + object}
 			}
@@ -192,6 +194,18 @@ func (a *bucketAccess) actionPolicyContext(action string) (policyContext, error)
 		// ignore lock headers. An invalid lock is rejected by the handler.
 		if lock, err := requestObjectLock(a.request.Header); err == nil && uploadID == "" {
 			maps.Copy(extra, objectLockPolicyContext(lock))
+		}
+		// PutObject and CreateMultipartUpload apply X-Amz-Tagging. The
+		// handlers of CopyObject and POST Object add the tags they apply. An
+		// invalid tag set is rejected by the handler.
+		appliesTags := query.Has("uploads")
+		if a.request.Method == http.MethodPut {
+			appliesTags = uploadID == "" && !copies
+		}
+		if appliesTags {
+			if tags, err := requestTags(a.request.Header); err == nil && len(tags) > 0 {
+				maps.Copy(extra, requestObjectTagPolicyContext(tags))
+			}
 		}
 	}
 	return a.requestContext.merge(extra), nil

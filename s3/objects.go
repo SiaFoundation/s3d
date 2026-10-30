@@ -30,6 +30,7 @@ type Object struct {
 	ContentMD5   [16]byte
 	LastModified time.Time
 	Metadata     map[string]string
+	Tags         TagSet
 	Range        *ObjectRange
 	Size         int64
 
@@ -149,6 +150,7 @@ type PutObjectResult struct {
 // and return an error if they don't match.
 type PutObjectOptions struct {
 	Meta map[string]string
+	Tags TagSet
 
 	// ContentLength is the exact number of bytes to read from the object data.
 	// It is negative when the length is not declared ahead of the read, which
@@ -190,10 +192,13 @@ func (c RequestChecksum) NewHash() hash.Hash {
 // CopyObjectOptions contains options for a CopyObject operation.
 //
 // Meta is the metadata to apply to the copy, replacing the source's when
-// Replace is set and merged into it otherwise.
+// Replace is set and merged into it otherwise. Tags are the copy's tags, taken
+// from the request, or from the source when CopyTags is set.
 type CopyObjectOptions struct {
 	Meta                     map[string]string
 	Replace                  bool
+	Tags                     TagSet
+	CopyTags                 bool
 	SourcePreconditions      ObjectPreconditions
 	DestinationPreconditions ObjectPreconditions
 
@@ -237,7 +242,9 @@ func (s *s3) routeObject(r *http.Request, object string) (operation, error) {
 	}
 
 	if r.Method == http.MethodPut {
-		return operation{action: actionPutObject, serve: func(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
+		// a copy's tags may be its source's, which only its handler knows
+		_, copies := r.Header["X-Amz-Copy-Source"]
+		return operation{action: actionPutObject, bodyConditions: copies, serve: func(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
 			return s.putObject(w, r, access, object)
 		}}, nil
 	}
@@ -263,8 +270,14 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, dst *bucketAcces
 		return err
 	}
 
+	directive := r.Header.Get(HeaderTaggingDirective)
+	if directive != "" && directive != TaggingDirectiveCopy && directive != TaggingDirectiveReplace {
+		return fmt.Errorf("unknown tagging directive %q: %w", directive, s3errs.ErrInvalidArgument)
+	}
+
 	// copying to the same key without REPLACE is not allowed, unless a specific
-	// source version is addressed (a version restore).
+	// source version is addressed (a version restore). Replacing only the tags
+	// does not count.
 	replace := r.Header.Get("x-amz-metadata-directive") == "REPLACE"
 	if srcBucket == dstBucket && srcObject == dstObject && !replace && !srcVersion.Specified {
 		return s3errs.ErrInvalidRequest
@@ -275,15 +288,29 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, dst *bucketAcces
 		return err
 	}
 
-	result, err := s.backend.CopyObject(r.Context(), src.bucketID, srcObject, srcVersion, dst.bucketID, dstObject, CopyObjectOptions{
+	tags, copyTags := src.tags, directive != TaggingDirectiveReplace
+	if !copyTags {
+		tags, err = requestTags(r.Header)
+		if err != nil {
+			return err
+		}
+	}
+	// copying the source's tags needs no tagging permission on the source
+	if err := dst.assertWriteAllowed(dstObject, tags); err != nil {
+		return err
+	}
+
+	result, err := s.backend.CopyObject(r.Context(), src.access.bucketID, srcObject, src.version, dst.bucketID, dstObject, CopyObjectOptions{
 		Meta:                     meta,
 		Replace:                  replace,
+		Tags:                     tags,
+		CopyTags:                 copyTags,
 		SourcePreconditions:      copySourcePreconditions(r.Header),
 		DestinationPreconditions: requestPreconditions(r.Header),
 		ObjectLock:               lock,
 	})
 	if err != nil {
-		return src.hideMissingSource(err, srcObject)
+		return src.access.hideMissingSource(err, srcObject)
 	}
 
 	if result.VersionID != "" {
@@ -459,6 +486,9 @@ func (s *s3) serveObject(w http.ResponseWriter, r *http.Request, access *bucketA
 	// write headers
 	setVersionHeaders(w, obj)
 	s.setLifecycleExpirationHeader(w, r, access, object, obj.Size, obj.LastModified)
+	if len(obj.Tags) > 0 && access.assertVersionAllowed(versionedAction(version, actionGetObjectTagging, actionGetObjectVersionTagging), object, version, nil) == nil {
+		w.Header().Set(HeaderTaggingCount, strconv.Itoa(len(obj.Tags)))
+	}
 	obj.ObjectLock = access.visibleObjectLock(object, obj.ObjectLock)
 	if err := writeGetOrHeadObjectHeaders(obj, w, r); err != nil {
 		return err
@@ -894,12 +924,20 @@ func (s *s3) putObject(w http.ResponseWriter, r *http.Request, access *bucketAcc
 		return fmt.Errorf("a retention requires Content-MD5 or a checksum: %w", s3errs.ErrInvalidRequest)
 	}
 
+	tags, err := requestTags(r.Header)
+	if err != nil {
+		return err
+	}
+	if err := access.assertRequestTagsAllowed(object, tags); err != nil {
+		return err
+	}
 	res, err := s.backend.PutObject(r.Context(), access.bucketID, object, r.Body, PutObjectOptions{
 		ContentLength: r.ContentLength,
 		ContentMD5:    contentMD5,
 		ContentSHA256: contentSHA256,
 		Checksum:      checksum,
 		Meta:          meta,
+		Tags:          tags,
 		Preconditions: requestPreconditions(r.Header),
 		ObjectLock:    lock,
 	})

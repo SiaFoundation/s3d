@@ -300,7 +300,7 @@ func TestObjectLockState(t *testing.T) {
 		}
 
 		// an unadorned write takes the default
-		before := time.Now().Truncate(time.Millisecond)
+		before := time.Now().UTC().Truncate(time.Millisecond)
 		if _, err := s3Tester.PutObject(ctx, bucket, "auto", bytes.NewReader([]byte("data")), nil); err != nil {
 			t.Fatal(err)
 		}
@@ -329,9 +329,9 @@ func TestObjectLockState(t *testing.T) {
 			t.Fatal(err)
 		}
 		time.Sleep(50 * time.Millisecond)
-		beforeComplete := time.Now().Truncate(time.Millisecond)
+		beforeComplete := time.Now().UTC().Truncate(time.Millisecond)
 		completeUpload(t, bucket, "autobig", *created.UploadId)
-		completed := time.Now()
+		completed := time.Now().UTC()
 		if h := head(t, bucket, "autobig"); h.ObjectLockMode != types.ObjectLockModeCompliance {
 			t.Fatalf("expected COMPLIANCE, got %q", h.ObjectLockMode)
 		} else if h.ObjectLockRetainUntilDate.Before(beforeComplete.AddDate(0, 0, 3)) {

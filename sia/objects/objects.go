@@ -49,6 +49,7 @@ type Object struct {
 	IsDeleteMarker bool
 	PartsCount     int32
 	Meta           map[string]string
+	Tags           s3.TagSet
 	Offset         int64
 	Length         int64
 	Size           int64
@@ -90,6 +91,7 @@ func (o *Object) Attrs() s3.ObjectAttrs {
 type PutOptions struct {
 	ContentMD5 [16]byte
 	Meta       map[string]string
+	Tags       s3.TagSet
 	Length     int64
 
 	// FileName is the pending upload file backing the object, or nil when the
