@@ -26,12 +26,13 @@ import (
 // while enumerating the account.
 const remoteSnapshotBatchSize = api.MaxLimit
 
-// SnapshotSchedule is the cron expression on which snapshots are taken and the
-// number of calendar days, weeks and months of scheduled snapshots kept. An
-// empty expression disables scheduled snapshots and all zero counts keep every
-// scheduled snapshot.
+// SnapshotSchedule is the cron expression on which snapshots are taken, the
+// time it was set or last fired and the number of calendar days, weeks and
+// months of scheduled snapshots kept. An empty expression disables scheduled
+// snapshots and all zero counts keep every scheduled snapshot.
 type SnapshotSchedule struct {
 	Expression  string
+	Since       time.Time
 	KeepDaily   int
 	KeepWeekly  int
 	KeepMonthly int
@@ -203,8 +204,8 @@ func (s *Sia) snapshotsLoop(ctx context.Context) {
 }
 
 // runScheduledSnapshot takes a snapshot when the stored schedule fired since
-// the last one and prunes the scheduled snapshots retention no longer keeps,
-// once object metadata is synced.
+// it was set or last took one and prunes the scheduled snapshots retention no
+// longer keeps, once object metadata is synced.
 func (s *Sia) runScheduledSnapshot(ctx context.Context, now time.Time) {
 	sched, err := s.store.SnapshotSchedule()
 	if err != nil {
@@ -223,32 +224,21 @@ func (s *Sia) runScheduledSnapshot(ctx context.Context, now time.Time) {
 		return
 	}
 	if !now.Before(s.snapshotRetryAt) {
-		s.takeScheduledSnapshot(ctx, now, cronSched)
+		s.takeScheduledSnapshot(ctx, now, sched, cronSched)
 	}
 	s.pruneScheduledSnapshots(ctx, now, sched)
 }
 
-// takeScheduledSnapshot takes a snapshot when the schedule fired since the
-// newest scheduled snapshot was taken.
-func (s *Sia) takeScheduledSnapshot(ctx context.Context, now time.Time, sched cron.Schedule) {
-	snapshots, err := s.store.ListSnapshots()
-	if err != nil {
-		s.logger.Error("failed to list snapshots", zap.Error(err))
+// takeScheduledSnapshot takes a snapshot when the schedule fired since it was
+// set or last took one, and advances it to now.
+func (s *Sia) takeScheduledSnapshot(ctx context.Context, now time.Time, sched SnapshotSchedule, cronSched cron.Schedule) {
+	if next := cronSched.Next(sched.Since.In(now.Location())); next.IsZero() || next.After(now) {
 		return
-	}
-	// the listing is newest first
-	for _, snap := range snapshots {
-		if !snap.Scheduled {
-			continue
-		} else if next := sched.Next(snap.CreatedAt.In(now.Location())); next.IsZero() || next.After(now) {
-			return
-		}
-		break
-	}
-
-	if _, err := s.createSnapshot(ctx, true); err != nil {
+	} else if _, err := s.createSnapshot(ctx, true); err != nil {
 		s.snapshotRetryAt = now.Add(scheduledSnapshotRetryDelay)
 		s.logger.Error("failed to take scheduled snapshot", zap.Error(err))
+	} else if err := s.store.UpdateSnapshotScheduleSince(now); err != nil {
+		s.logger.Error("failed to advance snapshot schedule", zap.Error(err))
 	}
 }
 

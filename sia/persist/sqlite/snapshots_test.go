@@ -619,29 +619,39 @@ func TestListSnapshotsOrderBy(t *testing.T) {
 func TestSnapshotSchedule(t *testing.T) {
 	store := initTestDB(t, zaptest.NewLogger(t))
 
-	// a fresh database has no schedule
-	sched, err := store.SnapshotSchedule()
-	if err != nil {
-		t.Fatal(err)
-	} else if sched != (sia.SnapshotSchedule{}) {
-		t.Fatal("unexpected", sched)
+	assertSchedule := func(want sia.SnapshotSchedule) {
+		t.Helper()
+		sched, err := store.SnapshotSchedule()
+		if err != nil {
+			t.Fatal(err)
+		} else if !sched.Since.Equal(want.Since) {
+			t.Fatal("mismatch", sched.Since, want.Since)
+		}
+		sched.Since = want.Since
+		if sched != want {
+			t.Fatal("mismatch", sched, want)
+		}
 	}
 
-	want := sia.SnapshotSchedule{Expression: "0 3 * * *", KeepDaily: 7, KeepWeekly: 4, KeepMonthly: 12}
+	// a fresh database has no schedule
+	assertSchedule(sia.SnapshotSchedule{Since: time.Unix(0, 0)})
+
+	want := sia.SnapshotSchedule{Expression: "0 3 * * *", Since: time.Now().Truncate(time.Second), KeepDaily: 7, KeepWeekly: 4, KeepMonthly: 12}
 	if err := store.UpdateSnapshotSchedule(want); err != nil {
 		t.Fatal(err)
-	} else if sched, err = store.SnapshotSchedule(); err != nil {
-		t.Fatal(err)
-	} else if sched != want {
-		t.Fatal("mismatch", sched, want)
 	}
+	assertSchedule(want)
+
+	// a scheduled snapshot advances the schedule
+	want.Since = want.Since.Add(time.Hour)
+	if err := store.UpdateSnapshotScheduleSince(want.Since); err != nil {
+		t.Fatal(err)
+	}
+	assertSchedule(want)
 
 	// clear it again
 	if err := store.UpdateSnapshotSchedule(sia.SnapshotSchedule{}); err != nil {
 		t.Fatal(err)
-	} else if sched, err = store.SnapshotSchedule(); err != nil {
-		t.Fatal(err)
-	} else if sched != (sia.SnapshotSchedule{}) {
-		t.Fatal("unexpected", sched)
 	}
+	assertSchedule(sia.SnapshotSchedule{})
 }

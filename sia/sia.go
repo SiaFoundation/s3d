@@ -306,6 +306,7 @@ type Store interface {
 	RollbackSnapshot(id int64) error
 	SnapshotSchedule() (SnapshotSchedule, error)
 	SnapshotsForDeletion(before time.Time) ([]types.Hash256, error)
+	UpdateSnapshotScheduleSince(since time.Time) error
 }
 
 // New creates a new Sia backend instance.

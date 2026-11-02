@@ -946,11 +946,11 @@ func TestScheduledSnapshots(t *testing.T) {
 	// the listing is complete, retention may run
 	backend.SyncMetadata(ctx)
 
-	// the schedule fired an hour ago, in UTC to stay clear of the host's
-	// daylight saving transitions
+	// the schedule is set an hour after its daily slot, in UTC to stay clear
+	// of the host's daylight saving transitions
 	base := time.Now().UTC()
 	slot := base.Add(-time.Hour)
-	sched := sia.SnapshotSchedule{Expression: fmt.Sprintf("%d %d * * *", slot.Minute(), slot.Hour())}
+	sched := sia.SnapshotSchedule{Expression: fmt.Sprintf("%d %d * * *", slot.Minute(), slot.Hour()), Since: base}
 	setSchedule := func(sched sia.SnapshotSchedule) {
 		t.Helper()
 		if err := store.UpdateSnapshotSchedule(sched); err != nil {
@@ -989,25 +989,37 @@ func TestScheduledSnapshots(t *testing.T) {
 		return snapshots
 	}
 
-	// no scheduled snapshot exists, so the first pass takes one at once
+	// the slot passed before the schedule was set, so nothing is taken until
+	// it fires again
 	backend.RunScheduledSnapshot(ctx, base)
+	assertScheduled(0)
+	backend.RunScheduledSnapshot(ctx, base.Add(30*time.Minute))
+	assertScheduled(0)
+
+	// the next day's slot takes the first
+	backend.RunScheduledSnapshot(ctx, base.AddDate(0, 0, 1))
 	first := assertScheduled(1)[0]
 
 	// a pass before the schedule fires again does nothing
-	backend.RunScheduledSnapshot(ctx, base.Add(30*time.Minute))
+	backend.RunScheduledSnapshot(ctx, base.AddDate(0, 0, 1).Add(30*time.Minute))
 	assertScheduled(1)
 
-	// the next day's slot takes another
-	backend.RunScheduledSnapshot(ctx, base.AddDate(0, 0, 1))
+	// a missed slot is caught up
+	backend.RunScheduledSnapshot(ctx, base.AddDate(0, 0, 3))
 	second := assertScheduled(2)[0]
 	if second.SiaObjectID == first.SiaObjectID {
 		t.Fatal("expected a new snapshot")
 	}
 
-	// a missed slot is caught up
-	backend.RunScheduledSnapshot(ctx, base.AddDate(0, 0, 3))
-	third := assertScheduled(3)[0]
-	if third.SiaObjectID == second.SiaObjectID {
+	// deleting the newest does not take another before the slot
+	if err := backend.DeleteSnapshot(ctx, second.SiaObjectID); err != nil {
+		t.Fatal(err)
+	}
+	backend.RunScheduledSnapshot(ctx, base.AddDate(0, 0, 3).Add(time.Hour))
+	assertScheduled(1)
+	backend.RunScheduledSnapshot(ctx, base.AddDate(0, 0, 4))
+	third := assertScheduled(2)[0]
+	if third.SiaObjectID == first.SiaObjectID {
 		t.Fatal("expected a new snapshot")
 	}
 
@@ -1023,8 +1035,8 @@ func TestScheduledSnapshots(t *testing.T) {
 	backend.RunScheduledSnapshot(ctx, base.Add(time.Hour))
 	if snapshots := assertScheduled(1); snapshots[0].SiaObjectID != third.SiaObjectID {
 		t.Fatal("expected the newest snapshot to be kept")
-	} else if memSDK.Pinned(first.SiaObjectID) || memSDK.Pinned(second.SiaObjectID) {
-		t.Fatal("expected the older snapshots to be pruned")
+	} else if memSDK.Pinned(first.SiaObjectID) {
+		t.Fatal("expected the older snapshot to be pruned")
 	} else if !memSDK.Pinned(manual.SiaObjectID) {
 		t.Fatal("expected the manual snapshot to be kept")
 	}
@@ -1047,9 +1059,9 @@ func TestScheduledSnapshots(t *testing.T) {
 	assertScheduled(3)
 }
 
-// TestScheduledSnapshotLoop verifies the background loop snapshots once the
-// first sync completes, again when the slot passes, and once a day after that,
-// pruning to the retention count each time.
+// TestScheduledSnapshotLoop verifies the background loop takes nothing before
+// the slot, snapshots when it passes, and once a day after that, pruning to
+// the retention count each time.
 func TestScheduledSnapshotLoop(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		memSDK := testutil.NewMemorySDK()
@@ -1063,7 +1075,7 @@ func TestScheduledSnapshotLoop(t *testing.T) {
 
 		// the slot is two minutes away
 		slot := time.Now().Add(2 * time.Minute)
-		if err := store.UpdateSnapshotSchedule(sia.SnapshotSchedule{Expression: fmt.Sprintf("%d %d * * *", slot.Minute(), slot.Hour()), KeepDaily: 1}); err != nil {
+		if err := store.UpdateSnapshotSchedule(sia.SnapshotSchedule{Expression: fmt.Sprintf("%d %d * * *", slot.Minute(), slot.Hour()), Since: time.Now(), KeepDaily: 1}); err != nil {
 			t.Fatal(err)
 		}
 		backend, err := sia.New(t.Context(), memSDK, store, dir, sia.WithUploadDisabled(), sia.WithLogger(log))
@@ -1089,15 +1101,19 @@ func TestScheduledSnapshotLoop(t *testing.T) {
 			return snapshots[0].SiaObjectID
 		}
 
-		// the first pass after the sync snapshots at once
+		// nothing is taken before the slot
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		if snapshots, err := store.ListSnapshots(); err != nil {
+			t.Fatal(err)
+		} else if len(snapshots) != 0 {
+			t.Fatal("unexpected", len(snapshots))
+		}
+
+		// the slot passing takes the first
 		time.Sleep(time.Minute)
 		synctest.Wait()
 		id := assertSnapshot(types.Hash256{})
-
-		// the slot passing takes another
-		time.Sleep(time.Minute)
-		synctest.Wait()
-		id = assertSnapshot(id)
 
 		// then once a day
 		for range 3 {

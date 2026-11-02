@@ -205,6 +205,7 @@ CREATE TABLE global_settings (
 	last_sync_key BLOB NOT NULL DEFAULT X'0000000000000000000000000000000000000000000000000000000000000000',
 	snapshot_gen INTEGER NOT NULL DEFAULT 0,
 	snapshot_schedule TEXT NOT NULL DEFAULT '', -- cron expression, empty disables scheduled snapshots
+	snapshot_schedule_since INTEGER NOT NULL DEFAULT 0, -- the schedule was set or last took a snapshot
 	snapshot_keep_daily INTEGER NOT NULL DEFAULT 0,
 	snapshot_keep_weekly INTEGER NOT NULL DEFAULT 0,
 	snapshot_keep_monthly INTEGER NOT NULL DEFAULT 0,

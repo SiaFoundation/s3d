@@ -86,8 +86,9 @@ Commands:
 Take snapshots on a cron schedule. The expression has five fields, minute,
 hour, day of month, month and day of week, or is one of @hourly, @daily,
 @weekly, @monthly and @yearly. It runs in the local time zone of the instance,
-which picks up a change within a minute. A snapshot missed while the instance
-was down is taken on the next start.
+which picks up a change within a minute. The first snapshot is taken when the
+schedule next fires after it is set. A snapshot missed while the instance was
+down is taken on the next start.
 
 Each count keeps the newest scheduled snapshot of that many days, weeks or
 months, the sets are combined, and all zero keeps every scheduled snapshot.
@@ -264,6 +265,7 @@ func runSnapshotsScheduleSet(cmd *flag.FlagSet, sched sia.SnapshotSchedule) {
 		os.Exit(1)
 	}
 	checkFatalError("failed to set snapshot schedule", sched.Validate())
+	sched.Since = time.Now()
 
 	store, err := openStore(zap.NewNop())
 	checkFatalError("failed to open database", err)

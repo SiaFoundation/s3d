@@ -239,8 +239,9 @@ The schedule is stored in the database next to the users and keys, a running
 instance picks up a change within a minute, and it is part of every snapshot,
 so a restored instance resumes it. `schedule` without a subcommand prints the
 current schedule and counts. A scheduled snapshot flushes the objects buffered
-on disk like a manual one. If the instance was down when a snapshot was due, it
-is taken on the next start.
+on disk like a manual one. The first snapshot is taken when the schedule next
+fires after it is set. If the instance was down when a snapshot was due, it is
+taken on the next start.
 
 Each count keeps the newest scheduled snapshot of that many days, weeks or
 months, the sets are combined, and all zero keeps every scheduled snapshot.

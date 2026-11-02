@@ -232,8 +232,8 @@ func (s *Store) HasSnapshotObject(objectID types.Hash256) (known bool, err error
 // SnapshotSchedule returns the snapshot schedule.
 func (s *Store) SnapshotSchedule() (sched sia.SnapshotSchedule, err error) {
 	err = s.transaction(func(tx *txn) error {
-		return tx.QueryRow(`SELECT snapshot_schedule, snapshot_keep_daily, snapshot_keep_weekly, snapshot_keep_monthly FROM global_settings`).
-			Scan(&sched.Expression, &sched.KeepDaily, &sched.KeepWeekly, &sched.KeepMonthly)
+		return tx.QueryRow(`SELECT snapshot_schedule, snapshot_schedule_since, snapshot_keep_daily, snapshot_keep_weekly, snapshot_keep_monthly FROM global_settings`).
+			Scan(&sched.Expression, (*sqlTime)(&sched.Since), &sched.KeepDaily, &sched.KeepWeekly, &sched.KeepMonthly)
 	})
 	return
 }
@@ -241,8 +241,16 @@ func (s *Store) SnapshotSchedule() (sched sia.SnapshotSchedule, err error) {
 // UpdateSnapshotSchedule replaces the snapshot schedule.
 func (s *Store) UpdateSnapshotSchedule(sched sia.SnapshotSchedule) error {
 	return s.transaction(func(tx *txn) error {
-		_, err := tx.Exec(`UPDATE global_settings SET snapshot_schedule = $1, snapshot_keep_daily = $2, snapshot_keep_weekly = $3, snapshot_keep_monthly = $4`,
-			sched.Expression, sched.KeepDaily, sched.KeepWeekly, sched.KeepMonthly)
+		_, err := tx.Exec(`UPDATE global_settings SET snapshot_schedule = $1, snapshot_schedule_since = $2, snapshot_keep_daily = $3, snapshot_keep_weekly = $4, snapshot_keep_monthly = $5`,
+			sched.Expression, sqlTime(sched.Since), sched.KeepDaily, sched.KeepWeekly, sched.KeepMonthly)
+		return err
+	})
+}
+
+// UpdateSnapshotScheduleSince sets the time the snapshot schedule runs from.
+func (s *Store) UpdateSnapshotScheduleSince(since time.Time) error {
+	return s.transaction(func(tx *txn) error {
+		_, err := tx.Exec(`UPDATE global_settings SET snapshot_schedule_since = $1`, sqlTime(since))
 		return err
 	})
 }
