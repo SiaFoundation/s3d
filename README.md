@@ -55,6 +55,14 @@ before running `s3d login`. The app connection is then approved without
 visiting a URL. The key is minted on the indexer, expires and is good for a
 limited number of uses. Your recovery phrase is still prompted for.
 
+To register without a terminal, write the config file by hand and start
+`s3d -env` instead of running `s3d login`. When no app key is stored yet it
+registers with the pre-authorized key in `S3D_PREAUTHORIZED_KEY`, the recovery
+phrase in `S3D_RECOVERY_PHRASE` and the indexer in `S3D_INDEXER_URL`, which
+defaults to `https://sia.storage`, and then starts the gateway. It exits with an
+error when one of them is missing. Once the app key is stored the variables are
+no longer read.
+
 To update the configuration later, run
 
 ```sh
@@ -458,6 +466,7 @@ generate one.
 | `-api.s3.https` | Address to serve the S3 API on over HTTPS (disabled by default, see [HTTPS](#https)) |
 | `-log.file.enabled` | Enable logging to a file (default `true`) |
 | `-log.stdout.enableANSI` | Enable ANSI color codes on stdout (default `true`, `false` on Windows) |
+| `-env` | Register with the indexer from environment variables when no app key is stored, see [Getting Started](#getting-started) |
 
 ### Subcommands
 
@@ -501,7 +510,9 @@ file and CLI flags. The order of precedence from lowest to highest is:
 |----------|-------------|
 | `S3D_CONFIG_FILE` | Override the config file path |
 | `S3D_DATA_DIR` | Override the data directory |
-| `S3D_PREAUTHORIZED_KEY` | Pre-authorized key in hex, read by `s3d login` to skip the browser approval |
+| `S3D_PREAUTHORIZED_KEY` | Pre-authorized key in hex, read by `s3d login` and `s3d -env` to skip the browser approval |
+| `S3D_RECOVERY_PHRASE` | Recovery phrase `s3d -env` registers with |
+| `S3D_INDEXER_URL` | Indexer `s3d -env` registers with (default `https://sia.storage`) |
 
 ### Example Config
 

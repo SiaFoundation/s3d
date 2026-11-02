@@ -29,6 +29,8 @@ import (
 const (
 	configFileEnvVar       = "S3D_CONFIG_FILE"
 	dataDirEnvVar          = "S3D_DATA_DIR"
+	indexerURLEnvVar       = "S3D_INDEXER_URL"
+	recoveryPhraseEnvVar   = "S3D_RECOVERY_PHRASE"
 	preAuthorizedKeyEnvVar = "S3D_PREAUTHORIZED_KEY"
 
 	rootUsage = `Usage:
@@ -99,6 +101,8 @@ func main() {
 	rootCmd.StringVar(&cfg.ApiHttpsAddress, "api.s3.https", cfg.ApiHttpsAddress, "address to serve the S3 API on over HTTPS using a self-signed certificate (disabled if empty)")
 	rootCmd.BoolVar(&cfg.Log.File.Enabled, "log.file.enabled", cfg.Log.File.Enabled, "enable file logging")
 	rootCmd.BoolVar(&cfg.Log.StdOut.EnableANSI, "log.stdout.enableANSI", cfg.Log.StdOut.EnableANSI, "enable ANSI color codes")
+	var registerFromEnv bool
+	rootCmd.BoolVar(&registerFromEnv, "env", false, "register with the indexer from environment variables when no app key is stored")
 	versionCmd := flagg.New("version", versionUsage)
 	configCmd := flagg.New("config", configUsage)
 	loginCmd := flagg.New("login", loginUsage)
@@ -334,7 +338,12 @@ func main() {
 	defer store.Close()
 
 	appKey, indexerURL, err := store.AppKey()
-	if errors.Is(err, sqlite.ErrNoAppKey) {
+	if errors.Is(err, sqlite.ErrNoAppKey) && registerFromEnv {
+		appKey, indexerURL, err = appKeyFromEnv(ctx)
+		checkFatalError("failed to register app", err)
+		checkFatalError("failed to store app key", store.SetAppKey(appKey, indexerURL))
+		log.Info("registered app with indexer", zap.String("indexerURL", indexerURL))
+	} else if errors.Is(err, sqlite.ErrNoAppKey) {
 		os.Stderr.WriteString("No app key found. Please run 's3d login' to register the app.\n")
 		os.Exit(1)
 	} else if err != nil {

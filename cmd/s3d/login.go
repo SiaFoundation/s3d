@@ -15,6 +15,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const defaultIndexerURL = "https://sia.storage"
+
 func openStore(log *zap.Logger) (*sqlite.Store, error) {
 	if err := os.MkdirAll(cfg.Directory, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %w", err)
@@ -109,6 +111,33 @@ func connectPreAuthorized(ctx context.Context, indexerURL, phrase string, key ty
 	return builder.ConnectPreAuthorized(ctx, key, phrase)
 }
 
+// appKeyFromEnv registers the app with the indexer using the pre-authorized
+// key and recovery phrase from the environment and returns the app key and the
+// indexer URL. The indexer URL defaults to the production one.
+func appKeyFromEnv(ctx context.Context) (types.PrivateKey, string, error) {
+	key, err := preAuthorizedKeyFromEnv()
+	if err != nil {
+		return nil, "", err
+	} else if key == nil {
+		return nil, "", fmt.Errorf("%s must be set", preAuthorizedKeyEnvVar)
+	}
+	phrase := os.Getenv(recoveryPhraseEnvVar)
+	if phrase == "" {
+		return nil, "", fmt.Errorf("%s must be set", recoveryPhraseEnvVar)
+	}
+	indexerURL := os.Getenv(indexerURLEnvVar)
+	if indexerURL == "" {
+		indexerURL = defaultIndexerURL
+	}
+
+	sdkClient, err := connectPreAuthorized(ctx, indexerURL, phrase, key)
+	if err != nil {
+		return nil, "", err
+	}
+	defer sdkClient.Close()
+	return sdkClient.AppKey(), indexerURL, nil
+}
+
 // existingAppKey returns the app key recorded in the configured data directory
 // and whether one was found. A directory holding no database is left
 // untouched.
@@ -161,10 +190,10 @@ func registerSDK(ctx context.Context, indexerURL, phrase string) (*sdk.SDK, erro
 
 // promptIndexerURL reads the indexer URL, defaulting to the production one.
 func promptIndexerURL() string {
-	if indexerURL := readInput("Indexer URL (default: https://sia.storage)"); indexerURL != "" {
+	if indexerURL := readInput("Indexer URL (default: " + defaultIndexerURL + ")"); indexerURL != "" {
 		return indexerURL
 	}
-	return "https://sia.storage"
+	return defaultIndexerURL
 }
 
 // promptExistingRecoveryPhrase reads the recovery phrase of an account that
