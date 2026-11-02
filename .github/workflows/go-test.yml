@@ -34,3 +34,14 @@ jobs:
     uses: SiaFoundation/workflows/.github/workflows/go-test.yml@95130e8c532eb275d3e359b4c4ae97083ae96c8f # master
     with:
       go-version: "1.27"
+  helm:
+    name: Helm
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Lint the chart
+        run: helm lint --strict deploy/helm/s3d --set adminPassword=lint
+      - name: Render the chart
+        run: helm template s3d deploy/helm/s3d --set adminPassword=lint --set ingress.enabled=true

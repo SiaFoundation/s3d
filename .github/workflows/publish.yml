@@ -64,6 +64,29 @@ jobs:
       cgo-enabled: 1
       project: s3d
       ref: ${{ needs.tag.outputs.version }}
+  helm:
+    name: Publish Helm Chart
+    if: needs.tag.outputs.version != ''
+    needs:
+      - tag
+      - build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Package the chart
+        env:
+          VERSION: ${{ needs.tag.outputs.version }}
+        run: helm package deploy/helm/s3d --version "${VERSION#v}" --app-version "${VERSION#v}"
+      - name: Push the chart
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_OWNER: ${{ github.repository_owner }}
+        run: |
+          helm registry login ghcr.io --username "$GH_OWNER" --password-stdin <<< "$GH_TOKEN"
+          helm push s3d-*.tgz oci://ghcr.io/siafoundation/charts
   linux:
     name: Dispatch Linux
     needs:

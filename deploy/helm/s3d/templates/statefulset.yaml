@@ -1,0 +1,103 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "s3d.fullname" . }}
+  labels:
+    {{- include "s3d.labels" . | nindent 4 }}
+spec:
+  # One instance per app key and data directory, see the README.
+  replicas: 1
+  serviceName: {{ include "s3d.fullname" . }}
+  selector:
+    matchLabels:
+      {{- include "s3d.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "s3d.selectorLabels" . | nindent 8 }}
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: s3d
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["-env"]
+          env:
+            - name: S3D_CONFIG_FILE
+              value: /config/s3d.yml
+            - name: S3D_INDEXER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "s3d.fullname" . }}
+                  key: indexerURL
+            - name: S3D_RECOVERY_PHRASE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "s3d.fullname" . }}
+                  key: recoveryPhrase
+            - name: S3D_PREAUTHORIZED_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "s3d.fullname" . }}
+                  key: preauthorizedKey
+          ports:
+            - name: s3
+              containerPort: 8000
+            - name: admin
+              containerPort: 8001
+          # The admin listener is the last one the daemon opens, so it only
+          # accepts connections once registration, the database and the
+          # backend are up. The S3 port is bound before any of that.
+          startupProbe:
+            tcpSocket:
+              port: admin
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            tcpSocket:
+              port: admin
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: config
+          secret:
+            secretName: {{ include "s3d.fullname" . }}
+            items:
+              - key: s3d.yml
+                path: s3d.yml
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.persistence.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}

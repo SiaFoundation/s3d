@@ -1,0 +1,51 @@
+# image.repository and image.tag select the s3d image, the tag defaults to the
+# chart appVersion. Set the tag when installing from a checkout, where the
+# appVersion is 0.0.0.
+image:
+  repository: ghcr.io/siafoundation/s3d
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# adminPassword protects the admin API and is required.
+adminPassword: ""
+
+# indexerURL, recoveryPhrase and preauthorizedKey register the instance on its
+# first start. The phrase and the key are only read while the data volume
+# holds no app key yet.
+indexerURL: https://sia.storage
+recoveryPhrase: ""
+preauthorizedKey: ""
+
+# config holds additional s3d.yml settings, for example sia.dataShards or
+# s3.hostBases. The addresses, the data directory and the admin password are
+# set by the chart.
+config: {}
+
+# persistence sizes the data volume, which holds the metadata database and
+# the objects waiting to be uploaded. An empty storageClass uses the cluster
+# default.
+persistence:
+  size: 10Gi
+  storageClass: ""
+
+# resources are passed to the container.
+resources: {}
+
+# ingress exposes the S3 API. Add the wildcard host for virtual-hosted-style
+# buckets together with config.s3.hostBases.
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - s3.example.com
+  tls: []
+
+# nodeSelector, tolerations and affinity are passed to the pod.
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# nameOverride and fullnameOverride replace the chart name in resource names.
+nameOverride: ""
+fullnameOverride: ""

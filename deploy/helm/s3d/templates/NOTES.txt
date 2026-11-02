@@ -1,0 +1,12 @@
+{{ include "s3d.fullname" . }} registers with the indexer on its first start. Follow it with
+
+  kubectl --namespace {{ .Release.Namespace }} logs --follow statefulset/{{ include "s3d.fullname" . }}
+
+Create a user and an access key once the pod is ready:
+
+  kubectl --namespace {{ .Release.Namespace }} exec {{ include "s3d.fullname" . }}-0 -- s3d users create <username>
+  kubectl --namespace {{ .Release.Namespace }} exec {{ include "s3d.fullname" . }}-0 -- s3d keys create <username>
+
+Reach the S3 API without an ingress with
+
+  kubectl --namespace {{ .Release.Namespace }} port-forward service/{{ include "s3d.fullname" . }} 8000:8000

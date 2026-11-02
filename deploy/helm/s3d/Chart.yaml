@@ -1,0 +1,10 @@
+apiVersion: v2
+name: s3d
+description: An S3-compatible gateway for the Sia network
+type: application
+home: https://github.com/SiaFoundation/s3d
+sources:
+  - https://github.com/SiaFoundation/s3d
+# Both versions are set from the release tag when the chart is packaged.
+version: 0.0.0
+appVersion: 0.0.0

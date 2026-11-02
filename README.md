@@ -148,6 +148,20 @@ docker compose up -d
 docker build -t s3d .
 ```
 
+## Kubernetes
+
+A Helm chart is published to `oci://ghcr.io/siafoundation/charts/s3d`. It runs
+one instance as a StatefulSet with a persistent data volume and registers with
+the indexer on the first start from a pre-authorized key and a recovery phrase,
+see [`deploy/helm/s3d`](deploy/helm/s3d/README.md).
+
+```sh
+helm install s3d oci://ghcr.io/siafoundation/charts/s3d \
+  --set adminPassword=<password> \
+  --set recoveryPhrase="<12 words>" \
+  --set preauthorizedKey=<hex>
+```
+
 ## Upload Packing
 
 Sia stores data in fixed-size slabs made up of 4 MiB sectors. Uploading small
