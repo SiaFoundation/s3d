@@ -233,22 +233,12 @@ s3d snapshots schedule
 s3d snapshots schedule disable
 ```
 
-The expression has the five standard fields or is one of `@hourly`, `@daily`,
-`@weekly`, `@monthly` and `@yearly`, and runs in the instance's local time zone.
-The schedule is stored in the database next to the users and keys, a running
-instance picks up a change within a minute, and it is part of every snapshot,
-so a restored instance resumes it. `schedule` without a subcommand prints the
-current schedule and counts. A scheduled snapshot flushes the objects buffered
-on disk like a manual one. The first snapshot is taken when the schedule next
-fires after it is set. If the instance was down when a snapshot was due, it is
-taken on the next start.
-
-Each count keeps the newest scheduled snapshot of that many days, weeks or
-months, the sets are combined, and all zero keeps every scheduled snapshot.
-`set` replaces the whole schedule, so a count left out is zero. Retention only
-ever removes snapshots the schedule took, a snapshot created with
-`s3d snapshots create` is kept until it is deleted. The `list` output marks
-scheduled snapshots.
+The expression is standard cron or a descriptor like `@daily`, in the instance's
+local time zone. Each count keeps the newest scheduled snapshot of that many
+days, weeks or months and the sets are combined. Retention never removes a
+snapshot created with `s3d snapshots create`. The schedule can be changed while
+`s3d` runs and a restored instance resumes it. Run `s3d snapshots schedule set`
+without arguments for the full usage.
 
 ### Deleting
 
