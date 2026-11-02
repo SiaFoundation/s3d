@@ -84,16 +84,27 @@ Commands:
 	snapshotsScheduleSetUsage = `Usage: s3d snapshots schedule set [--keep-daily <n>] [--keep-weekly <n>] [--keep-monthly <n>] <expression>
 
 Take snapshots on a cron schedule. The expression has five fields, minute,
-hour, day of month, month and day of week, or is one of @hourly, @daily,
-@weekly, @monthly and @yearly. It runs in the local time zone of the instance,
-which picks up a change within a minute. The first snapshot is taken when the
-schedule next fires after it is set. A snapshot missed while the instance was
-down is taken on the next start.
+hour, day of month, month and day of week, or is one of these descriptors:
+
+	@hourly		0 * * * *	at the start of every hour
+	@daily		0 0 * * *	at midnight
+	@weekly		0 0 * * 0	at midnight on Sunday
+	@monthly	0 0 1 * *	at midnight on the first of the month
+	@yearly		0 0 1 1 *	at midnight on the first of January
+
+It runs in the local time zone of the instance, which picks up a change within
+a minute. The first snapshot is taken when the schedule next fires after it is
+set. A snapshot missed while the instance was down is taken on the next start.
 
 Each count keeps the newest scheduled snapshot of that many days, weeks or
 months, the sets are combined, and all zero keeps every scheduled snapshot.
 The command replaces the whole schedule, so a count left out is zero. Snapshots
-created with 'snapshots create' are never pruned.`
+created with 'snapshots create' are never pruned.
+
+Examples:
+	s3d snapshots schedule set "0 3 * * *"
+	s3d snapshots schedule set --keep-daily 7 --keep-weekly 4 --keep-monthly 12 @daily
+	s3d snapshots schedule set --keep-daily 14 "0 */6 * * *"`
 
 	snapshotsScheduleDisableUsage = `Usage: s3d snapshots schedule disable
 
