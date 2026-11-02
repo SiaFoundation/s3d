@@ -13,8 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/SiaFoundation/s3d/s3"
-	"github.com/SiaFoundation/s3d/s3/auth"
 	"go.uber.org/zap"
 	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
@@ -133,8 +131,6 @@ func runConfigCmd(fp string) {
 
 	setAdvancedConfig()
 
-	setAccessKeyPairs()
-
 	// write the config file
 	f, err := os.Create(fp)
 	checkFatalError("failed to create config file", err)
@@ -145,6 +141,11 @@ func runConfigCmd(fp string) {
 
 	checkFatalError("failed to encode config file", enc.Encode(cfg))
 	checkFatalError("failed to sync config file", f.Sync())
+
+	fmt.Println("")
+	fmt.Println("To create S3 access credentials, start s3d and run:")
+	fmt.Println("  s3d users create <username>")
+	fmt.Println("  s3d keys create <username>")
 }
 
 // ansiStyle wraps the output in ANSI escape codes if enabled.
@@ -194,50 +195,6 @@ func humanList(s []string, sep string) string {
 		sb.WriteString(`"`)
 	}
 	return sb.String()
-}
-
-func setAccessKeyPairs() {
-	fmt.Println("")
-	if !promptYesNo("Would you like to create an initial S3 user and access key now?") {
-		fmt.Println("")
-		fmt.Println("To create S3 access credentials later, run:")
-		fmt.Println("  s3d users create <username>")
-		fmt.Println("  s3d keys create <username>")
-		return
-	}
-
-	store, err := openStore(zap.NewNop())
-	checkFatalError("failed to open database", err)
-	defer store.Close()
-
-	var userName string
-	for {
-		userName = readInput("Enter user name")
-		if userName == "" {
-			stdoutError("User name must not be empty.")
-			continue
-		}
-		err := store.CreateUser(userName)
-		if err == nil {
-			break
-		} else if errors.Is(err, s3.ErrUserAlreadyExists) {
-			fmt.Printf("User %q already exists, reusing it.\n", userName)
-			break
-		} else if errors.Is(err, s3.ErrReservedUserName) {
-			stdoutError(fmt.Sprintf("User name %q is reserved.", userName))
-			continue
-		}
-		checkFatalError("failed to create user", err)
-	}
-
-	accessKey, secretKey := auth.GenerateAccessKey()
-	checkFatalError("failed to create access key", store.CreateAccessKey(userName, accessKey, secretKey))
-
-	fmt.Println("")
-	fmt.Printf("  Access Key: %s\n", accessKey)
-	fmt.Printf("  Secret Key: %s\n", secretKey)
-	fmt.Println("")
-	fmt.Println(ansiStyle("1", "Save these credentials. The secret key will not be shown again."))
 }
 
 func setAdvancedConfig() {
