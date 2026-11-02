@@ -352,13 +352,14 @@ var validConditionKeys = map[string]bool{
 }
 
 // conditionKeyPrefixes are the condition keys that take a tag key suffix.
+// s3:BucketTag and s3:ExistingObjectTag are left out, so a policy using them is
+// rejected. Unlike other keys s3d cannot populate, they do not evaluate as
+// missing: s3d stores those tags, so a policy would expect them to apply.
 var conditionKeyPrefixes = []string{
 	"aws:principaltag/",
 	"aws:requesttag/",
 	"aws:resourcetag/",
 	"s3:accesspointtag/",
-	"s3:buckettag/",
-	"s3:existingobjecttag/",
 	"s3:requestobjecttag/",
 }
 

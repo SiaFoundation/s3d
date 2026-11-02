@@ -103,10 +103,10 @@ func TestMetadataHeaders(t *testing.T) {
 		// accepted and not implemented, so they must not read back as applied
 		"X-Amz-Acl",
 		"X-Amz-Storage-Class",
-		"X-Amz-Website-Redirect-Location",
-		// stored separately on the version, never as metadata
 		"X-Amz-Tagging",
 		"X-Amz-Tagging-Directive",
+		"X-Amz-Website-Redirect-Location",
+		// stored as object lock state on the version, never as metadata
 		"X-Amz-Object-Lock-Mode",
 		"X-Amz-Object-Lock-Retain-Until-Date",
 		"X-Amz-Object-Lock-Legal-Hold",

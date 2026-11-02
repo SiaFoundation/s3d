@@ -20,11 +20,16 @@ import (
 // [Backend.GetObjectTagging].
 type ObjectTagging struct {
 	Tags TagSet
-	// Version addresses the version explicitly, so a later call acts on the
-	// same one.
-	Version VersionRequest
-	// VersionID is the version ID a response reports, or "" for the current
-	// version of a bucket that never had versioning.
+	// VersionID is the wire-encoded version to report, or "" for the current
+	// version of an unversioned bucket.
+	VersionID string
+}
+
+// ObjectTaggingResult contains information about the result of a
+// PutObjectTagging or DeleteObjectTagging operation.
+type ObjectTaggingResult struct {
+	// VersionID is the wire-encoded version to report, or "" for the current
+	// version of an unversioned bucket.
 	VersionID string
 }
 
@@ -301,13 +306,13 @@ func (s *s3) putObjectTagging(w http.ResponseWriter, r *http.Request, access *bu
 	} else if err := access.assertTaggingActionAllowed(versionedAction(version, actionPutObjectTagging, actionPutObjectVersionTagging), object, tags); err != nil {
 		return err
 	}
-	tagging, err := s.objectTagging(r, access, object, version)
+	result, err := s.backend.PutObjectTagging(r.Context(), access.bucketID, object, version, tags)
 	if err != nil {
-		return err
-	} else if err := s.backend.PutObjectTagging(r.Context(), access.bucketID, object, tagging.Version, tags); err != nil {
-		return err
+		return access.hideMissing(err, object)
 	}
-	setTaggingVersionHeader(w, tagging)
+	if result.VersionID != "" {
+		w.Header().Set("x-amz-version-id", result.VersionID)
+	}
 	return nil
 }
 
@@ -317,11 +322,13 @@ func (s *s3) putObjectTagging(w http.ResponseWriter, r *http.Request, access *bu
 func (s *s3) getObjectTagging(w http.ResponseWriter, r *http.Request, access *bucketAccess, object string, version VersionRequest) error {
 	s.logger.Debug("getting object tagging", zap.String("bucket", access.bucket), zap.String("object", object))
 
-	tagging, err := s.objectTagging(r, access, object, version)
+	tagging, err := s.backend.GetObjectTagging(r.Context(), access.bucketID, object, version)
 	if err != nil {
-		return err
+		return access.hideMissing(err, object)
 	}
-	setTaggingVersionHeader(w, tagging)
+	if tagging.VersionID != "" {
+		w.Header().Set("x-amz-version-id", tagging.VersionID)
+	}
 	return writeXMLResponse(w, http.StatusOK, Tagging{
 		Xmlns:  "http://s3.amazonaws.com/doc/2006-03-01/",
 		TagSet: tagging.Tags,
@@ -334,37 +341,13 @@ func (s *s3) getObjectTagging(w http.ResponseWriter, r *http.Request, access *bu
 func (s *s3) deleteObjectTagging(w http.ResponseWriter, r *http.Request, access *bucketAccess, object string, version VersionRequest) error {
 	s.logger.Debug("deleting object tagging", zap.String("bucket", access.bucket), zap.String("object", object))
 
-	tagging, err := s.objectTagging(r, access, object, version)
+	result, err := s.backend.DeleteObjectTagging(r.Context(), access.bucketID, object, version)
 	if err != nil {
-		return err
+		return access.hideMissing(err, object)
 	}
-	if err := s.backend.DeleteObjectTagging(r.Context(), access.bucketID, object, tagging.Version); err != nil {
-		return err
+	if result.VersionID != "" {
+		w.Header().Set("x-amz-version-id", result.VersionID)
 	}
-	setTaggingVersionHeader(w, tagging)
 	w.WriteHeader(http.StatusNoContent)
 	return nil
-}
-
-// objectTagging looks up the addressed version of object, hiding a missing
-// one from callers that may not list it.
-func (s *s3) objectTagging(r *http.Request, access *bucketAccess, object string, version VersionRequest) (ObjectTagging, error) {
-	tagging, err := s.backend.GetObjectTagging(r.Context(), access.bucketID, object, version)
-	if isMissingOrDeleteMarker(err) {
-		return ObjectTagging{}, access.hideMissing(err, object)
-	}
-	return tagging, err
-}
-
-// setTaggingVersionHeader reports the version a tagging request acted on.
-func setTaggingVersionHeader(w http.ResponseWriter, tagging ObjectTagging) {
-	if tagging.VersionID != "" {
-		w.Header().Set("x-amz-version-id", tagging.VersionID)
-	}
-}
-
-// isMissingOrDeleteMarker reports whether err is a backend's report that the
-// addressed version does not exist or is a delete marker, which has no tags.
-func isMissingOrDeleteMarker(err error) bool {
-	return errors.Is(err, s3errs.ErrNoSuchKey) || errors.Is(err, s3errs.ErrNoSuchVersion) || errors.Is(err, s3errs.ErrMethodNotAllowed)
 }
