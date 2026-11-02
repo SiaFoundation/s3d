@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json/v2"
 	"errors"
@@ -19,15 +20,28 @@ func requireAdminConfig() {
 	}
 }
 
-// adminRequest sends a request to the admin API route and decodes the JSON
-// response into out when out is not nil. Cancellation is driven by ctx alone,
-// with no client timeout, since some operations can block for a long time.
-func adminRequest(ctx context.Context, method, addr, password, route string, out any) error {
-	req, err := http.NewRequestWithContext(ctx, method, "http://"+addr+route, nil)
+// adminRequest sends a request to the admin API route, encoding body as JSON
+// when it is not nil, and decodes the JSON response into out when out is not
+// nil. Cancellation is driven by ctx alone, with no client timeout, since some
+// operations can block for a long time.
+func adminRequest(ctx context.Context, method, addr, password, route string, body, out any) error {
+	var reqBody io.Reader
+	if body != nil {
+		buf, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("failed to encode request: %w", err)
+		}
+		reqBody = bytes.NewReader(buf)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, "http://"+addr+route, reqBody)
 	if err != nil {
 		return fmt.Errorf("failed to build request: %w", err)
 	}
 	req.SetBasicAuth("", password)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
