@@ -251,8 +251,8 @@ type Store interface {
 	PutBucketTagging(bucket s3.BucketID, tags s3.TagSet) error
 	DeleteBucketTagging(bucket s3.BucketID) error
 	GetObjectTagging(bucket s3.BucketID, name string, version s3.VersionRequest) (s3.ObjectTagging, error)
-	PutObjectTagging(bucket s3.BucketID, name string, version s3.VersionRequest, tags s3.TagSet) error
-	DeleteObjectTagging(bucket s3.BucketID, name string, version s3.VersionRequest) error
+	PutObjectTagging(bucket s3.BucketID, name string, version s3.VersionRequest, tags s3.TagSet) (string, error)
+	DeleteObjectTagging(bucket s3.BucketID, name string, version s3.VersionRequest) (string, error)
 	ObjectsCursor() (slabs.Cursor, error)
 	SetObjectsCursor(cursor slabs.Cursor) error
 	ListBuckets(accessKeyID string) ([]s3.BucketInfo, error)

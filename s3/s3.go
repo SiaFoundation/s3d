@@ -402,10 +402,9 @@ type Backend interface {
 	//
 	// - If the current version is a delete marker, [ErrNoSuchKey] must be
 	//   returned; if an addressed version is one, [ErrMethodNotAllowed].
-	PutObjectTagging(ctx context.Context, bucket BucketID, object string, version VersionRequest, tags TagSet) error
+	PutObjectTagging(ctx context.Context, bucket BucketID, object string, version VersionRequest, tags TagSet) (*ObjectTaggingResult, error)
 
-	// GetObjectTagging returns the tag set of the addressed version, with the
-	// version addressed explicitly so a later call acts on the same one.
+	// GetObjectTagging returns the tag set of the addressed version.
 	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
 	//
@@ -425,7 +424,7 @@ type Backend interface {
 	//
 	// - If the current version is a delete marker, [ErrNoSuchKey] must be
 	//   returned; if an addressed version is one, [ErrMethodNotAllowed].
-	DeleteObjectTagging(ctx context.Context, bucket BucketID, object string, version VersionRequest) error
+	DeleteObjectTagging(ctx context.Context, bucket BucketID, object string, version VersionRequest) (*ObjectTaggingResult, error)
 
 	// ListObjectVersions lists all versions (including delete markers) of the
 	// objects in the specified bucket.

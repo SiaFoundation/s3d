@@ -790,7 +790,7 @@ func TestMigrationTagging(t *testing.T) {
 	defer migrated.Close()
 
 	tags := s3.TagSet{{Key: "project", Value: "one"}}
-	if err := migrated.PutObjectTagging(1, "obj", s3.NoVersion(), tags); err != nil {
+	if _, err := migrated.PutObjectTagging(1, "obj", s3.NoVersion(), tags); err != nil {
 		t.Fatal(err)
 	} else if tagging, err := migrated.GetObjectTagging(1, "obj", s3.NoVersion()); err != nil {
 		t.Fatal(err)
