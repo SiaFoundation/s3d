@@ -62,7 +62,8 @@ the file specified by the S3D_CONFIG_FILE environment variable.`
 
 Register this s3d instance with the indexer and obtain an app key. Set
 S3D_PREAUTHORIZED_KEY to a pre-authorized key in hex to skip approving the
-connection in the browser.`
+connection in the browser. S3D_INDEXER_URL and S3D_RECOVERY_PHRASE answer the
+prompts when set.`
 )
 
 var cfg = Config{

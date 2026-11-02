@@ -48,9 +48,9 @@ func runLoginCmd(ctx context.Context, configPath string) {
 
 	fmt.Println("This command will register s3d with the Sia indexer.")
 	if preAuthorizedKey != nil {
-		fmt.Println("You will be prompted for a recovery phrase. The app connection is approved with the pre-authorized key from " + preAuthorizedKeyEnvVar + ".")
+		fmt.Println("The app connection is approved with the pre-authorized key from " + preAuthorizedKeyEnvVar + ".")
 	} else {
-		fmt.Println("You will be prompted for a recovery phrase and asked to visit a URL to approve the app connection.")
+		fmt.Println("You will be asked to visit a URL to approve the app connection.")
 	}
 	fmt.Println("")
 
@@ -65,8 +65,14 @@ func runLoginCmd(ctx context.Context, configPath string) {
 		checkFatalError("failed to check app key", err)
 	}
 
-	indexerURL := promptIndexerURL()
-	phrase := promptRecoveryPhrase()
+	indexerURL := os.Getenv(indexerURLEnvVar)
+	if indexerURL == "" {
+		indexerURL = promptIndexerURL()
+	}
+	phrase := os.Getenv(recoveryPhraseEnvVar)
+	if phrase == "" {
+		phrase = promptRecoveryPhrase()
+	}
 
 	var sdkClient *sdk.SDK
 	if preAuthorizedKey != nil {

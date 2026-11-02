@@ -53,14 +53,14 @@ approve the app connection and complete setup.
 If you have a pre-authorized key, export it as hex in `S3D_PREAUTHORIZED_KEY`
 before running `s3d login`. The app connection is then approved without
 visiting a URL. The key is minted on the indexer, expires and is good for a
-limited number of uses. Your recovery phrase is still prompted for.
+limited number of uses. `S3D_RECOVERY_PHRASE` and `S3D_INDEXER_URL` answer the
+remaining prompts when they are set.
 
-To register without a terminal, write the config file by hand and start
+To register without a terminal at all, write the config file by hand and start
 `s3d -env` instead of running `s3d login`. When no app key is stored yet it
-registers with the pre-authorized key in `S3D_PREAUTHORIZED_KEY`, the recovery
-phrase in `S3D_RECOVERY_PHRASE` and the indexer in `S3D_INDEXER_URL`, which
-defaults to `https://sia.storage`, and then starts the gateway. It exits with an
-error when one of them is missing. Once the app key is stored the variables are
+registers from the same three variables, with the indexer defaulting to
+`https://sia.storage`, and then starts the gateway. It exits with an error when
+the key or the phrase is missing. Once the app key is stored the variables are
 no longer read.
 
 To update the configuration later, run
@@ -510,9 +510,9 @@ file and CLI flags. The order of precedence from lowest to highest is:
 |----------|-------------|
 | `S3D_CONFIG_FILE` | Override the config file path |
 | `S3D_DATA_DIR` | Override the data directory |
-| `S3D_PREAUTHORIZED_KEY` | Pre-authorized key in hex, read by `s3d login` and `s3d -env` to skip the browser approval |
-| `S3D_RECOVERY_PHRASE` | Recovery phrase `s3d -env` registers with |
-| `S3D_INDEXER_URL` | Indexer `s3d -env` registers with (default `https://sia.storage`) |
+| `S3D_PREAUTHORIZED_KEY` | Pre-authorized key in hex, skips the browser approval in `s3d login` and `s3d -env` |
+| `S3D_RECOVERY_PHRASE` | Recovery phrase to register with, answers the prompt in `s3d login` |
+| `S3D_INDEXER_URL` | Indexer to register with, answers the prompt in `s3d login` (default `https://sia.storage`) |
 
 ### Example Config
 
