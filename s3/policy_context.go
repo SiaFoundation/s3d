@@ -159,7 +159,7 @@ func (a *bucketAccess) actionPolicyContext(action string) (policyContext, error)
 			}
 			extra["s3:max-keys"] = []string{strconv.FormatInt(maxKeys, 10)}
 		}
-	case actionGetObjectVersion, actionDeleteObjectVersion:
+	case actionGetObjectVersion, actionGetObjectVersionAttributes, actionDeleteObjectVersion:
 		if version := VersionFromQuery(query["versionId"]); version.Specified {
 			extra["s3:versionid"] = []string{FormatVersion(version.ID)}
 		}

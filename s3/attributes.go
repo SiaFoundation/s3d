@@ -110,6 +110,11 @@ func (s *s3) getObjectAttributes(w http.ResponseWriter, r *http.Request, access 
 		zap.String("object", object),
 		zap.String("version", version.LogValue()))
 
+	// S3 requires the attributes action alongside the read action the route
+	// already checked
+	if err := access.assertObjectAllowed(attributesAction(version), object); err != nil {
+		return err
+	}
 	requested, err := parseObjectAttributes(r.Header)
 	if err != nil {
 		return err
