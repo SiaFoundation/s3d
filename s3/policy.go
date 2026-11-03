@@ -49,6 +49,8 @@ const (
 const (
 	actionGetObject                        = "s3:GetObject"
 	actionGetObjectVersion                 = "s3:GetObjectVersion"
+	actionGetObjectAttributes              = "s3:GetObjectAttributes"
+	actionGetObjectVersionAttributes       = "s3:GetObjectVersionAttributes"
 	actionPutObject                        = "s3:PutObject"
 	actionDeleteObject                     = "s3:DeleteObject"
 	actionDeleteObjectVersion              = "s3:DeleteObjectVersion"
@@ -99,6 +101,15 @@ func readAction(version VersionRequest) string {
 		return actionGetObjectVersion
 	}
 	return actionGetObject
+}
+
+// attributesAction returns the action a GetObjectAttributes request requires
+// on top of [readAction], as S3 grants the two separately.
+func attributesAction(version VersionRequest) string {
+	if version.Specified {
+		return actionGetObjectVersionAttributes
+	}
+	return actionGetObjectAttributes
 }
 
 // deleteAction returns the action a delete of the given version requires, as
