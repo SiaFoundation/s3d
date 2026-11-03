@@ -1057,6 +1057,16 @@ func TestScheduledSnapshots(t *testing.T) {
 	assertScheduled(2)
 	backend.RunScheduledSnapshot(ctx, failedAt.Add(sia.ScheduledSnapshotRetryDelay))
 	assertScheduled(3)
+
+	// a count changed while the snapshot was taken is applied by its prune
+	sched.KeepDaily = 1
+	setSchedule(sched)
+	memSDK.SetPinHook(func(*sdk.Object) {
+		sched.KeepDaily = 0
+		setSchedule(sched)
+	})
+	backend.RunScheduledSnapshot(ctx, base.AddDate(0, 0, 6))
+	assertScheduled(4)
 }
 
 // TestScheduledSnapshotLoop verifies the background loop takes nothing before

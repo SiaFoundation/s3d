@@ -226,7 +226,7 @@ func (s *Sia) runScheduledSnapshot(ctx context.Context, now time.Time) {
 	if !now.Before(s.snapshotRetryAt) {
 		s.takeScheduledSnapshot(ctx, now, sched, cronSched)
 	}
-	s.pruneScheduledSnapshots(ctx, now, sched)
+	s.pruneScheduledSnapshots(ctx, now)
 }
 
 // takeScheduledSnapshot takes a snapshot when the schedule fired since it was
@@ -244,7 +244,13 @@ func (s *Sia) takeScheduledSnapshot(ctx context.Context, now time.Time, sched Sn
 
 // pruneScheduledSnapshots deletes the scheduled snapshots the retention counts
 // do not keep.
-func (s *Sia) pruneScheduledSnapshots(ctx context.Context, now time.Time, sched SnapshotSchedule) {
+func (s *Sia) pruneScheduledSnapshots(ctx context.Context, now time.Time) {
+	// the schedule may have changed while the snapshot was taken
+	sched, err := s.store.SnapshotSchedule()
+	if err != nil {
+		s.logger.Error("failed to load snapshot schedule", zap.Error(err))
+		return
+	}
 	snapshots, err := s.store.ListSnapshots()
 	if err != nil {
 		s.logger.Error("failed to list snapshots", zap.Error(err))
