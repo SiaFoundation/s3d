@@ -50,10 +50,9 @@ s3d login
 register `s3d` with the Sia indexer. Visit the printed URL in your browser to
 approve the app connection and complete setup.
 
-If you have a pre-authorized key, export it as hex in `S3D_PREAUTHORIZED_KEY`
-before running `s3d login`. The app connection is then approved without
-visiting a URL. The key is minted on the indexer, expires and is good for a
-limited number of uses. Your recovery phrase is still prompted for.
+`S3D_INDEXER_URL`, `S3D_RECOVERY_PHRASE` and `S3D_PREAUTHORIZED_KEY` are used
+when set, by `s3d login` and by `s3d` itself on first start. Pass `-env` to
+fail instead of prompting when one is missing.
 
 To update the configuration later, run
 
@@ -110,12 +109,6 @@ volumes:
 
 ```sh
 docker compose run --rm s3d login
-```
-
-With a pre-authorized key the URL step is skipped:
-
-```sh
-docker compose run --rm -e S3D_PREAUTHORIZED_KEY=<hex> s3d login
 ```
 
 ### 3. Create a user and access key
@@ -458,6 +451,7 @@ generate one.
 | `-api.s3.https` | Address to serve the S3 API on over HTTPS (disabled by default, see [HTTPS](#https)) |
 | `-log.file.enabled` | Enable logging to a file (default `true`) |
 | `-log.stdout.enableANSI` | Enable ANSI color codes on stdout (default `true`, `false` on Windows) |
+| `-env` | Fail instead of prompting when an environment variable is missing |
 
 ### Subcommands
 
@@ -465,7 +459,7 @@ generate one.
 |---------|-------------|
 | `version` | Print the version, commit hash, and build date |
 | `config` | Launch the interactive configuration wizard |
-| `login` | Prompts for recovery phrase and registers `s3d` with the Sia indexer, approved in the browser or with `S3D_PREAUTHORIZED_KEY` |
+| `login` | Prompts for recovery phrase and registers `s3d` with the Sia indexer |
 | `status` | Print a basic overview of the background upload pipeline |
 | `users` | Manage S3 users (create, delete, list) |
 | `keys` | Manage S3 access keys (create, delete, list) |
@@ -501,7 +495,9 @@ file and CLI flags. The order of precedence from lowest to highest is:
 |----------|-------------|
 | `S3D_CONFIG_FILE` | Override the config file path |
 | `S3D_DATA_DIR` | Override the data directory |
-| `S3D_PREAUTHORIZED_KEY` | Pre-authorized key in hex, read by `s3d login` to skip the browser approval |
+| `S3D_INDEXER_URL` | Indexer to register with (default `https://sia.storage`) |
+| `S3D_RECOVERY_PHRASE` | Recovery phrase to register with |
+| `S3D_PREAUTHORIZED_KEY` | Pre-authorized key in hex, approves the app connection without the browser |
 
 ### Example Config
 

@@ -29,6 +29,8 @@ import (
 const (
 	configFileEnvVar       = "S3D_CONFIG_FILE"
 	dataDirEnvVar          = "S3D_DATA_DIR"
+	indexerURLEnvVar       = "S3D_INDEXER_URL"
+	recoveryPhraseEnvVar   = "S3D_RECOVERY_PHRASE"
 	preAuthorizedKeyEnvVar = "S3D_PREAUTHORIZED_KEY"
 
 	rootUsage = `Usage:
@@ -58,9 +60,7 @@ the file specified by the S3D_CONFIG_FILE environment variable.`
 
 	loginUsage = `Usage: s3d login
 
-Register this s3d instance with the indexer and obtain an app key. Set
-S3D_PREAUTHORIZED_KEY to a pre-authorized key in hex to skip approving the
-connection in the browser.`
+Register this s3d instance with the indexer and obtain an app key.`
 )
 
 var cfg = Config{
@@ -99,6 +99,8 @@ func main() {
 	rootCmd.StringVar(&cfg.ApiHttpsAddress, "api.s3.https", cfg.ApiHttpsAddress, "address to serve the S3 API on over HTTPS using a self-signed certificate (disabled if empty)")
 	rootCmd.BoolVar(&cfg.Log.File.Enabled, "log.file.enabled", cfg.Log.File.Enabled, "enable file logging")
 	rootCmd.BoolVar(&cfg.Log.StdOut.EnableANSI, "log.stdout.enableANSI", cfg.Log.StdOut.EnableANSI, "enable ANSI color codes")
+	var disableStdin bool
+	rootCmd.BoolVar(&disableStdin, "env", false, "fail instead of prompting when an environment variable is missing")
 	versionCmd := flagg.New("version", versionUsage)
 	configCmd := flagg.New("config", configUsage)
 	loginCmd := flagg.New("login", loginUsage)
@@ -200,7 +202,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		runLoginCmd(ctx, configPath)
+		runLoginCmd(ctx, configPath, disableStdin)
 		return
 	case statusCmd:
 		runStatus(ctx, statusCmd)
@@ -335,8 +337,17 @@ func main() {
 
 	appKey, indexerURL, err := store.AppKey()
 	if errors.Is(err, sqlite.ErrNoAppKey) {
-		os.Stderr.WriteString("No app key found. Please run 's3d login' to register the app.\n")
-		os.Exit(1)
+		if err := missingRegistrationEnv(); err != nil && !disableStdin {
+			os.Stderr.WriteString("No app key found. Please run 's3d login' to register the app.\n")
+			os.Exit(1)
+		} else if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		appKey, indexerURL, err = appKeyFromEnv(ctx)
+		checkFatalError("failed to register app", err)
+		checkFatalError("failed to store app key", store.SetAppKey(appKey, indexerURL))
+		log.Info("registered app with indexer", zap.String("indexerURL", indexerURL))
 	} else if err != nil {
 		checkFatalError("failed to get app key from database", err)
 	}

@@ -2,4 +2,4 @@
 default: minor
 ---
 
-# Support pre-authorized keys in `s3d login`
+# Register with a pre-authorized key from the environment
