@@ -33,11 +33,33 @@ func TestTagging(t *testing.T) {
 		t.Fatalf("expected object tags %v, got %v", tags, obj.Tags)
 	}
 
+	// an unversioned bucket reports no version for the current version
+	if versionID, err := store.PutObjectTagging(bid, "match", s3.NoVersion(), tags); err != nil {
+		t.Fatal(err)
+	} else if versionID != "" {
+		t.Fatalf("expected no version, got %q", versionID)
+	}
+	tagging, err := store.GetObjectTagging(bid, "match", s3.NoVersion())
+	if err != nil {
+		t.Fatal(err)
+	} else if tagging.VersionID != "" {
+		t.Fatalf("expected no version, got %q", tagging.VersionID)
+	} else if !reflect.DeepEqual(tagging.Tags, tags) {
+		t.Fatalf("expected tags %v, got %v", tags, tagging.Tags)
+	}
+
+	// but reports the null version when it is addressed
+	if versionID, err := store.PutObjectTagging(bid, "match", s3.SpecificVersion(""), tags); err != nil {
+		t.Fatal(err)
+	} else if versionID != s3.Null {
+		t.Fatalf("expected version %q, got %q", s3.Null, versionID)
+	}
+
 	// overwriting an unversioned object clears its previous tags
 	if _, _, err := store.PutObject(bid, "other", objects.PutOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	tagging, err := store.GetObjectTagging(bid, "other", s3.NoVersion())
+	tagging, err = store.GetObjectTagging(bid, "other", s3.NoVersion())
 	if err != nil {
 		t.Fatal(err)
 	} else if len(tagging.Tags) != 0 {
@@ -73,7 +95,7 @@ func TestTaggingCopySourceChanged(t *testing.T) {
 	}
 
 	// once the tags match again the copy takes them
-	if err := store.PutObjectTagging(bid, "a", s3.NoVersion(), tags); err != nil {
+	if _, err := store.PutObjectTagging(bid, "a", s3.NoVersion(), tags); err != nil {
 		t.Fatal(err)
 	} else if _, _, err := store.CopyObject(bid, "a", tagging.Version, bid, "a-copy", opts); err != nil {
 		t.Fatal(err)
@@ -101,8 +123,10 @@ func TestTaggingUnderObjectLock(t *testing.T) {
 
 	// a locked version's tags can still be replaced
 	tags := s3.TagSet{{Key: "key", Value: "value"}}
-	if err := store.PutObjectTagging(bid, "key", s3.NoVersion(), tags); err != nil {
+	if versionID, err := store.PutObjectTagging(bid, "key", s3.NoVersion(), tags); err != nil {
 		t.Fatal(err)
+	} else if versionID != version {
+		t.Fatalf("expected version %q, got %q", version, versionID)
 	}
 	tagging, err := store.GetObjectTagging(bid, "key", s3.NoVersion())
 	if err != nil {
@@ -114,8 +138,10 @@ func TestTaggingUnderObjectLock(t *testing.T) {
 	}
 
 	// and removed, without touching the lock
-	if err := store.DeleteObjectTagging(bid, "key", s3.NoVersion()); err != nil {
+	if versionID, err := store.DeleteObjectTagging(bid, "key", s3.NoVersion()); err != nil {
 		t.Fatal(err)
+	} else if versionID != version {
+		t.Fatalf("expected version %q, got %q", version, versionID)
 	}
 	obj, err := store.GetObject(bid, "key", s3.NoVersion(), nil)
 	if err != nil {

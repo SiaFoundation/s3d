@@ -38,8 +38,16 @@ type ObjectTagging struct {
 	// Version addresses the version explicitly, so a later call acts on the
 	// same one.
 	Version VersionRequest
-	// VersionID is the version ID a response reports, or "" for the current
-	// version of a bucket that never had versioning.
+	// VersionID is the wire-encoded version to report, or "" for the current
+	// version of an unversioned bucket.
+	VersionID string
+}
+
+// ObjectTaggingResult contains information about the result of a
+// PutObjectTagging or DeleteObjectTagging operation.
+type ObjectTaggingResult struct {
+	// VersionID is the wire-encoded version to report, or "" for the current
+	// version of an unversioned bucket.
 	VersionID string
 }
 
@@ -61,17 +69,20 @@ const (
 )
 
 // validate checks S3's tag limits, character set, reserved prefix and unique
-// keys.
+// keys. Keys differing only in case are rejected too: policy condition keys are
+// case insensitive, so such keys would share one and could not be evaluated
+// safely.
 func (tags TagSet) validate(limits tagLimits) error {
 	if len(tags) > limits.count {
 		return fmt.Errorf("at most %d tags are allowed: %w", limits.count, s3errs.ErrInvalidTag)
 	}
 	seen := make(map[string]bool)
 	for _, tag := range tags {
-		if seen[tag.Key] {
+		lower := strings.ToLower(tag.Key)
+		if seen[lower] {
 			return fmt.Errorf("duplicate tag key %q: %w", tag.Key, s3errs.ErrInvalidTag)
 		}
-		seen[tag.Key] = true
+		seen[lower] = true
 		if tag.Key == "" {
 			return fmt.Errorf("a tag key must not be empty: %w", s3errs.ErrInvalidTag)
 		} else if strings.HasPrefix(strings.ToLower(tag.Key), "aws:") {
@@ -351,10 +362,13 @@ func (s *s3) putObjectTagging(w http.ResponseWriter, r *http.Request, access *bu
 		return err
 	} else if bodyErr != nil {
 		return bodyErr
-	} else if err := s.backend.PutObjectTagging(r.Context(), access.bucketID, object, tagging.Version, tags); err != nil {
-		return err
+	} else if _, err := s.backend.PutObjectTagging(r.Context(), access.bucketID, object, tagging.Version, tags); err != nil {
+		// the authorized version may have been deleted since
+		return access.hideMissing(err, object)
 	}
-	setTaggingVersionHeader(w, tagging)
+	if tagging.VersionID != "" {
+		w.Header().Set("x-amz-version-id", tagging.VersionID)
+	}
 	return nil
 }
 
@@ -368,7 +382,9 @@ func (s *s3) getObjectTagging(w http.ResponseWriter, r *http.Request, access *bu
 	if err != nil {
 		return err
 	}
-	setTaggingVersionHeader(w, tagging)
+	if tagging.VersionID != "" {
+		w.Header().Set("x-amz-version-id", tagging.VersionID)
+	}
 	return writeXMLResponse(w, http.StatusOK, Tagging{
 		Xmlns:  "http://s3.amazonaws.com/doc/2006-03-01/",
 		TagSet: tagging.Tags,
@@ -384,11 +400,13 @@ func (s *s3) deleteObjectTagging(w http.ResponseWriter, r *http.Request, access 
 	tagging, err := s.authorizeObjectTagging(r, access, action, object, version, nil)
 	if err != nil {
 		return err
+	} else if _, err := s.backend.DeleteObjectTagging(r.Context(), access.bucketID, object, tagging.Version); err != nil {
+		// the authorized version may have been deleted since
+		return access.hideMissing(err, object)
 	}
-	if err := s.backend.DeleteObjectTagging(r.Context(), access.bucketID, object, tagging.Version); err != nil {
-		return err
+	if tagging.VersionID != "" {
+		w.Header().Set("x-amz-version-id", tagging.VersionID)
 	}
-	setTaggingVersionHeader(w, tagging)
 	w.WriteHeader(http.StatusNoContent)
 	return nil
 }
@@ -417,13 +435,6 @@ func (s *s3) authorizeVersion(r *http.Request, access *bucketAccess, action, obj
 		return ObjectTagging{}, err
 	}
 	return tagging, nil
-}
-
-// setTaggingVersionHeader reports the version a tagging request acted on.
-func setTaggingVersionHeader(w http.ResponseWriter, tagging ObjectTagging) {
-	if tagging.VersionID != "" {
-		w.Header().Set("x-amz-version-id", tagging.VersionID)
-	}
 }
 
 // isMissingOrDeleteMarker reports whether err is a backend's report that the

@@ -232,8 +232,9 @@ const (
 func requestTagPolicyContext(tags TagSet) policyContext {
 	extra := make(policyContext)
 	for _, tag := range tags {
-		key := requestObjectTagPrefix + strings.ToLower(tag.Key)
-		extra[key] = append(extra[key], tag.Value)
+		// TagSet.validate rejects keys differing only in case, so each tag
+		// has its own condition key
+		extra[requestObjectTagPrefix+strings.ToLower(tag.Key)] = []string{tag.Value}
 		extra["s3:requestobjecttagkeys"] = append(extra["s3:requestobjecttagkeys"], tag.Key)
 	}
 	return extra
@@ -247,8 +248,7 @@ func existingTagPolicyContext(tags TagSet) policyContext {
 	}
 	extra := make(policyContext)
 	for _, tag := range tags {
-		key := existingObjectTagPrefix + strings.ToLower(tag.Key)
-		extra[key] = append(extra[key], tag.Value)
+		extra[existingObjectTagPrefix+strings.ToLower(tag.Key)] = []string{tag.Value}
 	}
 	return extra
 }
@@ -375,12 +375,14 @@ var validConditionKeys = map[string]bool{
 }
 
 // conditionKeyPrefixes are the condition keys that take a tag key suffix.
+// s3:BucketTag is left out, so a policy using it is rejected. Unlike other keys
+// s3d cannot populate, it does not evaluate as missing: s3d stores bucket tags,
+// so a policy would expect them to apply.
 var conditionKeyPrefixes = []string{
 	"aws:principaltag/",
 	"aws:requesttag/",
 	"aws:resourcetag/",
 	"s3:accesspointtag/",
-	"s3:buckettag/",
 	existingObjectTagPrefix,
 	requestObjectTagPrefix,
 }

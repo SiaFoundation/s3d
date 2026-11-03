@@ -336,7 +336,7 @@ included in their `ListBuckets` response.
 `aws:userid` and `aws:PrincipalAccount` are the username, or `anonymous` for
 unsigned requests. `aws:PrincipalArn` is `arn:aws:iam::<username>:root`.
 Condition keys for unsupported features evaluate as missing. Unknown condition
-keys are rejected.
+keys are rejected, as is `s3:BucketTag`.
 
 This policy allows `alice` to read and write objects under `alice/`:
 
@@ -398,9 +398,8 @@ delete with nothing to delete is a no-op, as an unconditional one is.
 | DeleteBucketLifecycle | ✓ | |
 | GetBucketCors | ✗ | |
 | PutBucketCors | ✗ | |
-| GetBucketTagging | ✓ | |
-| PutBucketTagging | ✓ | Up to 50 tags; replaces the complete set |
-| DeleteBucketTagging | ✓ | |
+| GetBucketTagging | ✗ | |
+| PutBucketTagging | ✗ | |
 | GetBucketEncryption | ✗ | |
 | PutBucketEncryption | ✗ | |
 | PublicAccessBlock | ✗ | |
@@ -419,9 +418,8 @@ delete with nothing to delete is a no-op, as an unconditional one is.
 | ListObjectVersions | ✓ | |
 | GetObjectAcl | ✗ | |
 | PutObjectAcl | ✗ | |
-| GetObjectTagging | ✓ | Current and explicit versions |
-| PutObjectTagging | ✓ | Up to 10 tags per version; replaces the complete set |
-| DeleteObjectTagging | ✓ | Current and explicit versions |
+| GetObjectTagging | ✗ | |
+| PutObjectTagging | ✗ | |
 | GetObjectRetention | ✓ | |
 | PutObjectRetention | ◐ | `EventHold` and `EventHoldDuration` are rejected |
 | GetObjectLegalHold | ✓ | |
