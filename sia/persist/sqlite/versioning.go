@@ -40,6 +40,15 @@ func reportedDeleteVersion(status, v string) string {
 	return s3.FormatVersion(v)
 }
 
+// reportedTaggingVersion is the version ID to report for a tagging request. An
+// unversioned bucket reports nothing unless the request addressed a version.
+func reportedTaggingVersion(status, v string, specified bool) string {
+	if status == "" && !specified {
+		return ""
+	}
+	return s3.FormatVersion(v)
+}
+
 // objectMutationResult carries every effect of a write or delete transition the
 // caller must observe.
 type objectMutationResult struct {

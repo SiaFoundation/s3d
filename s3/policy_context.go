@@ -228,6 +228,10 @@ func objectLockPolicyContext(lock *ObjectLockState) policyContext {
 	return extra
 }
 
+// requestObjectTagPrefix prefixes the condition key of each tag a request
+// applies to an object.
+const requestObjectTagPrefix = "s3:requestobjecttag/"
+
 // requestObjectTagPolicyContext returns the condition keys of a tag set the
 // request applies to an object.
 func requestObjectTagPolicyContext(tags TagSet) policyContext {
@@ -235,10 +239,9 @@ func requestObjectTagPolicyContext(tags TagSet) policyContext {
 	keys := make([]string, 0, len(tags))
 	for _, tag := range tags {
 		keys = append(keys, tag.Key)
-		// condition keys are case insensitive but tag keys are not, so keys
-		// differing only in case share a condition key
-		key := "s3:requestobjecttag/" + strings.ToLower(tag.Key)
-		extra[key] = append(extra[key], tag.Value)
+		// TagSet.validate rejects keys differing only in case, so each tag
+		// has its own condition key
+		extra[requestObjectTagPrefix+strings.ToLower(tag.Key)] = []string{tag.Value}
 	}
 	extra["s3:requestobjecttagkeys"] = keys
 	return extra
@@ -366,14 +369,15 @@ var validConditionKeys = map[string]bool{
 }
 
 // conditionKeyPrefixes are the condition keys that take a tag key suffix.
+// s3:BucketTag and s3:ExistingObjectTag are left out, so a policy using them is
+// rejected. Unlike other keys s3d cannot populate, they do not evaluate as
+// missing: s3d stores those tags, so a policy would expect them to apply.
 var conditionKeyPrefixes = []string{
 	"aws:principaltag/",
 	"aws:requesttag/",
 	"aws:resourcetag/",
 	"s3:accesspointtag/",
-	"s3:buckettag/",
-	"s3:existingobjecttag/",
-	"s3:requestobjecttag/",
+	requestObjectTagPrefix,
 }
 
 // validConditionKey reports whether key is a known condition key, ignoring

@@ -57,50 +57,58 @@ func (s *Store) GetObjectTagging(bucket s3.BucketID, name string, version s3.Ver
 		if err != nil {
 			return err
 		}
-		versionID, err := taggableVersion(tx, bid, name, version)
+		v, err := taggableVersion(tx, bid, name, version)
 		if err != nil {
 			return err
 		}
-		tags, err := objectTags(tx, bid, name, versionID)
+		tags, err := objectTags(tx, bid, name, v)
 		if err != nil {
 			return err
 		}
 		tagging = s3.ObjectTagging{
 			Tags:      tags,
-			Version:   s3.SpecificVersion(versionID),
-			VersionID: reportedTaggingVersion(status, versionID, version.Specified),
+			Version:   s3.SpecificVersion(v),
+			VersionID: reportedTaggingVersion(status, v, version.Specified),
 		}
 		return nil
 	})
 	return
 }
 
-// PutObjectTagging replaces the tag set of the addressed version. It creates no
-// version and changes neither the version's last-modified time nor its lock.
-func (s *Store) PutObjectTagging(bucket s3.BucketID, name string, version s3.VersionRequest, tags s3.TagSet) error {
-	return s.transaction(func(tx *txn) error {
-		bid, err := existingBucketID(tx, bucket)
+// PutObjectTagging replaces the tag set of the addressed version and returns
+// the wire-encoded version ID to report. It creates no version and changes
+// neither the version's last-modified time nor its lock.
+func (s *Store) PutObjectTagging(bucket s3.BucketID, name string, version s3.VersionRequest, tags s3.TagSet) (versionID string, err error) {
+	err = s.transaction(func(tx *txn) error {
+		versionID = "" // reset if the transaction retries
+
+		bid, status, err := bucketIDAndVersioning(tx, bucket)
 		if err != nil {
 			return err
 		}
-		versionID, err := taggableVersion(tx, bid, name, version)
+		v, err := taggableVersion(tx, bid, name, version)
 		if err != nil {
 			return err
+		} else if err := setObjectTags(tx, bid, name, v, tags); err != nil {
+			return err
 		}
-		return setObjectTags(tx, bid, name, versionID, tags)
+		versionID = reportedTaggingVersion(status, v, version.Specified)
+		return nil
 	})
+	return
 }
 
-// DeleteObjectTagging removes the tag set of the addressed version.
-func (s *Store) DeleteObjectTagging(bucket s3.BucketID, name string, version s3.VersionRequest) error {
+// DeleteObjectTagging removes the tag set of the addressed version and returns
+// the wire-encoded version ID to report.
+func (s *Store) DeleteObjectTagging(bucket s3.BucketID, name string, version s3.VersionRequest) (versionID string, err error) {
 	return s.PutObjectTagging(bucket, name, version, nil)
 }
 
 // taggableVersion resolves the addressed version, or the current version when
 // the request addresses none, to its internal version ID.
-func taggableVersion(tx *txn, bid int64, name string, version s3.VersionRequest) (string, error) {
-	versionID, _, _, _, err := objectLockRow(tx, bid, name, version)
-	return versionID, err
+func taggableVersion(tx *txn, bid int64, name string, version s3.VersionRequest) (versionID string, err error) {
+	versionID, _, _, _, err = objectLockRow(tx, bid, name, version)
+	return
 }
 
 // objectTags returns the tags of an object version.
@@ -152,13 +160,4 @@ func queryTags(tx *txn, query string, args ...any) (tags s3.TagSet, err error) {
 		tags = append(tags, tag)
 	}
 	return tags, rows.Err()
-}
-
-// reportedTaggingVersion is the version ID to report for a tagging request:
-// none for the current version of a bucket that never had versioning.
-func reportedTaggingVersion(status, v string, specified bool) string {
-	if status == "" && !specified {
-		return ""
-	}
-	return s3.FormatVersion(v)
 }

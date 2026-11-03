@@ -27,11 +27,19 @@ func (s *Sia) GetObjectTagging(ctx context.Context, bucket s3.BucketID, object s
 }
 
 // PutObjectTagging replaces the tag set of the addressed version.
-func (s *Sia) PutObjectTagging(ctx context.Context, bucket s3.BucketID, object string, version s3.VersionRequest, tags s3.TagSet) error {
-	return s.store.PutObjectTagging(bucket, object, version, tags)
+func (s *Sia) PutObjectTagging(ctx context.Context, bucket s3.BucketID, object string, version s3.VersionRequest, tags s3.TagSet) (*s3.ObjectTaggingResult, error) {
+	versionID, err := s.store.PutObjectTagging(bucket, object, version, tags)
+	if err != nil {
+		return nil, err
+	}
+	return &s3.ObjectTaggingResult{VersionID: versionID}, nil
 }
 
 // DeleteObjectTagging removes the tag set of the addressed version.
-func (s *Sia) DeleteObjectTagging(ctx context.Context, bucket s3.BucketID, object string, version s3.VersionRequest) error {
-	return s.store.DeleteObjectTagging(bucket, object, version)
+func (s *Sia) DeleteObjectTagging(ctx context.Context, bucket s3.BucketID, object string, version s3.VersionRequest) (*s3.ObjectTaggingResult, error) {
+	versionID, err := s.store.DeleteObjectTagging(bucket, object, version)
+	if err != nil {
+		return nil, err
+	}
+	return &s3.ObjectTaggingResult{VersionID: versionID}, nil
 }

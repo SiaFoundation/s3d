@@ -297,11 +297,11 @@ func TestTagSetValidate(t *testing.T) {
 	}{
 		{"empty set", nil, objectTagLimits, nil},
 		{"empty value", TagSet{{Key: "key", Value: ""}}, objectTagLimits, nil},
-		{"case sensitive", TagSet{{Key: "Key", Value: "one"}, {Key: "key", Value: "two"}}, objectTagLimits, nil},
 		{"unicode", TagSet{{Key: "日本語", Value: "Résumé 123 _.:/=+@-"}}, objectTagLimits, nil},
 		{"separator spaces", TagSet{{Key: "key", Value: "a b c　d"}}, objectTagLimits, nil},
 		{"empty key", TagSet{{Key: "", Value: "value"}}, objectTagLimits, s3errs.ErrInvalidTag},
 		{"duplicate key", TagSet{{Key: "key", Value: "one"}, {Key: "key", Value: "two"}}, objectTagLimits, s3errs.ErrInvalidTag},
+		{"keys differing only in case", TagSet{{Key: "classification", Value: "public"}, {Key: "Classification", Value: "secret"}}, objectTagLimits, s3errs.ErrInvalidTag},
 		{"reserved prefix", TagSet{{Key: "aws:owner", Value: "one"}}, objectTagLimits, s3errs.ErrInvalidTag},
 		{"reserved prefix uppercase", TagSet{{Key: "AWS:owner", Value: "one"}}, bucketTagLimits, s3errs.ErrInvalidTag},
 		{"invalid character", TagSet{{Key: "key", Value: "value&"}}, objectTagLimits, s3errs.ErrInvalidTag},

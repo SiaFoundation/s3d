@@ -790,11 +790,44 @@ func TestMigrationTagging(t *testing.T) {
 	defer migrated.Close()
 
 	tags := s3.TagSet{{Key: "project", Value: "one"}}
-	if err := migrated.PutObjectTagging(1, "obj", s3.NoVersion(), tags); err != nil {
+	if _, err := migrated.PutObjectTagging(1, "obj", s3.NoVersion(), tags); err != nil {
 		t.Fatal(err)
 	} else if tagging, err := migrated.GetObjectTagging(1, "obj", s3.NoVersion()); err != nil {
 		t.Fatal(err)
 	} else if !reflect.DeepEqual(tagging.Tags, tags) {
 		t.Fatalf("expected tags %v, got %v", tags, tagging.Tags)
+	}
+}
+
+func TestMigrationMultipartUploadTags(t *testing.T) {
+	log := zaptest.NewLogger(t)
+	fp := filepath.Join(t.TempDir(), "s3d.sqlite3")
+
+	const multipartTagsVersion = 17
+	store := initDBVersion(t, fp, multipartTagsVersion-1, log)
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	migrated, err := OpenDatabase(fp, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer migrated.Close()
+
+	uploadID := s3.NewUploadID()
+	tags := s3.TagSet{{Key: "project", Value: "one"}}
+	if err := migrated.CreateMultipartUpload(1, "obj", uploadID, nil, tags, nil); err != nil {
+		t.Fatal(err)
+	}
+	var got s3.TagSet
+	err = migrated.transaction(func(tx *txn) (err error) {
+		got, err = queryTags(tx, `SELECT tag_key, tag_value FROM multipart_upload_tags WHERE upload_id = $1 ORDER BY position`, sqlUploadID(uploadID))
+		return
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if !reflect.DeepEqual(got, tags) {
+		t.Fatalf("expected tags %v, got %v", tags, got)
 	}
 }
