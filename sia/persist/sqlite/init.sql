@@ -143,15 +143,6 @@ CREATE TABLE multipart_parts (
     PRIMARY KEY (upload_id, part_number)
 );
 
-CREATE TABLE multipart_upload_tags (
-    upload_id BLOB NOT NULL,
-    position INTEGER NOT NULL, -- keeps the order the client gave
-    tag_key TEXT NOT NULL,
-    tag_value TEXT NOT NULL,
-    FOREIGN KEY (upload_id) REFERENCES multipart_uploads(upload_id) ON DELETE CASCADE,
-    PRIMARY KEY (upload_id, tag_key)
-) WITHOUT ROWID;
-
 CREATE TABLE object_parts (
     bucket_id INTEGER NOT NULL,
     name TEXT NOT NULL,
