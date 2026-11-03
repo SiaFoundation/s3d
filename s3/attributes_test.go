@@ -349,7 +349,8 @@ func TestGetObjectAttributes(t *testing.T) {
 		t.Fatal("unexpected", got)
 	}
 
-	// a bucket policy grants an anonymous caller the same read
+	// a bucket policy grants an anonymous caller the read, which needs both
+	// s3:GetObject and s3:GetObjectAttributes
 	anon := s3Tester.Anonymous()
 	_, err = anon.Client().GetObjectAttributes(t.Context(), &service.GetObjectAttributesInput{
 		Bucket:           aws.String(bucket),
@@ -358,18 +359,31 @@ func TestGetObjectAttributes(t *testing.T) {
 	})
 	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
 
-	policy := fmt.Sprintf(`{
+	policy := func(actions string) string {
+		return fmt.Sprintf(`{
   "Version": "2012-10-17",
   "Statement": [
     {
       "Effect": "Allow",
       "Principal": "*",
-      "Action": "s3:GetObject",
+      "Action": %s,
       "Resource": "arn:aws:s3:::%s/*"
     }
   ]
-}`, bucket)
-	if err := s3Tester.PutBucketPolicy(t.Context(), bucket, policy); err != nil {
+}`, actions, bucket)
+	}
+	for _, actions := range []string{`"s3:GetObject"`, `"s3:GetObjectAttributes"`} {
+		if err := s3Tester.PutBucketPolicy(t.Context(), bucket, policy(actions)); err != nil {
+			t.Fatal(err)
+		}
+		_, err = anon.Client().GetObjectAttributes(t.Context(), &service.GetObjectAttributesInput{
+			Bucket:           aws.String(bucket),
+			Key:              aws.String(multipartKey),
+			ObjectAttributes: allAttributes,
+		})
+		testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+	}
+	if err := s3Tester.PutBucketPolicy(t.Context(), bucket, policy(`["s3:GetObject", "s3:GetObjectAttributes"]`)); err != nil {
 		t.Fatal(err)
 	}
 
