@@ -313,7 +313,6 @@ func TestCreateSnapshot(t *testing.T) {
 	}
 }
 
-// TestInvalidCredentials tests that API calls with invalid credentials fail.
 // adminRequest sends a request to the admin API test server, encoding body as
 // JSON when it is not nil.
 func adminRequest(t *testing.T, httpClient *http.Client, method, url string, body any) *http.Response {
@@ -523,6 +522,7 @@ func TestAccessKeys(t *testing.T) {
 	}
 }
 
+// TestInvalidCredentials tests that API calls with invalid credentials fail.
 func TestInvalidCredentials(t *testing.T) {
 	s3Tester := testutil.NewTester(t, testutil.WithServiceOptions(func(o *service.Options) {
 		o.Credentials = aws.NewCredentialsCache(&credentials.StaticCredentialsProvider{
