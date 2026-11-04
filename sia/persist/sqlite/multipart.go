@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -52,9 +53,11 @@ func (s *Store) CreateMultipartUpload(bucket s3.BucketID, name string, uploadID 
 // object's ID has no remaining references, it is inserted into the
 // orphaned_objects table. If the overwrite leaves a previously pending file
 // unreferenced, its filename is returned so the caller can remove it from disk.
-func (s *Store) CompleteMultipartUpload(bucket s3.BucketID, name string, uploadID s3.UploadID, parts []objects.Part, checksum *s3.ObjectChecksum, preconditions s3.ObjectPreconditions) (versionID string, orphan objects.OrphanedFile, _ error) {
+// Uploaded parts the completion does not name are dropped from the upload and
+// returned so the caller can remove them from disk as well.
+func (s *Store) CompleteMultipartUpload(bucket s3.BucketID, name string, uploadID s3.UploadID, parts []objects.Part, checksum *s3.ObjectChecksum, preconditions s3.ObjectPreconditions) (versionID string, orphan objects.OrphanedFile, dropped []objects.Part, _ error) {
 	err := s.transaction(func(tx *txn) error {
-		versionID, orphan = "", objects.OrphanedFile{} // reset per attempt
+		versionID, orphan, dropped = "", objects.OrphanedFile{}, nil // reset per attempt
 		bid, status, err := bucketIDAndVersioning(tx, bucket)
 		if err != nil {
 			return err
@@ -77,24 +80,32 @@ func (s *Store) CompleteMultipartUpload(bucket s3.BucketID, name string, uploadI
 		if len(parts) == 0 {
 			return errors.New("cannot complete multipart upload with no parts")
 		}
+		uploaded, err := uploadedParts(tx, uploadID)
+		if err != nil {
+			return err
+		}
 		md5Hash := md5.New()
 		var contentLength int64
 		for i, part := range parts {
-			var row objects.Part
-			err := tx.QueryRow(`SELECT filename, content_md5, content_length, checksum FROM multipart_parts WHERE upload_id = $1 AND part_number = $2`,
-				sqlUploadID(uploadID), part.PartNumber).Scan(&row.Filename, (*sqlMD5)(&row.ContentMD5), &row.Size, &row.Checksum)
-			if errors.Is(err, sql.ErrNoRows) {
+			row, ok := uploaded[part.PartNumber]
+			if !ok {
 				return s3errs.ErrInvalidPart
-			} else if err != nil {
-				return err
 			} else if row.Filename != part.Filename || row.ContentMD5 != part.ContentMD5 || row.Size != part.Size || !bytes.Equal(row.Checksum, part.Checksum) {
 				return s3errs.ErrInvalidPart
 			} else if i < len(parts)-1 && row.Size < s3.MinUploadPartSize {
 				return s3errs.ErrEntityTooSmall
 			}
+			delete(uploaded, part.PartNumber)
 			md5Hash.Write(row.ContentMD5[:])
 			contentLength += row.Size
 		}
+
+		// what the completion does not name leaves with the upload
+		for _, row := range uploaded {
+			dropped = append(dropped, row)
+		}
+		slices.SortFunc(dropped, func(a, b objects.Part) int { return a.PartNumber - b.PartNumber })
+
 		var contentMD5 [16]byte
 		copy(contentMD5[:], md5Hash.Sum(nil))
 
@@ -117,12 +128,18 @@ func (s *Store) CompleteMultipartUpload(bucket s3.BucketID, name string, uploadI
 			return err
 		}
 
+		insertPart, err := tx.Prepare(`
+			INSERT INTO object_parts (bucket_id, name, version_id, part_number, filename, content_md5, content_length, offset, checksum)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		`)
+		if err != nil {
+			return err
+		}
+		defer insertPart.Close()
+
 		var offset int64
 		for _, part := range parts {
-			if _, err := tx.Exec(`
-				INSERT INTO object_parts (bucket_id, name, version_id, part_number, filename, content_md5, content_length, offset, checksum)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-			`, bid, name, res.dbVersionID, part.PartNumber, part.Filename, sqlMD5(part.ContentMD5), part.Size, offset, part.Checksum); err != nil {
+			if _, err := insertPart.Exec(bid, name, res.dbVersionID, part.PartNumber, part.Filename, sqlMD5(part.ContentMD5), part.Size, offset, part.Checksum); err != nil {
 				return err
 			}
 			offset += part.Size
@@ -139,7 +156,28 @@ func (s *Store) CompleteMultipartUpload(bucket s3.BucketID, name string, uploadI
 		versionID, orphan = res.reportVersionID, res.orphanFile
 		return nil
 	})
-	return versionID, orphan, err
+	return versionID, orphan, dropped, err
+}
+
+func uploadedParts(tx *txn, uploadID s3.UploadID) (map[int]objects.Part, error) {
+	rows, err := tx.Query(`
+		SELECT part_number, filename, content_md5, content_length, checksum
+		FROM multipart_parts
+		WHERE upload_id = $1`, sqlUploadID(uploadID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	parts := make(map[int]objects.Part)
+	for rows.Next() {
+		var part objects.Part
+		if err := rows.Scan(&part.PartNumber, &part.Filename, (*sqlMD5)(&part.ContentMD5), &part.Size, &part.Checksum); err != nil {
+			return nil, err
+		}
+		parts[part.PartNumber] = part
+	}
+	return parts, rows.Err()
 }
 
 // AbortMultipartUpload removes a multipart upload from the store and returns

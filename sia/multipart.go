@@ -505,11 +505,14 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, bucket s3.BucketID, o
 	}
 
 	// complete the multipart upload in the database
-	versionID, orphan, err := s.store.CompleteMultipartUpload(bucket, object, uploadID, completed, checksum, opts.Preconditions)
+	versionID, orphan, dropped, err := s.store.CompleteMultipartUpload(bucket, object, uploadID, completed, checksum, opts.Preconditions)
 	if err != nil {
 		return nil, fmt.Errorf("failed to complete multipart upload in store: %w", err)
 	}
 	s.cleanupOrphanFile(orphan)
+	for _, part := range dropped {
+		s.cleanupOrphan(s.multipartPartPath(uploadID, part.PartNumber), part.Size)
+	}
 
 	// calculate ETag
 	etag := s3.FormatETag(contentMD5[:], len(completed))
