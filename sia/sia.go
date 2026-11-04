@@ -151,6 +151,16 @@ func WithUploadDeadline(d time.Duration) Option {
 	}
 }
 
+// WithUploadShardCounts records the configured erasure-code shard counts for
+// upload failure diagnostics. The SDK redundancy itself is configured
+// independently through its upload options.
+func WithUploadShardCounts(dataShards, parityShards uint8) Option {
+	return func(s *Sia) {
+		s.uploadDataShards = dataShards
+		s.uploadParityShards = parityShards
+	}
+}
+
 // Sia implements the s3.Backend interface for storing data on Sia.
 type Sia struct {
 	sdk   SDK
@@ -170,8 +180,10 @@ type Sia struct {
 	uploadDisabled    bool
 	uploadOptimalSize int64
 	uploadWastePct    float64
-	uploadThreads     int
-	uploadDeadline    time.Duration
+	uploadThreads      int
+	uploadDeadline     time.Duration
+	uploadDataShards   uint8
+	uploadParityShards uint8
 
 	lifecycleLoopInterval time.Duration
 	lifecycleDayDuration  time.Duration
@@ -315,6 +327,8 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		uploadWastePct:        DefaultUploadWastePct,
 		uploadThreads:         DefaultUploadThreads,
 		uploadDeadline:        DefaultUploadDeadline,
+		uploadDataShards:      10,
+		uploadParityShards:    20,
 		lifecycleLoopInterval: defaultLifecycleLoopInterval,
 		lifecycleDayDuration:  defaultLifecycleDayDuration,
 		diskUsageTimeout:      defaultDiskUsageTimeout,
