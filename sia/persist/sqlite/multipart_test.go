@@ -365,7 +365,7 @@ func TestCompleteMultipartUpload(t *testing.T) {
 	if _, _, err := store.AddMultipartPart(bid, object, uid, "part-2b", 2, frand.Entropy128(), 5, frand.Bytes(32)); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.CompleteMultipartUpload(bid, object, uid, stale, nil, s3.ObjectPreconditions{}); !errors.Is(err, s3errs.ErrInvalidPart) {
+	if _, _, _, err := store.CompleteMultipartUpload(bid, object, uid, stale, nil, s3.ObjectPreconditions{}); !errors.Is(err, s3errs.ErrInvalidPart) {
 		t.Fatal("expected ErrInvalidPart, got", err)
 	}
 	store.assertCount(1, "multipart_uploads")
@@ -373,7 +373,7 @@ func TestCompleteMultipartUpload(t *testing.T) {
 	parts[1] = mustMultipartParts(t, store, bid, object, uid)[1]
 
 	checksum := &s3.ObjectChecksum{Algorithm: s3.ChecksumSHA256, Type: s3.ChecksumTypeComposite, Value: "x=-2"}
-	if _, _, err := store.CompleteMultipartUpload(bid, object, uid, mustMultipartParts(t, store, bid, object, uid), checksum, s3.ObjectPreconditions{}); err != nil {
+	if _, _, _, err := store.CompleteMultipartUpload(bid, object, uid, mustMultipartParts(t, store, bid, object, uid), checksum, s3.ObjectPreconditions{}); err != nil {
 		t.Fatal(err)
 	}
 

@@ -585,6 +585,104 @@ func TestCompleteMultipartUpload(t *testing.T) {
 	}
 }
 
+func TestCompleteMultipartUploadSubset(t *testing.T) {
+	log := zap.NewNop()
+	dir := t.TempDir()
+	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	if err := store.CreateUser(testutil.Owner); err != nil {
+		t.Fatal(err)
+	} else if err := store.CreateAccessKey(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey); err != nil {
+		t.Fatal(err)
+	}
+
+	backend, err := sia.New(t.Context(), testutil.NewMemorySDK(), store, dir,
+		sia.WithUploadDisabled(),
+		sia.WithLogger(log))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { backend.Close() })
+	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
+
+	const (
+		bucket = "subset-bucket"
+		object = "object"
+	)
+
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := s3Tester.CreateMultipartUpload(t.Context(), bucket, object, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uploadID := *res.UploadId
+
+	// upload three parts and name only the first two on completion
+	body := bytes.Repeat([]byte("a"), int(s3.MinUploadPartSize))
+	var completedParts []s3Types.CompletedPart
+	for number := int32(1); number <= 3; number++ {
+		up, err := s3Tester.UploadPart(t.Context(), bucket, object, uploadID, number, body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if number < 3 {
+			completedParts = append(completedParts, s3Types.CompletedPart{PartNumber: aws.Int32(number), ETag: up.ETag})
+		}
+	}
+
+	stats, err := backend.UploadStats(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	} else if stats.BufferUsed != 3*s3.MinUploadPartSize {
+		t.Fatal("unexpected", stats.BufferUsed)
+	}
+
+	if _, err := s3Tester.CompleteMultipartUpload(t.Context(), bucket, object, uploadID, completedParts); err != nil {
+		t.Fatal(err)
+	}
+
+	// the dropped part leaves the disk and the reservation with it
+	if _, err := os.Stat(filepath.Join(dir, sia.UploadsDirectory, uploadID, "3")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatal("unexpected", err)
+	}
+
+	stats, err = backend.UploadStats(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	} else if stats.BufferUsed != 2*s3.MinUploadPartSize {
+		t.Fatal("unexpected", stats.BufferUsed)
+	}
+
+	objRes, err := s3Tester.GetObject(t.Context(), bucket, object, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := io.ReadAll(objRes.Body)
+	if err != nil {
+		t.Fatal(err)
+	} else if int64(len(data)) != 2*s3.MinUploadPartSize {
+		t.Fatal("unexpected", len(data))
+	}
+
+	if err := s3Tester.DeleteObject(t.Context(), bucket, object); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err = backend.UploadStats(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	} else if stats.BufferUsed != 0 {
+		t.Fatal("unexpected", stats.BufferUsed)
+	}
+}
+
 func TestMultipartUpload(t *testing.T) {
 	log := zap.NewNop()
 	dir := t.TempDir()
