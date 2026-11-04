@@ -176,10 +176,10 @@ type Sia struct {
 	diskUsageWake chan struct{}
 	diskUsage     uint64
 
-	uploadMu          sync.Mutex
-	uploadDisabled    bool
-	uploadOptimalSize int64
-	uploadWastePct    float64
+	uploadMu           sync.Mutex
+	uploadDisabled     bool
+	uploadOptimalSize  int64
+	uploadWastePct     float64
 	uploadThreads      int
 	uploadDeadline     time.Duration
 	uploadDataShards   uint8
