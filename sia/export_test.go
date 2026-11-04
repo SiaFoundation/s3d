@@ -64,6 +64,11 @@ func (s *Sia) RunScheduledSnapshot(ctx context.Context, now time.Time) { //nolin
 	s.runScheduledSnapshot(ctx, now)
 }
 
+// PruneScheduledSnapshots exports pruneScheduledSnapshots for testing.
+func (s *Sia) PruneScheduledSnapshots(ctx context.Context, now time.Time) { //nolint:revive
+	s.pruneScheduledSnapshots(ctx, now)
+}
+
 // ExpiredScheduledSnapshots exports expiredScheduledSnapshots for testing.
 func ExpiredScheduledSnapshots(snapshots []s3.Snapshot, sched SnapshotSchedule, loc *time.Location) []s3.Snapshot {
 	return expiredScheduledSnapshots(snapshots, sched, loc)

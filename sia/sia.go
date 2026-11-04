@@ -48,6 +48,10 @@ const (
 	// snapshot loop checks whether a snapshot is due.
 	scheduledSnapshotInterval = time.Minute
 
+	// scheduledSnapshotPruneInterval is the interval at which the scheduled
+	// snapshot loop applies retention.
+	scheduledSnapshotPruneInterval = time.Hour
+
 	// scheduledSnapshotRetryDelay is how long the scheduled snapshot loop
 	// waits after a failed attempt before trying again.
 	scheduledSnapshotRetryDelay = time.Hour
@@ -184,9 +188,8 @@ type Sia struct {
 	lifecycleLoopInterval time.Duration
 	lifecycleDayDuration  time.Duration
 
-	snapshotRetryAt      time.Time
-	snapshotRetrySched   SnapshotSchedule
-	snapshotPruneRetryAt time.Time
+	snapshotRetryAt    time.Time
+	snapshotRetrySched SnapshotSchedule
 
 	pinMu   sync.Mutex
 	pinWake chan struct{}

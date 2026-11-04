@@ -1025,16 +1025,15 @@ func TestScheduledSnapshots(t *testing.T) {
 		t.Fatal("expected a new snapshot")
 	}
 
-	// a count is applied without taking a snapshot, every row was created
-	// today so one daily keeps only the newest, and a manual snapshot is
-	// never pruned
+	// every row was created today so one daily keeps only the newest, and a
+	// manual snapshot is never pruned
 	manual, err := backend.CreateSnapshot(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	sched.KeepDaily = 1
 	setSchedule(sched)
-	backend.RunScheduledSnapshot(ctx, base.Add(time.Hour))
+	backend.PruneScheduledSnapshots(ctx, base.Add(time.Hour))
 	if snapshots := assertScheduled(1); snapshots[0].SiaObjectID != third.SiaObjectID {
 		t.Fatal("expected the newest snapshot to be kept")
 	} else if memSDK.Pinned(first.SiaObjectID) {
@@ -1047,6 +1046,7 @@ func TestScheduledSnapshots(t *testing.T) {
 	sched.KeepDaily = 0
 	setSchedule(sched)
 	backend.RunScheduledSnapshot(ctx, base.AddDate(0, 0, 4))
+	backend.PruneScheduledSnapshots(ctx, base.AddDate(0, 0, 4))
 	assertScheduled(2)
 
 	// a failed attempt is retried only after the retry delay
@@ -1060,7 +1060,7 @@ func TestScheduledSnapshots(t *testing.T) {
 	backend.RunScheduledSnapshot(ctx, failedAt.Add(sia.ScheduledSnapshotRetryDelay))
 	assertScheduled(3)
 
-	// a count changed while the snapshot was taken is applied by its prune
+	// a count changed while the snapshot was taken is applied by the prune
 	sched.KeepDaily = 1
 	setSchedule(sched)
 	memSDK.SetPinHook(func(*sdk.Object) {
@@ -1068,6 +1068,7 @@ func TestScheduledSnapshots(t *testing.T) {
 		setSchedule(sched)
 	})
 	backend.RunScheduledSnapshot(ctx, base.AddDate(0, 0, 6))
+	backend.PruneScheduledSnapshots(ctx, base.AddDate(0, 0, 6))
 	assertScheduled(4)
 
 	// a schedule replaced after a failure is attempted without waiting out the
@@ -1082,18 +1083,14 @@ func TestScheduledSnapshots(t *testing.T) {
 	backend.RunScheduledSnapshot(ctx, failedAt.Add(2*time.Minute))
 	assertScheduled(5)
 
-	// a failed prune is retried only after the retry delay, the next slot is
-	// two hours out so no pass takes a snapshot of its own
+	// a failed prune leaves the snapshots to the next pass
 	prunedAt := failedAt.Add(3 * time.Minute)
-	slot = prunedAt.Add(2 * time.Hour)
-	setSchedule(sia.SnapshotSchedule{Expression: fmt.Sprintf("%d %d * * *", slot.Minute(), slot.Hour()), Since: prunedAt, KeepDaily: 1})
+	setSchedule(sia.SnapshotSchedule{Expression: sched.Expression, Since: prunedAt, KeepDaily: 1})
 	memSDK.SetDeleteError(errors.New("unpin failed"))
-	backend.RunScheduledSnapshot(ctx, prunedAt)
+	backend.PruneScheduledSnapshots(ctx, prunedAt)
 	assertScheduled(5)
 	memSDK.SetDeleteError(nil)
-	backend.RunScheduledSnapshot(ctx, prunedAt.Add(time.Minute))
-	assertScheduled(5)
-	backend.RunScheduledSnapshot(ctx, prunedAt.Add(sia.ScheduledSnapshotRetryDelay))
+	backend.PruneScheduledSnapshots(ctx, prunedAt.Add(time.Hour))
 	assertScheduled(1)
 }
 
@@ -1144,7 +1141,7 @@ func TestScheduledSnapshotAdvanceFailure(t *testing.T) {
 
 // TestScheduledSnapshotLoop verifies the background loop takes nothing before
 // the slot, snapshots when it passes, and once a day after that, pruning to
-// the retention count each time.
+// the retention count on the hourly pass that follows.
 func TestScheduledSnapshotLoop(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		memSDK := testutil.NewMemorySDK()
@@ -1198,9 +1195,9 @@ func TestScheduledSnapshotLoop(t *testing.T) {
 		synctest.Wait()
 		id := assertSnapshot(types.Hash256{})
 
-		// then once a day
+		// then once a day, pruned by the hourly pass after it
 		for range 3 {
-			time.Sleep(24 * time.Hour)
+			time.Sleep(24*time.Hour + time.Hour)
 			synctest.Wait()
 			id = assertSnapshot(id)
 		}

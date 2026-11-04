@@ -191,23 +191,25 @@ func DownloadSnapshot(ctx context.Context, sdk SDK, snap RemoteSnapshot, w io.Wr
 // snapshotsLoop takes snapshots on the stored schedule and applies its
 // retention.
 func (s *Sia) snapshotsLoop(ctx context.Context) {
-	t := time.NewTicker(scheduledSnapshotInterval)
-	defer t.Stop()
+	snapshotTicker := time.NewTicker(scheduledSnapshotInterval)
+	defer snapshotTicker.Stop()
+	pruneTicker := time.NewTicker(scheduledSnapshotPruneInterval)
+	defer pruneTicker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-t.C:
+		case <-snapshotTicker.C:
+			s.runScheduledSnapshot(ctx, time.Now())
+		case <-pruneTicker.C:
+			s.pruneScheduledSnapshots(ctx, time.Now())
 		}
-
-		s.runScheduledSnapshot(ctx, time.Now())
 	}
 }
 
 // runScheduledSnapshot takes a snapshot when the stored schedule fired since
-// it was set or last took one and prunes the scheduled snapshots retention no
-// longer keeps, once object metadata is synced.
+// it was set or last took one, once object metadata is synced.
 func (s *Sia) runScheduledSnapshot(ctx context.Context, now time.Time) {
 	sched, err := s.store.SnapshotSchedule()
 	if err != nil {
@@ -233,7 +235,6 @@ func (s *Sia) runScheduledSnapshot(ctx context.Context, now time.Time) {
 	if !now.Before(s.snapshotRetryAt) {
 		s.takeScheduledSnapshot(ctx, now, sched, cronSched)
 	}
-	s.pruneScheduledSnapshots(ctx, now)
 }
 
 // takeScheduledSnapshot takes a snapshot when the schedule fired since it was
@@ -258,15 +259,17 @@ func (s *Sia) takeScheduledSnapshot(ctx context.Context, now time.Time, sched Sn
 }
 
 // pruneScheduledSnapshots deletes the scheduled snapshots the retention counts
-// do not keep.
+// do not keep, once object metadata is synced.
 func (s *Sia) pruneScheduledSnapshots(ctx context.Context, now time.Time) {
-	if now.Before(s.snapshotPruneRetryAt) {
+	if !s.synced.Load() {
+		s.logger.Debug("deferring scheduled snapshot pruning until object metadata is synced")
 		return
 	}
-	// the schedule may have changed while the snapshot was taken
 	sched, err := s.store.SnapshotSchedule()
 	if err != nil {
 		s.logger.Error("failed to load snapshot schedule", zap.Error(err))
+		return
+	} else if sched.Expression == "" {
 		return
 	}
 	snapshots, err := s.store.ListSnapshots()
@@ -279,8 +282,6 @@ func (s *Sia) pruneScheduledSnapshots(ctx context.Context, now time.Time) {
 			return
 		} else if err := s.DeleteSnapshot(ctx, snap.SiaObjectID); err != nil {
 			s.logger.Error("failed to prune scheduled snapshot", zap.Stringer("objectID", &snap.SiaObjectID), zap.Error(err))
-			s.snapshotPruneRetryAt = now.Add(scheduledSnapshotRetryDelay)
-			return
 		}
 	}
 }
