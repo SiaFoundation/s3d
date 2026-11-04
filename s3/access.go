@@ -100,13 +100,12 @@ func (s *s3) authorize(r *http.Request, caller *auth.Caller, bucket, object stri
 		// the handler checks the action once the body, copy source or
 		// addressed version supplies its keys
 		err = access.assertAnyAllowedInBucket(op.action)
+	case isObjectAction(op.action) && access.usesExistingTags(op.action):
+		// serveObject checks the read against the tags of the version it
+		// looks up
+		err = access.assertAnyAllowedInBucket(op.action)
 	case isObjectAction(op.action):
-		// a read's handler rechecks it against the version it serves
-		var existing TagSet
-		existing, err = s.existingTags(r, access, op.action, object, VersionFromQuery(r.URL.Query()["versionId"]))
-		if err == nil {
-			err = access.assertObjectContextAllowed(op.action, object, existingTagPolicyContext(existing))
-		}
+		err = access.assertObjectAllowed(op.action, object)
 	default:
 		err = access.assertBucketAllowed(op.action)
 	}

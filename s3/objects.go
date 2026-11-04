@@ -454,6 +454,7 @@ func (s *s3) serveObject(w http.ResponseWriter, r *http.Request, access *bucketA
 	}
 
 	// retrieve object (HEAD fetches metadata only)
+	action := readAction(version)
 	var obj *Object
 	if head {
 		obj, err = s.backend.HeadObject(r.Context(), access.bucketID, object, version, rnge, partNumber)
@@ -461,6 +462,16 @@ func (s *s3) serveObject(w http.ResponseWriter, r *http.Request, access *bucketA
 		obj, err = s.backend.GetObject(r.Context(), access.bucketID, object, version, rnge, partNumber)
 	}
 	if err != nil {
+		if access.usesExistingTags(action) {
+			// authorize left the read to be checked against the version's
+			// tags, so check it before revealing why the lookup failed
+			existing, tagsErr := s.existingTags(r, access, action, object, version)
+			if tagsErr != nil {
+				return tagsErr
+			} else if denied := access.assertObjectContextAllowed(action, object, existingTagPolicyContext(existing)); denied != nil {
+				return denied
+			}
+		}
 		return access.hideMissing(err, object)
 	}
 	// the body is only consumed on the successful GET path below; close it on
@@ -470,6 +481,12 @@ func (s *s3) serveObject(w http.ResponseWriter, r *http.Request, access *bucketA
 			obj.Body.Close()
 		}
 	}()
+
+	// check the read against the tags of the version served, which authorize
+	// may not have known. A delete marker has none.
+	if err := access.assertObjectContextAllowed(action, object, existingTagPolicyContext(obj.Tags)); err != nil {
+		return err
+	}
 
 	// a delete marker has no data and cannot be retrieved with GET or HEAD.
 	if obj.IsDeleteMarker {
@@ -481,11 +498,6 @@ func (s *s3) serveObject(w http.ResponseWriter, r *http.Request, access *bucketA
 			}
 		}
 		return deleteMarkerError(w, obj, version)
-	}
-
-	// recheck the read against the tags of the version served
-	if err := access.assertObjectContextAllowed(readAction(version), object, existingTagPolicyContext(obj.Tags)); err != nil {
-		return err
 	}
 
 	// write headers
