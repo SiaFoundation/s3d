@@ -717,15 +717,33 @@ func TestMultipartChecksum(t *testing.T) {
 		t.Fatalf("expected checksum %s, got %s", fullObjectCRC32, got)
 	}
 
-	// an upload created without an algorithm stores no checksum
+	// an upload created without an algorithm has nothing to check a completion
+	// against, so one that names a digest is refused rather than accepted
+	// unverified
 	const plainKey = "plain"
 	plainID := createChecksumUpload(plainKey, "", "")
 	plainETag := uploadChecksumPart(plainKey, plainID, 1, data, nil)
-	if _, err := completeChecksumUpload(plainKey, plainID, []types.CompletedPart{{
+	plainPart := types.CompletedPart{PartNumber: aws.Int32(1), ETag: plainETag}
+
+	_, err = completeChecksumUpload(plainKey, plainID, []types.CompletedPart{{
 		PartNumber:     aws.Int32(1),
 		ETag:           plainETag,
 		ChecksumSHA256: aws.String(partSHA256),
-	}}, nil); err != nil {
+	}}, nil)
+	testutil.AssertS3Error(t, s3errs.ErrInvalidRequest, err)
+
+	_, err = completeChecksumUpload(plainKey, plainID, []types.CompletedPart{plainPart}, func(in *service.CompleteMultipartUploadInput) {
+		in.ChecksumSHA256 = aws.String(partSHA256)
+	})
+	testutil.AssertS3Error(t, s3errs.ErrInvalidRequest, err)
+
+	_, err = completeChecksumUpload(plainKey, plainID, []types.CompletedPart{plainPart}, func(in *service.CompleteMultipartUploadInput) {
+		in.ChecksumType = types.ChecksumTypeFullObject
+	})
+	testutil.AssertS3Error(t, s3errs.ErrInvalidRequest, err)
+
+	// an upload created without an algorithm stores no checksum
+	if _, err := completeChecksumUpload(plainKey, plainID, []types.CompletedPart{plainPart}, nil); err != nil {
 		t.Fatal(err)
 	}
 
