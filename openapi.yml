@@ -14,6 +14,8 @@ tags:
     description: Background upload pipeline statistics for monitoring.
   - name: uploads
     description: Background upload pipeline control.
+  - name: repack
+    description: Slab waste analysis and repacking.
   - name: system
     description: System administration endpoints.
 paths:
@@ -49,6 +51,99 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/UploadStats"
+  /repack:
+    get:
+      tags:
+        - repack
+      summary: Open the slab repacker admin page
+      responses:
+        "200":
+          description: HTML slab repacker interface.
+          content:
+            text/html:
+              schema:
+                type: string
+  /repack/preview:
+    get:
+      tags:
+        - repack
+      summary: Preview slab waste and a repack plan
+      parameters:
+        - in: query
+          name: maxSlabFillPercent
+          schema:
+            type: number
+            format: double
+            default: 10
+        - in: query
+          name: maxObjectSize
+          schema:
+            type: integer
+            format: int64
+            default: 10485760
+          description: Maximum full logical object size to rewrite, in bytes.
+        - in: query
+          name: reuploadBudget
+          schema:
+            type: integer
+            format: int64
+            default: 1073741824
+          description: Maximum total full-object bytes to rewrite, in bytes.
+      responses:
+        "200":
+          description: Current waste statistics and the selected repack plan.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepackPreview"
+        "400":
+          description: Invalid preview options.
+  /repack/status:
+    get:
+      tags:
+        - repack
+      summary: Get slab repack job status
+      responses:
+        "200":
+          description: Current or most recent repack job.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepackStatus"
+  /repack/start:
+    post:
+      tags:
+        - repack
+      summary: Start a background slab repack
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RepackOptions"
+      responses:
+        "200":
+          description: Repack job started.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepackStatus"
+        "400":
+          description: Invalid options or no slabs matched.
+        "409":
+          description: A repack job is already running.
+  /repack/cancel:
+    post:
+      tags:
+        - repack
+      summary: Cancel the active slab repack
+      responses:
+        "200":
+          description: Current repack status after requesting cancellation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepackStatus"
   /objects/flush:
     post:
       tags:
@@ -226,6 +321,117 @@ components:
         finalizing:
           type: boolean
           description: Whether every object has been handed over and the group is being finalized on the Sia network.
+    RepackOptions:
+      type: object
+      description: Limits used to select sparse slabs for repacking.
+      properties:
+        maxSlabFillPercent:
+          type: number
+          format: double
+          default: 10
+          description: Select slabs whose live occupancy is below this percentage.
+        maxObjectSize:
+          type: integer
+          format: int64
+          default: 10485760
+          description: Maximum full logical size of an object that may be rewritten.
+        reuploadBudget:
+          type: integer
+          format: int64
+          default: 1073741824
+          description: Maximum total full-object bytes selected for one repack job.
+    RepackPreview:
+      type: object
+      properties:
+        options:
+          $ref: "#/components/schemas/RepackOptions"
+        slabs:
+          type: integer
+        logicalCapacity:
+          type: integer
+          format: int64
+        liveBytes:
+          type: integer
+          format: int64
+        logicalWaste:
+          type: integer
+          format: int64
+        wastePercent:
+          type: number
+          format: double
+        physicalCapacity:
+          type: integer
+          format: int64
+        physicalWaste:
+          type: integer
+          format: int64
+        candidateSlabs:
+          type: integer
+        selectedSlabs:
+          type: integer
+        objectsToRewrite:
+          type: integer
+        rewriteBytes:
+          type: integer
+          format: int64
+        estimatedLogicalReclaim:
+          type: integer
+          format: int64
+        estimatedPhysicalReclaim:
+          type: integer
+          format: int64
+        busySlabs:
+          type: integer
+        skippedLargeSlabs:
+          type: integer
+        skippedBudgetSlabs:
+          type: integer
+    RepackStatus:
+      type: object
+      properties:
+        state:
+          type: string
+          enum: [idle, running, completed, failed, canceled]
+        phase:
+          type: string
+          description: Current repack phase, such as rewriting, finalizing, pinning, committing, or cleanup.
+        options:
+          $ref: "#/components/schemas/RepackOptions"
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+        objectsTotal:
+          type: integer
+        objectsCompleted:
+          type: integer
+        currentObject:
+          type: string
+          description: Representative bucket/key for the Sia object currently being processed.
+        currentObjectID:
+          type: string
+          description: Sia object ID currently being processed.
+        currentObjectIndex:
+          type: integer
+        currentObjectSize:
+          type: integer
+          format: int64
+        rewriteBytes:
+          type: integer
+          format: int64
+        rewrittenBytes:
+          type: integer
+          format: int64
+        estimatedLogicalReclaim:
+          type: integer
+          format: int64
+        estimatedPhysicalReclaim:
+          type: integer
+          format: int64
+        error:
+          type: string
     Snapshot:
       type: object
       description: A database snapshot uploaded to Sia.
