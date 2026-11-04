@@ -191,6 +191,10 @@ type Sia struct {
 
 	transfer transferStats
 
+	repackMu     sync.Mutex
+	repackStatus s3.RepackStatus
+	repackCancel context.CancelFunc
+
 	tg     *threadgroup.ThreadGroup
 	logger *zap.Logger
 }
@@ -273,6 +277,11 @@ type Store interface {
 	ListParts(bucket s3.BucketID, name string, uploadID s3.UploadID, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error)
 	MultipartParts(bucket s3.BucketID, name string, uploadID s3.UploadID) ([]objects.Part, error)
 	UploadStats() (s3.UploadStats, error)
+
+	RepackSnapshot() (objects.RepackSnapshot, error)
+	SiaObject(id types.Hash256) (objects.SiaObject, error)
+	ReplaceSiaObjects(replacements []objects.RepackReplacement) error
+	QueueOrphanedObject(id types.Hash256) error
 
 	PutBucketLifecycleConfiguration(bucket s3.BucketID, config string) error
 	GetBucketLifecycleConfiguration(bucket s3.BucketID) (string, error)
