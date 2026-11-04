@@ -320,7 +320,12 @@ func (s *Sia) UploadStats(_ context.Context) (s3.UploadStats, error) {
 }
 
 func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
-	upload, err := s.sdk.UploadPacked(ctx, sdk.WithUploadProgress(s.shardProgress))
+	diagnostics := newUploadProgressDiagnostics()
+	progress := func(p sdk.ShardProgress) {
+		s.shardProgress(p)
+		diagnostics.record(p)
+	}
+	upload, err := s.sdk.UploadPacked(ctx, sdk.WithUploadProgress(progress))
 	if err != nil {
 		s.logger.Error("failed to create packed upload", zap.Error(err))
 		return fmt.Errorf("failed to create packed upload: %w", err)
@@ -375,7 +380,8 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 	results, err := upload.Finalize()
 	if err != nil {
 		s.failedUploads.Add(int64(len(objIdx)))
-		s.logger.Error("failed to finalize upload", zap.Error(err))
+		totalShards := int(s.uploadDataShards) + int(s.uploadParityShards)
+		diagnostics.logFailure(s.logger, group.slabs(), totalShards, err)
 		return err
 	} else if len(results) != len(objIdx) {
 		if n := int64(len(objIdx)) - int64(len(results)); n > 0 {
