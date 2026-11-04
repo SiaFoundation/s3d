@@ -59,6 +59,10 @@ func CombineChecksums(a ChecksumAlgorithm, parts []PartChecksum) ([]byte, error)
 
 	size := int(crc.width) / 8
 
+	// a multipart upload's parts share one length bar the last, so the
+	// operator each length needs is built once and reused
+	operators := make(map[int64][]uint64)
+
 	var combined uint64
 	for i, part := range parts {
 		if len(part.Sum) != size {
@@ -71,7 +75,13 @@ func CombineChecksums(a ChecksumAlgorithm, parts []PartChecksum) ([]byte, error)
 		} else {
 			sum = binary.BigEndian.Uint64(part.Sum)
 		}
-		combined = crcCombine(combined, sum, part.Length, crc.poly, crc.width)
+
+		operator, ok := operators[part.Length]
+		if !ok {
+			operator = crcCombineOperator(part.Length, crc.poly, crc.width)
+			operators[part.Length] = operator
+		}
+		combined = gf2MatrixTimes(operator, combined) ^ sum
 	}
 
 	if size == 4 {
@@ -80,9 +90,22 @@ func CombineChecksums(a ChecksumAlgorithm, parts []PartChecksum) ([]byte, error)
 	return binary.BigEndian.AppendUint64(nil, combined), nil
 }
 
-func crcCombine(crc1, crc2 uint64, len2 int64, poly uint64, width uint) uint64 {
+// crcCombineOperator returns the GF(2) matrix that advances a CRC over len2
+// zero bytes, so that gf2MatrixTimes(operator, crc1) ^ crc2 is the CRC of the
+// two runs concatenated. It is zlib's crc32_combine with the matrix
+// construction split out of the per-call path.
+func crcCombineOperator(len2 int64, poly uint64, width uint) []uint64 {
+	operator := make([]uint64, width)
+	for n := range operator {
+		operator[n] = 1 << uint(n)
+	}
+	if len2 <= 0 {
+		return operator
+	}
+
 	odd := make([]uint64, width)
 	even := make([]uint64, width)
+	scratch := make([]uint64, width)
 
 	odd[0] = poly
 	for n := uint(1); n < width; n++ {
@@ -91,10 +114,15 @@ func crcCombine(crc1, crc2 uint64, len2 int64, poly uint64, width uint) uint64 {
 	gf2MatrixSquare(even, odd)
 	gf2MatrixSquare(odd, even)
 
+	apply := func(mat []uint64) {
+		gf2MatrixMultiply(scratch, mat, operator)
+		copy(operator, scratch)
+	}
+
 	for len2 > 0 {
 		gf2MatrixSquare(even, odd)
 		if len2&1 != 0 {
-			crc1 = gf2MatrixTimes(even, crc1)
+			apply(even)
 		}
 
 		len2 >>= 1
@@ -104,12 +132,12 @@ func crcCombine(crc1, crc2 uint64, len2 int64, poly uint64, width uint) uint64 {
 
 		gf2MatrixSquare(odd, even)
 		if len2&1 != 0 {
-			crc1 = gf2MatrixTimes(odd, crc1)
+			apply(odd)
 		}
 		len2 >>= 1
 	}
 
-	return crc1 ^ crc2
+	return operator
 }
 
 // the GF(2) matrix routines of zlib's crc32_combine
@@ -124,8 +152,12 @@ func gf2MatrixTimes(mat []uint64, vec uint64) uint64 {
 	return sum
 }
 
-func gf2MatrixSquare(square, mat []uint64) {
-	for n := range mat {
-		square[n] = gf2MatrixTimes(mat, mat[n])
+func gf2MatrixMultiply(product, a, b []uint64) {
+	for n := range b {
+		product[n] = gf2MatrixTimes(a, b[n])
 	}
+}
+
+func gf2MatrixSquare(square, mat []uint64) {
+	gf2MatrixMultiply(square, mat, mat)
 }
