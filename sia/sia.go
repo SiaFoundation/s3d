@@ -151,6 +151,16 @@ func WithUploadDeadline(d time.Duration) Option {
 	}
 }
 
+// WithUploadShardCounts records the configured erasure-code shard counts for
+// upload failure diagnostics. The SDK redundancy itself is configured
+// independently through its upload options.
+func WithUploadShardCounts(dataShards, parityShards uint8) Option {
+	return func(s *Sia) {
+		s.uploadDataShards = dataShards
+		s.uploadParityShards = parityShards
+	}
+}
+
 // Sia implements the s3.Backend interface for storing data on Sia.
 type Sia struct {
 	sdk   SDK
@@ -166,12 +176,14 @@ type Sia struct {
 	diskUsageWake chan struct{}
 	diskUsage     uint64
 
-	uploadMu          sync.Mutex
-	uploadDisabled    bool
-	uploadOptimalSize int64
-	uploadWastePct    float64
-	uploadThreads     int
-	uploadDeadline    time.Duration
+	uploadMu           sync.Mutex
+	uploadDisabled     bool
+	uploadOptimalSize  int64
+	uploadWastePct     float64
+	uploadThreads      int
+	uploadDeadline     time.Duration
+	uploadDataShards   uint8
+	uploadParityShards uint8
 
 	lifecycleLoopInterval time.Duration
 	lifecycleDayDuration  time.Duration
@@ -190,6 +202,10 @@ type Sia struct {
 	orphanWake chan struct{}
 
 	transfer transferStats
+
+	repackMu     sync.Mutex
+	repackStatus s3.RepackStatus
+	repackCancel context.CancelFunc
 
 	tg     *threadgroup.ThreadGroup
 	logger *zap.Logger
@@ -274,6 +290,11 @@ type Store interface {
 	MultipartParts(bucket s3.BucketID, name string, uploadID s3.UploadID) ([]objects.Part, error)
 	UploadStats() (s3.UploadStats, error)
 
+	RepackSnapshot() (objects.RepackSnapshot, error)
+	SiaObject(id types.Hash256) (objects.SiaObject, error)
+	ReplaceSiaObjects(replacements []objects.RepackReplacement) error
+	QueueOrphanedObject(id types.Hash256) error
+
 	PutBucketLifecycleConfiguration(bucket s3.BucketID, config string) error
 	GetBucketLifecycleConfiguration(bucket s3.BucketID) (string, error)
 	DeleteBucketLifecycleConfiguration(bucket s3.BucketID) error
@@ -306,6 +327,8 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		uploadWastePct:        DefaultUploadWastePct,
 		uploadThreads:         DefaultUploadThreads,
 		uploadDeadline:        DefaultUploadDeadline,
+		uploadDataShards:      10,
+		uploadParityShards:    20,
 		lifecycleLoopInterval: defaultLifecycleLoopInterval,
 		lifecycleDayDuration:  defaultLifecycleDayDuration,
 		diskUsageTimeout:      defaultDiskUsageTimeout,

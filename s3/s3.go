@@ -382,6 +382,16 @@ type Backend interface {
 	// UploadStats returns statistics about the background upload pipeline.
 	UploadStats(ctx context.Context) (UploadStats, error)
 
+	// RepackPreview calculates slab waste and a safe repack plan without
+	// changing live object metadata.
+	RepackPreview(ctx context.Context, opts RepackOptions) (RepackPreview, error)
+	// RepackStatus reports the current or most recent background repack job.
+	RepackStatus(ctx context.Context) (RepackStatus, error)
+	// StartRepack starts a background slab repack using the supplied limits.
+	StartRepack(ctx context.Context, opts RepackOptions) (RepackStatus, error)
+	// CancelRepack requests cancellation of the active slab repack.
+	CancelRepack(ctx context.Context) (RepackStatus, error)
+
 	// FlushObjects uploads all pending objects to Sia regardless of padding,
 	// rather than waiting for the background pipeline to batch them into
 	// efficiently packed slabs. It blocks until the uploads complete.
@@ -531,6 +541,11 @@ func NewAdmin(b Backend, opts ...Option) http.Handler {
 	return jape.Mux(map[string]jape.Handler{
 		"GET /prometheus":             s3.handlePrometheus,
 		"GET /stats/uploads":          s3.handleGetUploadStats,
+		"GET /repack":                 s3.handleRepackPage,
+		"GET /repack/preview":         s3.handleRepackPreview,
+		"GET /repack/status":          s3.handleRepackStatus,
+		"POST /repack/start":          s3.handleStartRepack,
+		"POST /repack/cancel":         s3.handleCancelRepack,
 		"POST /objects/flush":         s3.handleFlushObjects,
 		"POST /snapshots":             s3.handleCreateSnapshot,
 		"GET /snapshots":              s3.handleListSnapshots,

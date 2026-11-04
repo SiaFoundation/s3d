@@ -373,6 +373,7 @@ func main() {
 		sia.WithDiskUsageLimit(cfg.Sia.DiskUsageLimit),
 		sia.WithUploadThreads(cfg.Sia.UploadThreads),
 		sia.WithUploadDeadline(cfg.Sia.UploadDeadline),
+		sia.WithUploadShardCounts(cfg.Sia.DataShards, cfg.Sia.ParityShards),
 		sia.WithLogger(log.Named("backend")))
 	if err != nil {
 		checkFatalError("failed to create Sia backend", err)
