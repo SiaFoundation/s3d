@@ -379,11 +379,64 @@ func TestExpireNoncurrentVersions(t *testing.T) {
 		} else if deleted != 0 {
 			t.Fatalf("expected the size bound to exclude every version, got %d", deleted)
 		}
+		// a delete marker holds no data, so the bound does not keep it once a
+		// newer version pushes it noncurrent
+		marker, isMarker, _, err := store.DeleteObject(bid, s3.ObjectID{Key: key}, false)
+		if err != nil {
+			t.Fatal(err)
+		} else if !isMarker {
+			t.Fatal("expected a delete marker")
+		}
+		if _, _, err := store.PutObject(bid, key, objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 1, FileName: new(string)}); err != nil {
+			t.Fatal(err)
+		}
+		if deleted, _, err := store.ExpireNoncurrentVersions(bid, "logs/", size(1), nil, 0, time.Now(), 100); err != nil {
+			t.Fatal(err)
+		} else if deleted != 1 {
+			t.Fatalf("expected only the delete marker to expire, got %d", deleted)
+		} else if exists(bid, key, marker) {
+			t.Fatal("expected the noncurrent delete marker to be expired")
+		}
 		// a prefix that matches nothing also selects nothing
 		if deleted, _, err := store.ExpireNoncurrentVersions(bid, "other/", nil, nil, 0, time.Now(), 100); err != nil {
 			t.Fatal(err)
 		} else if deleted != 0 {
 			t.Fatalf("expected the prefix to exclude every version, got %d", deleted)
+		}
+	})
+
+	t.Run("ObjectLock", func(t *testing.T) {
+		bid, key, v := setup("locked")
+		if err := store.PutBucketObjectLockConfiguration(bid, s3.ObjectLockConfiguration{ObjectLockEnabled: s3.ObjectLockEnabled}); err != nil {
+			t.Fatal(err)
+		}
+		retention := s3.ObjectLockState{Mode: s3.ObjectLockModeCompliance, RetainUntil: time.Now().Add(time.Hour)}
+		if err := store.PutObjectRetention(bid, key, s3.SpecificVersion(v[0]), retention, false); err != nil {
+			t.Fatal(err)
+		} else if err := store.PutObjectLegalHold(bid, key, s3.SpecificVersion(v[1]), s3.LegalHoldOn); err != nil {
+			t.Fatal(err)
+		}
+		// the locked versions are skipped rather than failing the sweep
+		if deleted, _, err := store.ExpireNoncurrentVersions(bid, "logs/", nil, nil, 0, time.Now(), 100); err != nil {
+			t.Fatal(err)
+		} else if deleted != 1 {
+			t.Fatalf("expected only the unlocked version to expire, got %d", deleted)
+		} else if !exists(bid, key, v[0]) || !exists(bid, key, v[1]) {
+			t.Fatal("expected the locked versions to remain")
+		} else if exists(bid, key, v[2]) {
+			t.Fatal("expected the unlocked version to be expired")
+		}
+		// a lapsed retention and a lifted hold release them
+		if _, err := store.db.Exec(`UPDATE objects SET object_lock_retain_until = ? WHERE bucket_id = ? AND name = ? AND version_id = ?`,
+			time.Now().Add(-time.Hour).UnixMilli(), bid, key, v[0]); err != nil {
+			t.Fatal(err)
+		} else if err := store.PutObjectLegalHold(bid, key, s3.SpecificVersion(v[1]), s3.LegalHoldOff); err != nil {
+			t.Fatal(err)
+		}
+		if deleted, _, err := store.ExpireNoncurrentVersions(bid, "logs/", nil, nil, 0, time.Now(), 100); err != nil {
+			t.Fatal(err)
+		} else if deleted != 2 {
+			t.Fatalf("expected the released versions to expire, got %d", deleted)
 		}
 	})
 }

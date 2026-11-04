@@ -239,8 +239,9 @@ func (s *Store) ExpireObjects(bucket s3.BucketID, prefix string, sizeGreaterThan
 // whose key matches the prefix, whose size matches the bounds, that became
 // noncurrent at or before the cutoff, and that sit behind at least retain
 // newer noncurrent versions of the same key. A retain of 0 applies no such
-// bound. Returns the number of versions expired and performs no ownership
-// checks.
+// bound, delete markers are exempt from the size bounds, and a version under
+// retention or a legal hold is left alone. Returns the number of versions
+// expired and performs no ownership checks.
 func (s *Store) ExpireNoncurrentVersions(bucket s3.BucketID, prefix string, sizeGreaterThan, sizeLessThan *int64, retain int, before time.Time, limit int) (deleted int, orphans []objects.OrphanedFile, err error) {
 	err = s.transaction(func(tx *txn) error {
 		deleted = 0
@@ -251,18 +252,27 @@ func (s *Store) ExpireNoncurrentVersions(bucket s3.BucketID, prefix string, size
 			return err
 		}
 
-		where := []string{"o.bucket_id = ?", "o.is_latest = FALSE", "o.noncurrent_at <= ?"}
-		args := []any{bid, sqlTime(before)}
+		where := []string{
+			"o.bucket_id = ?",
+			"o.is_latest = FALSE",
+			"o.noncurrent_at <= ?",
+			// a version under a legal hold or an unexpired retention cannot be
+			// deleted, so it waits for a later sweep instead of failing this one
+			"o.object_lock_legal_hold != ?",
+			"(o.object_lock_mode = '' OR o.object_lock_retain_until < ?)",
+		}
+		args := []any{bid, sqlTime(before), s3.LegalHoldOn, time.Now().UnixMilli()}
 		if prefix != "" {
 			where = append(where, "o.name >= ? AND o.name < ?")
 			args = append(args, prefix, prefix+"\xFF")
 		}
+		// a delete marker holds no data, so the size bounds never exclude it
 		if sizeGreaterThan != nil {
-			where = append(where, "o.size > ?")
+			where = append(where, "(o.is_delete_marker = TRUE OR o.size > ?)")
 			args = append(args, *sizeGreaterThan)
 		}
 		if sizeLessThan != nil {
-			where = append(where, "o.size < ?")
+			where = append(where, "(o.is_delete_marker = TRUE OR o.size < ?)")
 			args = append(args, *sizeLessThan)
 		}
 		if retain > 0 {
