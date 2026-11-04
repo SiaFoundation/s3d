@@ -135,3 +135,16 @@ func TestBuildRepackPlanBusyObject(t *testing.T) {
 			plan.preview.SelectedSlabs, plan.preview.BusySlabs)
 	}
 }
+
+func TestRepackPhysicalSlabSize(t *testing.T) {
+	snapshot := objects.RepackSnapshot{Slabs: []objects.RepackSlab{
+		{MinShards: 24, TotalShards: 48},
+		{MinShards: 24, TotalShards: 60},
+		{MinShards: 10, TotalShards: 20},
+	}}
+	got := repackNewPhysicalSlabSize(snapshot, 24*int64(proto.SectorSize))
+	want := int64(60) * int64(proto.SectorSize)
+	if got != want {
+		t.Fatalf("expected conservative physical slab size %d, got %d", want, got)
+	}
+}
