@@ -206,9 +206,10 @@ CREATE TABLE global_settings (
 	snapshot_gen INTEGER NOT NULL DEFAULT 0,
 	snapshot_schedule TEXT NOT NULL DEFAULT '', -- cron expression, empty disables scheduled snapshots
 	snapshot_schedule_since INTEGER NOT NULL DEFAULT 0, -- the schedule was set or last took a snapshot
-	snapshot_keep_daily INTEGER NOT NULL DEFAULT 0,
-	snapshot_keep_weekly INTEGER NOT NULL DEFAULT 0,
-	snapshot_keep_monthly INTEGER NOT NULL DEFAULT 0,
+	-- a retention count requires a schedule to take the snapshots it keeps
+	snapshot_keep_daily INTEGER NOT NULL DEFAULT 0 CHECK (snapshot_keep_daily = 0 OR snapshot_schedule != ''),
+	snapshot_keep_weekly INTEGER NOT NULL DEFAULT 0 CHECK (snapshot_keep_weekly = 0 OR snapshot_schedule != ''),
+	snapshot_keep_monthly INTEGER NOT NULL DEFAULT 0 CHECK (snapshot_keep_monthly = 0 OR snapshot_schedule != ''),
 	-- app_key and indexer_url are always set or nulled together
 	CHECK ((app_key IS NULL AND indexer_url IS NULL) OR (app_key IS NOT NULL AND indexer_url IS NOT NULL))
 );

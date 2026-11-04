@@ -844,10 +844,11 @@ func TestSnapshotScheduleValidate(t *testing.T) {
 		}
 	}
 
+	now := time.Now()
 	for _, sched := range []sia.SnapshotSchedule{
 		{},
-		{Expression: "@daily"},
-		{Expression: "@daily", KeepDaily: 7, KeepWeekly: 4, KeepMonthly: 12},
+		{Expression: "@daily", Since: now},
+		{Expression: "@daily", Since: now, KeepDaily: 7, KeepWeekly: 4, KeepMonthly: 12},
 	} {
 		if err := sched.Validate(); err != nil {
 			t.Fatal(sched, err)
@@ -855,8 +856,9 @@ func TestSnapshotScheduleValidate(t *testing.T) {
 	}
 	for _, sched := range []sia.SnapshotSchedule{
 		{KeepDaily: 7},
-		{Expression: "@daily", KeepWeekly: -1},
-		{Expression: "03:00"},
+		{Expression: "@daily"},
+		{Expression: "@daily", Since: now, KeepWeekly: -1},
+		{Expression: "03:00", Since: now},
 	} {
 		if err := sched.Validate(); err == nil {
 			t.Fatal("expected error", sched)
@@ -936,8 +938,8 @@ func TestExpiredScheduledSnapshots(t *testing.T) {
 	}
 }
 
-// TestScheduledSnapshots verifies the due check, retention and the retry delay
-// of the scheduled snapshot pass.
+// TestScheduledSnapshots verifies the due check, retention and the retry
+// delays of the scheduled snapshot pass.
 func TestScheduledSnapshots(t *testing.T) {
 	memSDK := testutil.NewMemorySDK()
 	backend, store := testutil.NewBackend(t, testutil.WithSDK(memSDK))
@@ -1067,6 +1069,77 @@ func TestScheduledSnapshots(t *testing.T) {
 	})
 	backend.RunScheduledSnapshot(ctx, base.AddDate(0, 0, 6))
 	assertScheduled(4)
+
+	// a schedule replaced after a failure is attempted without waiting out the
+	// backoff the old one recorded
+	memSDK.SetPinHook(nil)
+	memSDK.SetPinError(errors.New("pin failed"))
+	failedAt = base.AddDate(0, 0, 7)
+	backend.RunScheduledSnapshot(ctx, failedAt)
+	assertScheduled(4)
+	memSDK.SetPinError(nil)
+	setSchedule(sia.SnapshotSchedule{Expression: "*/1 * * * *", Since: failedAt})
+	backend.RunScheduledSnapshot(ctx, failedAt.Add(2*time.Minute))
+	assertScheduled(5)
+
+	// a failed prune is retried only after the retry delay, the next slot is
+	// two hours out so no pass takes a snapshot of its own
+	prunedAt := failedAt.Add(3 * time.Minute)
+	slot = prunedAt.Add(2 * time.Hour)
+	setSchedule(sia.SnapshotSchedule{Expression: fmt.Sprintf("%d %d * * *", slot.Minute(), slot.Hour()), Since: prunedAt, KeepDaily: 1})
+	memSDK.SetDeleteError(errors.New("unpin failed"))
+	backend.RunScheduledSnapshot(ctx, prunedAt)
+	assertScheduled(5)
+	memSDK.SetDeleteError(nil)
+	backend.RunScheduledSnapshot(ctx, prunedAt.Add(time.Minute))
+	assertScheduled(5)
+	backend.RunScheduledSnapshot(ctx, prunedAt.Add(sia.ScheduledSnapshotRetryDelay))
+	assertScheduled(1)
+}
+
+// unadvancingStore fails to advance the snapshot schedule.
+type unadvancingStore struct {
+	*sqlite.Store
+}
+
+func (unadvancingStore) UpdateSnapshotScheduleSince(time.Time) error {
+	return errors.New("advance failed")
+}
+
+// TestScheduledSnapshotAdvanceFailure verifies a schedule that cannot be
+// advanced backs off rather than taking a snapshot on every tick.
+func TestScheduledSnapshotAdvanceFailure(t *testing.T) {
+	memSDK := testutil.NewMemorySDK()
+	log := zaptest.NewLogger(t)
+	dir := t.TempDir()
+	ctx := t.Context()
+
+	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	backend, err := sia.New(ctx, memSDK, unadvancingStore{store}, dir, sia.WithLogger(log))
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend.SyncMetadata(ctx)
+
+	base := time.Now().UTC()
+	slot := base.Add(-time.Hour)
+	if err := store.UpdateSnapshotSchedule(sia.SnapshotSchedule{Expression: fmt.Sprintf("%d %d * * *", slot.Minute(), slot.Hour()), Since: base}); err != nil {
+		t.Fatal(err)
+	}
+
+	at := base.AddDate(0, 0, 1)
+	for i := range 3 {
+		backend.RunScheduledSnapshot(ctx, at.Add(time.Duration(i)*time.Minute))
+	}
+	if snapshots, err := store.ListSnapshots(); err != nil {
+		t.Fatal(err)
+	} else if len(snapshots) != 1 {
+		t.Fatal("unexpected", len(snapshots))
+	}
 }
 
 // TestScheduledSnapshotLoop verifies the background loop takes nothing before

@@ -240,6 +240,9 @@ func (s *Store) SnapshotSchedule() (sched sia.SnapshotSchedule, err error) {
 
 // UpdateSnapshotSchedule replaces the snapshot schedule.
 func (s *Store) UpdateSnapshotSchedule(sched sia.SnapshotSchedule) error {
+	if err := sched.Validate(); err != nil {
+		return err
+	}
 	return s.transaction(func(tx *txn) error {
 		_, err := tx.Exec(`UPDATE global_settings SET snapshot_schedule = $1, snapshot_schedule_since = $2, snapshot_keep_daily = $3, snapshot_keep_weekly = $4, snapshot_keep_monthly = $5`,
 			sched.Expression, sqlTime(sched.Since), sched.KeepDaily, sched.KeepWeekly, sched.KeepMonthly)

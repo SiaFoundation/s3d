@@ -47,6 +47,8 @@ func (sched SnapshotSchedule) Validate() error {
 			return errors.New("snapshot retention requires a snapshot schedule")
 		}
 		return nil
+	} else if sched.Since.IsZero() {
+		return errors.New("a snapshot schedule must record the time it runs from")
 	}
 	_, err := ParseSnapshotSchedule(sched.Expression)
 	return err
@@ -223,6 +225,11 @@ func (s *Sia) runScheduledSnapshot(ctx context.Context, now time.Time) {
 		s.logger.Debug("deferring scheduled snapshots until object metadata is synced")
 		return
 	}
+	// the backoff was recorded against the schedule that failed, one the
+	// operator has changed since is attempted right away
+	if sched.Expression != s.snapshotRetrySched.Expression || !sched.Since.Equal(s.snapshotRetrySched.Since) {
+		s.snapshotRetryAt = time.Time{}
+	}
 	if !now.Before(s.snapshotRetryAt) {
 		s.takeScheduledSnapshot(ctx, now, sched, cronSched)
 	}
@@ -234,17 +241,28 @@ func (s *Sia) runScheduledSnapshot(ctx context.Context, now time.Time) {
 func (s *Sia) takeScheduledSnapshot(ctx context.Context, now time.Time, sched SnapshotSchedule, cronSched cron.Schedule) {
 	if next := cronSched.Next(sched.Since.In(now.Location())); next.IsZero() || next.After(now) {
 		return
-	} else if _, err := s.createSnapshot(ctx, true); err != nil {
-		s.snapshotRetryAt = now.Add(scheduledSnapshotRetryDelay)
+	}
+
+	_, err := s.createSnapshot(ctx, true)
+	if err != nil {
 		s.logger.Error("failed to take scheduled snapshot", zap.Error(err))
-	} else if err := s.store.UpdateSnapshotScheduleSince(now); err != nil {
+	} else if err = s.store.UpdateSnapshotScheduleSince(now); err != nil {
+		// a schedule left where it was is due again on the next tick, so a
+		// failed advance backs off like a failed snapshot
 		s.logger.Error("failed to advance snapshot schedule", zap.Error(err))
+	}
+	if err != nil {
+		s.snapshotRetryAt = now.Add(scheduledSnapshotRetryDelay)
+		s.snapshotRetrySched = sched
 	}
 }
 
 // pruneScheduledSnapshots deletes the scheduled snapshots the retention counts
 // do not keep.
 func (s *Sia) pruneScheduledSnapshots(ctx context.Context, now time.Time) {
+	if now.Before(s.snapshotPruneRetryAt) {
+		return
+	}
 	// the schedule may have changed while the snapshot was taken
 	sched, err := s.store.SnapshotSchedule()
 	if err != nil {
@@ -261,6 +279,8 @@ func (s *Sia) pruneScheduledSnapshots(ctx context.Context, now time.Time) {
 			return
 		} else if err := s.DeleteSnapshot(ctx, snap.SiaObjectID); err != nil {
 			s.logger.Error("failed to prune scheduled snapshot", zap.Stringer("objectID", &snap.SiaObjectID), zap.Error(err))
+			s.snapshotPruneRetryAt = now.Add(scheduledSnapshotRetryDelay)
+			return
 		}
 	}
 }

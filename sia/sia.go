@@ -184,7 +184,9 @@ type Sia struct {
 	lifecycleLoopInterval time.Duration
 	lifecycleDayDuration  time.Duration
 
-	snapshotRetryAt time.Time
+	snapshotRetryAt      time.Time
+	snapshotRetrySched   SnapshotSchedule
+	snapshotPruneRetryAt time.Time
 
 	pinMu   sync.Mutex
 	pinWake chan struct{}

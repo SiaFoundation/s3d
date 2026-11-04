@@ -275,8 +275,8 @@ func runSnapshotsScheduleSet(cmd *flag.FlagSet, sched sia.SnapshotSchedule) {
 		cmd.Usage()
 		os.Exit(1)
 	}
-	checkFatalError("failed to set snapshot schedule", sched.Validate())
 	sched.Since = time.Now()
+	checkFatalError("failed to set snapshot schedule", sched.Validate())
 
 	store, err := openStore(zap.NewNop())
 	checkFatalError("failed to open database", err)
