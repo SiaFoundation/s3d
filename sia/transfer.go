@@ -43,7 +43,9 @@ type (
 	// activeUpload tracks an upload group being streamed from the local buffer
 	// to Sia.
 	activeUpload struct {
-		group uploadGroup
+		label   string
+		objects int64
+		size    int64
 
 		sent       atomic.Int64
 		finalizing atomic.Bool
@@ -128,13 +130,21 @@ func (c *transferCounter) snapshot() (total, rate int64) {
 	return total, c.rate
 }
 
-func (t *transferStats) beginUpload(group uploadGroup) *activeUpload {
-	u := &activeUpload{group: group}
+func (t *transferStats) beginNamedUpload(label string, objects int64, size int64) *activeUpload {
+	u := &activeUpload{
+		label:   label,
+		objects: objects,
+		size:    size,
+	}
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.active = append(t.active, u)
 	return u
+}
+
+func (t *transferStats) beginUpload(group uploadGroup) *activeUpload {
+	return t.beginNamedUpload(uploadLabel(group), int64(len(group.objects)), group.totalSize)
 }
 
 func (t *transferStats) endUpload(u *activeUpload) {
@@ -171,9 +181,9 @@ func (t *transferStats) snapshot() s3.TransferStats {
 	stats.IngressActive = t.ingressActive
 	for _, u := range t.active {
 		stats.ActiveUploads = append(stats.ActiveUploads, s3.ActiveUpload{
-			Label:      uploadLabel(u.group),
-			Objects:    int64(len(u.group.objects)),
-			Size:       u.group.totalSize,
+			Label:      u.label,
+			Objects:    u.objects,
+			Size:       u.size,
 			Sent:       u.sent.Load(),
 			Finalizing: u.finalizing.Load(),
 		})
