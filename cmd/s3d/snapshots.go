@@ -92,8 +92,9 @@ hour, day of month, month and day of week, or is one of these descriptors:
 	@monthly	0 0 1 * *	at midnight on the first of the month
 	@yearly		0 0 1 1 *	at midnight on the first of January
 
-It runs in the local time zone of the instance, which picks up a change within
-a minute. The first snapshot is taken when the schedule next fires after it is
+It runs in the local time zone of the instance, read when s3d starts. A
+changed expression is picked up within a minute and changed counts within an
+hour. The first snapshot is taken when the schedule next fires after it is
 set. A snapshot missed while the instance was down is taken on the next start.
 
 Each count keeps the newest scheduled snapshot of that many days, weeks or
