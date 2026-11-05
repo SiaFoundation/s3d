@@ -72,9 +72,9 @@ func TestBackup(t *testing.T) {
 	stage(versioned, "versioned", true, true)
 	stage(versioned, "versioned", false, false)
 	uploadID := s3.NewUploadID()
-	if err := store.CreateMultipartUpload(ids[plain], "multipart", uploadID, nil, nil); err != nil {
+	if err := store.CreateMultipartUpload(ids[plain], "multipart", uploadID, nil, nil, objects.MultipartChecksum{}); err != nil {
 		t.Fatal(err)
-	} else if _, _, err := store.AddMultipartPart(ids[plain], "multipart", uploadID, "part1", 1, frand.Entropy128(), 16); err != nil {
+	} else if _, _, err := store.AddMultipartPart(ids[plain], "multipart", uploadID, "part1", 1, frand.Entropy128(), 16, nil); err != nil {
 		t.Fatal(err)
 	}
 

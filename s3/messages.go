@@ -1,9 +1,14 @@
 package s3
 
 import (
+	"encoding/base64"
 	"encoding/xml"
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
+
+	"github.com/SiaFoundation/s3d/s3/s3errs"
 )
 
 // Null is used by S3 to represent an explicit empty value in XML responses.
@@ -354,6 +359,7 @@ type (
 		XMLName      xml.Name    `xml:"CopyPartResult"`
 		ETag         string      `xml:"ETag"`
 		LastModified ContentTime `xml:"LastModified,omitempty"`
+		ChecksumElements
 	}
 )
 
@@ -381,6 +387,8 @@ type (
 		MaxParts             int64                `xml:"MaxParts"`
 		IsTruncated          bool                 `xml:"IsTruncated"`
 		StorageClass         StorageClass         `xml:"StorageClass"`
+		ChecksumAlgorithm    ChecksumAlgorithm    `xml:"ChecksumAlgorithm,omitempty"`
+		ChecksumType         ChecksumType         `xml:"ChecksumType,omitempty"`
 		Initiator            *UserInfo            `xml:"Initiator,omitempty"`
 		Owner                *UserInfo            `xml:"Owner,omitempty"`
 		Parts                []ListedPartResponse `xml:"Part"`
@@ -392,6 +400,7 @@ type (
 		LastModified ContentTime `xml:"LastModified,omitempty"`
 		ETag         string      `xml:"ETag"`
 		Size         int64       `xml:"Size"`
+		ChecksumElements
 	}
 
 	// CompleteMultipartUploadRequest matches the XML request body sent when
@@ -406,17 +415,20 @@ type (
 	CompleteMultipartPart struct {
 		PartNumber int    `xml:"PartNumber"`
 		ETag       string `xml:"ETag"`
+		ChecksumElements
 	}
 
 	// CompleteMultipartUploadResponse matches the XML response returned after a
 	// successful CompleteMultipartUpload operation.
 	CompleteMultipartUploadResponse struct {
-		XMLName  xml.Name `xml:"CompleteMultipartUploadResult"`
-		Xmlns    string   `xml:"xmlns,attr"`
-		Location string   `xml:"Location"`
-		Bucket   string   `xml:"Bucket"`
-		Key      string   `xml:"Key"`
-		ETag     string   `xml:"ETag"`
+		XMLName      xml.Name     `xml:"CompleteMultipartUploadResult"`
+		Xmlns        string       `xml:"xmlns,attr"`
+		Location     string       `xml:"Location"`
+		Bucket       string       `xml:"Bucket"`
+		Key          string       `xml:"Key"`
+		ETag         string       `xml:"ETag"`
+		ChecksumType ChecksumType `xml:"ChecksumType,omitempty"`
+		ChecksumElements
 	}
 
 	// ListMultipartUploadsResponse is the response to a ListMultipartUploads
@@ -638,3 +650,74 @@ type (
 		TagSet  TagSet   `xml:"TagSet>Tag"`
 	}
 )
+
+// ChecksumElements are the per algorithm checksum elements a multipart message
+// carries. At most one is set.
+type ChecksumElements struct {
+	ChecksumCRC32     string `xml:"ChecksumCRC32,omitempty"`
+	ChecksumCRC32C    string `xml:"ChecksumCRC32C,omitempty"`
+	ChecksumCRC64NVME string `xml:"ChecksumCRC64NVME,omitempty"`
+	ChecksumSHA1      string `xml:"ChecksumSHA1,omitempty"`
+	ChecksumSHA256    string `xml:"ChecksumSHA256,omitempty"`
+}
+
+// NewChecksumElements returns the elements for an algorithm with value in the
+// matching slot. An algorithm with no element leaves all of them unset.
+func NewChecksumElements(a ChecksumAlgorithm, value string) ChecksumElements {
+	var elements ChecksumElements
+	if field := elements.field(a); field != nil {
+		*field = value
+	}
+	return elements
+}
+
+// field returns the element for an algorithm, nil when it has none.
+func (e *ChecksumElements) field(a ChecksumAlgorithm) *string {
+	switch a {
+	case ChecksumCRC32:
+		return &e.ChecksumCRC32
+	case ChecksumCRC32C:
+		return &e.ChecksumCRC32C
+	case ChecksumCRC64NVME:
+		return &e.ChecksumCRC64NVME
+	case ChecksumSHA1:
+		return &e.ChecksumSHA1
+	case ChecksumSHA256:
+		return &e.ChecksumSHA256
+	}
+	return nil
+}
+
+// Value returns the one element that is set and the algorithm it belongs to,
+// both empty when none is set. More than one set element wraps
+// [s3errs.ErrInvalidRequest], and a value that is not base64 of the algorithm's
+// digest size wraps [s3errs.ErrBadDigest]. A composite value carrying a part
+// count suffix such as "-3" is validated on the digest before the suffix. The
+// value is returned as it arrived so a caller can compare a composite verbatim.
+func (e ChecksumElements) Value() (ChecksumAlgorithm, string, error) {
+	var algorithm ChecksumAlgorithm
+	var value string
+	var count int
+	for candidate := range checksumTypes {
+		if v := *e.field(candidate); v != "" {
+			algorithm, value = candidate, v
+			count++
+		}
+	}
+	if count > 1 {
+		return "", "", fmt.Errorf("found %d checksums, expected at most one: %w", count, s3errs.ErrInvalidRequest)
+	} else if count == 0 {
+		return "", "", nil
+	}
+
+	digest := value
+	if base, parts, ok := strings.Cut(value, "-"); ok && parts != "" && strings.Trim(parts, "0123456789") == "" {
+		digest = base
+	}
+
+	sum, err := base64.StdEncoding.DecodeString(digest)
+	if err != nil || len(sum) != algorithm.NewHash().Size() {
+		return "", "", fmt.Errorf("checksum %q is not a %s digest: %w", value, algorithm, s3errs.ErrBadDigest)
+	}
+	return algorithm, value, nil
+}
