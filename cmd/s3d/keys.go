@@ -89,7 +89,7 @@ func runKeysList(ctx context.Context, cmd *flag.FlagSet) {
 	if len(args) == 1 {
 		route += "?username=" + url.QueryEscape(args[0])
 	}
-	var keys []s3.AccessKey
+	var keys []s3.AccessKeyMetadata
 	err := client.request(ctx, http.MethodGet, route, nil, &keys)
 	checkFatalError("failed to list access keys", err)
 
