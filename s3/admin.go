@@ -54,6 +54,8 @@ func (sched SnapshotSchedule) Validate() error {
 			return errors.New("snapshot retention requires a snapshot schedule")
 		}
 		return nil
+	} else if sched.KeepDaily == 0 && sched.KeepWeekly == 0 && sched.KeepMonthly == 0 {
+		return errors.New("a snapshot schedule requires at least one positive retention count")
 	} else if sched.Since.IsZero() {
 		return errors.New("a snapshot schedule must record the time it runs from")
 	}

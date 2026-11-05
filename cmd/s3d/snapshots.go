@@ -100,12 +100,12 @@ first snapshot is taken when the schedule next fires after it is set. A
 snapshot missed while the instance was down is taken on the next start.
 
 Each count keeps the newest scheduled snapshot of that many days, weeks or
-months, the sets are combined, and all zero keeps every scheduled snapshot.
-The command replaces the whole schedule, so a count left out is zero. Snapshots
+months and the sets are combined. At least one count must be positive. The
+command replaces the whole schedule, so a count left out is zero. Snapshots
 created with 'snapshots create' are never pruned.
 
 Examples:
-	s3d snapshots schedule set "0 3 * * *"
+	s3d snapshots schedule set --keep-daily 7 "0 3 * * *"
 	s3d snapshots schedule set --keep-daily 7 --keep-weekly 4 --keep-monthly 12 @daily
 	s3d snapshots schedule set --keep-daily 14 "0 */6 * * *"`
 

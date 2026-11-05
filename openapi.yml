@@ -119,6 +119,7 @@ paths:
       summary: Replace the snapshot schedule
       description: >
         Replaces the whole schedule. Counts omitted from the request are zero.
+        An enabled schedule requires at least one positive retention count.
         The daemon records when the schedule was set and updates its timer
         immediately. Retention is applied once an hour.
       operationId: updateSnapshotSchedule
@@ -294,7 +295,7 @@ components:
           description: Whether the snapshot was taken by the snapshot schedule.
     SnapshotSchedule:
       type: object
-      description: A snapshot schedule and its retention counts. An empty expression disables scheduled snapshots.
+      description: A snapshot schedule and its retention counts. An empty expression disables scheduled snapshots. An enabled schedule requires at least one positive count.
       required:
         - expression
       properties:

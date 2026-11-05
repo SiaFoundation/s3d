@@ -120,7 +120,7 @@ func TestSnapshotScheduleValidate(t *testing.T) {
 	now := time.Now()
 	for _, sched := range []s3.SnapshotSchedule{
 		{},
-		{Expression: "@daily", Since: now},
+		{Expression: "@daily", Since: now, KeepDaily: 1},
 		{Expression: "@daily", Since: now, KeepDaily: 7, KeepWeekly: 4, KeepMonthly: 12},
 	} {
 		if err := sched.Validate(); err != nil {
@@ -129,6 +129,7 @@ func TestSnapshotScheduleValidate(t *testing.T) {
 	}
 	for _, sched := range []s3.SnapshotSchedule{
 		{KeepDaily: 7},
+		{Expression: "@daily", Since: now},
 		{Expression: "@daily"},
 		{Expression: "@daily", Since: now, KeepWeekly: -1},
 		{Expression: "03:00", Since: now},
@@ -196,6 +197,7 @@ func TestSnapshotSchedule(t *testing.T) {
 		t.Fatal("mismatch", persisted, sched)
 	}
 
+	request(http.MethodPut, `{"expression":"@daily"}`, http.StatusBadRequest)
 	request(http.MethodPut, `{"expression":"@daily","keepDaily":-1}`, http.StatusBadRequest)
 	request(http.MethodPut, `{"expression":"invalid","keepDaily":1}`, http.StatusBadRequest)
 	if current := readSchedule(); !reflect.DeepEqual(current, sched) {
