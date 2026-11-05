@@ -7,6 +7,9 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 )
 
+// PinBatchSize exports pinBatchSize for testing.
+const PinBatchSize = pinBatchSize
+
 // PinThreads exports pinThreads for testing.
 const PinThreads = pinThreads
 
