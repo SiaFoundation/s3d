@@ -277,6 +277,25 @@ func TestHandleAuthV4(t *testing.T) {
 		}
 	})
 
+	t.Run("unsigned host", func(t *testing.T) {
+		signed := exampleHeaders()
+		delete(signed, "host")
+		req := signedRequest(http.MethodPut, exampleRegion, exampleScope, canonicalSignedHeaders(signed), signed)
+		if _, err := HandleAuth(req, store, exampleRegion, exampleTime); !errors.Is(err, s3errs.ErrAccessDeniedUnsignedHeaders) {
+			t.Fatalf("expected ErrAccessDeniedUnsignedHeaders, got %v", err)
+		}
+	})
+
+	t.Run("missing signed header", func(t *testing.T) {
+		signed := exampleHeaders()
+		signed.Set("content-type", "text/plain")
+		req := signedRequest(http.MethodPut, exampleRegion, exampleScope, canonicalSignedHeaders(signed), signed)
+		req.Header.Del("Content-Type")
+		if _, err := HandleAuth(req, store, exampleRegion, exampleTime); !errors.Is(err, s3errs.ErrSignatureDoesNotMatch) {
+			t.Fatalf("expected ErrSignatureDoesNotMatch, got %v", err)
+		}
+	})
+
 	t.Run("unsigned x-amz-content-sha256 exempt", func(t *testing.T) {
 		signed := exampleHeaders()
 		delete(signed, "x-amz-content-sha256")

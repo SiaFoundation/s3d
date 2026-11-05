@@ -147,15 +147,11 @@ func TestS3(t *testing.T) {
 	//    request headers
 	//  - tests around ACLs since s3d currently does not implement ACL
 	//    handling
-	//  - test_sigv4_host_bad and test_sigv4_missing_header, which expect a
-	//    403 when host is not signed or a signed header is missing from the
-	//    request. s3d rejects both as AuthorizationHeaderMalformed (400)
-	//    before comparing signatures.
 	t.Run("test_headers", func(t *testing.T) {
 		runTox(t, confPath, testsDir,
 			"s3tests/functional/test_headers.py",
 			"-m", "not s3d_unsupported and not auth_aws2 and not fails_on_rgw",
-			"-k", "not _create_bad_expect_ and not _acl and not test_sigv4_host_bad and not test_sigv4_missing_header",
+			"-k", "not _create_bad_expect_ and not _acl",
 		)
 	})
 
