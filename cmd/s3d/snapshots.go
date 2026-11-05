@@ -70,7 +70,10 @@ snapshot is created and by 'snapshots list'.
 
 The destination must be empty or missing, so a restore can never overwrite an
 existing database. Run 's3d config' for the restored directory before starting
-s3d.`
+s3d.
+
+A snapshot carries no schedule, so a restored database takes no scheduled
+snapshots and prunes none until 'snapshots schedule set' is run against it.`
 
 	snapshotsScheduleUsage = `Usage: s3d snapshots schedule [command]
 
@@ -244,6 +247,7 @@ func runSnapshotsRestore(ctx context.Context, cmd *flag.FlagSet, out string) {
 	fmt.Printf("Restored %d objects from the snapshot taken at %s.\n", snap.Metadata.ObjectCount, snap.Metadata.CreatedAt.Format(time.RFC3339))
 	fmt.Println("Database written to", dbPath)
 	fmt.Println("Run 's3d config' for this directory, then start s3d to reconcile it with the network.")
+	fmt.Println("Scheduled snapshots are off in a restored database. Set them with 's3d snapshots schedule set' once it runs.")
 }
 
 func runSnapshotsSchedule(cmd *flag.FlagSet) {
