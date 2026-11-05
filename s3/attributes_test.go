@@ -270,32 +270,26 @@ func TestGetObjectAttributes(t *testing.T) {
 	}
 
 	// assert [s3errs.ErrInvalidArgument] for a marker that is not a part number
-	for _, value := range []string{"two", "-1"} {
+	// and a limit outside the range ListParts accepts
+	for _, invalid := range []struct {
+		header string
+		value  string
+	}{
+		{"X-Amz-Part-Number-Marker", "two"},
+		{"X-Amz-Part-Number-Marker", "-1"},
+		{"X-Amz-Part-Number-Marker", "10000"},
+		{"X-Amz-Max-Parts", "0"},
+		{"X-Amz-Max-Parts", "5000"},
+	} {
 		resp, body = rawRequest(http.MethodGet, "/"+bucket+"/"+multipartKey+"?attributes", http.Header{
-			"X-Amz-Object-Attributes":  []string{"ObjectParts"},
-			"X-Amz-Part-Number-Marker": []string{value},
+			"X-Amz-Object-Attributes": []string{"ObjectParts"},
+			invalid.header:            []string{invalid.value},
 		})
 		if err := xml.Unmarshal(body, &parsed); err != nil {
 			t.Fatal(err)
 		} else if resp.StatusCode != s3errs.ErrInvalidArgument.HTTPStatus || parsed.Code != s3errs.ErrInvalidArgument.Code {
-			t.Fatal("unexpected", value, resp.StatusCode, parsed.Code)
+			t.Fatal("unexpected", invalid.header, invalid.value, resp.StatusCode, parsed.Code)
 		}
-	}
-
-	// a part limit above the maximum is clamped to it
-	resp, body = rawRequest(http.MethodGet, "/"+bucket+"/"+multipartKey+"?attributes", http.Header{
-		"X-Amz-Object-Attributes": []string{"ObjectParts"},
-		"X-Amz-Max-Parts":         []string{"5000"},
-	})
-	var reported s3.GetObjectAttributesResponse
-	if resp.StatusCode != http.StatusOK {
-		t.Fatal("unexpected", resp.StatusCode)
-	} else if err := xml.Unmarshal(body, &reported); err != nil {
-		t.Fatal(err)
-	} else if reported.ObjectParts == nil {
-		t.Fatal("expected object parts")
-	} else if reported.ObjectParts.MaxParts != s3.MaxUploadListParts {
-		t.Fatal("unexpected", reported.ObjectParts.MaxParts)
 	}
 
 	// assert [s3errs.ErrMethodNotAllowed] for a request that names no key, which
