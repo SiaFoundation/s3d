@@ -252,14 +252,19 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, version s3.
 	}
 
 	// part specified, return part info. the MD5 read is the object's, not the
-	// part's, because ContentMD5 and PartsCount are the object's ETag inputs
+	// part's, because ContentMD5 and PartsCount are the object's ETag inputs.
+	// the requested number is a position among the completed parts, since
+	// part_number keeps the upload's numbering the part file is stored under
+	// and a completion may have named a subset of the uploaded parts
 	var partObjID sql.Null[sqlHash256]
 	err := tx.QueryRow(`
 		SELECT o.filename, o.sia_object_id, o.metadata, o.updated_at, o.size, p.offset, p.content_length, o.content_md5, p.checksum
 		FROM object_parts p
 		JOIN objects o ON o.bucket_id = p.bucket_id AND o.name = p.name AND o.version_id = p.version_id
-		WHERE o.bucket_id = $1 AND o.name = $2 AND o.version_id = $3 AND p.part_number = $4
-	`, bid, name, versionID, *partNumber).Scan(&obj.FileName, &partObjID, (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Size, &obj.Offset, &obj.Length, (*sqlMD5)(&obj.ContentMD5), &obj.PartChecksum)
+		WHERE o.bucket_id = $1 AND o.name = $2 AND o.version_id = $3
+		ORDER BY p.part_number
+		LIMIT 1 OFFSET $4
+	`, bid, name, versionID, *partNumber-1).Scan(&obj.FileName, &partObjID, (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Size, &obj.Offset, &obj.Length, (*sqlMD5)(&obj.ContentMD5), &obj.PartChecksum)
 	if err != nil {
 		return err
 	}
