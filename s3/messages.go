@@ -665,19 +665,27 @@ type ChecksumElements struct {
 // matching slot. An algorithm with no element leaves all of them unset.
 func NewChecksumElements(a ChecksumAlgorithm, value string) ChecksumElements {
 	var elements ChecksumElements
-	switch a {
-	case ChecksumCRC32:
-		elements.ChecksumCRC32 = value
-	case ChecksumCRC32C:
-		elements.ChecksumCRC32C = value
-	case ChecksumCRC64NVME:
-		elements.ChecksumCRC64NVME = value
-	case ChecksumSHA1:
-		elements.ChecksumSHA1 = value
-	case ChecksumSHA256:
-		elements.ChecksumSHA256 = value
+	if field := elements.field(a); field != nil {
+		*field = value
 	}
 	return elements
+}
+
+// field returns the element for an algorithm, nil when it has none.
+func (e *ChecksumElements) field(a ChecksumAlgorithm) *string {
+	switch a {
+	case ChecksumCRC32:
+		return &e.ChecksumCRC32
+	case ChecksumCRC32C:
+		return &e.ChecksumCRC32C
+	case ChecksumCRC64NVME:
+		return &e.ChecksumCRC64NVME
+	case ChecksumSHA1:
+		return &e.ChecksumSHA1
+	case ChecksumSHA256:
+		return &e.ChecksumSHA256
+	}
+	return nil
 }
 
 // Value returns the one element that is set and the algorithm it belongs to,
@@ -690,21 +698,11 @@ func (e ChecksumElements) Value() (ChecksumAlgorithm, string, error) {
 	var algorithm ChecksumAlgorithm
 	var value string
 	var count int
-	for _, candidate := range []struct {
-		algorithm ChecksumAlgorithm
-		value     string
-	}{
-		{ChecksumCRC32, e.ChecksumCRC32},
-		{ChecksumCRC32C, e.ChecksumCRC32C},
-		{ChecksumCRC64NVME, e.ChecksumCRC64NVME},
-		{ChecksumSHA1, e.ChecksumSHA1},
-		{ChecksumSHA256, e.ChecksumSHA256},
-	} {
-		if candidate.value == "" {
-			continue
+	for candidate := range checksumTypes {
+		if v := *e.field(candidate); v != "" {
+			algorithm, value = candidate, v
+			count++
 		}
-		algorithm, value = candidate.algorithm, candidate.value
-		count++
 	}
 	if count > 1 {
 		return "", "", fmt.Errorf("found %d checksums, expected at most one: %w", count, s3errs.ErrInvalidRequest)

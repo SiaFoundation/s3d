@@ -927,7 +927,10 @@ func TestCreateMultipartUploadChecksumValue(t *testing.T) {
 	if head.ChecksumSHA256 != nil {
 		t.Fatalf("expected no SHA256 checksum, got %s", *head.ChecksumSHA256)
 	}
-	composite := s3.CompositeChecksum(s3.ChecksumCRC32, []s3.PartChecksum{{Sum: crc32Sum[:], Length: int64(len(data))}})
+	composite, err := s3.CompositeChecksum(s3.ChecksumCRC32, []s3.PartChecksum{{Sum: crc32Sum[:], Length: int64(len(data))}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got := aws.ToString(head.ChecksumCRC32); got != composite {
 		t.Fatalf("expected checksum %s, got %s", composite, got)
 	} else if head.ChecksumType != types.ChecksumTypeComposite {
