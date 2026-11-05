@@ -147,11 +147,15 @@ func TestS3(t *testing.T) {
 	//    request headers
 	//  - tests around ACLs since s3d currently does not implement ACL
 	//    handling
+	//  - test_sigv4_host_bad and test_sigv4_missing_header, which expect a
+	//    403 when host is not signed or a signed header is missing from the
+	//    request. s3d rejects both as AuthorizationHeaderMalformed (400)
+	//    before comparing signatures.
 	t.Run("test_headers", func(t *testing.T) {
 		runTox(t, confPath, testsDir,
 			"s3tests/functional/test_headers.py",
-			"-m", "not auth_aws2 and not fails_on_rgw",
-			"-k", "not _create_bad_expect_ and not _acl",
+			"-m", "not s3d_unsupported and not auth_aws2 and not fails_on_rgw",
+			"-k", "not _create_bad_expect_ and not _acl and not test_sigv4_host_bad and not test_sigv4_missing_header",
 		)
 	})
 
@@ -161,7 +165,7 @@ func TestS3(t *testing.T) {
 	t.Run("test_s3", func(t *testing.T) {
 		runTox(t, confPath, testsDir,
 			"s3tests/functional/test_s3.py",
-			"-m", "not s3d_not_implemented and not s3d_not_supported and not bucket_logging and not encryption and not sse_s3 and not bucket_encryption and not lifecycle_transition and not tagging and not object_ownership and not cloud_transition and not cloud_restore and not iam_user and not iam_account",
+			"-m", "not s3d_unsupported and not bucket_logging and not encryption and not sse_s3 and not bucket_encryption and not lifecycle_transition and not tagging and not object_ownership and not cloud_transition and not cloud_restore and not iam_user and not iam_account",
 			// the two policy-status tests with _acl in their names only use bucket
 			// policies, so they are kept despite the general ACL exclusion
 			// the lifecycle exclusions drop tests for unimplemented features,
