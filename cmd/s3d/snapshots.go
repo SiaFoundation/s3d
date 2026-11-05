@@ -69,10 +69,7 @@ snapshot is created and by 'snapshots list'.
 
 The destination must be empty or missing, so a restore can never overwrite an
 existing database. Run 's3d config' for the restored directory before starting
-s3d.
-
-A snapshot carries no schedule, so a restored database takes no scheduled
-snapshots and prunes none until 'snapshots schedule set' is run against it.`
+s3d.`
 
 	snapshotsScheduleUsage = `Usage: s3d snapshots schedule [command]
 
@@ -94,10 +91,7 @@ hour, day of month, month and day of week, or is one of these descriptors:
 	@monthly	0 0 1 * *	at midnight on the first of the month
 	@yearly		0 0 1 1 *	at midnight on the first of January
 
-It runs in the local time zone of the instance, read when s3d starts. Schedule
-changes take effect immediately and retention is applied once an hour. The
-first snapshot is taken when the schedule next fires after it is set. A
-snapshot missed while the instance was down is taken on the next start.
+It runs in the local time zone of the instance, read when s3d starts.
 
 Each count keeps the newest scheduled snapshot of that many days, weeks or
 months and the sets are combined. At least one count must be positive. The
@@ -246,7 +240,6 @@ func runSnapshotsRestore(ctx context.Context, cmd *flag.FlagSet, out string) {
 	fmt.Printf("Restored %d objects from the snapshot taken at %s.\n", snap.Metadata.ObjectCount, snap.Metadata.CreatedAt.Format(time.RFC3339))
 	fmt.Println("Database written to", dbPath)
 	fmt.Println("Run 's3d config' for this directory, then start s3d to reconcile it with the network.")
-	fmt.Println("Scheduled snapshots are off in a restored database. Set them with 's3d snapshots schedule set' once it runs.")
 }
 
 func runSnapshotsSchedule(ctx context.Context, cmd *flag.FlagSet) {

@@ -20,10 +20,9 @@ func requireAdminConfig() {
 	}
 }
 
-// adminRequest sends a request to the admin API route, with in encoded as its
-// JSON body when not nil, and decodes the JSON response into out when out is
-// not nil. Cancellation is driven by ctx alone, with no client timeout, since
-// some operations can block for a long time.
+// adminRequest sends a request to the admin API route and decodes the JSON
+// response into out when out is not nil. Cancellation is driven by ctx alone,
+// with no client timeout, since some operations can block for a long time.
 func adminRequest(ctx context.Context, method, addr, password, route string, in, out any) error {
 	var body io.Reader
 	if in != nil {

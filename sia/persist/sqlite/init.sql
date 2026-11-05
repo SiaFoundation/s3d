@@ -204,8 +204,8 @@ CREATE TABLE global_settings (
 	last_sync_at INTEGER NOT NULL DEFAULT 0,
 	last_sync_key BLOB NOT NULL DEFAULT X'0000000000000000000000000000000000000000000000000000000000000000',
 	snapshot_gen INTEGER NOT NULL DEFAULT 0,
-	snapshot_schedule TEXT NOT NULL DEFAULT '', -- cron expression, empty disables scheduled snapshots
-	snapshot_schedule_since INTEGER NOT NULL DEFAULT 0, -- the schedule was set or last took a snapshot
+	snapshot_schedule TEXT NOT NULL DEFAULT '',
+	snapshot_schedule_since INTEGER NOT NULL DEFAULT 0,
 	-- a retention count requires a schedule to take the snapshots it keeps
 	snapshot_keep_daily INTEGER NOT NULL DEFAULT 0 CHECK (snapshot_keep_daily = 0 OR snapshot_schedule != ''),
 	snapshot_keep_weekly INTEGER NOT NULL DEFAULT 0 CHECK (snapshot_keep_weekly = 0 OR snapshot_schedule != ''),

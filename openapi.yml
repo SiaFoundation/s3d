@@ -120,8 +120,6 @@ paths:
       description: >
         Replaces the whole schedule. Counts omitted from the request are zero.
         An enabled schedule requires at least one positive retention count.
-        The daemon records when the schedule was set and updates its timer
-        immediately. Retention is applied once an hour.
       operationId: updateSnapshotSchedule
       requestBody:
         required: true

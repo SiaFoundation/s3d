@@ -198,8 +198,7 @@ type Sia struct {
 	failedUploads atomic.Int64
 
 	// synced reports whether a metadata sync drained the event stream without
-	// failing, it gates orphan processing, snapshot deletions and scheduled
-	// snapshots
+	// failing, it gates orphan processing and snapshot deletions
 	synced     atomic.Bool
 	orphanWake chan struct{}
 
@@ -433,8 +432,7 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (s3.Snapshot, error) {
 	return s.createSnapshot(ctx, false)
 }
 
-// createSnapshot implements CreateSnapshot, marking a scheduled snapshot in
-// its metadata and record.
+// createSnapshot implements CreateSnapshot with the scheduled flag.
 func (s *Sia) createSnapshot(ctx context.Context, scheduled bool) (_ s3.Snapshot, err error) {
 	// a snapshot backs up the metadata database, which stays worth capturing
 	// when an object cannot be flushed, so a failed flush is reported and the
@@ -891,8 +889,8 @@ func (s *Sia) syncBatch(ctx context.Context, cursor slabs.Cursor) (slabs.Cursor,
 
 	if len(events) == 0 {
 		// every published snapshot event is consumed so orphan processing
-		// is safe. Only a gate that was closed leaves the orphan and
-		// snapshot loops waiting on a wake
+		// is safe. Only a gate that was closed leaves the orphan loop
+		// waiting on a wake
 		if !s.synced.Swap(true) {
 			s.wakeOrphanLoop()
 			s.wakeSnapshotLoop()

@@ -190,8 +190,7 @@ func (s *Sia) snapshotsLoop(ctx context.Context) {
 	}
 }
 
-// runScheduledSnapshot takes a snapshot when the stored schedule fired since
-// it was set or last took one, once object metadata is synced, and returns
+// runScheduledSnapshot takes a snapshot when the schedule is due and returns
 // when it should run next, zero until the loop is woken.
 func (s *Sia) runScheduledSnapshot(ctx context.Context, now time.Time) time.Time {
 	s.snapshotMu.Lock()
