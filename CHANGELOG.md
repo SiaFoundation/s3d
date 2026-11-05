@@ -1,3 +1,69 @@
+## 0.2.2 (2026-11-05)
+
+### Features
+
+- Add bucket policies
+- Checksum headers are echoed on upload and returned only with x-amz-checksum-mode
+- Added object size filters to bucket lifecycle rules
+- Register with a pre-authorized key from the environment
+- Replace the Go library with the new Rust-based library
+- Fixed the reported Sia upload rate reading zero during an upload
+- Added `s3d snapshots create`, `list` and `delete`
+- Added `s3d snapshots restore`
+
+#### Add bucket and object tagging APIs
+
+GetBucketTagging, PutBucketTagging and DeleteBucketTagging, and
+GetObjectTagging, PutObjectTagging and DeleteObjectTagging for current and
+explicit versions, are now supported. A PUT replaces the whole tag set, up to 50
+tags on a bucket and 10 on an object version, and must carry Content-MD5 or a
+checksum. Tag keys differing only in case are rejected, since policy condition
+keys are case insensitive. Existing databases gain empty tag sets through a
+schema migration.
+Bucket policies using `s3:BucketTag` or `s3:ExistingObjectTag` are now rejected,
+since those tags are stored but not evaluated.
+
+#### Auto flush objects after configurable interval
+
+`sia.uploadDeadline` sets how long after an object was last modified its group
+is uploaded to Sia regardless of wasted space, so small objects no longer wait
+indefinitely for enough data to fill a slab. It defaults to `24h`, and `0s`
+disables the deadline.
+
+#### Implement POST Object
+
+A bucket now accepts a browser form upload. The credential, policy and
+signature are read from the form fields, the policy's conditions are enforced,
+and `success_action_status` and `success_action_redirect` decide the response.
+Such a request was previously refused with `AccessDenied`.
+
+#### Added support for S3 Object Lock
+
+Buckets can now be created with object lock enabled, or have it turned on once
+versioning is enabled. Object versions can be protected by a retention period in
+`GOVERNANCE` or `COMPLIANCE` mode, by a legal hold, or by the bucket's default
+retention rule, and a locked version cannot be deleted until its protection
+ends. `x-amz-bypass-governance-retention` lets the bucket owner shorten, clear
+or delete through a `GOVERNANCE` retention. Event holds are not supported and
+are rejected with `NotImplemented`.
+
+### Fixes
+
+- Pin uploaded objects in parallel
+- Leave objects still buffered on disk out of snapshots
+
+#### Deny requests that do not sign host or omit a signed header
+
+A SigV4 request whose signed headers leave out `host` is now denied with
+`AccessDenied` (403), and one missing a header it signed with
+`SignatureDoesNotMatch` (403), instead of `AuthorizationHeaderMalformed` or
+`AuthorizationQueryParametersError` (400).
+
+#### Fix a panic on a malformed Content-MD5
+
+A `Content-MD5` that did not decode to a 16 byte digest panicked the request
+handler and dropped the connection. It is now refused with `InvalidDigest`.
+
 ## 0.2.1 (2026-10-05)
 
 ### Features
