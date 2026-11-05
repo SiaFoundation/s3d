@@ -47,7 +47,7 @@ func runKeysCreate(ctx context.Context, cmd *flag.FlagSet, accessKey, secretKey 
 		fmt.Fprintln(os.Stderr, "Both --access-key and --secret-key must be provided together, or omit both to auto-generate.")
 		os.Exit(1)
 	}
-	requireAdminConfig()
+	client := newAdminClient()
 
 	req := s3.CreateAccessKeyRequest{
 		UserName:    userName,
@@ -55,7 +55,7 @@ func runKeysCreate(ctx context.Context, cmd *flag.FlagSet, accessKey, secretKey 
 		SecretKey:   secretKey,
 	}
 	var key s3.AccessKey
-	err := adminRequest(ctx, http.MethodPost, cfg.AdminAddress, cfg.AdminPassword, "/keys", req, &key)
+	err := client.request(ctx, http.MethodPost, "/keys", req, &key)
 	checkFatalError("failed to create access key", err)
 
 	fmt.Println("Created access key for user", userName)
@@ -70,9 +70,9 @@ func runKeysDelete(ctx context.Context, cmd *flag.FlagSet) {
 		cmd.Usage()
 		os.Exit(1)
 	}
-	requireAdminConfig()
+	client := newAdminClient()
 
-	err := adminRequest(ctx, http.MethodDelete, cfg.AdminAddress, cfg.AdminPassword, "/keys/"+url.PathEscape(args[0]), nil, nil)
+	err := client.request(ctx, http.MethodDelete, "/keys/"+url.PathEscape(args[0]), nil, nil)
 	checkFatalError("failed to delete access key", err)
 	fmt.Printf("Deleted access key %q\n", args[0])
 }
@@ -83,14 +83,14 @@ func runKeysList(ctx context.Context, cmd *flag.FlagSet) {
 		cmd.Usage()
 		os.Exit(1)
 	}
-	requireAdminConfig()
+	client := newAdminClient()
 
 	route := "/keys"
 	if len(args) == 1 {
 		route += "?userName=" + url.QueryEscape(args[0])
 	}
 	var keys []s3.AccessKey
-	err := adminRequest(ctx, http.MethodGet, cfg.AdminAddress, cfg.AdminPassword, route, nil, &keys)
+	err := client.request(ctx, http.MethodGet, route, nil, &keys)
 	checkFatalError("failed to list access keys", err)
 
 	if len(keys) == 0 {
