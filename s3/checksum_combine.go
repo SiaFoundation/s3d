@@ -4,9 +4,11 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
+	"hash/crc32"
 	"strconv"
 
 	"github.com/SiaFoundation/s3d/s3/s3errs"
+	"github.com/minio/crc64nvme"
 )
 
 // the reflected polynomial and bit width of each CRC algorithm
@@ -14,9 +16,9 @@ var crcPolynomials = map[ChecksumAlgorithm]struct {
 	poly  uint64
 	width uint
 }{
-	ChecksumCRC32:     {0xEDB88320, 32},
-	ChecksumCRC32C:    {0x82F63B78, 32},
-	ChecksumCRC64NVME: {0x9A6C9329AC4BC9B5, 64},
+	ChecksumCRC32:     {crc32.IEEE, 32},
+	ChecksumCRC32C:    {crc32.Castagnoli, 32},
+	ChecksumCRC64NVME: {crc64nvme.NVME, 64},
 }
 
 // PartChecksum is one part's raw digest and the number of bytes it covers.
@@ -27,21 +29,21 @@ type PartChecksum struct {
 
 // CompositeChecksum returns the base64 digest of the concatenated part digests
 // followed by a part count suffix such as "-3", the value AWS reports for a
-// multipart object whose checksum type is COMPOSITE. It returns an empty string
-// for an algorithm the backend cannot hash and for a part that does not carry a
-// digest of the algorithm's width.
-func CompositeChecksum(a ChecksumAlgorithm, parts []PartChecksum) string {
+// multipart object whose checksum type is COMPOSITE. The algorithm must support
+// ChecksumTypeComposite and every part must carry a digest of the algorithm's
+// width, otherwise the error wraps s3errs.ErrInvalidRequest.
+func CompositeChecksum(a ChecksumAlgorithm, parts []PartChecksum) (string, error) {
 	h := a.NewHash()
-	if h == nil {
-		return ""
+	if h == nil || !a.SupportsType(ChecksumTypeComposite) {
+		return "", fmt.Errorf("checksum algorithm %q cannot cover a composite object: %w", a, s3errs.ErrInvalidRequest)
 	}
-	for _, part := range parts {
+	for i, part := range parts {
 		if len(part.Sum) != h.Size() {
-			return ""
+			return "", fmt.Errorf("part %d carries a %d byte %s checksum, expected %d bytes: %w", i+1, len(part.Sum), a, h.Size(), s3errs.ErrInvalidRequest)
 		}
 		h.Write(part.Sum)
 	}
-	return base64.StdEncoding.EncodeToString(h.Sum(nil)) + "-" + strconv.Itoa(len(parts))
+	return base64.StdEncoding.EncodeToString(h.Sum(nil)) + "-" + strconv.Itoa(len(parts)), nil
 }
 
 // CombineChecksums returns the big endian digest the algorithm would produce
@@ -51,7 +53,7 @@ func CompositeChecksum(a ChecksumAlgorithm, parts []PartChecksum) string {
 // s3errs.ErrInvalidRequest.
 func CombineChecksums(a ChecksumAlgorithm, parts []PartChecksum) ([]byte, error) {
 	crc, ok := crcPolynomials[a]
-	if !ok || !a.SupportsType(ChecksumTypeFullObject) {
+	if !ok {
 		return nil, fmt.Errorf("checksum algorithm %q cannot cover a full object: %w", a, s3errs.ErrInvalidRequest)
 	} else if len(parts) == 0 {
 		return nil, fmt.Errorf("cannot combine the checksums of zero parts: %w", s3errs.ErrInvalidRequest)

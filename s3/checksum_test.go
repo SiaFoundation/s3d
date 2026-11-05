@@ -349,11 +349,16 @@ func assertPartDigests(t *testing.T, parts []PartChecksum, want []string) {
 func TestCompositeChecksum(t *testing.T) {
 	single := partChecksum(t, ChecksumSHA256, bytes.Repeat([]byte{'A'}, 1024))
 	assertPartDigests(t, []PartChecksum{single}, []string{"arcu6553sHVAiX4MjW0j7I7vD4w6R+Gz9Ok0Q9lTa+0="})
-	if got := CompositeChecksum(ChecksumSHA256, []PartChecksum{single}); got != "Ok6Cs5b96ux6+MWQkJO7UBT5sKPBeXBLwvj/hK89smg=-1" {
+	if got, err := CompositeChecksum(ChecksumSHA256, []PartChecksum{single}); err != nil {
+		t.Fatal(err)
+	} else if got != "Ok6Cs5b96ux6+MWQkJO7UBT5sKPBeXBLwvj/hK89smg=-1" {
 		t.Fatalf("unexpected composite %q", got)
 	}
-	if got := CompositeChecksum(ChecksumSHA256, []PartChecksum{single, {Length: single.Length}}); got != "" {
-		t.Fatalf("expected no composite, got %q", got)
+	if _, err := CompositeChecksum(ChecksumSHA256, []PartChecksum{single, {Length: single.Length}}); !errors.Is(err, s3errs.ErrInvalidRequest) {
+		t.Fatalf("expected ErrInvalidRequest, got %v", err)
+	}
+	if _, err := CompositeChecksum(ChecksumCRC64NVME, nil); !errors.Is(err, s3errs.ErrInvalidRequest) {
+		t.Fatalf("expected ErrInvalidRequest, got %v", err)
 	}
 
 	tests := []struct {
@@ -385,7 +390,9 @@ func TestCompositeChecksum(t *testing.T) {
 		t.Run(string(tt.algorithm), func(t *testing.T) {
 			parts := repeatedParts(t, tt.algorithm)
 			assertPartDigests(t, parts, tt.digests)
-			if got := CompositeChecksum(tt.algorithm, parts); got != tt.want {
+			if got, err := CompositeChecksum(tt.algorithm, parts); err != nil {
+				t.Fatal(err)
+			} else if got != tt.want {
 				t.Fatalf("expected %q, got %q", tt.want, got)
 			}
 		})

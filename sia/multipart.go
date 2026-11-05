@@ -556,21 +556,18 @@ func objectChecksumValue(upload objects.MultipartChecksum, completed []objects.P
 		partChecksums[i] = s3.PartChecksum{Sum: part.Checksum, Length: part.Size}
 	}
 
-	var value string
-	switch {
-	case upload.Type == s3.ChecksumTypeComposite && upload.Algorithm.SupportsType(s3.ChecksumTypeComposite):
-		value = s3.CompositeChecksum(upload.Algorithm, partChecksums)
-	case upload.Type == s3.ChecksumTypeFullObject:
+	switch upload.Type {
+	case s3.ChecksumTypeComposite:
+		return s3.CompositeChecksum(upload.Algorithm, partChecksums)
+	case s3.ChecksumTypeFullObject:
 		sum, err := s3.CombineChecksums(upload.Algorithm, partChecksums)
 		if err != nil {
 			return "", err
 		}
-		value = base64.StdEncoding.EncodeToString(sum)
-	}
-	if value == "" {
+		return base64.StdEncoding.EncodeToString(sum), nil
+	default:
 		return "", fmt.Errorf("cannot compute a %s %s checksum: %w", upload.Type, upload.Algorithm, s3errs.ErrInvalidRequest)
 	}
-	return value, nil
 }
 
 func syncDir(path string) error {
