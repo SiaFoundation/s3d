@@ -156,6 +156,11 @@ type Backend interface {
 	// - If ContentMD5 is set in opts, and the MD5 checksum of the data read
 	//   from 'r' does not match, [ErrBadDigest] must be returned.
 	//
+	// - If opts.Checksum is set, its algorithm must be computed over the data
+	//   read from 'r', stored with the object and returned in the result. If
+	//   opts.Checksum.Sum is set and does not match, [ErrBadDigest] must be
+	//   returned.
+	//
 	// - opts.Preconditions must be evaluated against the current version of the
 	//   object, via ObjectPreconditions.CheckWrite.
 	PutObject(ctx context.Context, bucket BucketID, object string, r io.Reader, opts PutObjectOptions) (*PutObjectResult, error)
@@ -367,6 +372,59 @@ type Backend interface {
 	// - If the object or version does not exist, [ErrNoSuchKey] or
 	//   [ErrNoSuchVersion] must be returned.
 	GetObjectLegalHold(ctx context.Context, bucket BucketID, object string, version VersionRequest) (string, error)
+
+	// PutBucketTagging replaces the tag set of the specified bucket. An empty
+	// set removes the tags.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	PutBucketTagging(ctx context.Context, bucket BucketID, tags TagSet) error
+
+	// GetBucketTagging returns the tag set of the specified bucket.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	//
+	// - If the bucket has no tags, [ErrNoSuchTagSet] must be returned.
+	GetBucketTagging(ctx context.Context, bucket BucketID) (TagSet, error)
+
+	// DeleteBucketTagging removes the tag set of the specified bucket.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	DeleteBucketTagging(ctx context.Context, bucket BucketID) error
+
+	// PutObjectTagging replaces the tag set of the addressed version. An empty
+	// set removes the tags. It creates no version and changes neither the
+	// version's last-modified time nor its lock.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	//
+	// - If the object or version does not exist, [ErrNoSuchKey] or
+	//   [ErrNoSuchVersion] must be returned.
+	//
+	// - If the current version is a delete marker, [ErrNoSuchKey] must be
+	//   returned; if an addressed version is one, [ErrMethodNotAllowed].
+	PutObjectTagging(ctx context.Context, bucket BucketID, object string, version VersionRequest, tags TagSet) (*ObjectTaggingResult, error)
+
+	// GetObjectTagging returns the tag set of the addressed version.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	//
+	// - If the object or version does not exist, [ErrNoSuchKey] or
+	//   [ErrNoSuchVersion] must be returned.
+	//
+	// - If the current version is a delete marker, [ErrNoSuchKey] must be
+	//   returned; if an addressed version is one, [ErrMethodNotAllowed].
+	GetObjectTagging(ctx context.Context, bucket BucketID, object string, version VersionRequest) (ObjectTagging, error)
+
+	// DeleteObjectTagging removes the tag set of the addressed version.
+	//
+	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
+	//
+	// - If the object or version does not exist, [ErrNoSuchKey] or
+	//   [ErrNoSuchVersion] must be returned.
+	//
+	// - If the current version is a delete marker, [ErrNoSuchKey] must be
+	//   returned; if an addressed version is one, [ErrMethodNotAllowed].
+	DeleteObjectTagging(ctx context.Context, bucket BucketID, object string, version VersionRequest) (*ObjectTaggingResult, error)
 
 	// ListObjectVersions lists all versions (including delete markers) of the
 	// objects in the specified bucket.
@@ -709,6 +767,8 @@ func (s *s3) route(r *http.Request, bucket, object string) (operation, error) {
 		return s.routeObjectRetention(r, object, VersionFromQuery(query["versionId"]))
 	} else if _, ok := query["legal-hold"]; ok {
 		return s.routeObjectLegalHold(r, object, VersionFromQuery(query["versionId"]))
+	} else if _, ok := query["tagging"]; ok && object != "" {
+		return s.routeObjectTagging(r, object, VersionFromQuery(query["versionId"]))
 	} else if version := VersionFromQuery(query["versionId"]); version.Specified {
 		return s.routeObjectVersion(r, object, version)
 	} else if bucket != "" && object != "" {

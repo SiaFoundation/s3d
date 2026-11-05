@@ -266,7 +266,7 @@ func (s v4Signature) verify(req *http.Request, store KeyStore, region string, ma
 
 	signedHeaders, err := extractSignedHeaders(req, s.SignedHeaders)
 	if err != nil {
-		return nil, malformed
+		return nil, err
 	} else if err := assertSignedAMZHeaders(req.Header, s.SignedHeaders); err != nil {
 		return nil, err
 	}

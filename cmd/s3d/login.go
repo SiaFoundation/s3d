@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"go.sia.tech/core/types"
@@ -13,6 +15,8 @@ import (
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
 )
+
+const defaultIndexerURL = "https://sia.storage"
 
 func openStore(log *zap.Logger) (*sqlite.Store, error) {
 	if err := os.MkdirAll(cfg.Directory, 0700); err != nil {
@@ -31,9 +35,12 @@ func newSDKBuilder(indexerURL string) (*sdk.Builder, error) {
 	})
 }
 
-func runLoginCmd(ctx context.Context, configPath string) {
+func runLoginCmd(ctx context.Context, configPath string, disableStdin bool) {
+	preAuthorizedKey, err := preAuthorizedKeyFromEnv()
+	checkFatalError("failed to read pre-authorized key", err)
+
 	// if no config exists yet, run the config wizard first
-	if configPath == "" {
+	if configPath == "" && !disableStdin {
 		fmt.Println("No existing config found. Launching configuration wizard.")
 		fmt.Println("")
 		runConfigCmd("")
@@ -41,7 +48,11 @@ func runLoginCmd(ctx context.Context, configPath string) {
 	}
 
 	fmt.Println("This command will register s3d with the Sia indexer.")
-	fmt.Println("You will be prompted for a recovery phrase and asked to visit a URL to approve the app connection.")
+	if preAuthorizedKey != nil {
+		fmt.Println("The app connection is approved with the pre-authorized key from " + preAuthorizedKeyEnvVar + ".")
+	} else if !disableStdin {
+		fmt.Println("You will be asked to visit a URL to approve the app connection.")
+	}
 	fmt.Println("")
 
 	store, err := openStore(zap.NewNop())
@@ -55,16 +66,115 @@ func runLoginCmd(ctx context.Context, configPath string) {
 		checkFatalError("failed to check app key", err)
 	}
 
-	indexerURL := promptIndexerURL()
-	phrase := promptRecoveryPhrase()
-
-	sdkClient, err := registerSDK(ctx, indexerURL, phrase)
+	var appKey types.PrivateKey
+	var indexerURL string
+	if disableStdin {
+		if err := missingRegistrationEnv(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		appKey, indexerURL, err = appKeyFromEnv(ctx)
+	} else {
+		appKey, indexerURL, err = appKeyFromPrompts(ctx, preAuthorizedKey)
+	}
 	checkFatalError("failed to register app", err)
-	defer sdkClient.Close()
-
-	checkFatalError("failed to store app key", store.SetAppKey(sdkClient.AppKey(), indexerURL))
+	checkFatalError("failed to store app key", store.SetAppKey(appKey, indexerURL))
 
 	fmt.Println(ansiStyle("32", "Login successful. You can now start s3d."))
+}
+
+// preAuthorizedKeyFromEnv returns the pre-authorized key set in the
+// environment, or nil when the variable is unset.
+func preAuthorizedKeyFromEnv() (types.PrivateKey, error) {
+	v := os.Getenv(preAuthorizedKeyEnvVar)
+	if v == "" {
+		return nil, nil
+	}
+
+	key, err := hex.DecodeString(v)
+	if err != nil {
+		return nil, fmt.Errorf("%s is not valid hex: %w", preAuthorizedKeyEnvVar, err)
+	} else if len(key) < 32 {
+		return nil, fmt.Errorf("%s must be at least 32 bytes", preAuthorizedKeyEnvVar)
+	}
+	return key, nil
+}
+
+// connectPreAuthorized registers the app with a key the indexer has already
+// authorized, so no approval in the browser is needed.
+func connectPreAuthorized(ctx context.Context, indexerURL, phrase string, key types.PrivateKey) (*sdk.SDK, error) {
+	builder, err := newSDKBuilder(indexerURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create SDK builder: %w", err)
+	}
+	defer builder.Close()
+
+	return builder.ConnectPreAuthorized(ctx, key, phrase)
+}
+
+// appKeyFromEnv registers the app with the indexer using the pre-authorized
+// key and recovery phrase from the environment and returns the app key and the
+// indexer URL. The indexer URL defaults to the production one.
+func appKeyFromEnv(ctx context.Context) (types.PrivateKey, string, error) {
+	key, err := preAuthorizedKeyFromEnv()
+	if err != nil {
+		return nil, "", err
+	}
+	indexerURL := os.Getenv(indexerURLEnvVar)
+	if indexerURL == "" {
+		indexerURL = defaultIndexerURL
+	}
+
+	sdkClient, err := connectPreAuthorized(ctx, indexerURL, os.Getenv(recoveryPhraseEnvVar), key)
+	if err != nil {
+		return nil, "", err
+	}
+	defer sdkClient.Close()
+	return sdkClient.AppKey(), indexerURL, nil
+}
+
+// missingRegistrationEnv returns an error naming the environment variables
+// needed to register without prompting that are unset.
+func missingRegistrationEnv() error {
+	var missing []string
+	if os.Getenv(preAuthorizedKeyEnvVar) == "" {
+		missing = append(missing, preAuthorizedKeyEnvVar)
+	}
+	if os.Getenv(recoveryPhraseEnvVar) == "" {
+		missing = append(missing, recoveryPhraseEnvVar)
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%s must be set", strings.Join(missing, " and "))
+}
+
+// appKeyFromPrompts registers the app with the indexer and returns the app key
+// and the indexer URL. The indexer URL and recovery phrase come from the
+// environment, with a prompt for whichever is unset. Without a pre-authorized
+// key the connection is approved in the browser.
+func appKeyFromPrompts(ctx context.Context, key types.PrivateKey) (types.PrivateKey, string, error) {
+	indexerURL := os.Getenv(indexerURLEnvVar)
+	if indexerURL == "" {
+		indexerURL = promptIndexerURL()
+	}
+	phrase := os.Getenv(recoveryPhraseEnvVar)
+	if phrase == "" {
+		phrase = promptRecoveryPhrase()
+	}
+
+	var sdkClient *sdk.SDK
+	var err error
+	if key != nil {
+		sdkClient, err = connectPreAuthorized(ctx, indexerURL, phrase, key)
+	} else {
+		sdkClient, err = registerSDK(ctx, indexerURL, phrase)
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	defer sdkClient.Close()
+	return sdkClient.AppKey(), indexerURL, nil
 }
 
 // existingAppKey returns the app key recorded in the configured data directory
@@ -119,10 +229,10 @@ func registerSDK(ctx context.Context, indexerURL, phrase string) (*sdk.SDK, erro
 
 // promptIndexerURL reads the indexer URL, defaulting to the production one.
 func promptIndexerURL() string {
-	if indexerURL := readInput("Indexer URL (default: https://sia.storage)"); indexerURL != "" {
+	if indexerURL := readInput("Indexer URL (default: " + defaultIndexerURL + ")"); indexerURL != "" {
 		return indexerURL
 	}
-	return "https://sia.storage"
+	return defaultIndexerURL
 }
 
 // promptExistingRecoveryPhrase reads the recovery phrase of an account that

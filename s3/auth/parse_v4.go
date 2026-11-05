@@ -134,13 +134,13 @@ func parseDateHeader(header http.Header) (time.Time, error) {
 }
 
 // extractSignedHeaders extracts the signed headers specified in the
-// Authorization header from the http.Request headers.
+// Authorization header from the http.Request headers. Like S3 it denies a
+// request that does not sign "host", and one missing a signed header, which
+// cannot match its signature.
 func extractSignedHeaders(req *http.Request, signedHeaders []string) (http.Header, error) {
 	reqHeaders := req.Header
-	// find whether "host" is part of list of signed headers.
-	// if not return ErrAuthorizationHeaderMalformed. "host" is mandatory.
 	if !slices.Contains(signedHeaders, "host") {
-		return nil, s3errs.ErrAuthorizationHeaderMalformed
+		return nil, s3errs.ErrAccessDeniedUnsignedHeaders
 	}
 	extractedSignedHeaders := make(http.Header)
 	for _, header := range signedHeaders {
@@ -183,7 +183,7 @@ func extractSignedHeaders(req *http.Request, signedHeaders []string) (http.Heade
 			// calculation to be compatible with such clients.
 			extractedSignedHeaders.Set(header, strconv.FormatInt(req.ContentLength, 10))
 		default:
-			return nil, s3errs.ErrAuthorizationHeaderMalformed
+			return nil, s3errs.ErrSignatureDoesNotMatch
 		}
 	}
 	return extractedSignedHeaders, nil

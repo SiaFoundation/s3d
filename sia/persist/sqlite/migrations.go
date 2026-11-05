@@ -550,6 +550,28 @@ DROP TABLE bucket_lifecycle_configurations_backup;`)
 		return err
 	},
 	func(tx *txn, _ *zap.Logger) error {
+		_, err := tx.Exec(`CREATE TABLE bucket_tags (
+    bucket_id INTEGER NOT NULL,
+    position INTEGER NOT NULL, -- keeps the order the client gave
+    tag_key TEXT NOT NULL,
+    tag_value TEXT NOT NULL,
+    FOREIGN KEY (bucket_id) REFERENCES buckets(id) ON DELETE CASCADE,
+    PRIMARY KEY (bucket_id, tag_key)
+) WITHOUT ROWID;
+
+CREATE TABLE object_tags (
+    bucket_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    version_id TEXT NOT NULL,
+    position INTEGER NOT NULL, -- keeps the order the client gave
+    tag_key TEXT NOT NULL,
+    tag_value TEXT NOT NULL,
+    FOREIGN KEY (bucket_id, name, version_id) REFERENCES objects(bucket_id, name, version_id) ON DELETE CASCADE,
+    PRIMARY KEY (bucket_id, name, version_id, tag_key)
+) WITHOUT ROWID;`)
+		return err
+	},
+	func(tx *txn, _ *zap.Logger) error {
 		_, err := tx.Exec(`ALTER TABLE snapshots ADD COLUMN scheduled INTEGER NOT NULL DEFAULT FALSE CHECK (scheduled IN (FALSE, TRUE));
 ALTER TABLE global_settings ADD COLUMN snapshot_schedule TEXT NOT NULL DEFAULT '';
 ALTER TABLE global_settings ADD COLUMN snapshot_schedule_since INTEGER NOT NULL DEFAULT 0;

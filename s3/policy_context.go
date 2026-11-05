@@ -158,7 +158,8 @@ func (a *bucketAccess) actionPolicyContext(action string) (policyContext, error)
 			}
 			extra["s3:max-keys"] = []string{strconv.FormatInt(maxKeys, 10)}
 		}
-	case actionGetObjectVersion, actionDeleteObjectVersion:
+	case actionGetObjectVersion, actionDeleteObjectVersion,
+		actionGetObjectVersionTagging, actionPutObjectVersionTagging, actionDeleteObjectVersionTagging:
 		if version := VersionFromQuery(query["versionId"]); version.Specified {
 			extra["s3:versionid"] = []string{FormatVersion(version.ID)}
 		}
@@ -210,6 +211,25 @@ func objectLockPolicyContext(lock *ObjectLockState) policyContext {
 	if lock != nil && lock.LegalHold != "" {
 		extra["s3:object-lock-legal-hold"] = []string{lock.LegalHold}
 	}
+	return extra
+}
+
+// requestObjectTagPrefix prefixes the condition key of each tag a request
+// applies to an object.
+const requestObjectTagPrefix = "s3:requestobjecttag/"
+
+// requestObjectTagPolicyContext returns the condition keys of a tag set the
+// request applies to an object.
+func requestObjectTagPolicyContext(tags TagSet) policyContext {
+	extra := make(policyContext)
+	keys := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		keys = append(keys, tag.Key)
+		// TagSet.validate rejects keys differing only in case, so each tag
+		// has its own condition key
+		extra[requestObjectTagPrefix+strings.ToLower(tag.Key)] = []string{tag.Value}
+	}
+	extra["s3:requestobjecttagkeys"] = keys
 	return extra
 }
 
@@ -335,14 +355,15 @@ var validConditionKeys = map[string]bool{
 }
 
 // conditionKeyPrefixes are the condition keys that take a tag key suffix.
+// s3:BucketTag and s3:ExistingObjectTag are left out, so a policy using them is
+// rejected. Unlike other keys s3d cannot populate, they do not evaluate as
+// missing: s3d stores those tags, so a policy would expect them to apply.
 var conditionKeyPrefixes = []string{
 	"aws:principaltag/",
 	"aws:requesttag/",
 	"aws:resourcetag/",
 	"s3:accesspointtag/",
-	"s3:buckettag/",
-	"s3:existingobjecttag/",
-	"s3:requestobjecttag/",
+	requestObjectTagPrefix,
 }
 
 // validConditionKey reports whether key is a known condition key, ignoring

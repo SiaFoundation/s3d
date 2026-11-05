@@ -50,6 +50,10 @@ s3d login
 register `s3d` with the Sia indexer. Visit the printed URL in your browser to
 approve the app connection and complete setup.
 
+`S3D_INDEXER_URL`, `S3D_RECOVERY_PHRASE` and `S3D_PREAUTHORIZED_KEY` are used
+when set, by `s3d login` and by `s3d` itself on first start. Pass `-env` to
+fail instead of prompting when one is missing.
+
 To update the configuration later, run
 
 ```sh
@@ -353,7 +357,7 @@ included in their `ListBuckets` response.
 `aws:userid` and `aws:PrincipalAccount` are the username, or `anonymous` for
 unsigned requests. `aws:PrincipalArn` is `arn:aws:iam::<username>:root`.
 Condition keys for unsupported features evaluate as missing. Unknown condition
-keys are rejected.
+keys are rejected, as are `s3:BucketTag` and `s3:ExistingObjectTag`.
 
 This policy allows `alice` to read and write objects under `alice/`:
 
@@ -389,6 +393,14 @@ wildcard), `x-amz-if-match-size` and `x-amz-if-match-last-modified-time`, and
 each object of a multi delete honors its `ETag`, `Size` and `LastModifiedTime`
 elements, where a failed precondition fails only that object. A conditional
 delete with nothing to delete is a no-op, as an unconditional one is.
+
+`PutObject`, `POST Object` and `UploadPart` validate an `x-amz-checksum-*`
+header against the body and echo the checksum back on the response. A trailing
+checksum sent with `PutObject` is validated and stored the same way.
+`HeadObject` and `GetObject` return the stored checksum and
+`x-amz-checksum-type` only when the request carries `x-amz-checksum-mode` set
+to `ENABLED`, and a ranged response never carries one. An object assembled by
+`CompleteMultipartUpload` has no checksum of its own yet.
 
 ### Operations
 
@@ -464,6 +476,7 @@ generate one.
 | `-api.s3.https` | Address to serve the S3 API on over HTTPS (disabled by default, see [HTTPS](#https)) |
 | `-log.file.enabled` | Enable logging to a file (default `true`) |
 | `-log.stdout.enableANSI` | Enable ANSI color codes on stdout (default `true`, `false` on Windows) |
+| `-env` | Fail instead of prompting when an environment variable is missing |
 
 ### Subcommands
 
@@ -507,6 +520,9 @@ file and CLI flags. The order of precedence from lowest to highest is:
 |----------|-------------|
 | `S3D_CONFIG_FILE` | Override the config file path |
 | `S3D_DATA_DIR` | Override the data directory |
+| `S3D_INDEXER_URL` | Indexer to register with (default `https://sia.storage`) |
+| `S3D_RECOVERY_PHRASE` | Recovery phrase to register with |
+| `S3D_PREAUTHORIZED_KEY` | Pre-authorized key in hex, approves the app connection without the browser |
 
 ### Example Config
 

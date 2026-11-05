@@ -221,7 +221,7 @@ func TestPostObjectSDKForms(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	assertUpload := func(upload *postUpload) {
+	assertUpload := func(upload *postUpload) *http.Response {
 		t.Helper()
 
 		resp, body := upload.post(t, tester)
@@ -249,6 +249,7 @@ func TestPostObjectSDKForms(t *testing.T) {
 		} else if got := object.Metadata["origin"]; got != "form" {
 			t.Fatalf("unexpected metadata %q", got)
 		}
+		return resp
 	}
 
 	// boto3 spells the fields in lowercase and sends no bucket field
@@ -259,7 +260,12 @@ func TestPostObjectSDKForms(t *testing.T) {
 		{"x-amz-meta-origin", "form"},
 		{"x-amz-checksum-sha256", base64.StdEncoding.EncodeToString(sum[:])},
 	}
-	assertUpload(upload)
+	resp := assertUpload(upload)
+	if got := resp.Header.Get("x-amz-checksum-sha256"); got != base64.StdEncoding.EncodeToString(sum[:]) {
+		t.Fatalf("unexpected checksum %q", got)
+	} else if got := resp.Header.Get("x-amz-checksum-type"); got != "FULL_OBJECT" {
+		t.Fatalf("unexpected checksum type %q", got)
+	}
 
 	// the JavaScript SDK capitalizes the fields and sends the bucket
 	upload = newPostUpload(bucket, "javascript/photo.txt")
@@ -510,7 +516,7 @@ func TestPostObjectRejections(t *testing.T) {
 	// a checksum field that does not decode to a digest of the right length
 	upload = newPostUpload(bucket, "rejected")
 	upload.fields = [][2]string{{"x-amz-checksum-sha256", "sailorjerry"}}
-	assertRejected(upload, s3errs.ErrInvalidRequest)
+	assertRejected(upload, s3errs.ErrBadDigest)
 
 	// a well formed checksum field the file does not match
 	upload = newPostUpload(bucket, "rejected")

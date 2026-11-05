@@ -97,6 +97,11 @@ func TestMetadataHeaders(t *testing.T) {
 		"X-Amz-Sdk-Checksum-Algorithm",
 		"X-Amz-Trailer",
 		"X-Amz-Security-Token",
+		// written by the backend next to the checksum it computed, or read off
+		// the request and never stored
+		"X-Amz-Checksum-Algorithm",
+		"X-Amz-Checksum-Mode",
+		"X-Amz-Checksum-Type",
 		// routing
 		"X-Amz-Copy-Source",
 		"X-Amz-Metadata-Directive",
@@ -104,6 +109,7 @@ func TestMetadataHeaders(t *testing.T) {
 		"X-Amz-Acl",
 		"X-Amz-Storage-Class",
 		"X-Amz-Tagging",
+		"X-Amz-Tagging-Directive",
 		"X-Amz-Website-Redirect-Location",
 		// stored as object lock state on the version, never as metadata
 		"X-Amz-Object-Lock-Mode",
@@ -156,11 +162,15 @@ func TestWriteGetOrHeadObjectHeaders(t *testing.T) {
 			"X-Amz-Object-Lock-Mode":                    "GOVERNANCE",
 			"x-amz-meta-keep":                           "kept",
 			"Content-Type":                              "text/plain",
+			"X-Amz-Checksum-Type":                       "FULL_OBJECT",
 		},
 	}
 
+	r := httptest.NewRequest(http.MethodGet, "/bucket/object", nil)
+	r.Header.Set(HeaderXAMZChecksumMode, "ENABLED")
+
 	w := httptest.NewRecorder()
-	if err := writeGetOrHeadObjectHeaders(obj, w, httptest.NewRequest(http.MethodGet, "/bucket/object", nil)); err != nil {
+	if err := writeGetOrHeadObjectHeaders(obj, w, r); err != nil {
 		t.Fatal(err)
 	}
 
@@ -180,6 +190,18 @@ func TestWriteGetOrHeadObjectHeaders(t *testing.T) {
 	}
 	if got := w.Header().Get("Content-Type"); got != "text/plain" {
 		t.Fatal("mismatch", got)
+	}
+	// the checksum type is served back even though a request cannot store it
+	if got := w.Header().Get("X-Amz-Checksum-Type"); got != "FULL_OBJECT" {
+		t.Fatal("mismatch", got)
+	}
+
+	w = httptest.NewRecorder()
+	if err := writeGetOrHeadObjectHeaders(obj, w, httptest.NewRequest(http.MethodGet, "/bucket/object", nil)); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.Header().Get("X-Amz-Checksum-Type"); got != "" {
+		t.Fatal("served", got)
 	}
 }
 
@@ -282,6 +304,99 @@ func TestRequestObjectLock(t *testing.T) {
 
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("expected %+v, got %+v", tt.want, got)
+			}
+		})
+	}
+}
+
+func TestTagSetValidate(t *testing.T) {
+	tests := []struct {
+		name    string
+		tags    TagSet
+		limits  tagLimits
+		wantErr error
+	}{
+		{"empty set", nil, objectTagLimits, nil},
+		{"empty value", TagSet{{Key: "key", Value: ""}}, objectTagLimits, nil},
+		{"unicode", TagSet{{Key: "日本語", Value: "Résumé 123 _.:/=+@-"}}, objectTagLimits, nil},
+		{"separator spaces", TagSet{{Key: "key", Value: "a b c　d"}}, objectTagLimits, nil},
+		{"empty key", TagSet{{Key: "", Value: "value"}}, objectTagLimits, s3errs.ErrInvalidTag},
+		{"duplicate key", TagSet{{Key: "key", Value: "one"}, {Key: "key", Value: "two"}}, objectTagLimits, s3errs.ErrInvalidTag},
+		{"keys differing only in case", TagSet{{Key: "classification", Value: "public"}, {Key: "Classification", Value: "secret"}}, objectTagLimits, s3errs.ErrInvalidTag},
+		{"reserved prefix", TagSet{{Key: "aws:owner", Value: "one"}}, objectTagLimits, s3errs.ErrInvalidTag},
+		{"reserved prefix uppercase", TagSet{{Key: "AWS:owner", Value: "one"}}, bucketTagLimits, s3errs.ErrInvalidTag},
+		{"invalid character", TagSet{{Key: "key", Value: "value&"}}, objectTagLimits, s3errs.ErrInvalidTag},
+		{"invalid utf8", TagSet{{Key: "key", Value: "\xff"}}, objectTagLimits, s3errs.ErrInvalidTag},
+		{"tab", TagSet{{Key: "key", Value: "a\tb"}}, objectTagLimits, s3errs.ErrInvalidTag},
+		{"newline", TagSet{{Key: "key\n", Value: "v"}}, bucketTagLimits, s3errs.ErrInvalidTag},
+		{"carriage return", TagSet{{Key: "key", Value: "a\rb"}}, objectTagLimits, s3errs.ErrInvalidTag},
+		{"max key", TagSet{{Key: strings.Repeat("界", 128), Value: "v"}}, objectTagLimits, nil},
+		{"long key", TagSet{{Key: strings.Repeat("界", 129), Value: "v"}}, objectTagLimits, s3errs.ErrInvalidTag},
+		{"max value", TagSet{{Key: "k", Value: strings.Repeat("界", 256)}}, objectTagLimits, nil},
+		{"long value", TagSet{{Key: "k", Value: strings.Repeat("界", 257)}}, objectTagLimits, s3errs.ErrInvalidTag},
+		// object tags count UTF-16 code units, bucket tags characters
+		{"utf16 boundary", TagSet{{Key: strings.Repeat("𐐀", 64), Value: "v"}}, objectTagLimits, nil},
+		{"utf16 exceeded", TagSet{{Key: strings.Repeat("𐐀", 65), Value: "v"}}, objectTagLimits, s3errs.ErrInvalidTag},
+		{"bucket characters", TagSet{{Key: strings.Repeat("𐐀", 128), Value: "v"}}, bucketTagLimits, nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.tags.validate(tc.limits); !errors.Is(err, tc.wantErr) {
+				t.Fatalf("expected %v, got %v", tc.wantErr, err)
+			}
+		})
+	}
+
+	// each kind of tag set has its own limit on the number of tags
+	for _, limits := range []tagLimits{objectTagLimits, bucketTagLimits} {
+		t.Run(fmt.Sprintf("%d tags", limits.count), func(t *testing.T) {
+			tags := make(TagSet, limits.count)
+			for i := range tags {
+				tags[i] = Tag{Key: fmt.Sprint(i), Value: "v"}
+			}
+			if err := tags.validate(limits); err != nil {
+				t.Fatal(err)
+			}
+			tags = append(tags, Tag{Key: "extra", Value: "v"})
+			if err := tags.validate(limits); !errors.Is(err, s3errs.ErrInvalidTag) {
+				t.Fatalf("expected %v, got %v", s3errs.ErrInvalidTag, err)
+			}
+		})
+	}
+}
+
+func TestParseTaggingXML(t *testing.T) {
+	tests := []struct {
+		name     string
+		document string
+		wantErr  error
+	}{
+		{"empty tag set", `<Tagging><TagSet/></Tagging>`, nil},
+		{"namespaced", `<Tagging xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><TagSet><Tag><Key>k</Key><Value/></Tag></TagSet></Tagging>`, nil},
+		{"prolog", "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!-- comment -->\n<Tagging><TagSet/></Tagging>\n", nil},
+		{"empty document", ``, s3errs.ErrMalformedXML},
+		{"leading text", `junk<Tagging><TagSet/></Tagging>`, s3errs.ErrMalformedXML},
+		{"doctype", `<!DOCTYPE Tagging><Tagging><TagSet/></Tagging>`, s3errs.ErrMalformedXML},
+		{"wrong namespace", `<Tagging xmlns="urn:wrong"><TagSet/></Tagging>`, s3errs.ErrMalformedXML},
+		{"unknown attribute", `<Tagging extra="no"><TagSet/></Tagging>`, s3errs.ErrMalformedXML},
+		{"wrong root", `<Other><TagSet/></Other>`, s3errs.ErrMalformedXML},
+		// a missing TagSet must not clear the tags
+		{"missing tag set", `<Tagging/>`, s3errs.ErrMalformedXML},
+		{"two tag sets", `<Tagging><TagSet/><TagSet/></Tagging>`, s3errs.ErrMalformedXML},
+		{"missing value", `<Tagging><TagSet><Tag><Key>k</Key></Tag></TagSet></Tagging>`, s3errs.ErrMalformedXML},
+		{"missing key", `<Tagging><TagSet><Tag><Value>v</Value></Tag></TagSet></Tagging>`, s3errs.ErrMalformedXML},
+		{"two keys", `<Tagging><TagSet><Tag><Key>k</Key><Key>v</Key></Tag></TagSet></Tagging>`, s3errs.ErrMalformedXML},
+		{"unknown element", `<Tagging><TagSet><Unknown/></TagSet></Tagging>`, s3errs.ErrMalformedXML},
+		{"nested key", `<Tagging><TagSet><Tag><Key><Nested/></Key><Value>v</Value></Tag></TagSet></Tagging>`, s3errs.ErrMalformedXML},
+		{"trailing element", `<Tagging><TagSet/></Tagging><Other/>`, s3errs.ErrMalformedXML},
+		{"trailing text", `<Tagging><TagSet/></Tagging>junk`, s3errs.ErrMalformedXML},
+		{"text in tag set", `<Tagging><TagSet>junk</TagSet></Tagging>`, s3errs.ErrMalformedXML},
+		{"duplicate key", `<Tagging><TagSet><Tag><Key>k</Key><Value>a</Value></Tag><Tag><Key>k</Key><Value>b</Value></Tag></TagSet></Tagging>`, s3errs.ErrInvalidTag},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := parseTaggingXML([]byte(tc.document), objectTagLimits); !errors.Is(err, tc.wantErr) {
+				t.Fatalf("expected %v, got %v", tc.wantErr, err)
 			}
 		})
 	}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/md5"
 	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"hash"
@@ -13,6 +14,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
@@ -582,8 +584,22 @@ func (s *Sia) PutObject(ctx context.Context, bucket s3.BucketID, object string, 
 		return nil, s3errs.ErrBadDigest
 	} else if opts.ContentMD5 != nil && contentMD5 != *opts.ContentMD5 {
 		return nil, s3errs.ErrBadDigest
-	} else if checksumHash != nil && !bytes.Equal(checksumHash.Sum(nil), opts.Checksum.Sum) {
-		return nil, s3errs.ErrBadDigest
+	}
+
+	var checksum *s3.RequestChecksum
+	if checksumHash != nil {
+		checksum = &s3.RequestChecksum{Algorithm: opts.Checksum.Algorithm, Sum: checksumHash.Sum(nil)}
+		if opts.Checksum.Sum != nil && !bytes.Equal(checksum.Sum, opts.Checksum.Sum) {
+			return nil, s3errs.ErrBadDigest
+		}
+		if opts.Meta == nil {
+			opts.Meta = make(map[string]string)
+		}
+		s3.ObjectChecksum{
+			Algorithm: s3.ChecksumAlgorithm(strings.ToUpper(checksum.Algorithm)),
+			Type:      s3.ChecksumTypeFullObject,
+			Value:     base64.StdEncoding.EncodeToString(checksum.Sum),
+		}.StoreInMeta(opts.Meta)
 	}
 
 	// store the object in the database
@@ -603,5 +619,6 @@ func (s *Sia) PutObject(ctx context.Context, bucket s3.BucketID, object string, 
 	return &s3.PutObjectResult{
 		ContentMD5: contentMD5,
 		VersionID:  versionID,
+		Checksum:   checksum,
 	}, nil
 }

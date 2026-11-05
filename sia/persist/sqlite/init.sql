@@ -32,6 +32,15 @@ CREATE TABLE buckets (
 );
 CREATE INDEX buckets_user_id_idx ON buckets(user_id);
 
+CREATE TABLE bucket_tags (
+    bucket_id INTEGER NOT NULL,
+    position INTEGER NOT NULL, -- keeps the order the client gave
+    tag_key TEXT NOT NULL,
+    tag_value TEXT NOT NULL,
+    FOREIGN KEY (bucket_id) REFERENCES buckets(id) ON DELETE CASCADE,
+    PRIMARY KEY (bucket_id, tag_key)
+) WITHOUT ROWID;
+
 CREATE TABLE sia_objects (
     id BLOB PRIMARY KEY, -- digest of the object's slab slices
     encrypted_data_key BLOB NOT NULL,
@@ -146,6 +155,17 @@ CREATE TABLE object_parts (
     FOREIGN KEY (bucket_id, name, version_id) REFERENCES objects(bucket_id, name, version_id) ON DELETE CASCADE,
     PRIMARY KEY (bucket_id, name, version_id, part_number)
 );
+
+CREATE TABLE object_tags (
+    bucket_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    version_id TEXT NOT NULL,
+    position INTEGER NOT NULL, -- keeps the order the client gave
+    tag_key TEXT NOT NULL,
+    tag_value TEXT NOT NULL,
+    FOREIGN KEY (bucket_id, name, version_id) REFERENCES objects(bucket_id, name, version_id) ON DELETE CASCADE,
+    PRIMARY KEY (bucket_id, name, version_id, tag_key)
+) WITHOUT ROWID;
 
 CREATE TABLE orphaned_objects (
     sia_object_id BLOB PRIMARY KEY,
