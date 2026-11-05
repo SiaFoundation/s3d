@@ -11,33 +11,46 @@ import (
 	"strings"
 )
 
-// requireAdminConfig exits if the admin API address or password are unset.
-func requireAdminConfig() {
+// adminClient sends requests to the admin API of the running s3d instance.
+type adminClient struct {
+	addr     string
+	password string
+}
+
+// newAdminClient returns a client for the configured admin API, exiting if the
+// admin API address or password are unset.
+func newAdminClient() adminClient {
 	if cfg.AdminAddress == "" {
 		checkFatalError("missing admin configuration", errors.New("adminAddress is not set in the config file"))
 	} else if cfg.AdminPassword == "" {
 		checkFatalError("missing admin configuration", errors.New("adminPassword is not set in the config file"))
 	}
+	return adminClient{
+		addr:     cfg.AdminAddress,
+		password: cfg.AdminPassword,
+	}
 }
 
-// adminRequest sends a request to the admin API route and decodes the JSON
-// response into out when out is not nil. Cancellation is driven by ctx alone,
-// with no client timeout, since some operations can block for a long time.
-func adminRequest(ctx context.Context, method, addr, password, route string, in, out any) error {
-	var body io.Reader
-	if in != nil {
-		data, err := json.Marshal(in)
+// request sends a request to the admin API route, encoding body as JSON when
+// it is not nil, and decodes the JSON response into out when out is not nil.
+// Cancellation is driven by ctx alone, with no client timeout, since some
+// operations can block for a long time.
+func (c adminClient) request(ctx context.Context, method, route string, body, out any) error {
+	var reqBody io.Reader
+	if body != nil {
+		buf, err := json.Marshal(body)
 		if err != nil {
 			return fmt.Errorf("failed to encode request: %w", err)
 		}
-		body = bytes.NewReader(data)
+		reqBody = bytes.NewReader(buf)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, "http://"+addr+route, body)
+
+	req, err := http.NewRequestWithContext(ctx, method, "http://"+c.addr+route, reqBody)
 	if err != nil {
 		return fmt.Errorf("failed to build request: %w", err)
 	}
-	req.SetBasicAuth("", password)
-	if in != nil {
+	req.SetBasicAuth("", c.password)
+	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 

@@ -40,9 +40,9 @@ func runUsersCreate(ctx context.Context, cmd *flag.FlagSet) {
 		cmd.Usage()
 		os.Exit(1)
 	}
-	requireAdminConfig()
+	client := newAdminClient()
 
-	err := adminRequest(ctx, http.MethodPost, cfg.AdminAddress, cfg.AdminPassword, "/users", s3.CreateUserRequest{Name: args[0]}, nil)
+	err := client.request(ctx, http.MethodPost, "/users", s3.CreateUserRequest{Name: args[0]}, nil)
 	checkFatalError("failed to create user", err)
 	fmt.Printf("Created user %q\n", args[0])
 }
@@ -53,9 +53,9 @@ func runUsersDelete(ctx context.Context, cmd *flag.FlagSet) {
 		cmd.Usage()
 		os.Exit(1)
 	}
-	requireAdminConfig()
+	client := newAdminClient()
 
-	err := adminRequest(ctx, http.MethodDelete, cfg.AdminAddress, cfg.AdminPassword, "/users/"+url.PathEscape(args[0]), nil, nil)
+	err := client.request(ctx, http.MethodDelete, "/users/"+url.PathEscape(args[0]), nil, nil)
 	checkFatalError("failed to delete user", err)
 	fmt.Printf("Deleted user %q\n", args[0])
 }
@@ -65,10 +65,10 @@ func runUsersList(ctx context.Context, cmd *flag.FlagSet) {
 		cmd.Usage()
 		os.Exit(1)
 	}
-	requireAdminConfig()
+	client := newAdminClient()
 
 	var users []string
-	err := adminRequest(ctx, http.MethodGet, cfg.AdminAddress, cfg.AdminPassword, "/users", nil, &users)
+	err := client.request(ctx, http.MethodGet, "/users", nil, &users)
 	checkFatalError("failed to list users", err)
 
 	if len(users) == 0 {
