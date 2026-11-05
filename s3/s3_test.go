@@ -374,12 +374,26 @@ func TestUsers(t *testing.T) {
 		t.Fatal("unexpected users", users)
 	}
 
-	// creating the user again conflicts, and a missing name is rejected
+	// creating the user again conflicts, and a missing, overlong or invalid
+	// name is rejected
 	if s := status(http.MethodPost, "/users", s3.CreateUserRequest{Name: "alice"}); s != http.StatusConflict {
 		t.Fatalf("expected 409, got %d", s)
 	}
 	if s := status(http.MethodPost, "/users", s3.CreateUserRequest{}); s != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", s)
+	}
+	if s := status(http.MethodPost, "/users", s3.CreateUserRequest{Name: strings.Repeat("a", 65)}); s != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", s)
+	}
+	if s := status(http.MethodPost, "/users", s3.CreateUserRequest{Name: "a/b"}); s != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", s)
+	}
+
+	// the permitted punctuation survives the delete route
+	if s := status(http.MethodPost, "/users", s3.CreateUserRequest{Name: "al.ice-1@x"}); s != http.StatusOK {
+		t.Fatalf("expected 200, got %d", s)
+	} else if s := status(http.MethodDelete, "/users/al.ice-1@x", nil); s != http.StatusOK {
+		t.Fatalf("expected 200, got %d", s)
 	}
 
 	// a user that owns a bucket cannot be deleted
