@@ -271,24 +271,40 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, version s3.
 	return attachSiaObject(tx, obj, partObjID)
 }
 
-// ObjectAttributes returns an object together with one page of its parts, read
-// in a single transaction. A nil page skips the parts and reports no truncation.
-func (s *Store) ObjectAttributes(bucket s3.BucketID, name string, version s3.VersionRequest, page *s3.ObjectAttributesPage) (*objects.Object, []objects.Part, bool, error) {
-	var obj objects.Object
-	var parts []objects.Part
-	var truncated bool
-	if err := s.transaction(func(tx *txn) error {
-		obj, parts, truncated = objects.Object{}, parts[:0], false // reset per attempt
+// ObjectAttributes returns the attributes of an object together with one page
+// of its parts, read in a single transaction. A nil page skips the parts and
+// reports no truncation.
+func (s *Store) ObjectAttributes(bucket s3.BucketID, name string, version s3.VersionRequest, page *s3.ObjectAttributesPage) (*s3.ObjectAttributes, error) {
+	var attrs s3.ObjectAttributes
+	err := s.transaction(func(tx *txn) error {
+		attrs = s3.ObjectAttributes{} // reset per attempt
 
 		bid, status, err := bucketIDAndVersioning(tx, bucket)
 		if err != nil {
 			return err
 		}
-		if err := getObject(tx, &obj, bid, name, version, nil); err != nil {
+		attrs.Versioned = status != ""
+
+		var meta map[string]string
+		if version.Specified {
+			attrs.VersionID = version.ID
+			err = tx.QueryRow(`
+				SELECT parts_count, is_delete_marker, metadata, updated_at, size, content_md5
+				FROM objects
+				WHERE bucket_id = $1 AND name = $2 AND version_id = $3
+			`, bid, name, version.ID).Scan(&attrs.PartsCount, &attrs.IsDeleteMarker, (*sqlMetaJSON)(&meta), (*sqlTime)(&attrs.LastModified), &attrs.Size, (*sqlMD5)(&attrs.ContentMD5))
+		} else {
+			err = tx.QueryRow(`
+				SELECT version_id, parts_count, is_delete_marker, metadata, updated_at, size, content_md5
+				FROM objects
+				WHERE bucket_id = $1 AND name = $2 AND is_latest = TRUE
+			`, bid, name).Scan(&attrs.VersionID, &attrs.PartsCount, &attrs.IsDeleteMarker, (*sqlMetaJSON)(&meta), (*sqlTime)(&attrs.LastModified), &attrs.Size, (*sqlMD5)(&attrs.ContentMD5))
+		}
+		if err != nil {
 			return err
 		}
-		obj.Versioned = status != ""
-		if page == nil || obj.IsDeleteMarker || obj.PartsCount == 0 {
+		attrs.Checksum = s3.ObjectChecksumFromMeta(meta)
+		if page == nil || attrs.IsDeleteMarker || attrs.PartsCount == 0 {
 			return nil
 		}
 
@@ -298,33 +314,34 @@ func (s *Store) ObjectAttributes(bucket s3.BucketID, name string, version s3.Ver
 			WHERE bucket_id = $1 AND name = $2 AND version_id = $3 AND part_number > $4
 			ORDER BY part_number ASC
 			LIMIT $5
-		`, bid, name, obj.VersionID, page.PartNumberMarker, page.MaxParts+1)
+		`, bid, name, attrs.VersionID, page.PartNumberMarker, page.MaxParts+1)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 
 		for rows.Next() {
-			if len(parts) >= page.MaxParts {
-				truncated = true
+			if len(attrs.Parts) >= page.MaxParts {
+				attrs.IsTruncated = true
 				break
 			}
-			var p objects.Part
-			if err := rows.Scan(&p.PartNumber, &p.Size, &p.Checksum); err != nil {
+			var part s3.ObjectPart
+			if err := rows.Scan(&part.PartNumber, &part.Size, &part.Checksum); err != nil {
 				return err
 			}
-			parts = append(parts, p)
+			attrs.Parts = append(attrs.Parts, part)
 		}
 		return rows.Err()
-	}); errors.Is(err, sql.ErrNoRows) {
+	})
+	if errors.Is(err, sql.ErrNoRows) {
 		if version.Specified {
-			return nil, nil, false, s3errs.ErrNoSuchVersion
+			return nil, s3errs.ErrNoSuchVersion
 		}
-		return nil, nil, false, s3errs.ErrNoSuchKey
+		return nil, s3errs.ErrNoSuchKey
 	} else if err != nil {
-		return nil, nil, false, err
+		return nil, err
 	}
-	return &obj, parts, truncated, nil
+	return &attrs, nil
 }
 
 func attachSiaObject(tx *txn, obj *objects.Object, objectID sql.Null[sqlHash256]) error {

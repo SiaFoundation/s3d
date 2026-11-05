@@ -326,31 +326,7 @@ func (s *Sia) GetObject(ctx context.Context, bucket s3.BucketID, object string, 
 // in parts. version selects a specific version, or the current version when
 // unspecified.
 func (s *Sia) GetObjectAttributes(ctx context.Context, bucket s3.BucketID, object string, version s3.VersionRequest, page *s3.ObjectAttributesPage) (*s3.ObjectAttributes, error) {
-	obj, parts, truncated, err := s.store.ObjectAttributes(bucket, object, version, page)
-	if err != nil {
-		return nil, err
-	}
-
-	attrs := &s3.ObjectAttributes{
-		ContentMD5:     obj.ContentMD5,
-		PartsCount:     obj.PartsCount,
-		Size:           obj.Length,
-		LastModified:   obj.LastModified,
-		VersionID:      obj.VersionID,
-		Versioned:      obj.Versioned,
-		IsDeleteMarker: obj.IsDeleteMarker,
-		Checksum:       s3.ObjectChecksumFromMeta(obj.Meta),
-		IsTruncated:    truncated,
-	}
-
-	for _, part := range parts {
-		attrs.Parts = append(attrs.Parts, s3.ObjectPart{
-			PartNumber: part.PartNumber,
-			Size:       part.Size,
-			Checksum:   part.Checksum,
-		})
-	}
-	return attrs, nil
+	return s.store.ObjectAttributes(bucket, object, version, page)
 }
 
 // HeadObject is like GetObject but only retrieves the metadata of the
