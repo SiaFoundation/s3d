@@ -250,7 +250,7 @@ paths:
 
       operationId: listAccessKeys
       parameters:
-        - name: userName
+        - name: username
           in: query
           required: false
           description: Only return the access keys of this user.
