@@ -314,6 +314,9 @@ func (s *s3) handleCreateUser(jc jape.Context) {
 	} else if req.Name == "" {
 		jc.Error(errors.New("name is required"), http.StatusBadRequest)
 		return
+	} else if err := auth.ValidateUserName(req.Name); err != nil {
+		jc.Error(err, http.StatusBadRequest)
+		return
 	}
 
 	err := s.admin.CreateUser(jc.Request.Context(), req.Name)

@@ -163,7 +163,7 @@ paths:
         "200":
           description: The user was created.
         "400":
-          description: The request body could not be parsed, the name is empty, or the name is reserved.
+          description: The request body could not be parsed, the name is empty, too long, contains invalid characters, or is reserved.
         "409":
           description: A user with that name already exists.
         "500":
@@ -421,7 +421,7 @@ components:
       properties:
         name:
           type: string
-          description: The name of the user to create.
+          description: The name of the user to create, between 1 and 64 ASCII letters, digits or the characters +=,.@-_.
     CreateAccessKeyRequest:
       type: object
       required:
