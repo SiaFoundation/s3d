@@ -1,17 +1,20 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 
-	"go.uber.org/zap"
+	"github.com/SiaFoundation/s3d/s3"
 )
 
 const (
 	usersUsage = `Usage: s3d users <command>
 
-Manage S3 users.
+Manage S3 users through the admin API of the running s3d instance.
 
 Commands:
   create    Create a new user
@@ -31,47 +34,41 @@ Delete an existing user.`
 List all users.`
 )
 
-func runUsersCreate(cmd *flag.FlagSet) {
+func runUsersCreate(ctx context.Context, cmd *flag.FlagSet) {
 	args := cmd.Args()
 	if len(args) != 1 {
 		cmd.Usage()
 		os.Exit(1)
 	}
+	client := newAdminClient()
 
-	store, err := openStore(zap.NewNop())
-	checkFatalError("failed to open database", err)
-	defer store.Close()
-
-	checkFatalError("failed to create user", store.CreateUser(args[0]))
+	err := client.request(ctx, http.MethodPost, "/users", s3.CreateUserRequest{Name: args[0]}, nil)
+	checkFatalError("failed to create user", err)
 	fmt.Printf("Created user %q\n", args[0])
 }
 
-func runUsersDelete(cmd *flag.FlagSet) {
+func runUsersDelete(ctx context.Context, cmd *flag.FlagSet) {
 	args := cmd.Args()
 	if len(args) != 1 {
 		cmd.Usage()
 		os.Exit(1)
 	}
+	client := newAdminClient()
 
-	store, err := openStore(zap.NewNop())
-	checkFatalError("failed to open database", err)
-	defer store.Close()
-
-	checkFatalError("failed to delete user", store.DeleteUser(args[0]))
+	err := client.request(ctx, http.MethodDelete, "/users/"+url.PathEscape(args[0]), nil, nil)
+	checkFatalError("failed to delete user", err)
 	fmt.Printf("Deleted user %q\n", args[0])
 }
 
-func runUsersList(cmd *flag.FlagSet) {
+func runUsersList(ctx context.Context, cmd *flag.FlagSet) {
 	if len(cmd.Args()) != 0 {
 		cmd.Usage()
 		os.Exit(1)
 	}
+	client := newAdminClient()
 
-	store, err := openStore(zap.NewNop())
-	checkFatalError("failed to open database", err)
-	defer store.Close()
-
-	users, err := store.ListUsers()
+	var users []string
+	err := client.request(ctx, http.MethodGet, "/users", nil, &users)
 	checkFatalError("failed to list users", err)
 
 	if len(users) == 0 {

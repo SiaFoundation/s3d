@@ -217,13 +217,13 @@ func main() {
 		}
 		return
 	case usersCreateCmd:
-		runUsersCreate(usersCreateCmd)
+		runUsersCreate(ctx, usersCreateCmd)
 		return
 	case usersDeleteCmd:
-		runUsersDelete(usersDeleteCmd)
+		runUsersDelete(ctx, usersDeleteCmd)
 		return
 	case usersListCmd:
-		runUsersList(usersListCmd)
+		runUsersList(ctx, usersListCmd)
 		return
 	case keysCmd:
 		cmd.Usage()
@@ -232,13 +232,13 @@ func main() {
 		}
 		return
 	case keysCreateCmd:
-		runKeysCreate(keysCreateCmd, keysCreateAccessKey, keysCreateSecretKey)
+		runKeysCreate(ctx, keysCreateCmd, keysCreateAccessKey, keysCreateSecretKey)
 		return
 	case keysDeleteCmd:
-		runKeysDelete(keysDeleteCmd)
+		runKeysDelete(ctx, keysDeleteCmd)
 		return
 	case keysListCmd:
-		runKeysList(keysListCmd)
+		runKeysList(ctx, keysListCmd)
 		return
 	case snapshotsCmd:
 		cmd.Usage()

@@ -63,21 +63,22 @@ s3d config
 For more information on configuration options, see the
 [Configuration](#configuration) section below.
 
-Next, create a user and generate an access key pair:
+Once logged in, start `s3d` with
+
+```sh
+s3d
+```
+
+Then create a user and generate an access key pair:
 
 ```sh
 s3d users create <username>
 s3d keys create [--access-key <id> --secret-key <secret>] <username>
 ```
 
-The access key pair is auto-generated when both flags are omitted. Save the
-printed credentials. The secret key is only shown once.
-
-Once logged in and credentials are set up, start `s3d` with
-
-```sh
-s3d
-```
+The commands talk to the admin API of the running instance. The access key pair
+is auto-generated when both flags are omitted. Save the printed credentials. The
+secret key is only shown once.
 
 ## Docker
 
@@ -111,21 +112,21 @@ volumes:
 docker compose run --rm s3d login
 ```
 
-### 3. Create a user and access key
-
-```sh
-docker compose run --rm s3d users create <username>
-docker compose run --rm s3d keys create [--access-key <id> --secret-key <secret>] <username>
-```
-
-The access key pair is auto-generated when both flags are omitted. Save the
-printed credentials. The secret key is only shown once.
-
-### 4. Start `s3d`
+### 3. Start `s3d`
 
 ```sh
 docker compose up -d
 ```
+
+### 4. Create a user and access key
+
+```sh
+docker compose exec s3d s3d users create <username>
+docker compose exec s3d s3d keys create [--access-key <id> --secret-key <secret>] <username>
+```
+
+The access key pair is auto-generated when both flags are omitted. Save the
+printed credentials. The secret key is only shown once.
 
 ### Building the image
 
@@ -173,10 +174,10 @@ assembling objects from existing data without re-uploading.
 
 ## Admin API
 
-`s3d` serves an admin API on a separate HTTP address for monitoring. It is
-always enabled and defaults to `127.0.0.1:8001`. The admin password is set
-during `s3d config`, or via `adminAddress` and `adminPassword` in the config
-file:
+`s3d` serves an admin API on a separate HTTP address for monitoring and for
+managing users and access keys. It is always enabled and defaults to
+`127.0.0.1:8001`. The admin password is set during `s3d config`, or via
+`adminAddress` and `adminPassword` in the config file:
 
 ```yaml
 adminAddress: 127.0.0.1:8001 # must differ from apiAddress
@@ -184,7 +185,9 @@ adminPassword: change-me # required
 ```
 
 Requests are authenticated via HTTP Basic authentication using the configured
-password; the username is ignored.
+password; the username is ignored. The API is served over plain HTTP and the
+password can issue access keys for every user, so keep the address on loopback
+or put a reverse proxy that terminates TLS in front of it.
 
 The admin API is documented in [`openapi.yml`](openapi.yml) and rendered at
 [api.sia.tech/s3d](https://api.sia.tech/s3d). It serves upload pipeline metrics
@@ -192,6 +195,15 @@ in the Prometheus text exposition format.
 
 ```sh
 curl -u ":change-me" http://127.0.0.1:8001/prometheus
+```
+
+Users and access keys are managed through the API. The `users` and `keys`
+commands call the same endpoints, so they need a running instance. A secret key
+is only returned when it is created.
+
+```sh
+curl -u ":change-me" -X POST http://127.0.0.1:8001/users -d '{"name":"alice"}'
+curl -u ":change-me" -X POST http://127.0.0.1:8001/keys -d '{"userName":"alice"}'
 ```
 
 ## Snapshots
@@ -478,7 +490,7 @@ generate one.
 | Port | Protocol | Description |
 |------|----------|-------------|
 | 8000 | TCP | S3 API |
-| 8001 | TCP | Admin API (disabled by default, see [Admin API](#admin-api)) |
+| 8001 | TCP | Admin API, see [Admin API](#admin-api) |
 
 ### Default Paths
 
@@ -538,6 +550,6 @@ s3:
     - s3.example.com
 ```
 
-Access keys are managed via the `s3d users` and `s3d keys` CLI commands and
-stored in the SQLite database. See [Getting Started](#getting-started) for
-details.
+Access keys are managed via the `s3d users` and `s3d keys` CLI commands or
+the [Admin API](#admin-api) and stored in the SQLite database. See
+[Getting Started](#getting-started) for details.

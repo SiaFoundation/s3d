@@ -82,7 +82,7 @@ func TestS3(t *testing.T) {
 		if uid == "" {
 			uid = ak
 		}
-		if err := store.CreateUser(uid); err != nil && !errors.Is(err, sia.ErrUserAlreadyExists) {
+		if err := store.CreateUser(uid); err != nil && !errors.Is(err, s3.ErrUserAlreadyExists) {
 			t.Fatalf("failed to create user: %v", err)
 		}
 		if err := store.CreateAccessKey(uid, ak, ssk); err != nil {
