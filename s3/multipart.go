@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/textproto"
-	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -83,8 +82,8 @@ type UploadPartCopyResult struct {
 	Checksum *RequestChecksum
 }
 
-// ListPartsPage specifies pagination options when listing the parts of an
-// in-progress multipart upload.
+// ListPartsPage specifies pagination options when listing the parts of a
+// multipart upload or a multipart object.
 type ListPartsPage struct {
 	PartNumberMarker int
 	MaxParts         int64
@@ -541,7 +540,8 @@ func (s *s3) listUploadParts(w http.ResponseWriter, r *http.Request, access *buc
 	log.Debug("list multipart parts")
 
 	// parse pagination options
-	page, err := listPartsPageFromQuery(r.URL.Query())
+	query := r.URL.Query()
+	page, err := parsePartsPage(query.Get("part-number-marker"), query.Get("max-parts"))
 	if err != nil {
 		return err
 	}
@@ -752,12 +752,15 @@ func parsePartNumber(s string) (*int32, error) {
 	return &val, nil
 }
 
-func listPartsPageFromQuery(query url.Values) (ListPartsPage, error) {
+// parsePartsPage reads a page of parts from its raw marker and limit. A marker
+// outside [0, MaxUploadPartNumber) or a limit outside [1, MaxUploadListParts]
+// returns [s3errs.ErrInvalidArgument].
+func parsePartsPage(rawMarker, rawMax string) (ListPartsPage, error) {
 	page := ListPartsPage{
 		MaxParts: DefaultMaxUploadListParts,
 	}
 
-	if rawMarker := query.Get("part-number-marker"); rawMarker != "" {
+	if rawMarker != "" {
 		val, err := strconv.Atoi(rawMarker)
 		if err != nil {
 			return page, s3errs.ErrInvalidArgument
@@ -768,7 +771,7 @@ func listPartsPageFromQuery(query url.Values) (ListPartsPage, error) {
 		page.PartNumberMarker = val
 	}
 
-	if rawMax := query.Get("max-parts"); rawMax != "" {
+	if rawMax != "" {
 		val, err := strconv.Atoi(rawMax)
 		if err != nil {
 			return page, s3errs.ErrInvalidArgument

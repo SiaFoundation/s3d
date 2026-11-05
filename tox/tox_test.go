@@ -187,11 +187,7 @@ func TestS3(t *testing.T) {
 			// time and expects the idempotent answer AWS gives. s3d deletes the
 			// upload on completion and answers NoSuchUpload. The checksum
 			// assertions in the test pass.
-			//
-			// use_cksum_helper and checksum_object_attributes read the stored
-			// checksums back through GetObjectAttributes, which s3d does not
-			// implement yet.
-			"-k", "(not _acl or publicpolicy_acl_bucket_policy_status or nonpublicpolicy_acl_bucket_policy_status) and not multipart_reupload_checksum and not use_cksum_helper and not checksum_object_attributes and not post_object and not _torrent and not cors and not notification and not replication and not website and not _select and not lifecycle_expiration_tags and not lifecycle_expiration_versioned and not tags_head and not noncur and not deletemarker and not delete_marker_nonversioned and not delete_marker_expiration and not lifecycle_set_filter and not lifecycle_set_empty_filter and not lifecycle_transition_set_invalid_date and not bucket_list_return_data_versioning and not bucket_recreate_not_overriding and not versioning_concurrent_multi_object_delete",
+			"-k", "(not _acl or publicpolicy_acl_bucket_policy_status or nonpublicpolicy_acl_bucket_policy_status) and not multipart_reupload_checksum and not post_object and not _torrent and not cors and not notification and not replication and not website and not _select and not lifecycle_expiration_tags and not lifecycle_expiration_versioned and not tags_head and not noncur and not deletemarker and not delete_marker_nonversioned and not delete_marker_expiration and not lifecycle_set_filter and not lifecycle_set_empty_filter and not lifecycle_transition_set_invalid_date and not bucket_list_return_data_versioning and not bucket_recreate_not_overriding and not versioning_concurrent_multi_object_delete",
 		)
 	})
 

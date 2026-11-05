@@ -321,6 +321,14 @@ func (s *Sia) GetObject(ctx context.Context, bucket s3.BucketID, object string, 
 	return s.headOrGetObject(ctx, bucket, object, version, rnge, partNumber, false)
 }
 
+// GetObjectAttributes retrieves the attributes of the object with the given key
+// from the specified bucket, along with a page of its parts when it was uploaded
+// in parts. version selects a specific version, or the current version when
+// unspecified.
+func (s *Sia) GetObjectAttributes(ctx context.Context, bucket s3.BucketID, object string, version s3.VersionRequest, page *s3.ListPartsPage) (*s3.ObjectAttributes, error) {
+	return s.store.ObjectAttributes(bucket, object, version, page)
+}
+
 // HeadObject is like GetObject but only retrieves the metadata of the
 // object and returns an empty body.
 func (s *Sia) HeadObject(ctx context.Context, bucket s3.BucketID, object string, version s3.VersionRequest, rnge *s3.ObjectRangeRequest, partNumber *int32) (*s3.Object, error) {
