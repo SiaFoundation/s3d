@@ -75,11 +75,11 @@ func runSnapshotsCreate(ctx context.Context, cmd *flag.FlagSet) {
 		cmd.Usage()
 		os.Exit(1)
 	}
-	requireAdminConfig()
+	client := newAdminClient()
 
 	fmt.Println("Backing up the database and uploading it to Sia. This may take a while...")
 	var snapshot s3.Snapshot
-	err := adminRequest(ctx, http.MethodPost, cfg.AdminAddress, cfg.AdminPassword, "/snapshots", nil, &snapshot)
+	err := client.request(ctx, http.MethodPost, "/snapshots", nil, &snapshot)
 	checkFatalError("failed to create snapshot", err)
 
 	fmt.Printf("Created snapshot %s with %d objects.\n", snapshot.SiaObjectID, snapshot.ObjectCount)
@@ -90,10 +90,10 @@ func runSnapshotsList(ctx context.Context, cmd *flag.FlagSet) {
 		cmd.Usage()
 		os.Exit(1)
 	}
-	requireAdminConfig()
+	client := newAdminClient()
 
 	var list s3.SnapshotList
-	err := adminRequest(ctx, http.MethodGet, cfg.AdminAddress, cfg.AdminPassword, "/snapshots", nil, &list)
+	err := client.request(ctx, http.MethodGet, "/snapshots", nil, &list)
 	checkFatalError("failed to list snapshots", err)
 
 	if list.Synced {
@@ -120,12 +120,12 @@ func runSnapshotsDelete(ctx context.Context, cmd *flag.FlagSet) {
 		cmd.Usage()
 		os.Exit(1)
 	}
-	requireAdminConfig()
+	client := newAdminClient()
 
 	var objectID types.Hash256
 	checkFatalError("invalid Sia object id", objectID.UnmarshalText([]byte(cmd.Arg(0))))
 
-	err := adminRequest(ctx, http.MethodDelete, cfg.AdminAddress, cfg.AdminPassword, "/snapshots/"+objectID.String(), nil, nil)
+	err := client.request(ctx, http.MethodDelete, "/snapshots/"+objectID.String(), nil, nil)
 	checkFatalError("failed to delete snapshot", err)
 
 	fmt.Println("Deleted snapshot", objectID)
