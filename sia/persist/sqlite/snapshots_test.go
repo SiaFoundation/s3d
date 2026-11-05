@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
-	"github.com/SiaFoundation/s3d/sia"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.sia.tech/core/types"
 	"go.uber.org/zap/zaptest"
@@ -619,7 +618,7 @@ func TestListSnapshotsOrderBy(t *testing.T) {
 func TestSnapshotSchedule(t *testing.T) {
 	store := initTestDB(t, zaptest.NewLogger(t))
 
-	assertSchedule := func(want sia.SnapshotSchedule) {
+	assertSchedule := func(want s3.SnapshotSchedule) {
 		t.Helper()
 		sched, err := store.SnapshotSchedule()
 		if err != nil {
@@ -634,24 +633,31 @@ func TestSnapshotSchedule(t *testing.T) {
 	}
 
 	// a fresh database has no schedule
-	assertSchedule(sia.SnapshotSchedule{Since: time.Unix(0, 0)})
+	assertSchedule(s3.SnapshotSchedule{Since: time.Unix(0, 0)})
 
-	want := sia.SnapshotSchedule{Expression: "0 3 * * *", Since: time.Now().Truncate(time.Second), KeepDaily: 7, KeepWeekly: 4, KeepMonthly: 12}
+	want := s3.SnapshotSchedule{Expression: "0 3 * * *", Since: time.Now().Truncate(time.Second), KeepDaily: 7, KeepWeekly: 4, KeepMonthly: 12}
 	if err := store.UpdateSnapshotSchedule(want); err != nil {
 		t.Fatal(err)
 	}
 	assertSchedule(want)
 
 	// a scheduled snapshot advances the schedule
+	previous := want
 	want.Since = want.Since.Add(time.Hour)
-	if err := store.UpdateSnapshotScheduleSince(want.Since); err != nil {
+	if err := store.UpdateSnapshotScheduleSince(previous, want.Since); err != nil {
+		t.Fatal(err)
+	}
+	assertSchedule(want)
+
+	// a stale schedule does not
+	if err := store.UpdateSnapshotScheduleSince(previous, want.Since.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	assertSchedule(want)
 
 	// clear it again
-	if err := store.UpdateSnapshotSchedule(sia.SnapshotSchedule{}); err != nil {
+	if err := store.UpdateSnapshotSchedule(s3.SnapshotSchedule{}); err != nil {
 		t.Fatal(err)
 	}
-	assertSchedule(sia.SnapshotSchedule{})
+	assertSchedule(s3.SnapshotSchedule{})
 }

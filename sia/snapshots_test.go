@@ -830,42 +830,6 @@ func TestFetchRemoteSnapshot(t *testing.T) {
 	}
 }
 
-// TestSnapshotScheduleValidate verifies the expressions and counts a schedule
-// accepts and the ones the guard in front of the parser rejects.
-func TestSnapshotScheduleValidate(t *testing.T) {
-	for _, expr := range []string{"0 3 * * *", "*/15 * * * *", "0 3 * * MON-FRI", "@hourly", "@daily", "@weekly", "@monthly", "@yearly", " @daily "} {
-		if _, err := sia.ParseSnapshotSchedule(expr); err != nil {
-			t.Fatal(expr, err)
-		}
-	}
-	for _, expr := range []string{"", "03:00", "0 3 * *", "0 3 * * * *", "0 25 * * *", "@every 1h", "@every 0s", "TZ=UTC 0 3 * * *", "CRON_TZ=UTC", "TZ=", "0 3 31 2 *"} {
-		if _, err := sia.ParseSnapshotSchedule(expr); err == nil {
-			t.Fatal("expected error", expr)
-		}
-	}
-
-	now := time.Now()
-	for _, sched := range []sia.SnapshotSchedule{
-		{},
-		{Expression: "@daily", Since: now},
-		{Expression: "@daily", Since: now, KeepDaily: 7, KeepWeekly: 4, KeepMonthly: 12},
-	} {
-		if err := sched.Validate(); err != nil {
-			t.Fatal(sched, err)
-		}
-	}
-	for _, sched := range []sia.SnapshotSchedule{
-		{KeepDaily: 7},
-		{Expression: "@daily"},
-		{Expression: "@daily", Since: now, KeepWeekly: -1},
-		{Expression: "03:00", Since: now},
-	} {
-		if err := sched.Validate(); err == nil {
-			t.Fatal("expected error", sched)
-		}
-	}
-}
-
 // TestExpiredScheduledSnapshots verifies which scheduled snapshots the daily,
 // weekly and monthly counts keep.
 func TestExpiredScheduledSnapshots(t *testing.T) {
@@ -883,7 +847,7 @@ func TestExpiredScheduledSnapshots(t *testing.T) {
 	manual := s3.Snapshot{SiaObjectID: frand.Entropy256(), CreatedAt: snapshots[0].CreatedAt}
 	snapshots = append([]s3.Snapshot{manual}, snapshots...)
 
-	kept := func(sched sia.SnapshotSchedule) []time.Time {
+	kept := func(sched s3.SnapshotSchedule) []time.Time {
 		t.Helper()
 		expired := make(map[types.Hash256]bool)
 		for _, snap := range sia.ExpiredScheduledSnapshots(snapshots, sched, loc) {
@@ -900,7 +864,7 @@ func TestExpiredScheduledSnapshots(t *testing.T) {
 		}
 		return out
 	}
-	assertKept := func(sched sia.SnapshotSchedule, want ...time.Time) {
+	assertKept := func(sched s3.SnapshotSchedule, want ...time.Time) {
 		t.Helper()
 		got := kept(sched)
 		if len(got) != len(want) {
@@ -915,25 +879,25 @@ func TestExpiredScheduledSnapshots(t *testing.T) {
 	lastOf := func(y int, m time.Month, d int) time.Time { return time.Date(y, m, d, 23, 0, 0, 0, loc) }
 
 	// zero counts expire nothing
-	if n := len(kept(sia.SnapshotSchedule{})); n != len(snapshots)-1 {
+	if n := len(kept(s3.SnapshotSchedule{})); n != len(snapshots)-1 {
 		t.Fatal("unexpected", n)
 	}
 
 	// daily keeps the last snapshot of each day
-	assertKept(sia.SnapshotSchedule{KeepDaily: 3}, lastOf(2027, time.January, 15), lastOf(2027, time.January, 14), lastOf(2027, time.January, 13))
+	assertKept(s3.SnapshotSchedule{KeepDaily: 3}, lastOf(2027, time.January, 15), lastOf(2027, time.January, 14), lastOf(2027, time.January, 13))
 
 	// weekly keeps the last snapshot of each ISO week, week 53 of 2026 ends
 	// on Sunday the 3rd
-	assertKept(sia.SnapshotSchedule{KeepWeekly: 3}, lastOf(2027, time.January, 15), lastOf(2027, time.January, 10), lastOf(2027, time.January, 3))
+	assertKept(s3.SnapshotSchedule{KeepWeekly: 3}, lastOf(2027, time.January, 15), lastOf(2027, time.January, 10), lastOf(2027, time.January, 3))
 
 	// monthly keeps the last snapshot of each month
-	assertKept(sia.SnapshotSchedule{KeepMonthly: 2}, lastOf(2027, time.January, 15), lastOf(2026, time.December, 31))
+	assertKept(s3.SnapshotSchedule{KeepMonthly: 2}, lastOf(2027, time.January, 15), lastOf(2026, time.December, 31))
 
 	// the kept sets are unioned, the newest snapshot satisfies all three
-	assertKept(sia.SnapshotSchedule{KeepDaily: 1, KeepWeekly: 2, KeepMonthly: 2}, lastOf(2027, time.January, 15), lastOf(2027, time.January, 10), lastOf(2026, time.December, 31))
+	assertKept(s3.SnapshotSchedule{KeepDaily: 1, KeepWeekly: 2, KeepMonthly: 2}, lastOf(2027, time.January, 15), lastOf(2027, time.January, 10), lastOf(2026, time.December, 31))
 
 	// a count larger than the history keeps every bucket
-	if n := len(kept(sia.SnapshotSchedule{KeepMonthly: 12})); n != 3 {
+	if n := len(kept(s3.SnapshotSchedule{KeepMonthly: 12})); n != 3 {
 		t.Fatal("unexpected", n)
 	}
 }
@@ -952,8 +916,8 @@ func TestScheduledSnapshots(t *testing.T) {
 	// of the host's daylight saving transitions
 	base := time.Now().UTC()
 	slot := base.Add(-time.Hour)
-	sched := sia.SnapshotSchedule{Expression: fmt.Sprintf("%d %d * * *", slot.Minute(), slot.Hour()), Since: base}
-	setSchedule := func(sched sia.SnapshotSchedule) {
+	sched := s3.SnapshotSchedule{Expression: fmt.Sprintf("%d %d * * *", slot.Minute(), slot.Hour()), Since: base, KeepDaily: 1}
+	setSchedule := func(sched s3.SnapshotSchedule) {
 		t.Helper()
 		if err := store.UpdateSnapshotSchedule(sched); err != nil {
 			t.Fatal(err)
@@ -1042,11 +1006,14 @@ func TestScheduledSnapshots(t *testing.T) {
 		t.Fatal("expected the manual snapshot to be kept")
 	}
 
-	// zero counts keep every scheduled snapshot
-	sched.KeepDaily = 0
-	setSchedule(sched)
+	// a disabled schedule takes and prunes nothing
+	setSchedule(s3.SnapshotSchedule{})
 	backend.RunScheduledSnapshot(ctx, base.AddDate(0, 0, 4))
 	backend.PruneScheduledSnapshots(ctx, base.AddDate(0, 0, 4))
+	assertScheduled(1)
+
+	setSchedule(sched)
+	backend.RunScheduledSnapshot(ctx, base.AddDate(0, 0, 4))
 	assertScheduled(2)
 
 	// a failed attempt is retried only after the retry delay
@@ -1060,32 +1027,36 @@ func TestScheduledSnapshots(t *testing.T) {
 	backend.RunScheduledSnapshot(ctx, failedAt.Add(sia.ScheduledSnapshotRetryDelay))
 	assertScheduled(3)
 
-	// a count changed while the snapshot was taken is applied by the prune
-	sched.KeepDaily = 1
+	// a schedule disabled while the snapshot was taken is not advanced
 	setSchedule(sched)
 	memSDK.SetPinHook(func(*sdk.Object) {
-		sched.KeepDaily = 0
-		setSchedule(sched)
+		setSchedule(s3.SnapshotSchedule{})
 	})
 	backend.RunScheduledSnapshot(ctx, base.AddDate(0, 0, 6))
 	backend.PruneScheduledSnapshots(ctx, base.AddDate(0, 0, 6))
 	assertScheduled(4)
+	if current, err := store.SnapshotSchedule(); err != nil {
+		t.Fatal(err)
+	} else if current.Expression != "" || !current.Since.IsZero() {
+		t.Fatal("unexpected", current)
+	}
 
 	// a schedule replaced after a failure is attempted without waiting out the
 	// backoff the old one recorded
 	memSDK.SetPinHook(nil)
+	setSchedule(sched)
 	memSDK.SetPinError(errors.New("pin failed"))
 	failedAt = base.AddDate(0, 0, 7)
 	backend.RunScheduledSnapshot(ctx, failedAt)
 	assertScheduled(4)
 	memSDK.SetPinError(nil)
-	setSchedule(sia.SnapshotSchedule{Expression: "*/1 * * * *", Since: failedAt})
+	setSchedule(s3.SnapshotSchedule{Expression: "*/1 * * * *", Since: failedAt, KeepDaily: 1})
 	backend.RunScheduledSnapshot(ctx, failedAt.Add(2*time.Minute))
 	assertScheduled(5)
 
 	// a failed prune leaves the snapshots to the next pass
 	prunedAt := failedAt.Add(3 * time.Minute)
-	setSchedule(sia.SnapshotSchedule{Expression: sched.Expression, Since: prunedAt, KeepDaily: 1})
+	setSchedule(s3.SnapshotSchedule{Expression: sched.Expression, Since: prunedAt, KeepDaily: 1})
 	memSDK.SetDeleteError(errors.New("unpin failed"))
 	backend.PruneScheduledSnapshots(ctx, prunedAt)
 	assertScheduled(5)
@@ -1099,7 +1070,7 @@ type unadvancingStore struct {
 	*sqlite.Store
 }
 
-func (unadvancingStore) UpdateSnapshotScheduleSince(time.Time) error {
+func (unadvancingStore) UpdateSnapshotScheduleSince(s3.SnapshotSchedule, time.Time) error {
 	return errors.New("advance failed")
 }
 
@@ -1124,7 +1095,7 @@ func TestScheduledSnapshotAdvanceFailure(t *testing.T) {
 
 	base := time.Now().UTC()
 	slot := base.Add(-time.Hour)
-	if err := store.UpdateSnapshotSchedule(sia.SnapshotSchedule{Expression: fmt.Sprintf("%d %d * * *", slot.Minute(), slot.Hour()), Since: base}); err != nil {
+	if err := store.UpdateSnapshotSchedule(s3.SnapshotSchedule{Expression: fmt.Sprintf("%d %d * * *", slot.Minute(), slot.Hour()), Since: base, KeepDaily: 1}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1141,7 +1112,8 @@ func TestScheduledSnapshotAdvanceFailure(t *testing.T) {
 
 // TestScheduledSnapshotLoop verifies the background loop takes nothing before
 // the slot, snapshots when it passes, and once a day after that, pruning to
-// the retention count on the hourly pass that follows.
+// the retention count on the hourly pass that follows, and that a schedule
+// changed through the backend is followed without waiting for a tick.
 func TestScheduledSnapshotLoop(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		memSDK := testutil.NewMemorySDK()
@@ -1155,7 +1127,7 @@ func TestScheduledSnapshotLoop(t *testing.T) {
 
 		// the slot is two minutes away
 		slot := time.Now().Add(2 * time.Minute)
-		if err := store.UpdateSnapshotSchedule(sia.SnapshotSchedule{Expression: fmt.Sprintf("%d %d * * *", slot.Minute(), slot.Hour()), Since: time.Now(), KeepDaily: 1}); err != nil {
+		if err := store.UpdateSnapshotSchedule(s3.SnapshotSchedule{Expression: fmt.Sprintf("%d %d * * *", slot.Minute(), slot.Hour()), Since: time.Now(), KeepDaily: 1}); err != nil {
 			t.Fatal(err)
 		}
 		backend, err := sia.New(t.Context(), memSDK, store, dir, sia.WithUploadDisabled(), sia.WithLogger(log))
@@ -1201,5 +1173,39 @@ func TestScheduledSnapshotLoop(t *testing.T) {
 			synctest.Wait()
 			id = assertSnapshot(id)
 		}
+
+		// a schedule set through the backend replaces the armed timer, so the
+		// nearer slot fires without a tick
+		setSchedule := func(at time.Time) {
+			t.Helper()
+			sched := s3.SnapshotSchedule{Expression: fmt.Sprintf("%d %d * * *", at.Minute(), at.Hour()), Since: time.Now(), KeepDaily: 1}
+			if err := backend.UpdateSnapshotSchedule(t.Context(), sched); err != nil {
+				t.Fatal(err)
+			}
+			synctest.Wait()
+		}
+		setSchedule(time.Now().Add(10 * time.Minute))
+		setSchedule(time.Now().Add(2 * time.Minute))
+		time.Sleep(2*time.Minute + time.Hour)
+		synctest.Wait()
+		id = assertSnapshot(id)
+
+		// disabling it stops the loop
+		if err := backend.UpdateSnapshotSchedule(t.Context(), s3.SnapshotSchedule{}); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(24*time.Hour + time.Hour)
+		synctest.Wait()
+		if snapshots, err := store.ListSnapshots(); err != nil {
+			t.Fatal(err)
+		} else if len(snapshots) != 1 || snapshots[0].SiaObjectID != id {
+			t.Fatal("unexpected", snapshots)
+		}
+
+		// and setting it again resumes without a tick
+		setSchedule(time.Now().Add(2 * time.Minute))
+		time.Sleep(2*time.Minute + time.Hour)
+		synctest.Wait()
+		assertSnapshot(id)
 	})
 }

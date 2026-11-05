@@ -236,9 +236,10 @@ s3d snapshots schedule disable
 The expression is standard cron or a descriptor like `@daily`, in the instance's
 local time zone. Each count keeps the newest scheduled snapshot of that many
 days, weeks or months and the sets are combined. Retention never removes a
-snapshot created with `s3d snapshots create`. The schedule can be changed while
-`s3d` runs and a restored instance resumes it. Run `s3d snapshots schedule set`
-without arguments for the full usage.
+snapshot created with `s3d snapshots create`. Schedule commands use the running
+instance's admin API and changes take effect immediately. A restored database
+has no schedule until one is set. Run `s3d snapshots schedule set` without
+arguments for the full usage.
 
 ### Deleting
 

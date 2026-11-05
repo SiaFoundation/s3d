@@ -9,12 +9,10 @@ import (
 	"fmt"
 	"io"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/sia/objects"
-	"github.com/robfig/cron/v3"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/api"
 	"go.sia.tech/indexd/slabs"
@@ -25,52 +23,6 @@ import (
 // remoteSnapshotBatchSize is the number of object events fetched per request
 // while enumerating the account.
 const remoteSnapshotBatchSize = api.MaxLimit
-
-// SnapshotSchedule is the cron expression on which snapshots are taken, the
-// time it was set or last fired and the number of calendar days, weeks and
-// months of scheduled snapshots kept. An empty expression disables scheduled
-// snapshots and all zero counts keep every scheduled snapshot.
-type SnapshotSchedule struct {
-	Expression  string
-	Since       time.Time
-	KeepDaily   int
-	KeepWeekly  int
-	KeepMonthly int
-}
-
-// Validate rejects a schedule the snapshot loop cannot apply.
-func (sched SnapshotSchedule) Validate() error {
-	if sched.KeepDaily < 0 || sched.KeepWeekly < 0 || sched.KeepMonthly < 0 {
-		return errors.New("snapshot retention counts must not be negative")
-	} else if sched.Expression == "" {
-		if sched.KeepDaily != 0 || sched.KeepWeekly != 0 || sched.KeepMonthly != 0 {
-			return errors.New("snapshot retention requires a snapshot schedule")
-		}
-		return nil
-	} else if sched.Since.IsZero() {
-		return errors.New("a snapshot schedule must record the time it runs from")
-	}
-	_, err := ParseSnapshotSchedule(sched.Expression)
-	return err
-}
-
-// ParseSnapshotSchedule parses a standard five field cron expression or one of
-// the @hourly, @daily, @weekly, @monthly and @yearly descriptors. The schedule
-// fires in the location of the time it is evaluated against.
-func ParseSnapshotSchedule(expr string) (cron.Schedule, error) {
-	// the parser panics on a bare time zone prefix and accepts a zero @every
-	// interval, which would fire on every tick
-	if expr = strings.TrimSpace(expr); strings.Contains(expr, "=") || strings.HasPrefix(expr, "@every") {
-		return nil, fmt.Errorf("invalid snapshot schedule %q, expected a cron expression or a descriptor like @daily", expr)
-	}
-	sched, err := cron.ParseStandard(expr)
-	if err != nil {
-		return nil, fmt.Errorf("invalid snapshot schedule %q: %w", expr, err)
-	} else if sched.Next(time.Now()).IsZero() {
-		return nil, fmt.Errorf("invalid snapshot schedule %q, it never fires", expr)
-	}
-	return sched, nil
-}
 
 // RemoteSnapshot is a snapshot stored on the Sia network.
 type RemoteSnapshot struct {
@@ -188,11 +140,35 @@ func DownloadSnapshot(ctx context.Context, sdk SDK, snap RemoteSnapshot, w io.Wr
 	return ctx.Err()
 }
 
+// SnapshotSchedule returns the snapshot schedule.
+func (s *Sia) SnapshotSchedule(_ context.Context) (s3.SnapshotSchedule, error) {
+	return s.store.SnapshotSchedule()
+}
+
+// UpdateSnapshotSchedule replaces the snapshot schedule and reschedules the
+// next snapshot.
+func (s *Sia) UpdateSnapshotSchedule(_ context.Context, sched s3.SnapshotSchedule) error {
+	if err := s.store.UpdateSnapshotSchedule(sched); err != nil {
+		return err
+	}
+	s.wakeSnapshotLoop()
+	return nil
+}
+
+// wakeSnapshotLoop signals the snapshot loop to reread the schedule without
+// waiting for its timer.
+func (s *Sia) wakeSnapshotLoop() {
+	select {
+	case s.snapshotWake <- struct{}{}:
+	default:
+	}
+}
+
 // snapshotsLoop takes snapshots on the stored schedule and applies its
 // retention.
 func (s *Sia) snapshotsLoop(ctx context.Context) {
-	snapshotTicker := time.NewTicker(scheduledSnapshotInterval)
-	defer snapshotTicker.Stop()
+	timer := time.NewTimer(0)
+	defer timer.Stop()
 	pruneTicker := time.NewTicker(scheduledSnapshotPruneInterval)
 	defer pruneTicker.Stop()
 
@@ -200,62 +176,67 @@ func (s *Sia) snapshotsLoop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-snapshotTicker.C:
-			s.runScheduledSnapshot(ctx, time.Now())
 		case <-pruneTicker.C:
 			s.pruneScheduledSnapshots(ctx, time.Now())
+			continue
+		case <-timer.C:
+		case <-s.snapshotWake:
+		}
+		if next := s.runScheduledSnapshot(ctx, time.Now()); next.IsZero() {
+			timer.Stop()
+		} else {
+			timer.Reset(time.Until(next))
 		}
 	}
 }
 
 // runScheduledSnapshot takes a snapshot when the stored schedule fired since
-// it was set or last took one, once object metadata is synced.
-func (s *Sia) runScheduledSnapshot(ctx context.Context, now time.Time) {
+// it was set or last took one, once object metadata is synced, and returns
+// when it should run next, zero until the loop is woken.
+func (s *Sia) runScheduledSnapshot(ctx context.Context, now time.Time) time.Time {
+	s.snapshotMu.Lock()
+	defer s.snapshotMu.Unlock()
+
 	sched, err := s.store.SnapshotSchedule()
 	if err != nil {
 		s.logger.Error("failed to load snapshot schedule", zap.Error(err))
-		return
+		return now.Add(scheduledSnapshotRetryDelay)
 	} else if sched.Expression == "" {
-		return
+		return time.Time{}
 	}
-	cronSched, err := ParseSnapshotSchedule(sched.Expression)
+	cronSched, err := s3.ParseSnapshotSchedule(sched.Expression)
 	if err != nil {
 		s.logger.Error("failed to parse snapshot schedule", zap.Error(err))
-		return
+		return now.Add(scheduledSnapshotRetryDelay)
 	}
 	if !s.synced.Load() {
-		s.logger.Debug("deferring scheduled snapshots until object metadata is synced")
-		return
+		return time.Time{}
 	}
 	// the backoff was recorded against the schedule that failed, one the
 	// operator has changed since is attempted right away
 	if sched.Expression != s.snapshotRetrySched.Expression || !sched.Since.Equal(s.snapshotRetrySched.Since) {
 		s.snapshotRetryAt = time.Time{}
 	}
-	if !now.Before(s.snapshotRetryAt) {
-		s.takeScheduledSnapshot(ctx, now, sched, cronSched)
-	}
-}
-
-// takeScheduledSnapshot takes a snapshot when the schedule fired since it was
-// set or last took one, and advances it to now.
-func (s *Sia) takeScheduledSnapshot(ctx context.Context, now time.Time, sched SnapshotSchedule, cronSched cron.Schedule) {
-	if next := cronSched.Next(sched.Since.In(now.Location())); next.IsZero() || next.After(now) {
-		return
+	if next := cronSched.Next(sched.Since.In(now.Location())); next.IsZero() {
+		return time.Time{}
+	} else if s.snapshotRetryAt.After(now) {
+		return s.snapshotRetryAt
+	} else if next.After(now) {
+		return next
 	}
 
-	_, err := s.createSnapshot(ctx, true)
+	_, err = s.createSnapshot(ctx, true)
 	if err != nil {
 		s.logger.Error("failed to take scheduled snapshot", zap.Error(err))
-	} else if err = s.store.UpdateSnapshotScheduleSince(now); err != nil {
-		// a schedule left where it was is due again on the next tick, so a
-		// failed advance backs off like a failed snapshot
+	} else if err = s.store.UpdateSnapshotScheduleSince(sched, now); err != nil {
 		s.logger.Error("failed to advance snapshot schedule", zap.Error(err))
 	}
 	if err != nil {
 		s.snapshotRetryAt = now.Add(scheduledSnapshotRetryDelay)
 		s.snapshotRetrySched = sched
+		return s.snapshotRetryAt
 	}
+	return cronSched.Next(now)
 }
 
 // pruneScheduledSnapshots deletes the scheduled snapshots the retention counts
@@ -290,7 +271,7 @@ func (s *Sia) pruneScheduledSnapshots(ctx context.Context, now time.Time) {
 // first, that the retention counts do not keep. Each count keeps the newest
 // snapshot of that many calendar days, ISO weeks or months in loc, all zero
 // counts keep every scheduled snapshot.
-func expiredScheduledSnapshots(snapshots []s3.Snapshot, sched SnapshotSchedule, loc *time.Location) []s3.Snapshot {
+func expiredScheduledSnapshots(snapshots []s3.Snapshot, sched s3.SnapshotSchedule, loc *time.Location) []s3.Snapshot {
 	if sched.KeepDaily == 0 && sched.KeepWeekly == 0 && sched.KeepMonthly == 0 {
 		return nil
 	}

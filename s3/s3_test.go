@@ -103,6 +103,116 @@ func TestUploadStats(t *testing.T) {
 	}
 }
 
+// TestSnapshotScheduleValidate verifies the expressions and counts a schedule
+// accepts and the ones the guard in front of the parser rejects.
+func TestSnapshotScheduleValidate(t *testing.T) {
+	for _, expr := range []string{"0 3 * * *", "*/15 * * * *", "0 3 * * MON-FRI", "@hourly", "@daily", "@weekly", "@monthly", "@yearly", " @daily "} {
+		if _, err := s3.ParseSnapshotSchedule(expr); err != nil {
+			t.Fatal(expr, err)
+		}
+	}
+	for _, expr := range []string{"", "03:00", "0 3 * *", "0 3 * * * *", "0 25 * * *", "@every 1h", "@every 0s", "TZ=UTC 0 3 * * *", "CRON_TZ=UTC", "TZ=", "0 3 31 2 *"} {
+		if _, err := s3.ParseSnapshotSchedule(expr); err == nil {
+			t.Fatal("expected error", expr)
+		}
+	}
+
+	now := time.Now()
+	for _, sched := range []s3.SnapshotSchedule{
+		{},
+		{Expression: "@daily", Since: now},
+		{Expression: "@daily", Since: now, KeepDaily: 7, KeepWeekly: 4, KeepMonthly: 12},
+	} {
+		if err := sched.Validate(); err != nil {
+			t.Fatal(sched, err)
+		}
+	}
+	for _, sched := range []s3.SnapshotSchedule{
+		{KeepDaily: 7},
+		{Expression: "@daily"},
+		{Expression: "@daily", Since: now, KeepWeekly: -1},
+		{Expression: "03:00", Since: now},
+	} {
+		if err := sched.Validate(); err == nil {
+			t.Fatal("expected error", sched)
+		}
+	}
+}
+
+func TestSnapshotSchedule(t *testing.T) {
+	backend, store := testutil.NewBackend(t)
+	server := httptest.NewServer(s3.NewAdmin(backend))
+	t.Cleanup(server.Close)
+
+	request := func(method, body string, status int) []byte {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), method, server.URL+"/settings/snapshots", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := server.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		data, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		} else if resp.StatusCode != status {
+			t.Fatal("unexpected", resp.StatusCode, string(data))
+		}
+		return data
+	}
+	readSchedule := func() s3.SnapshotSchedule {
+		t.Helper()
+		var sched s3.SnapshotSchedule
+		if err := json.Unmarshal(request(http.MethodGet, "", http.StatusOK), &sched); err != nil {
+			t.Fatal(err)
+		}
+		return sched
+	}
+
+	if sched := readSchedule(); sched.Expression != "" {
+		t.Fatal("unexpected", sched)
+	}
+
+	before := time.Now().Truncate(time.Second)
+	request(http.MethodPut, `{"expression":"@daily","keepDaily":7,"since":"2099-01-01T00:00:00Z"}`, http.StatusOK)
+	sched := readSchedule()
+	if sched.Expression != "@daily" || sched.KeepDaily != 7 || sched.KeepWeekly != 0 || sched.KeepMonthly != 0 {
+		t.Fatal("unexpected", sched)
+	} else if sched.Since.Before(before) || sched.Since.After(time.Now()) {
+		t.Fatal("unexpected", sched.Since)
+	}
+	persisted, err := store.SnapshotSchedule()
+	if err != nil {
+		t.Fatal(err)
+	} else if !persisted.Since.Equal(sched.Since) {
+		t.Fatal("mismatch", persisted.Since, sched.Since)
+	}
+	persisted.Since = sched.Since
+	if !reflect.DeepEqual(persisted, sched) {
+		t.Fatal("mismatch", persisted, sched)
+	}
+
+	request(http.MethodPut, `{"expression":"@daily","keepDaily":-1}`, http.StatusBadRequest)
+	request(http.MethodPut, `{"expression":"invalid","keepDaily":1}`, http.StatusBadRequest)
+	if current := readSchedule(); !reflect.DeepEqual(current, sched) {
+		t.Fatal("mismatch", current, sched)
+	}
+
+	request(http.MethodPut, `{"expression":"@hourly","keepWeekly":4}`, http.StatusOK)
+	if sched := readSchedule(); sched.Expression != "@hourly" || sched.KeepDaily != 0 || sched.KeepWeekly != 4 {
+		t.Fatal("unexpected", sched)
+	}
+
+	request(http.MethodDelete, "", http.StatusOK)
+	if sched := readSchedule(); sched.Expression != "" || sched.KeepDaily != 0 || sched.KeepWeekly != 0 || sched.KeepMonthly != 0 {
+		t.Fatal("unexpected", sched)
+	}
+}
+
 func TestCreateSnapshot(t *testing.T) {
 	backend, store := testutil.NewBackend(t)
 	server := httptest.NewServer(s3.NewAdmin(backend))

@@ -20,7 +20,6 @@ import (
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"go.sia.tech/core/types"
 	sdk "go.sia.tech/siastorage"
-	"go.uber.org/zap"
 )
 
 const (
@@ -95,10 +94,10 @@ hour, day of month, month and day of week, or is one of these descriptors:
 	@monthly	0 0 1 * *	at midnight on the first of the month
 	@yearly		0 0 1 1 *	at midnight on the first of January
 
-It runs in the local time zone of the instance, read when s3d starts. A
-changed expression is picked up within a minute and changed counts within an
-hour. The first snapshot is taken when the schedule next fires after it is
-set. A snapshot missed while the instance was down is taken on the next start.
+It runs in the local time zone of the instance, read when s3d starts. Schedule
+changes take effect immediately and retention is applied once an hour. The
+first snapshot is taken when the schedule next fires after it is set. A
+snapshot missed while the instance was down is taken on the next start.
 
 Each count keeps the newest scheduled snapshot of that many days, weeks or
 months, the sets are combined, and all zero keeps every scheduled snapshot.
@@ -124,7 +123,7 @@ func runSnapshotsCreate(ctx context.Context, cmd *flag.FlagSet) {
 
 	fmt.Println("Backing up the database and uploading it to Sia. This may take a while...")
 	var snapshot s3.Snapshot
-	err := adminRequest(ctx, http.MethodPost, cfg.AdminAddress, cfg.AdminPassword, "/snapshots", &snapshot)
+	err := adminRequest(ctx, http.MethodPost, cfg.AdminAddress, cfg.AdminPassword, "/snapshots", nil, &snapshot)
 	checkFatalError("failed to create snapshot", err)
 
 	fmt.Printf("Created snapshot %s with %d objects.\n", snapshot.SiaObjectID, snapshot.ObjectCount)
@@ -138,7 +137,7 @@ func runSnapshotsList(ctx context.Context, cmd *flag.FlagSet) {
 	requireAdminConfig()
 
 	var list s3.SnapshotList
-	err := adminRequest(ctx, http.MethodGet, cfg.AdminAddress, cfg.AdminPassword, "/snapshots", &list)
+	err := adminRequest(ctx, http.MethodGet, cfg.AdminAddress, cfg.AdminPassword, "/snapshots", nil, &list)
 	checkFatalError("failed to list snapshots", err)
 
 	if list.Synced {
@@ -170,7 +169,7 @@ func runSnapshotsDelete(ctx context.Context, cmd *flag.FlagSet) {
 	var objectID types.Hash256
 	checkFatalError("invalid Sia object id", objectID.UnmarshalText([]byte(cmd.Arg(0))))
 
-	err := adminRequest(ctx, http.MethodDelete, cfg.AdminAddress, cfg.AdminPassword, "/snapshots/"+objectID.String(), nil)
+	err := adminRequest(ctx, http.MethodDelete, cfg.AdminAddress, cfg.AdminPassword, "/snapshots/"+objectID.String(), nil, nil)
 	checkFatalError("failed to delete snapshot", err)
 
 	fmt.Println("Deleted snapshot", objectID)
@@ -250,17 +249,16 @@ func runSnapshotsRestore(ctx context.Context, cmd *flag.FlagSet, out string) {
 	fmt.Println("Scheduled snapshots are off in a restored database. Set them with 's3d snapshots schedule set' once it runs.")
 }
 
-func runSnapshotsSchedule(cmd *flag.FlagSet) {
+func runSnapshotsSchedule(ctx context.Context, cmd *flag.FlagSet) {
 	if len(cmd.Args()) != 0 {
 		cmd.Usage()
 		os.Exit(1)
 	}
 
-	store, err := openStore(zap.NewNop())
-	checkFatalError("failed to open database", err)
-	defer store.Close()
+	requireAdminConfig()
 
-	sched, err := store.SnapshotSchedule()
+	var sched s3.SnapshotSchedule
+	err := adminRequest(ctx, http.MethodGet, cfg.AdminAddress, cfg.AdminPassword, "/settings/snapshots", nil, &sched)
 	checkFatalError("failed to load snapshot schedule", err)
 
 	if sched.Expression == "" {
@@ -270,7 +268,7 @@ func runSnapshotsSchedule(cmd *flag.FlagSet) {
 	printSnapshotSchedule(sched)
 }
 
-func runSnapshotsScheduleSet(cmd *flag.FlagSet, sched sia.SnapshotSchedule) {
+func runSnapshotsScheduleSet(ctx context.Context, cmd *flag.FlagSet, sched s3.SnapshotSchedule) {
 	if len(cmd.Args()) != 1 {
 		cmd.Usage()
 		os.Exit(1)
@@ -280,28 +278,23 @@ func runSnapshotsScheduleSet(cmd *flag.FlagSet, sched sia.SnapshotSchedule) {
 		cmd.Usage()
 		os.Exit(1)
 	}
-	sched.Since = time.Now()
-	checkFatalError("failed to set snapshot schedule", sched.Validate())
+	requireAdminConfig()
 
-	store, err := openStore(zap.NewNop())
-	checkFatalError("failed to open database", err)
-	defer store.Close()
-
-	checkFatalError("failed to set snapshot schedule", store.UpdateSnapshotSchedule(sched))
+	err := adminRequest(ctx, http.MethodPut, cfg.AdminAddress, cfg.AdminPassword, "/settings/snapshots", sched, nil)
+	checkFatalError("failed to set snapshot schedule", err)
 	printSnapshotSchedule(sched)
 }
 
-func runSnapshotsScheduleDisable(cmd *flag.FlagSet) {
+func runSnapshotsScheduleDisable(ctx context.Context, cmd *flag.FlagSet) {
 	if len(cmd.Args()) != 0 {
 		cmd.Usage()
 		os.Exit(1)
 	}
 
-	store, err := openStore(zap.NewNop())
-	checkFatalError("failed to open database", err)
-	defer store.Close()
+	requireAdminConfig()
 
-	checkFatalError("failed to disable scheduled snapshots", store.UpdateSnapshotSchedule(sia.SnapshotSchedule{}))
+	err := adminRequest(ctx, http.MethodDelete, cfg.AdminAddress, cfg.AdminPassword, "/settings/snapshots", nil, nil)
+	checkFatalError("failed to disable scheduled snapshots", err)
 	fmt.Println("Scheduled snapshots are disabled.")
 }
 
@@ -438,7 +431,7 @@ func scheduledMark(scheduled bool) string {
 	return ""
 }
 
-func printSnapshotSchedule(sched sia.SnapshotSchedule) {
+func printSnapshotSchedule(sched s3.SnapshotSchedule) {
 	fmt.Printf("Schedule:     %s\n", sched.Expression)
 	fmt.Printf("Keep daily:   %d\n", sched.KeepDaily)
 	fmt.Printf("Keep weekly:  %d\n", sched.KeepWeekly)

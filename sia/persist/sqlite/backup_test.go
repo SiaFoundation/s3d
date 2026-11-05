@@ -10,7 +10,6 @@ import (
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
-	"github.com/SiaFoundation/s3d/sia"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.sia.tech/indexd/slabs"
 	"go.uber.org/zap/zaptest"
@@ -95,7 +94,7 @@ func TestBackup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.UpdateSnapshotSchedule(sia.SnapshotSchedule{Expression: "@daily", Since: time.Now(), KeepDaily: 7}); err != nil {
+	if err := store.UpdateSnapshotSchedule(s3.SnapshotSchedule{Expression: "@daily", Since: time.Now(), KeepDaily: 7}); err != nil {
 		t.Fatal(err)
 	}
 

@@ -2,10 +2,13 @@ package s3
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/SiaFoundation/s3d/internal/prometheus"
+	"github.com/robfig/cron/v3"
 	"go.sia.tech/core/types"
 	"go.sia.tech/jape"
 )
@@ -29,6 +32,51 @@ type Snapshot struct {
 type SnapshotList struct {
 	Synced    bool       `json:"synced"`
 	Snapshots []Snapshot `json:"snapshots"`
+}
+
+// SnapshotSchedule defines when snapshots are taken and how many calendar days,
+// weeks and months of scheduled snapshots are kept. An empty expression disables
+// scheduled snapshots.
+type SnapshotSchedule struct {
+	Expression  string    `json:"expression"`
+	Since       time.Time `json:"since"`
+	KeepDaily   int       `json:"keepDaily"`
+	KeepWeekly  int       `json:"keepWeekly"`
+	KeepMonthly int       `json:"keepMonthly"`
+}
+
+// Validate rejects a schedule the snapshot loop cannot apply.
+func (sched SnapshotSchedule) Validate() error {
+	if sched.KeepDaily < 0 || sched.KeepWeekly < 0 || sched.KeepMonthly < 0 {
+		return errors.New("snapshot retention counts must not be negative")
+	} else if sched.Expression == "" {
+		if sched.KeepDaily != 0 || sched.KeepWeekly != 0 || sched.KeepMonthly != 0 {
+			return errors.New("snapshot retention requires a snapshot schedule")
+		}
+		return nil
+	} else if sched.Since.IsZero() {
+		return errors.New("a snapshot schedule must record the time it runs from")
+	}
+	_, err := ParseSnapshotSchedule(sched.Expression)
+	return err
+}
+
+// ParseSnapshotSchedule parses a standard five field cron expression or one of
+// the @hourly, @daily, @weekly, @monthly and @yearly descriptors. The schedule
+// fires in the location of the time it is evaluated against.
+func ParseSnapshotSchedule(expr string) (cron.Schedule, error) {
+	// the parser panics on a bare time zone prefix and accepts a zero @every
+	// interval, which would fire on every tick
+	if expr = strings.TrimSpace(expr); strings.Contains(expr, "=") || strings.HasPrefix(expr, "@every") {
+		return nil, fmt.Errorf("invalid snapshot schedule %q, expected a cron expression or a descriptor like @daily", expr)
+	}
+	sched, err := cron.ParseStandard(expr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid snapshot schedule %q: %w", expr, err)
+	} else if sched.Next(time.Now()).IsZero() {
+		return nil, fmt.Errorf("invalid snapshot schedule %q, it never fires", expr)
+	}
+	return sched, nil
 }
 
 // ActiveUpload describes an upload group being streamed from the local buffer
@@ -193,4 +241,35 @@ func (s *s3) handleDeleteSnapshot(jc jape.Context) {
 		return
 	}
 	jc.Check("failed to delete snapshot", err)
+}
+
+// handleGetSnapshotSchedule returns the snapshot schedule.
+func (s *s3) handleGetSnapshotSchedule(jc jape.Context) {
+	sched, err := s.backend.SnapshotSchedule(jc.Request.Context())
+	if jc.Check("failed to load snapshot schedule", err) != nil {
+		return
+	}
+	jc.Encode(sched)
+}
+
+// handleUpdateSnapshotSchedule replaces the snapshot schedule, which runs from
+// the time of the request.
+func (s *s3) handleUpdateSnapshotSchedule(jc jape.Context) {
+	var sched SnapshotSchedule
+	if jc.Decode(&sched) != nil {
+		return
+	}
+	sched.Expression = strings.TrimSpace(sched.Expression)
+	sched.Since = time.Now()
+	if err := sched.Validate(); err != nil {
+		jc.Error(err, http.StatusBadRequest)
+		return
+	}
+	jc.Check("failed to set snapshot schedule", s.backend.UpdateSnapshotSchedule(jc.Request.Context(), sched))
+}
+
+// handleDeleteSnapshotSchedule disables scheduled snapshots, keeping the
+// existing ones.
+func (s *s3) handleDeleteSnapshotSchedule(jc jape.Context) {
+	jc.Check("failed to disable scheduled snapshots", s.backend.UpdateSnapshotSchedule(jc.Request.Context(), SnapshotSchedule{}))
 }

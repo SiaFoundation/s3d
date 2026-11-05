@@ -44,10 +44,6 @@ const (
 	// deleting state before we effectively delete it.
 	snapshotConfirmDelay = time.Hour
 
-	// scheduledSnapshotInterval is the interval at which the scheduled
-	// snapshot loop checks whether a snapshot is due.
-	scheduledSnapshotInterval = time.Minute
-
 	// scheduledSnapshotPruneInterval is the interval at which the scheduled
 	// snapshot loop applies retention.
 	scheduledSnapshotPruneInterval = time.Hour
@@ -188,8 +184,10 @@ type Sia struct {
 	lifecycleLoopInterval time.Duration
 	lifecycleDayDuration  time.Duration
 
+	snapshotMu         sync.Mutex
+	snapshotWake       chan struct{}
 	snapshotRetryAt    time.Time
-	snapshotRetrySched SnapshotSchedule
+	snapshotRetrySched s3.SnapshotSchedule
 
 	pinMu   sync.Mutex
 	pinWake chan struct{}
@@ -309,9 +307,10 @@ type Store interface {
 	MarkSnapshotPinning(id int64, objectID types.Hash256, objectCount int64) error
 	RollbackIncompleteSnapshots() (int64, error)
 	RollbackSnapshot(id int64) error
-	SnapshotSchedule() (SnapshotSchedule, error)
+	SnapshotSchedule() (s3.SnapshotSchedule, error)
 	SnapshotsForDeletion(before time.Time) ([]types.Hash256, error)
-	UpdateSnapshotScheduleSince(since time.Time) error
+	UpdateSnapshotSchedule(sched s3.SnapshotSchedule) error
+	UpdateSnapshotScheduleSince(sched s3.SnapshotSchedule, since time.Time) error
 }
 
 // New creates a new Sia backend instance.
@@ -335,6 +334,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 	sia.diskUsageWake = make(chan struct{})
 	sia.pinWake = make(chan struct{}, 1)
 	sia.orphanWake = make(chan struct{}, 1)
+	sia.snapshotWake = make(chan struct{}, 1)
 	for _, opt := range opts {
 		opt(sia)
 	}
@@ -891,10 +891,11 @@ func (s *Sia) syncBatch(ctx context.Context, cursor slabs.Cursor) (slabs.Cursor,
 
 	if len(events) == 0 {
 		// every published snapshot event is consumed so orphan processing
-		// is safe. Only a gate that was closed leaves the orphan loop
-		// waiting on a wake
+		// is safe. Only a gate that was closed leaves the orphan and
+		// snapshot loops waiting on a wake
 		if !s.synced.Swap(true) {
 			s.wakeOrphanLoop()
+			s.wakeSnapshotLoop()
 		}
 		return cursor, 0, false
 	}

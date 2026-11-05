@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/SiaFoundation/s3d/sia"
+	"github.com/SiaFoundation/s3d/s3"
 )
 
 // Backup writes a consistent, compacted copy of the database to destPath
@@ -58,7 +58,7 @@ func (s *Store) Backup(ctx context.Context, destPath string) (objectCount int64,
 	}
 	// a node started from the copy would otherwise take and prune snapshots
 	// on the account of the node that made it
-	if err := backup.UpdateSnapshotSchedule(sia.SnapshotSchedule{}); err != nil {
+	if err := backup.UpdateSnapshotSchedule(s3.SnapshotSchedule{}); err != nil {
 		backup.Close()
 		return 0, fmt.Errorf("failed to clear the snapshot schedule in backup: %w", err)
 	}

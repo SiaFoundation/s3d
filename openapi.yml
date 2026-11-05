@@ -98,6 +98,54 @@ paths:
                 $ref: "#/components/schemas/SnapshotList"
         "500":
           description: The snapshots could not be listed.
+  /settings/snapshots:
+    get:
+      tags:
+        - system
+      summary: Get the snapshot schedule
+      operationId: getSnapshotSchedule
+      responses:
+        "200":
+          description: The snapshot schedule and retention counts.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SnapshotSchedule"
+        "500":
+          description: The schedule could not be loaded.
+    put:
+      tags:
+        - system
+      summary: Replace the snapshot schedule
+      description: >
+        Replaces the whole schedule. Counts omitted from the request are zero.
+        The daemon records when the schedule was set and updates its timer
+        immediately. Retention is applied once an hour.
+      operationId: updateSnapshotSchedule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SnapshotSchedule"
+      responses:
+        "200":
+          description: The schedule was updated.
+        "400":
+          description: The expression or retention counts are invalid.
+        "500":
+          description: The schedule could not be updated.
+    delete:
+      tags:
+        - system
+      summary: Disable scheduled snapshots
+      description: Existing snapshots are kept.
+      operationId: deleteSnapshotSchedule
+      responses:
+        "200":
+          description: Scheduled snapshots were disabled.
+        "500":
+          description: The schedule could not be disabled.
   /snapshots/{objectID}:
     delete:
       tags:
@@ -244,6 +292,35 @@ components:
         scheduled:
           type: boolean
           description: Whether the snapshot was taken by the snapshot schedule.
+    SnapshotSchedule:
+      type: object
+      description: A snapshot schedule and its retention counts. An empty expression disables scheduled snapshots.
+      required:
+        - expression
+      properties:
+        expression:
+          type: string
+          description: A standard cron expression or @hourly, @daily, @weekly, @monthly or @yearly in the daemon's local time zone.
+        since:
+          type: string
+          format: date-time
+          readOnly: true
+          description: Time the schedule was set or last took a snapshot, assigned by the daemon.
+        keepDaily:
+          type: integer
+          minimum: 0
+          default: 0
+          description: Number of calendar days of scheduled snapshots kept.
+        keepWeekly:
+          type: integer
+          minimum: 0
+          default: 0
+          description: Number of ISO weeks of scheduled snapshots kept.
+        keepMonthly:
+          type: integer
+          minimum: 0
+          default: 0
+          description: Number of calendar months of scheduled snapshots kept.
     SnapshotList:
       type: object
       description: The recorded database snapshots and the instance's sync state.

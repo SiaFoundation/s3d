@@ -70,6 +70,6 @@ func (s *Sia) PruneScheduledSnapshots(ctx context.Context, now time.Time) { //no
 }
 
 // ExpiredScheduledSnapshots exports expiredScheduledSnapshots for testing.
-func ExpiredScheduledSnapshots(snapshots []s3.Snapshot, sched SnapshotSchedule, loc *time.Location) []s3.Snapshot {
+func ExpiredScheduledSnapshots(snapshots []s3.Snapshot, sched s3.SnapshotSchedule, loc *time.Location) []s3.Snapshot {
 	return expiredScheduledSnapshots(snapshots, sched, loc)
 }
