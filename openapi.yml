@@ -217,7 +217,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: "#/components/schemas/AccessKey"
+                  $ref: "#/components/schemas/AccessKeyMetadata"
         "500":
           description: The access keys could not be listed.
     post:
@@ -410,7 +410,17 @@ components:
           description: The access key ID.
         secretKey:
           type: string
-          description: The secret key. Only present in the response of POST /keys.
+          description: The secret key.
+        userName:
+          type: string
+          description: The user the key belongs to.
+    AccessKeyMetadata:
+      type: object
+      description: An access key without its secret and the user it belongs to.
+      properties:
+        accessKeyID:
+          type: string
+          description: The access key ID.
         userName:
           type: string
           description: The user the key belongs to.

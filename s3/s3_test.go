@@ -338,7 +338,7 @@ func TestAccessKeys(t *testing.T) {
 		}
 		return key, resp.StatusCode
 	}
-	listKeys := func(userName string) ([]s3.AccessKey, string) {
+	listKeys := func(userName string) ([]s3.AccessKeyMetadata, string) {
 		t.Helper()
 		url := baseURL + "/keys"
 		if userName != "" {
@@ -353,7 +353,7 @@ func TestAccessKeys(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var keys []s3.AccessKey
+		var keys []s3.AccessKeyMetadata
 		if err := json.Unmarshal(body, &keys); err != nil {
 			t.Fatal(err)
 		}
@@ -393,14 +393,14 @@ func TestAccessKeys(t *testing.T) {
 
 	// listing never includes secrets, filters by user, and an unknown user
 	// yields an empty array rather than null
-	keys, _ := listKeys("")
+	keys, body := listKeys("")
 	if len(keys) != 3 {
 		t.Fatalf("expected 3 keys, got %d", len(keys))
+	} else if strings.Contains(body, "secret") {
+		t.Fatal("expected secrets to be omitted", body)
 	}
 	for _, key := range keys {
-		if key.SecretKey != "" {
-			t.Fatal("expected secret to be omitted", key)
-		} else if key.UserName != testutil.Owner {
+		if key.UserName != testutil.Owner {
 			t.Fatal("unexpected user", key)
 		}
 	}

@@ -92,7 +92,7 @@ type AdminBackend interface {
 
 	// ListAccessKeys returns the access keys of the given user, or of every
 	// user when userName is nil.
-	ListAccessKeys(ctx context.Context, userName *string) ([]AccessKey, error)
+	ListAccessKeys(ctx context.Context, userName *string) ([]AccessKeyMetadata, error)
 }
 
 // Snapshot describes a database snapshot uploaded to Sia. It is returned by the
@@ -112,11 +112,18 @@ type SnapshotList struct {
 	Snapshots []Snapshot `json:"snapshots"`
 }
 
-// AccessKey describes an access key pair and the user it belongs to. The secret
-// is only returned when the key is created.
+// AccessKey describes an access key pair and the user it belongs to. It is
+// returned by the [POST] /keys endpoint.
 type AccessKey struct {
 	AccessKeyID string `json:"accessKeyID"`
-	SecretKey   string `json:"secretKey,omitempty"`
+	SecretKey   string `json:"secretKey"`
+	UserName    string `json:"userName"`
+}
+
+// AccessKeyMetadata describes an access key without its secret. It is returned
+// by the [GET] /keys endpoint.
+type AccessKeyMetadata struct {
+	AccessKeyID string `json:"accessKeyID"`
 	UserName    string `json:"userName"`
 }
 
@@ -357,9 +364,6 @@ func (s *s3) handleListAccessKeys(jc jape.Context) {
 	keys, err := s.admin.ListAccessKeys(jc.Request.Context(), userName)
 	if jc.Check("failed to list access keys", err) != nil {
 		return
-	}
-	for i := range keys {
-		keys[i].SecretKey = ""
 	}
 	jc.Encode(keys)
 }

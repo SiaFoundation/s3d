@@ -203,7 +203,7 @@ type Store interface {
 	ListUsers() ([]string, error)
 	CreateAccessKey(userName, accessKeyID, secretKey string) error
 	DeleteAccessKey(accessKeyID string) error
-	ListAccessKeys(userName *string) ([]s3.AccessKey, error)
+	ListAccessKeys(userName *string) ([]s3.AccessKeyMetadata, error)
 	LoadSecret(accessKeyID string) (secret, userName string, err error)
 
 	AllFilenames() ([]string, error)

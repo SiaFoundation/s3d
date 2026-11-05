@@ -132,8 +132,8 @@ func (s *Store) DeleteAccessKey(accessKeyID string) error {
 
 // ListAccessKeys returns all access keys for the given user. If userName is
 // nil, all access keys are returned.
-func (s *Store) ListAccessKeys(userName *string) ([]s3.AccessKey, error) {
-	keys := []s3.AccessKey{}
+func (s *Store) ListAccessKeys(userName *string) ([]s3.AccessKeyMetadata, error) {
+	keys := []s3.AccessKeyMetadata{}
 	err := s.transaction(func(tx *txn) error {
 		keys = keys[:0]
 
@@ -141,13 +141,13 @@ func (s *Store) ListAccessKeys(userName *string) ([]s3.AccessKey, error) {
 		var err error
 		if userName == nil {
 			r, err = tx.Query(`
-				SELECT ak.access_key_id, ak.secret_key, u.name
+				SELECT ak.access_key_id, u.name
 				FROM access_keys ak
 				INNER JOIN users u ON ak.user_id = u.id
 				ORDER BY u.name ASC, ak.access_key_id ASC`)
 		} else {
 			r, err = tx.Query(`
-				SELECT ak.access_key_id, ak.secret_key, u.name
+				SELECT ak.access_key_id, u.name
 				FROM access_keys ak
 				INNER JOIN users u ON ak.user_id = u.id
 				WHERE u.name = $1
@@ -159,8 +159,8 @@ func (s *Store) ListAccessKeys(userName *string) ([]s3.AccessKey, error) {
 		defer r.Close()
 
 		for r.Next() {
-			var k s3.AccessKey
-			if err := r.Scan(&k.AccessKeyID, &k.SecretKey, &k.UserName); err != nil {
+			var k s3.AccessKeyMetadata
+			if err := r.Scan(&k.AccessKeyID, &k.UserName); err != nil {
 				return err
 			}
 			keys = append(keys, k)
