@@ -471,7 +471,7 @@ func TestObjectAttributes(t *testing.T) {
 	bid := store.bucketID(bucket)
 
 	// assert [s3errs.ErrNoSuchKey] for a key that has no versions
-	if _, _, _, err := store.ObjectAttributes(bid, name, s3.NoVersion(), &s3.ObjectAttributesPage{PartNumberMarker: 0, MaxParts: 1000}); !errors.Is(err, s3errs.ErrNoSuchKey) {
+	if _, err := store.ObjectAttributes(bid, name, s3.NoVersion(), &s3.ObjectAttributesPage{PartNumberMarker: 0, MaxParts: 1000}); !errors.Is(err, s3errs.ErrNoSuchKey) {
 		t.Fatal(err)
 	}
 
@@ -481,13 +481,13 @@ func TestObjectAttributes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	expected := make([]objects.Part, totalParts)
+	expected := make([]s3.ObjectPart, totalParts)
 	for i := range expected {
 		size := s3.MinUploadPartSize
 		if i == totalParts-1 {
 			size = 64
 		}
-		expected[i] = objects.Part{PartNumber: i + 1, Size: size, Checksum: frand.Bytes(32)}
+		expected[i] = s3.ObjectPart{PartNumber: i + 1, Size: size, Checksum: frand.Bytes(32)}
 		if _, _, err := store.AddMultipartPart(bid, name, uploadID, fmt.Sprintf("part-%d", i+1), expected[i].PartNumber, frand.Entropy128(), size, expected[i].Checksum); err != nil {
 			t.Fatal(err)
 		}
@@ -497,61 +497,61 @@ func TestObjectAttributes(t *testing.T) {
 	}
 
 	// every part of the current version
-	_, parts, truncated, err := store.ObjectAttributes(bid, name, s3.NoVersion(), &s3.ObjectAttributesPage{PartNumberMarker: 0, MaxParts: 1000})
+	attrs, err := store.ObjectAttributes(bid, name, s3.NoVersion(), &s3.ObjectAttributesPage{PartNumberMarker: 0, MaxParts: 1000})
 	if err != nil {
 		t.Fatal(err)
-	} else if truncated {
+	} else if attrs.IsTruncated {
 		t.Fatal("expected a complete listing")
-	} else if !reflect.DeepEqual(parts, expected) {
-		t.Fatal("unexpected", parts)
+	} else if !reflect.DeepEqual(attrs.Parts, expected) {
+		t.Fatal("unexpected", attrs.Parts)
 	}
 
 	// a limit reports the parts that fit and that more remain
-	_, parts, truncated, err = store.ObjectAttributes(bid, name, s3.NoVersion(), &s3.ObjectAttributesPage{PartNumberMarker: 0, MaxParts: 2})
+	attrs, err = store.ObjectAttributes(bid, name, s3.NoVersion(), &s3.ObjectAttributesPage{PartNumberMarker: 0, MaxParts: 2})
 	if err != nil {
 		t.Fatal(err)
-	} else if !truncated {
+	} else if !attrs.IsTruncated {
 		t.Fatal("expected a truncated listing")
-	} else if !reflect.DeepEqual(parts, expected[:2]) {
-		t.Fatal("unexpected", parts)
+	} else if !reflect.DeepEqual(attrs.Parts, expected[:2]) {
+		t.Fatal("unexpected", attrs.Parts)
 	}
 
 	// a marker skips the parts up to and including it
-	_, parts, truncated, err = store.ObjectAttributes(bid, name, s3.NoVersion(), &s3.ObjectAttributesPage{PartNumberMarker: 2, MaxParts: 2})
+	attrs, err = store.ObjectAttributes(bid, name, s3.NoVersion(), &s3.ObjectAttributesPage{PartNumberMarker: 2, MaxParts: 2})
 	if err != nil {
 		t.Fatal(err)
-	} else if truncated {
+	} else if attrs.IsTruncated {
 		t.Fatal("expected a complete listing")
-	} else if !reflect.DeepEqual(parts, expected[2:]) {
-		t.Fatal("unexpected", parts)
+	} else if !reflect.DeepEqual(attrs.Parts, expected[2:]) {
+		t.Fatal("unexpected", attrs.Parts)
 	}
 
 	// assert [s3errs.ErrNoSuchVersion] for a version that is not there
-	if _, _, _, err := store.ObjectAttributes(bid, name, s3.SpecificVersion("missing"), &s3.ObjectAttributesPage{PartNumberMarker: 0, MaxParts: 1000}); !errors.Is(err, s3errs.ErrNoSuchVersion) {
+	if _, err := store.ObjectAttributes(bid, name, s3.SpecificVersion("missing"), &s3.ObjectAttributesPage{PartNumberMarker: 0, MaxParts: 1000}); !errors.Is(err, s3errs.ErrNoSuchVersion) {
 		t.Fatal(err)
 	}
 
 	// a nil page reads the object without its parts
-	obj, parts, truncated, err := store.ObjectAttributes(bid, name, s3.NoVersion(), nil)
+	attrs, err = store.ObjectAttributes(bid, name, s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
-	} else if obj.PartsCount != totalParts {
-		t.Fatal("unexpected parts count", obj.PartsCount)
-	} else if len(parts) != 0 || truncated {
-		t.Fatal("unexpected parts", len(parts), truncated)
+	} else if attrs.PartsCount != totalParts {
+		t.Fatal("unexpected parts count", attrs.PartsCount)
+	} else if len(attrs.Parts) != 0 || attrs.IsTruncated {
+		t.Fatal("unexpected parts", len(attrs.Parts), attrs.IsTruncated)
 	}
 
 	// overwriting the null version replaces the object and its parts together
 	if _, _, err := store.PutObject(bid, name, objects.PutOptions{Length: 0}); err != nil {
 		t.Fatal(err)
 	}
-	obj, parts, truncated, err = store.ObjectAttributes(bid, name, s3.NoVersion(), &s3.ObjectAttributesPage{PartNumberMarker: 0, MaxParts: 1000})
+	attrs, err = store.ObjectAttributes(bid, name, s3.NoVersion(), &s3.ObjectAttributesPage{PartNumberMarker: 0, MaxParts: 1000})
 	if err != nil {
 		t.Fatal(err)
-	} else if obj.PartsCount != 0 || obj.Length != 0 {
-		t.Fatal("unexpected object", obj.PartsCount, obj.Length)
-	} else if len(parts) != 0 || truncated {
-		t.Fatal("unexpected parts", len(parts), truncated)
+	} else if attrs.PartsCount != 0 || attrs.Size != 0 {
+		t.Fatal("unexpected object", attrs.PartsCount, attrs.Size)
+	} else if len(attrs.Parts) != 0 || attrs.IsTruncated {
+		t.Fatal("unexpected parts", len(attrs.Parts), attrs.IsTruncated)
 	}
 }
 
