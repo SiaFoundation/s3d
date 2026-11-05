@@ -71,11 +71,7 @@ func (s *Sia) CreateMultipartUpload(ctx context.Context, bucket s3.BucketID, obj
 	}
 
 	// create multipart upload in the database
-	var checksum objects.MultipartChecksum
-	if opts.ChecksumAlgorithm != "" {
-		checksum = objects.MultipartChecksum{Algorithm: opts.ChecksumAlgorithm, Type: opts.ChecksumType}
-	}
-
+	checksum := objects.MultipartChecksum{Algorithm: opts.ChecksumAlgorithm, Type: opts.ChecksumType}
 	if err := s.store.CreateMultipartUpload(bucket, object, uploadID, opts.Meta, opts.ObjectLock, checksum); err != nil {
 		s.cleanupOrphan(uploadDir, 0)
 		return nil, fmt.Errorf("failed to create multipart upload: %w", err)
@@ -173,21 +169,20 @@ func (s *Sia) UploadPart(ctx context.Context, bucket s3.BucketID, object string,
 		writers = append(writers, sha256Hash)
 	}
 
-	var uploadHash hash.Hash
-	if upload.Algorithm != "" {
-		uploadHash = upload.Algorithm.NewHash()
-		if uploadHash == nil {
-			return nil, fmt.Errorf("cannot hash %q: %w", upload.Algorithm, s3errs.ErrInvalidRequest)
-		}
-		writers = append(writers, uploadHash)
+	// hash with the upload's algorithm, else the one the request names
+	checksumHash, err := newUploadHash(upload)
+	if err != nil {
+		return nil, err
 	}
-
-	var checksumHash hash.Hash
-	if opts.Checksum != nil && upload.Algorithm == "" {
+	checksumAlgorithm := upload.Algorithm.HeaderSuffix()
+	if checksumHash == nil && opts.Checksum != nil {
 		checksumHash = opts.Checksum.NewHash()
 		if checksumHash == nil {
 			return nil, s3errs.ErrInvalidRequest
 		}
+		checksumAlgorithm = opts.Checksum.Algorithm
+	}
+	if checksumHash != nil {
 		writers = append(writers, checksumHash)
 	}
 
@@ -217,19 +212,16 @@ func (s *Sia) UploadPart(ctx context.Context, bucket s3.BucketID, object string,
 		}
 	}
 
+	// only an upload with an algorithm stores the part's digest
 	var storedChecksum []byte
 	var checksum *s3.RequestChecksum
-	switch {
-	case uploadHash != nil:
-		storedChecksum = uploadHash.Sum(nil)
-		if opts.Checksum != nil && opts.Checksum.Sum != nil && !bytes.Equal(storedChecksum, opts.Checksum.Sum) {
+	if checksumHash != nil {
+		checksum = &s3.RequestChecksum{Algorithm: checksumAlgorithm, Sum: checksumHash.Sum(nil)}
+		if opts.Checksum != nil && opts.Checksum.Sum != nil && !bytes.Equal(checksum.Sum, opts.Checksum.Sum) {
 			return nil, s3errs.ErrBadDigest
 		}
-		checksum = &s3.RequestChecksum{Algorithm: upload.Algorithm.HeaderSuffix(), Sum: storedChecksum}
-	case checksumHash != nil:
-		checksum = &s3.RequestChecksum{Algorithm: opts.Checksum.Algorithm, Sum: checksumHash.Sum(nil)}
-		if opts.Checksum.Sum != nil && !bytes.Equal(checksum.Sum, opts.Checksum.Sum) {
-			return nil, s3errs.ErrBadDigest
+		if upload.Algorithm != "" {
+			storedChecksum = checksum.Sum
 		}
 	}
 
@@ -350,12 +342,10 @@ func (s *Sia) UploadPartCopy(ctx context.Context, srcBucket s3.BucketID, srcObje
 	md5Hash := md5.New()
 	writers := []io.Writer{partFile, md5Hash}
 
-	var uploadHash hash.Hash
-	if upload.Algorithm != "" {
-		uploadHash = upload.Algorithm.NewHash()
-		if uploadHash == nil {
-			return nil, fmt.Errorf("cannot hash %q: %w", upload.Algorithm, s3errs.ErrInvalidRequest)
-		}
+	uploadHash, err := newUploadHash(upload)
+	if err != nil {
+		return nil, err
+	} else if uploadHash != nil {
 		writers = append(writers, uploadHash)
 	}
 
@@ -568,6 +558,19 @@ func objectChecksumValue(upload objects.MultipartChecksum, completed []objects.P
 	default:
 		return "", fmt.Errorf("cannot compute a %s %s checksum: %w", upload.Type, upload.Algorithm, s3errs.ErrInvalidRequest)
 	}
+}
+
+// newUploadHash returns a hash of the upload's algorithm, nil when the upload
+// has none.
+func newUploadHash(upload objects.MultipartChecksum) (hash.Hash, error) {
+	if upload.Algorithm == "" {
+		return nil, nil
+	}
+	h := upload.Algorithm.NewHash()
+	if h == nil {
+		return nil, fmt.Errorf("cannot hash %q: %w", upload.Algorithm, s3errs.ErrInvalidRequest)
+	}
+	return h, nil
 }
 
 func syncDir(path string) error {
