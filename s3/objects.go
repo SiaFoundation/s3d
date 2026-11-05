@@ -1711,7 +1711,7 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 		return err
 	}
 
-	if r.URL.Query().Get("partNumber") != "" {
+	if partRead {
 		partsCount := int32(1) // a non-multipart object reads as a single part
 		if obj.PartsCount != nil {
 			partsCount = *obj.PartsCount
