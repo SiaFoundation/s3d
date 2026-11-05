@@ -274,7 +274,7 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, version s3.
 // ObjectAttributes returns the attributes of an object together with one page
 // of its parts, read in a single transaction. A nil page skips the parts and
 // reports no truncation.
-func (s *Store) ObjectAttributes(bucket s3.BucketID, name string, version s3.VersionRequest, page *s3.ObjectAttributesPage) (*s3.ObjectAttributes, error) {
+func (s *Store) ObjectAttributes(bucket s3.BucketID, name string, version s3.VersionRequest, page *s3.ListPartsPage) (*s3.ObjectAttributes, error) {
 	var attrs s3.ObjectAttributes
 	err := s.transaction(func(tx *txn) error {
 		attrs = s3.ObjectAttributes{} // reset per attempt
@@ -321,7 +321,7 @@ func (s *Store) ObjectAttributes(bucket s3.BucketID, name string, version s3.Ver
 		defer rows.Close()
 
 		for rows.Next() {
-			if len(attrs.Parts) >= page.MaxParts {
+			if int64(len(attrs.Parts)) >= page.MaxParts {
 				attrs.IsTruncated = true
 				break
 			}
