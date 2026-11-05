@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -624,15 +625,20 @@ func TestCompleteMultipartUploadSubset(t *testing.T) {
 	}
 	uploadID := *res.UploadId
 
-	// upload three parts and name only the first two on completion
-	body := bytes.Repeat([]byte("a"), int(s3.MinUploadPartSize))
+	// upload three parts and name only the first and the last on completion
+	bodies := [][]byte{
+		bytes.Repeat([]byte("a"), int(s3.MinUploadPartSize)),
+		bytes.Repeat([]byte("b"), int(s3.MinUploadPartSize)),
+		bytes.Repeat([]byte("c"), int(s3.MinUploadPartSize)),
+	}
 	var completedParts []s3Types.CompletedPart
-	for number := int32(1); number <= 3; number++ {
+	for i, body := range bodies {
+		number := int32(i + 1)
 		up, err := s3Tester.UploadPart(t.Context(), bucket, object, uploadID, number, body)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if number < 3 {
+		if number != 2 {
 			completedParts = append(completedParts, s3Types.CompletedPart{PartNumber: aws.Int32(number), ETag: up.ETag})
 		}
 	}
@@ -649,7 +655,7 @@ func TestCompleteMultipartUploadSubset(t *testing.T) {
 	}
 
 	// the dropped part leaves the disk and the reservation with it
-	if _, err := os.Stat(filepath.Join(dir, sia.UploadsDirectory, uploadID, "3")); !errors.Is(err, fs.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(dir, sia.UploadsDirectory, uploadID, "2")); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatal("unexpected", err)
 	}
 
@@ -667,9 +673,36 @@ func TestCompleteMultipartUploadSubset(t *testing.T) {
 	data, err := io.ReadAll(objRes.Body)
 	if err != nil {
 		t.Fatal(err)
-	} else if int64(len(data)) != 2*s3.MinUploadPartSize {
-		t.Fatal("unexpected", len(data))
+	} else if !bytes.Equal(data, slices.Concat(bodies[0], bodies[2])) {
+		t.Fatal("unexpected object body")
 	}
+
+	// the object's parts are read by their position, so its second part is the
+	// third one uploaded
+	partRes, err := s3Tester.Client().GetObject(t.Context(), &service.GetObjectInput{
+		Bucket:     aws.String(bucket),
+		Key:        aws.String(object),
+		PartNumber: aws.Int32(2),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	part, err := io.ReadAll(partRes.Body)
+	partRes.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	} else if !bytes.Equal(part, bodies[2]) {
+		t.Fatal("unexpected part body")
+	} else if aws.ToInt32(partRes.PartsCount) != 2 {
+		t.Fatal("unexpected", aws.ToInt32(partRes.PartsCount))
+	}
+
+	_, err = s3Tester.Client().GetObject(t.Context(), &service.GetObjectInput{
+		Bucket:     aws.String(bucket),
+		Key:        aws.String(object),
+		PartNumber: aws.Int32(3),
+	})
+	testutil.AssertS3Error(t, s3errs.ErrInvalidPart, err)
 
 	if err := s3Tester.DeleteObject(t.Context(), bucket, object); err != nil {
 		t.Fatal(err)
