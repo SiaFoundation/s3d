@@ -471,7 +471,7 @@ func TestObjectAttributes(t *testing.T) {
 	bid := store.bucketID(bucket)
 
 	// assert [s3errs.ErrNoSuchKey] for a key that has no versions
-	if _, err := store.ObjectAttributes(bid, name, s3.NoVersion(), &s3.ObjectAttributesPage{PartNumberMarker: 0, MaxParts: 1000}); !errors.Is(err, s3errs.ErrNoSuchKey) {
+	if _, err := store.ObjectAttributes(bid, name, s3.NoVersion(), &s3.ListPartsPage{PartNumberMarker: 0, MaxParts: 1000}); !errors.Is(err, s3errs.ErrNoSuchKey) {
 		t.Fatal(err)
 	}
 
@@ -497,7 +497,7 @@ func TestObjectAttributes(t *testing.T) {
 	}
 
 	// every part of the current version
-	attrs, err := store.ObjectAttributes(bid, name, s3.NoVersion(), &s3.ObjectAttributesPage{PartNumberMarker: 0, MaxParts: 1000})
+	attrs, err := store.ObjectAttributes(bid, name, s3.NoVersion(), &s3.ListPartsPage{PartNumberMarker: 0, MaxParts: 1000})
 	if err != nil {
 		t.Fatal(err)
 	} else if attrs.IsTruncated {
@@ -507,7 +507,7 @@ func TestObjectAttributes(t *testing.T) {
 	}
 
 	// a limit reports the parts that fit and that more remain
-	attrs, err = store.ObjectAttributes(bid, name, s3.NoVersion(), &s3.ObjectAttributesPage{PartNumberMarker: 0, MaxParts: 2})
+	attrs, err = store.ObjectAttributes(bid, name, s3.NoVersion(), &s3.ListPartsPage{PartNumberMarker: 0, MaxParts: 2})
 	if err != nil {
 		t.Fatal(err)
 	} else if !attrs.IsTruncated {
@@ -517,7 +517,7 @@ func TestObjectAttributes(t *testing.T) {
 	}
 
 	// a marker skips the parts up to and including it
-	attrs, err = store.ObjectAttributes(bid, name, s3.NoVersion(), &s3.ObjectAttributesPage{PartNumberMarker: 2, MaxParts: 2})
+	attrs, err = store.ObjectAttributes(bid, name, s3.NoVersion(), &s3.ListPartsPage{PartNumberMarker: 2, MaxParts: 2})
 	if err != nil {
 		t.Fatal(err)
 	} else if attrs.IsTruncated {
@@ -527,7 +527,7 @@ func TestObjectAttributes(t *testing.T) {
 	}
 
 	// assert [s3errs.ErrNoSuchVersion] for a version that is not there
-	if _, err := store.ObjectAttributes(bid, name, s3.SpecificVersion("missing"), &s3.ObjectAttributesPage{PartNumberMarker: 0, MaxParts: 1000}); !errors.Is(err, s3errs.ErrNoSuchVersion) {
+	if _, err := store.ObjectAttributes(bid, name, s3.SpecificVersion("missing"), &s3.ListPartsPage{PartNumberMarker: 0, MaxParts: 1000}); !errors.Is(err, s3errs.ErrNoSuchVersion) {
 		t.Fatal(err)
 	}
 
@@ -545,7 +545,7 @@ func TestObjectAttributes(t *testing.T) {
 	if _, _, err := store.PutObject(bid, name, objects.PutOptions{Length: 0}); err != nil {
 		t.Fatal(err)
 	}
-	attrs, err = store.ObjectAttributes(bid, name, s3.NoVersion(), &s3.ObjectAttributesPage{PartNumberMarker: 0, MaxParts: 1000})
+	attrs, err = store.ObjectAttributes(bid, name, s3.NoVersion(), &s3.ListPartsPage{PartNumberMarker: 0, MaxParts: 1000})
 	if err != nil {
 		t.Fatal(err)
 	} else if attrs.PartsCount != 0 || attrs.Size != 0 {

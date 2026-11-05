@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -41,15 +40,6 @@ var objectAttributeNames = []string{
 	attributeObjectParts,
 	attributeStorageClass,
 	attributeObjectSize,
-}
-
-// ObjectAttributesPage bounds the parts a GetObjectAttributes request reports.
-type ObjectAttributesPage struct {
-	// PartNumberMarker excludes every part up to and including it.
-	PartNumberMarker int
-
-	// MaxParts caps how many parts follow the marker.
-	MaxParts int
 }
 
 // ObjectPart is one part of a multipart object.
@@ -119,12 +109,12 @@ func (s *s3) getObjectAttributes(w http.ResponseWriter, r *http.Request, access 
 	if err != nil {
 		return err
 	}
-	page, err := objectAttributesPage(r.Header)
+	page, err := parsePartsPage(r.Header.Get(HeaderXAMZPartNumberMarker), r.Header.Get(HeaderXAMZMaxParts))
 	if err != nil {
 		return err
 	}
 
-	var partsPage *ObjectAttributesPage
+	var partsPage *ListPartsPage
 	if requested[attributeObjectParts] {
 		partsPage = &page
 	}
@@ -200,31 +190,13 @@ func parseObjectAttributes(header http.Header) (map[string]bool, error) {
 	return requested, nil
 }
 
-// objectAttributesPage reads the page of parts a request asks for.
-func objectAttributesPage(header http.Header) (ObjectAttributesPage, error) {
-	maxParts, err := parseClampedInt(header.Get(HeaderXAMZMaxParts), DefaultMaxUploadListParts, 1, MaxUploadListParts)
-	if err != nil {
-		return ObjectAttributesPage{}, err
-	}
-
-	page := ObjectAttributesPage{MaxParts: int(maxParts)}
-	if raw := header.Get(HeaderXAMZPartNumberMarker); raw != "" {
-		marker, err := strconv.Atoi(raw)
-		if err != nil || marker < 0 {
-			return ObjectAttributesPage{}, fmt.Errorf("invalid part number marker %q: %w", raw, s3errs.ErrInvalidArgument)
-		}
-		page.PartNumberMarker = marker
-	}
-	return page, nil
-}
-
 // objectPartsResponse builds the parts element of a GetObjectAttributes
 // response. The next marker is the last part reported and is only set when
 // parts remain.
-func objectPartsResponse(attrs *ObjectAttributes, page ObjectAttributesPage) *ObjectPartsResponse {
+func objectPartsResponse(attrs *ObjectAttributes, page ListPartsPage) *ObjectPartsResponse {
 	parts := &ObjectPartsResponse{
 		IsTruncated:      attrs.IsTruncated,
-		MaxParts:         page.MaxParts,
+		MaxParts:         int(page.MaxParts),
 		PartNumberMarker: page.PartNumberMarker,
 		PartsCount:       attrs.PartsCount,
 	}

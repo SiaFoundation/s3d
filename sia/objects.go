@@ -330,7 +330,7 @@ func (s *Sia) GetObject(ctx context.Context, bucket s3.BucketID, object string, 
 // from the specified bucket, along with a page of its parts when it was uploaded
 // in parts. version selects a specific version, or the current version when
 // unspecified.
-func (s *Sia) GetObjectAttributes(ctx context.Context, bucket s3.BucketID, object string, version s3.VersionRequest, page *s3.ObjectAttributesPage) (*s3.ObjectAttributes, error) {
+func (s *Sia) GetObjectAttributes(ctx context.Context, bucket s3.BucketID, object string, version s3.VersionRequest, page *s3.ListPartsPage) (*s3.ObjectAttributes, error) {
 	return s.store.ObjectAttributes(bucket, object, version, page)
 }
 
