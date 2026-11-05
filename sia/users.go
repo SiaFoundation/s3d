@@ -28,7 +28,7 @@ func (s *Sia) DeleteUser(ctx context.Context, name string) error {
 
 // ListAccessKeys returns the access keys of the given user, or of every user
 // when userName is nil.
-func (s *Sia) ListAccessKeys(ctx context.Context, userName *string) ([]s3.AccessKey, error) {
+func (s *Sia) ListAccessKeys(ctx context.Context, userName *string) ([]s3.AccessKeyMetadata, error) {
 	return s.store.ListAccessKeys(userName)
 }
 
