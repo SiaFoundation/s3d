@@ -74,7 +74,7 @@ func initTestDB(t testing.TB, log *zap.Logger) *testStore {
 // the backend hands them to CompleteMultipartUpload.
 func mustMultipartParts(t testing.TB, store *testStore, bucket s3.BucketID, name string, uploadID s3.UploadID) []objects.Part {
 	t.Helper()
-	parts, err := store.MultipartParts(bucket, name, uploadID)
+	_, parts, err := store.MultipartParts(bucket, name, uploadID)
 	if err != nil {
 		t.Fatal(err)
 	}

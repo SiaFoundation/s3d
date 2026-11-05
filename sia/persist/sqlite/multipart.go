@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -80,14 +79,18 @@ func (s *Store) CompleteMultipartUpload(bucket s3.BucketID, name string, uploadI
 		if len(parts) == 0 {
 			return errors.New("cannot complete multipart upload with no parts")
 		}
-		uploaded, err := uploadedParts(tx, uploadID)
+		uploaded, err := uploadParts(tx, uploadID)
 		if err != nil {
 			return err
+		}
+		rows := make(map[int]objects.Part, len(uploaded))
+		for _, row := range uploaded {
+			rows[row.PartNumber] = row
 		}
 		md5Hash := md5.New()
 		var contentLength int64
 		for i, part := range parts {
-			row, ok := uploaded[part.PartNumber]
+			row, ok := rows[part.PartNumber]
 			if !ok {
 				return s3errs.ErrInvalidPart
 			} else if row.Filename != part.Filename || row.ContentMD5 != part.ContentMD5 || row.Size != part.Size || !bytes.Equal(row.Checksum, part.Checksum) {
@@ -95,16 +98,17 @@ func (s *Store) CompleteMultipartUpload(bucket s3.BucketID, name string, uploadI
 			} else if i < len(parts)-1 && row.Size < s3.MinUploadPartSize {
 				return s3errs.ErrEntityTooSmall
 			}
-			delete(uploaded, part.PartNumber)
+			delete(rows, part.PartNumber)
 			md5Hash.Write(row.ContentMD5[:])
 			contentLength += row.Size
 		}
 
 		// what the completion does not name leaves with the upload
 		for _, row := range uploaded {
-			dropped = append(dropped, row)
+			if _, ok := rows[row.PartNumber]; ok {
+				dropped = append(dropped, row)
+			}
 		}
-		slices.SortFunc(dropped, func(a, b objects.Part) int { return a.PartNumber - b.PartNumber })
 
 		var contentMD5 [16]byte
 		copy(contentMD5[:], md5Hash.Sum(nil))
@@ -159,23 +163,25 @@ func (s *Store) CompleteMultipartUpload(bucket s3.BucketID, name string, uploadI
 	return versionID, orphan, dropped, err
 }
 
-func uploadedParts(tx *txn, uploadID s3.UploadID) (map[int]objects.Part, error) {
+// uploadParts returns the upload's parts in ascending part number order.
+func uploadParts(tx *txn, uploadID s3.UploadID) ([]objects.Part, error) {
 	rows, err := tx.Query(`
 		SELECT part_number, filename, content_md5, content_length, checksum
 		FROM multipart_parts
-		WHERE upload_id = $1`, sqlUploadID(uploadID))
+		WHERE upload_id = $1
+		ORDER BY part_number ASC`, sqlUploadID(uploadID))
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	parts := make(map[int]objects.Part)
+	var parts []objects.Part
 	for rows.Next() {
 		var part objects.Part
 		if err := rows.Scan(&part.PartNumber, &part.Filename, (*sqlMD5)(&part.ContentMD5), &part.Size, &part.Checksum); err != nil {
 			return nil, err
 		}
-		parts[part.PartNumber] = part
+		parts = append(parts, part)
 	}
 	return parts, rows.Err()
 }
@@ -280,49 +286,24 @@ func (s *Store) HasMultipartUpload(bucket s3.BucketID, name string, uploadID s3.
 	return
 }
 
-// MultipartParts returns the parts belonging to the specified multipart upload.
-func (s *Store) MultipartParts(bucket s3.BucketID, name string, uploadID s3.UploadID) ([]objects.Part, error) {
-	var parts []objects.Part
+// MultipartParts returns the additional checksum the specified multipart
+// upload was created with and its parts.
+func (s *Store) MultipartParts(bucket s3.BucketID, name string, uploadID s3.UploadID) (checksum objects.MultipartChecksum, parts []objects.Part, _ error) {
 	if err := s.transaction(func(tx *txn) error {
-		parts = parts[:0] // reuse same slice if transaction retries
-
 		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
-
-		var exists bool
-		err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM multipart_uploads WHERE upload_id = $1 AND bucket_id = $2 AND name = $3)`,
-			sqlUploadID(uploadID), bid, name).Scan(&exists)
+		checksum, err = uploadChecksum(tx, bid, name, uploadID)
 		if err != nil {
 			return err
 		}
-		if !exists {
-			return s3errs.ErrNoSuchUpload
-		}
-
-		rows, err := tx.Query(`
-			SELECT part_number, filename, content_md5, content_length, checksum
-			FROM multipart_parts
-			WHERE upload_id = $1
-			ORDER BY part_number ASC`, sqlUploadID(uploadID))
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-
-		for rows.Next() {
-			var part objects.Part
-			if err := rows.Scan(&part.PartNumber, &part.Filename, (*sqlMD5)(&part.ContentMD5), &part.Size, &part.Checksum); err != nil {
-				return err
-			}
-			parts = append(parts, part)
-		}
-		return rows.Err()
+		parts, err = uploadParts(tx, uploadID)
+		return err
 	}); err != nil {
-		return nil, err
+		return objects.MultipartChecksum{}, nil, err
 	}
-	return parts, nil
+	return checksum, parts, nil
 }
 
 // MultipartUploadChecksum returns the additional checksum the upload was

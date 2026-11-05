@@ -405,13 +405,8 @@ func (s *Sia) ListParts(ctx context.Context, bucket s3.BucketID, object string, 
 
 // CompleteMultipartUpload completes a multipart upload.
 func (s *Sia) CompleteMultipartUpload(ctx context.Context, bucket s3.BucketID, object string, uploadID s3.UploadID, parts []s3.CompleteMultipartPart, opts s3.CompleteMultipartUploadOptions) (*s3.CompleteMultipartUploadResult, error) {
-	upload, err := s.store.MultipartUploadChecksum(bucket, object, uploadID)
-	if err != nil {
-		return nil, err
-	}
-
 	// get multipart upload
-	uploaded, err := s.store.MultipartParts(bucket, object, uploadID)
+	upload, uploaded, err := s.store.MultipartParts(bucket, object, uploadID)
 	if err != nil {
 		return nil, err
 	}
