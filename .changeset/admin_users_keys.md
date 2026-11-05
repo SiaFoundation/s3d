@@ -1,5 +1,5 @@
 ---
-default: minor
+default: major
 ---
 
 # Added user and access key management to the admin API
