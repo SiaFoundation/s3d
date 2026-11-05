@@ -196,7 +196,7 @@ func TestMultipartAddPart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parts, err := store.MultipartParts(bucketID(t, store, bucket), object, uid)
+	_, parts, err := store.MultipartParts(bucketID(t, store, bucket), object, uid)
 	if err != nil {
 		t.Fatal(err)
 	} else if len(parts) != 1 {
@@ -225,7 +225,7 @@ func TestMultipartAddPart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	checksumParts, err := store.MultipartParts(bucketID(t, store, bucket), checksumObject, checksumUID)
+	_, checksumParts, err := store.MultipartParts(bucketID(t, store, bucket), checksumObject, checksumUID)
 	if err != nil {
 		t.Fatal(err)
 	}

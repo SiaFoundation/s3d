@@ -115,7 +115,7 @@ func TestAddMultipartPart(t *testing.T) {
 		t.Fatal("expected empty previous filename for first part upload", prev)
 	}
 
-	if parts, err := store.MultipartParts(bid, object, uid); err != nil {
+	if _, parts, err := store.MultipartParts(bid, object, uid); err != nil {
 		t.Fatal(err)
 	} else if len(parts) != 1 {
 		t.Fatal("unexpected", len(parts))
@@ -132,7 +132,7 @@ func TestAddMultipartPart(t *testing.T) {
 		t.Fatal("expected previous filename to be returned on part overwrite", prev)
 	}
 
-	if parts, err := store.MultipartParts(bid, object, uid); err != nil {
+	if _, parts, err := store.MultipartParts(bid, object, uid); err != nil {
 		t.Fatal(err)
 	} else if len(parts) != 1 {
 		t.Fatal("unexpected", len(parts))
