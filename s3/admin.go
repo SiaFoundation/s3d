@@ -346,7 +346,7 @@ func (s *s3) handleDeleteUser(jc jape.Context) {
 // handleListAccessKeys lists access keys without their secrets.
 func (s *s3) handleListAccessKeys(jc jape.Context) {
 	var filter string
-	if jc.DecodeForm("userName", &filter) != nil {
+	if jc.DecodeForm("username", &filter) != nil {
 		return
 	}
 	var userName *string

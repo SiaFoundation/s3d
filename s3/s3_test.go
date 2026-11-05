@@ -342,7 +342,7 @@ func TestAccessKeys(t *testing.T) {
 		t.Helper()
 		url := baseURL + "/keys"
 		if userName != "" {
-			url += "?userName=" + userName
+			url += "?username=" + userName
 		}
 		resp := adminRequest(t, httpClient, http.MethodGet, url, nil)
 		defer resp.Body.Close()
