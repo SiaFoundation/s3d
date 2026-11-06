@@ -477,7 +477,8 @@ type (
 		// the stored configuration.
 		Transitions                  []LifecycleUnsupportedAction `xml:"Transition,omitempty"`
 		NoncurrentVersionTransitions []LifecycleUnsupportedAction `xml:"NoncurrentVersionTransition,omitempty"`
-		NoncurrentVersionExpiration  *LifecycleUnsupportedAction  `xml:"NoncurrentVersionExpiration,omitempty"`
+
+		NoncurrentVersionExpiration *LifecycleNoncurrentVersionExpiration `xml:"NoncurrentVersionExpiration,omitempty"`
 	}
 
 	// LifecycleUnsupportedAction marks the presence of a lifecycle action this
@@ -506,6 +507,13 @@ type (
 		Tags                  []LifecycleTag `xml:"Tag"`
 		ObjectSizeGreaterThan *int64         `xml:"ObjectSizeGreaterThan,omitempty"`
 		ObjectSizeLessThan    *int64         `xml:"ObjectSizeLessThan,omitempty"`
+	}
+
+	// LifecycleNoncurrentVersionExpiration describes when noncurrent object
+	// versions expire.
+	LifecycleNoncurrentVersionExpiration struct {
+		NoncurrentDays          int  `xml:"NoncurrentDays,omitempty"`
+		NewerNoncurrentVersions *int `xml:"NewerNoncurrentVersions,omitempty"`
 	}
 
 	// LifecycleExpiration describes when current object versions expire.
