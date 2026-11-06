@@ -906,8 +906,22 @@ func TestExpiredScheduledSnapshots(t *testing.T) {
 // delays of the scheduled snapshot pass.
 func TestScheduledSnapshots(t *testing.T) {
 	memSDK := testutil.NewMemorySDK()
-	backend, store := testutil.NewBackend(t, testutil.WithSDK(memSDK))
+	log := zaptest.NewLogger(t)
+	dir := t.TempDir()
 	ctx := t.Context()
+
+	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	// the loop runs the same passes on the host clock, this test runs them
+	// itself
+	backend, err := sia.New(ctx, memSDK, store, dir, sia.WithUploadDisabled(), sia.WithSnapshotsDisabled(), sia.WithLogger(log))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
 
 	// the listing is complete, retention may run
 	backend.SyncMetadata(ctx)
@@ -1087,7 +1101,7 @@ func TestScheduledSnapshotAdvanceFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	backend, err := sia.New(ctx, memSDK, unadvancingStore{store}, dir, sia.WithLogger(log))
+	backend, err := sia.New(ctx, memSDK, unadvancingStore{store}, dir, sia.WithSnapshotsDisabled(), sia.WithLogger(log))
 	if err != nil {
 		t.Fatal(err)
 	}

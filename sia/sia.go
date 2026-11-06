@@ -113,6 +113,13 @@ func WithUploadDisabled() Option {
 	}
 }
 
+// WithSnapshotsDisabled disables the background snapshots loop.
+func WithSnapshotsDisabled() Option {
+	return func(s *Sia) {
+		s.snapshotsDisabled = true
+	}
+}
+
 // WithLifecycleLoopInterval sets how often the background lifecycle loop
 // evaluates bucket lifecycle rules.
 func WithLifecycleLoopInterval(d time.Duration) Option {
@@ -186,6 +193,7 @@ type Sia struct {
 
 	snapshotMu         sync.Mutex
 	snapshotWake       chan struct{}
+	snapshotsDisabled  bool
 	snapshotRetryAt    time.Time
 	snapshotRetrySched s3.SnapshotSchedule
 

@@ -167,6 +167,9 @@ func (s *Sia) wakeSnapshotLoop() {
 // snapshotsLoop takes snapshots on the stored schedule and applies its
 // retention.
 func (s *Sia) snapshotsLoop(ctx context.Context) {
+	if s.snapshotsDisabled {
+		return
+	}
 	timer := time.NewTimer(0)
 	defer timer.Stop()
 	pruneTicker := time.NewTicker(scheduledSnapshotPruneInterval)
