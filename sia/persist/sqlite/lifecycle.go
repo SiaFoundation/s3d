@@ -276,11 +276,12 @@ func (s *Store) ExpireNoncurrentVersions(bucket s3.BucketID, prefix string, size
 			args = append(args, *sizeLessThan)
 		}
 		if retain > 0 {
-			// the count spans every newer noncurrent version of the key, so
-			// retain counts versions the cutoff and size bounds exclude
-			where = append(where, `(SELECT COUNT(*) FROM objects n
-				WHERE n.bucket_id = o.bucket_id AND n.name = o.name AND n.seq > o.seq AND n.is_latest = FALSE) >= ?`)
-			args = append(args, retain)
+			// newer noncurrent versions count toward retain even when the cutoff
+			// or the size bounds exclude them, so the subquery applies neither
+			where = append(where, `EXISTS (SELECT 1 FROM objects n
+				WHERE n.bucket_id = o.bucket_id AND n.name = o.name AND n.seq > o.seq AND n.is_latest = FALSE
+				LIMIT 1 OFFSET ?)`)
+			args = append(args, retain-1)
 		}
 		args = append(args, limit)
 
