@@ -185,7 +185,8 @@ CREATE TABLE snapshots (
     gen_completed INTEGER, -- generation it completed at, NULL until pinned
 
     state INTEGER NOT NULL, -- lifecycle state, values defined in snapshots.go
-    state_since INTEGER NOT NULL -- when the current state was entered
+    state_since INTEGER NOT NULL, -- when the current state was entered
+    scheduled INTEGER NOT NULL DEFAULT FALSE CHECK (scheduled IN (FALSE, TRUE)) -- taken by the snapshot schedule
 );
 
 -- serves the orphan guard, both halves probe by completion generation
@@ -223,6 +224,12 @@ CREATE TABLE global_settings (
 	last_sync_at INTEGER NOT NULL DEFAULT 0,
 	last_sync_key BLOB NOT NULL DEFAULT X'0000000000000000000000000000000000000000000000000000000000000000',
 	snapshot_gen INTEGER NOT NULL DEFAULT 0,
+	snapshot_schedule TEXT NOT NULL DEFAULT '',
+	snapshot_schedule_since INTEGER NOT NULL DEFAULT 0,
+	-- a retention count requires a schedule to take the snapshots it keeps
+	snapshot_keep_daily INTEGER NOT NULL DEFAULT 0 CHECK (snapshot_keep_daily = 0 OR snapshot_schedule != ''),
+	snapshot_keep_weekly INTEGER NOT NULL DEFAULT 0 CHECK (snapshot_keep_weekly = 0 OR snapshot_schedule != ''),
+	snapshot_keep_monthly INTEGER NOT NULL DEFAULT 0 CHECK (snapshot_keep_monthly = 0 OR snapshot_schedule != ''),
 	-- app_key and indexer_url are always set or nulled together
 	CHECK ((app_key IS NULL AND indexer_url IS NULL) OR (app_key IS NOT NULL AND indexer_url IS NOT NULL))
 );

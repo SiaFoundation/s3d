@@ -1,16 +1,53 @@
 package main
 
 import (
+	"flag"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/SiaFoundation/s3d/internal/testutil"
+	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/sia"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
+	"go.sia.tech/jape"
 )
+
+func TestSnapshotScheduleCommands(t *testing.T) {
+	backend, store := testutil.NewBackend(t)
+	server := httptest.NewServer(jape.BasicAuth("password")(s3.NewAdmin(backend)))
+	t.Cleanup(server.Close)
+	orig := cfg
+	t.Cleanup(func() { cfg = orig })
+	cfg.AdminAddress = strings.TrimPrefix(server.URL, "http://")
+	cfg.AdminPassword = "password"
+	cfg.Directory = filepath.Join(t.TempDir(), "unused")
+
+	cmd := flag.NewFlagSet("set", flag.ContinueOnError)
+	if err := cmd.Parse([]string{"@daily"}); err != nil {
+		t.Fatal(err)
+	}
+	runSnapshotsScheduleSet(t.Context(), cmd, s3.SnapshotSchedule{KeepDaily: 7})
+	if sched, err := store.SnapshotSchedule(); err != nil {
+		t.Fatal(err)
+	} else if sched.Expression != "@daily" || sched.KeepDaily != 7 {
+		t.Fatal("unexpected", sched)
+	}
+
+	runSnapshotsSchedule(t.Context(), flag.NewFlagSet("schedule", flag.ContinueOnError))
+	runSnapshotsScheduleDisable(t.Context(), flag.NewFlagSet("disable", flag.ContinueOnError))
+	if sched, err := store.SnapshotSchedule(); err != nil {
+		t.Fatal(err)
+	} else if sched.Expression != "" {
+		t.Fatal("unexpected", sched)
+	} else if _, err := os.Stat(cfg.Directory); !os.IsNotExist(err) {
+		t.Fatal("unexpected", err)
+	}
+}
 
 func TestPrepareRestoreDir(t *testing.T) {
 	root := t.TempDir()

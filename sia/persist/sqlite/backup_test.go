@@ -94,6 +94,9 @@ func TestBackup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := store.UpdateSnapshotSchedule(s3.SnapshotSchedule{Expression: "@daily", Since: time.Now(), KeepDaily: 7}); err != nil {
+		t.Fatal(err)
+	}
 
 	checkDatabase := func(t *testing.T, fp string, objectCount int64) {
 		t.Helper()
@@ -147,6 +150,11 @@ func TestBackup(t *testing.T) {
 		} else if stats.UploadedObjects != 2 || objectCount != 2 {
 			t.Fatal("unexpected", stats.UploadedObjects, objectCount)
 		}
+		if sched, err := backup.SnapshotSchedule(); err != nil {
+			t.Fatal(err)
+		} else if sched.Expression != "" || sched.KeepDaily != 0 {
+			t.Fatal("expected no snapshot schedule in the copy", sched)
+		}
 	}
 
 	t.Run("Backup", func(t *testing.T) {
@@ -162,6 +170,10 @@ func TestBackup(t *testing.T) {
 			t.Fatal(err)
 		} else if !reflect.DeepEqual(stats, live) {
 			t.Fatal("mismatch", stats)
+		} else if sched, err := store.SnapshotSchedule(); err != nil {
+			t.Fatal(err)
+		} else if sched.Expression != "@daily" {
+			t.Fatal("source schedule changed", sched)
 		} else if entries, err := os.ReadDir(filepath.Dir(destPath)); err != nil {
 			t.Fatal(err)
 		} else if len(entries) != 1 {

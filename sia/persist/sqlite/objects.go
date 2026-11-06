@@ -376,11 +376,11 @@ func (s *Store) MarkObjectUploaded(bucket s3.BucketID, name, versionID string, c
 			return err
 		}
 		if _, err := tx.Exec(`
-			INSERT INTO unpinned_objects (sia_object_id, pin_before)
-			VALUES ($1, $2)
+			INSERT INTO unpinned_objects (sia_object_id, pin_before, next_attempt_at)
+			VALUES ($1, $2, $3)
 			ON CONFLICT (sia_object_id) DO UPDATE
 				SET pin_before = max(unpinned_objects.pin_before, excluded.pin_before)
-		`, sqlHash256(sealed.ID()), sqlTime(pinBefore)); err != nil {
+		`, sqlHash256(sealed.ID()), sqlTime(pinBefore), sqlTime(time.Now())); err != nil {
 			return err
 		}
 		if !exists {
