@@ -439,8 +439,19 @@ func (s *s3) postObject(w http.ResponseWriter, r *http.Request, header *bucketAc
 	access, err := s.bucketAccess(r, caller, bucket)
 	if err != nil {
 		return err
-	} else if err := access.assertObjectAllowed(actionPutObject, object); err != nil {
+	}
+	// an invalid tag set is reported only once the write is allowed
+	var (
+		tags    TagSet
+		tagsErr error
+	)
+	if document, ok := form.fields["tagging"]; ok {
+		tags, tagsErr = parseTaggingXML([]byte(document), objectTagLimits)
+	}
+	if err := access.assertWriteAllowed(object, tags); err != nil {
 		return err
+	} else if tagsErr != nil {
+		return tagsErr
 	}
 
 	// the request body bounds the file from above, and a content-length-range
@@ -493,6 +504,7 @@ func (s *s3) postObject(w http.ResponseWriter, r *http.Request, header *bucketAc
 		ContentMD5:       contentMD5,
 		Checksum:         checksum,
 		Meta:             meta,
+		Tags:             tags,
 	})
 	if err != nil {
 		return err

@@ -571,4 +571,15 @@ CREATE TABLE object_tags (
 ) WITHOUT ROWID;`)
 		return err
 	},
+	func(tx *txn, _ *zap.Logger) error {
+		_, err := tx.Exec(`CREATE TABLE multipart_upload_tags (
+    upload_id BLOB NOT NULL,
+    position INTEGER NOT NULL, -- keeps the order the client gave
+    tag_key TEXT NOT NULL,
+    tag_value TEXT NOT NULL,
+    FOREIGN KEY (upload_id) REFERENCES multipart_uploads(upload_id) ON DELETE CASCADE,
+    PRIMARY KEY (upload_id, tag_key)
+) WITHOUT ROWID;`)
+		return err
+	},
 }

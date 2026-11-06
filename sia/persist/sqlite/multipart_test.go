@@ -25,7 +25,7 @@ func TestCreateMultipartUpload(t *testing.T) {
 	store := initTestDB(t, zap.NewNop())
 
 	// assert [s3errs.ErrNoSuchBucket] for unknown bucket - then create it
-	if err := store.CreateMultipartUpload(-1, object, s3.NewUploadID(), nil, nil); !errors.Is(err, s3errs.ErrNoSuchBucket) {
+	if err := store.CreateMultipartUpload(-1, object, s3.NewUploadID(), nil, nil, nil); !errors.Is(err, s3errs.ErrNoSuchBucket) {
 		t.Fatal(err)
 	} else if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
 		t.Fatal(err)
@@ -34,7 +34,7 @@ func TestCreateMultipartUpload(t *testing.T) {
 
 	// create multipart upload
 	uid1 := s3.NewUploadID()
-	err := store.CreateMultipartUpload(bid, object, uid1, nil, nil)
+	err := store.CreateMultipartUpload(bid, object, uid1, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestAddMultipartPart(t *testing.T) {
 
 	// create multipart upload
 	uid := s3.NewUploadID()
-	err := store.CreateMultipartUpload(bid, object, uid, nil, nil)
+	err := store.CreateMultipartUpload(bid, object, uid, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestAbortMultipartUpload(t *testing.T) {
 
 	// create multipart upload
 	uid := s3.NewUploadID()
-	err := store.CreateMultipartUpload(bid, object, uid, nil, nil)
+	err := store.CreateMultipartUpload(bid, object, uid, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestHasMultipartUpload(t *testing.T) {
 
 	// create multipart upload
 	uid := s3.NewUploadID()
-	err := store.CreateMultipartUpload(bid, object, uid, nil, nil)
+	err := store.CreateMultipartUpload(bid, object, uid, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +212,7 @@ func TestListParts(t *testing.T) {
 
 	// create multipart upload
 	uid := s3.NewUploadID()
-	err := store.CreateMultipartUpload(bid, object, uid, nil, nil)
+	err := store.CreateMultipartUpload(bid, object, uid, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +278,7 @@ func TestCompleteMultipartUpload(t *testing.T) {
 	bid := store.bucketID(bucket)
 
 	uid := s3.NewUploadID()
-	err := store.CreateMultipartUpload(bid, object, uid, nil, nil)
+	err := store.CreateMultipartUpload(bid, object, uid, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,7 +362,7 @@ func TestListMultipartUploads(t *testing.T) {
 		uids := make(map[string][]string)
 		for _, key := range keys {
 			uid := s3.NewUploadID()
-			err := store.CreateMultipartUpload(bid, key, uid, nil, nil)
+			err := store.CreateMultipartUpload(bid, key, uid, nil, nil, nil)
 			if err != nil {
 				t.Fatal(err)
 			}

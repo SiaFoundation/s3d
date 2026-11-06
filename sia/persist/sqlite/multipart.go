@@ -14,7 +14,7 @@ import (
 )
 
 // CreateMultipartUpload persists metadata for a new multipart upload.
-func (s *Store) CreateMultipartUpload(bucket s3.BucketID, name string, uploadID s3.UploadID, meta map[string]string, lock *s3.ObjectLockState) error {
+func (s *Store) CreateMultipartUpload(bucket s3.BucketID, name string, uploadID s3.UploadID, meta map[string]string, tags s3.TagSet, lock *s3.ObjectLockState) error {
 	if meta == nil {
 		meta = make(map[string]string) // force '{}' instead of 'null' in JSON
 	}
@@ -40,6 +40,10 @@ func (s *Store) CreateMultipartUpload(bucket s3.BucketID, name string, uploadID 
 				VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 			`, sqlUploadID(uploadID), bid, name, sqlMetaJSON(meta), sqlTime(time.Now()), stored.Mode, stored.RetainUntil, stored.LegalHold); err != nil {
 			return fmt.Errorf("failed to insert multipart upload: %w", err)
+		}
+		if err := insertTags(tx, `INSERT INTO multipart_upload_tags (upload_id, position, tag_key, tag_value) VALUES ($1, $2, $3, $4)`,
+			tags, sqlUploadID(uploadID)); err != nil {
+			return fmt.Errorf("failed to insert multipart upload tags: %w", err)
 		}
 		return incrementStat(tx, statMultipartUploads, 1)
 	})
@@ -112,12 +116,16 @@ func (s *Store) CompleteMultipartUpload(bucket s3.BucketID, name string, uploadI
 			sqlUploadID(uploadID)).Scan((*sqlMetaJSON)(&meta), &stored.Mode, &stored.RetainUntil, &stored.LegalHold); err != nil {
 			return err
 		}
+		tags, err := queryTags(tx, `SELECT tag_key, tag_value FROM multipart_upload_tags WHERE upload_id = $1 ORDER BY position`, sqlUploadID(uploadID))
+		if err != nil {
+			return err
+		}
 		lock, err := effectiveObjectLock(tx, bid, storedObjectLock(stored))
 		if err != nil {
 			return err
 		}
 		filename := uploadID.String()
-		res, err := putObject(tx, bid, name, status, contentMD5, meta, contentLength, int32(partCount), &filename, nil, lock)
+		res, err := putObject(tx, bid, name, status, contentMD5, meta, tags, contentLength, int32(partCount), &filename, nil, lock)
 		if err != nil {
 			return err
 		}
