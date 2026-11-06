@@ -1,7 +1,7 @@
 bin/
 .DS_Store
 .vscode
-s3-tests/
+ceph/
 CLAUDE.md
 GeoLite2-City.mmdb
 go.work

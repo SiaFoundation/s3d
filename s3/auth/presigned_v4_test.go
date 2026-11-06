@@ -136,13 +136,13 @@ func TestHandleAuthV4Presigned(t *testing.T) {
 			name:   "signed headers without host",
 			now:    exampleTime,
 			mutate: setQuery(QueryXAMZSignedHeaders, str("x-amz-date")),
-			want:   s3errs.ErrAuthorizationQueryParametersError,
+			want:   s3errs.ErrAccessDeniedUnsignedHeaders,
 		},
 		{
 			name:   "unknown signed header",
 			now:    exampleTime,
 			mutate: setQuery(QueryXAMZSignedHeaders, str("host;x-not-sent")),
-			want:   s3errs.ErrAuthorizationQueryParametersError,
+			want:   s3errs.ErrSignatureDoesNotMatch,
 		},
 		{
 			name:   "wrong region",
