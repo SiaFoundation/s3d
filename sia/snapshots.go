@@ -187,6 +187,9 @@ func (s *Sia) snapshotsLoop(ctx context.Context) {
 		} else {
 			timer.Reset(time.Until(next))
 		}
+		// a node restarted more often than the prune interval never reaches a
+		// tick, so every wake applies retention too
+		s.pruneScheduledSnapshots(ctx, time.Now())
 	}
 }
 

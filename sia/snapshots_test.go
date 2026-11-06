@@ -1167,9 +1167,10 @@ func TestScheduledSnapshotLoop(t *testing.T) {
 		synctest.Wait()
 		id := assertSnapshot(types.Hash256{})
 
-		// then once a day, pruned by the hourly pass after it
+		// then once a day, each cut pruning the one before it without
+		// waiting for a prune tick
 		for range 3 {
-			time.Sleep(24*time.Hour + time.Hour)
+			time.Sleep(24 * time.Hour)
 			synctest.Wait()
 			id = assertSnapshot(id)
 		}
@@ -1186,7 +1187,7 @@ func TestScheduledSnapshotLoop(t *testing.T) {
 		}
 		setSchedule(time.Now().Add(10 * time.Minute))
 		setSchedule(time.Now().Add(2 * time.Minute))
-		time.Sleep(2*time.Minute + time.Hour)
+		time.Sleep(2 * time.Minute)
 		synctest.Wait()
 		id = assertSnapshot(id)
 
@@ -1194,7 +1195,7 @@ func TestScheduledSnapshotLoop(t *testing.T) {
 		if err := backend.UpdateSnapshotSchedule(t.Context(), s3.SnapshotSchedule{}); err != nil {
 			t.Fatal(err)
 		}
-		time.Sleep(24*time.Hour + time.Hour)
+		time.Sleep(24 * time.Hour)
 		synctest.Wait()
 		if snapshots, err := store.ListSnapshots(); err != nil {
 			t.Fatal(err)
@@ -1204,7 +1205,7 @@ func TestScheduledSnapshotLoop(t *testing.T) {
 
 		// and setting it again resumes without a tick
 		setSchedule(time.Now().Add(2 * time.Minute))
-		time.Sleep(2*time.Minute + time.Hour)
+		time.Sleep(2 * time.Minute)
 		synctest.Wait()
 		assertSnapshot(id)
 	})
