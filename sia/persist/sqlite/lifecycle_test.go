@@ -1,7 +1,9 @@
 package sqlite
 
 import (
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -492,4 +494,72 @@ func TestExpireDeleteMarkers(t *testing.T) {
 		t.Fatalf("expected the marker to be removed, got %d", deleted)
 	}
 	store.assertCount(0, "objects")
+}
+
+func BenchmarkExpireNoncurrentVersions(b *testing.B) {
+	const (
+		versions  = 10_000
+		retain    = 5
+		batchSize = 100
+	)
+
+	store := initTestDB(b, zap.NewNop())
+
+	sealed := sealedObject()
+	var size uint64
+	for _, slab := range sealed.Slabs {
+		size += uint64(slab.Length)
+	}
+	size = max(size, 1)
+	contentMD5 := [16]byte(frand.Bytes(16))
+
+	// populate returns a bucket holding one key with a current version and
+	// versions noncurrent ones that became noncurrent in seq order
+	populate := func(bucket string) s3.BucketID {
+		if err := store.CreateBucket(testAccessKeyID, bucket, false); err != nil {
+			b.Fatal(err)
+		}
+		bid := store.bucketID(bucket)
+		err := store.transaction(func(tx *txn) error {
+			if err := upsertSiaObject(tx, sealed); err != nil {
+				return err
+			}
+			now := time.Now()
+			for seq := 1; seq <= versions+1; seq++ {
+				var noncurrentAt any
+				if seq <= versions {
+					noncurrentAt = sqlTime(now.Add(-time.Duration(versions-seq) * time.Minute))
+				}
+				_, err := tx.Exec(`
+				INSERT INTO objects (bucket_id, name, version_id, seq, is_latest, sia_object_id, content_md5, metadata, size, updated_at, noncurrent_at)
+				VALUES ($1, 'key', $2, $3, $4, $5, $6, $7, $8, $9, $10)`, bid, hex.EncodeToString(frand.Bytes(16)), seq, seq > versions, sqlHash256(sealed.ID()), sqlMD5(contentMD5), []byte{}, size, sqlTime(now), noncurrentAt)
+				if err != nil {
+					return err
+				} else if err := addUploadedObject(tx, int64(size)); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			b.Fatal(err)
+		}
+		return bid
+	}
+
+	// the oldest versions expire first and sit behind every newer one, so a
+	// retain check that walks all newer versions pays the whole key per row
+	var i int
+	for b.Loop() {
+		b.StopTimer()
+		bid := populate(fmt.Sprintf("bucket%d", i))
+		i++
+		b.StartTimer()
+		deleted, _, err := store.ExpireNoncurrentVersions(bid, "", nil, nil, retain, time.Now(), batchSize)
+		if err != nil {
+			b.Fatal(err)
+		} else if deleted != batchSize {
+			b.Fatalf("expected %d expired versions, got %d", batchSize, deleted)
+		}
+	}
 }
