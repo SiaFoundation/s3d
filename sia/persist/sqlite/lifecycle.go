@@ -153,11 +153,11 @@ func (s *Store) AbortMultipartUploads(bucket s3.BucketID, prefix string, before 
 }
 
 // ExpireObjects expires up to limit objects whose current version matches the
-// prefix and size bounds and was last modified at or before the cutoff,
+// prefix, size bounds and tags and was last modified at or before the cutoff,
 // applying a versioning-aware delete (see [deleteCurrentObject]) to each.
 // NoncurrentVersionExpiration is not supported. Returns the number of objects
 // expired; performs no ownership checks.
-func (s *Store) ExpireObjects(bucket s3.BucketID, prefix string, sizeGreaterThan, sizeLessThan *int64, before time.Time, limit int) (deleted int, orphans []objects.OrphanedFile, err error) {
+func (s *Store) ExpireObjects(bucket s3.BucketID, prefix string, sizeGreaterThan, sizeLessThan *int64, tags s3.TagSet, before time.Time, limit int) (deleted int, orphans []objects.OrphanedFile, err error) {
 	err = s.transaction(func(tx *txn) error {
 		deleted = 0
 		orphans = nil
@@ -187,6 +187,10 @@ func (s *Store) ExpireObjects(bucket s3.BucketID, prefix string, sizeGreaterThan
 		if sizeLessThan != nil {
 			where = append(where, "o.size < ?")
 			args = append(args, *sizeLessThan)
+		}
+		for _, tag := range tags {
+			where = append(where, `EXISTS (SELECT 1 FROM object_tags t WHERE t.bucket_id = o.bucket_id AND t.name = o.name AND t.version_id = o.version_id AND t.tag_key = ? AND t.tag_value = ?)`)
+			args = append(args, tag.Key, tag.Value)
 		}
 		args = append(args, limit)
 

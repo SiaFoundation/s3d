@@ -113,7 +113,7 @@ func (s *Sia) applyLifecycleRules(ctx context.Context, now time.Time) {
 			}
 			if cutoff, ok := rule.Expiration.ExpiryCutoff(now, s.lifecycleDayDuration); ok {
 				sizeGreaterThan, sizeLessThan := rule.EffectiveSizeRange()
-				s.expireObjects(ctx, bc, prefix, sizeGreaterThan, sizeLessThan, cutoff)
+				s.expireObjects(ctx, bc, prefix, sizeGreaterThan, sizeLessThan, rule.EffectiveTags(), cutoff)
 			}
 		}
 	}
@@ -145,14 +145,14 @@ func (s *Sia) abortIncompleteUploads(ctx context.Context, bc BucketLifecycleConf
 	}
 }
 
-// expireObjects deletes objects matching the prefix and size bounds in the
-// given bucket that were last modified at or before the cutoff.
-func (s *Sia) expireObjects(ctx context.Context, bc BucketLifecycleConfiguration, prefix string, sizeGreaterThan, sizeLessThan *int64, before time.Time) {
+// expireObjects deletes objects matching the prefix, size bounds and tags in
+// the given bucket that were last modified at or before the cutoff.
+func (s *Sia) expireObjects(ctx context.Context, bc BucketLifecycleConfiguration, prefix string, sizeGreaterThan, sizeLessThan *int64, tags s3.TagSet, before time.Time) {
 	// batchSize bounds how many objects are expired per store transaction.
 	const batchSize = 100
 	var expired int
 	for ctx.Err() == nil {
-		deleted, orphans, err := s.store.ExpireObjects(bc.BucketID, prefix, sizeGreaterThan, sizeLessThan, before, batchSize)
+		deleted, orphans, err := s.store.ExpireObjects(bc.BucketID, prefix, sizeGreaterThan, sizeLessThan, tags, before, batchSize)
 		if err != nil {
 			s.logger.Error("failed to expire objects", zap.String("bucket", bc.Bucket), zap.Error(err))
 			return
