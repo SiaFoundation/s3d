@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11"
 
@@ -44,16 +44,20 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install "tox>=4"
 
+      # s3-tests lives in our ceph fork, so only check out its directory
       - name: Clone test repo
-        run: git clone https://github.com/SiaFoundation/s3-tests.git
+        run: |
+          git clone --filter=blob:none --no-checkout --depth 1 https://github.com/SiaFoundation/ceph.git
+          git -C ceph sparse-checkout set --no-cone /src/test/rgw/s3-tests/
+          git -C ceph checkout
 
       # warm up the tox env so the Go test's `tox --skip-pkg-install` is fast
       - name: Setup test suite (create envs only)
-        run: tox run -vv --notest -c ./s3-tests
+        run: tox run -vv --notest -c ./ceph/src/test/rgw/s3-tests
 
       - name: Run s3-tests
         env:
-          S3_TESTS_DIR: ${{ github.workspace }}/s3-tests
+          S3_TESTS_DIR: ${{ github.workspace }}/ceph/src/test/rgw/s3-tests
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: postgres

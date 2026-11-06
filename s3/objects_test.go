@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"net/http"
 	"reflect"
 	"strings"
 	"testing"
@@ -442,24 +443,117 @@ func TestPutObject(t *testing.T) {
 			return base64.StdEncoding.EncodeToString(sum[:])
 		}
 		checksummed := "checksummed"
-		if _, err := s3Tester.Client().PutObject(t.Context(), &service.PutObjectInput{
+		put, err := s3Tester.Client().PutObject(t.Context(), &service.PutObjectInput{
 			Bucket:        aws.String(bucket),
 			Key:           aws.String(checksummed),
 			Body:          bytes.NewReader(data),
 			ChecksumCRC32: aws.String(crc32Checksum(data)),
-		}); err != nil {
+		})
+		if err != nil {
 			t.Fatal(err)
+		} else if got := aws.ToString(put.ChecksumCRC32); got != crc32Checksum(data) {
+			t.Fatalf("checksum mismatch: expected %s, got %s", crc32Checksum(data), got)
+		} else if put.ChecksumType != types.ChecksumTypeFullObject {
+			t.Fatalf("unexpected checksum type %q", put.ChecksumType)
 		}
 
 		// the checksum is stored with the object and served back
 		head, err := s3Tester.Client().HeadObject(t.Context(), &service.HeadObjectInput{
-			Bucket: aws.String(bucket),
-			Key:    aws.String(checksummed),
+			Bucket:       aws.String(bucket),
+			Key:          aws.String(checksummed),
+			ChecksumMode: types.ChecksumModeEnabled,
 		})
 		if err != nil {
 			t.Fatal(err)
 		} else if got := aws.ToString(head.ChecksumCRC32); got != crc32Checksum(data) {
 			t.Fatalf("checksum mismatch: expected %s, got %s", crc32Checksum(data), got)
+		} else if head.ChecksumType != types.ChecksumTypeFullObject {
+			t.Fatalf("unexpected checksum type %q", head.ChecksumType)
+		}
+
+		// a request that does not ask for the checksum is not served one
+		unasked, err := s3Tester.Client().HeadObject(t.Context(), &service.HeadObjectInput{
+			Bucket: aws.String(bucket),
+			Key:    aws.String(checksummed),
+		})
+		if err != nil {
+			t.Fatal(err)
+		} else if unasked.ChecksumCRC32 != nil {
+			t.Fatalf("unexpected checksum %q", aws.ToString(unasked.ChecksumCRC32))
+		} else if unasked.ChecksumType != "" {
+			t.Fatalf("unexpected checksum type %q", unasked.ChecksumType)
+		}
+
+		// a get asking for the checksum is served it too
+		get, err := s3Tester.Client().GetObject(t.Context(), &service.GetObjectInput{
+			Bucket:       aws.String(bucket),
+			Key:          aws.String(checksummed),
+			ChecksumMode: types.ChecksumModeEnabled,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer get.Body.Close()
+		if got := aws.ToString(get.ChecksumCRC32); got != crc32Checksum(data) {
+			t.Fatalf("checksum mismatch: expected %s, got %s", crc32Checksum(data), got)
+		} else if get.ChecksumType != types.ChecksumTypeFullObject {
+			t.Fatalf("unexpected checksum type %q", get.ChecksumType)
+		}
+
+		// a presigned URL carries the mode as a query parameter
+		presigner := service.NewPresignClient(s3Tester.Client())
+		httpClient := s3Tester.Client().Options().HTTPClient
+		presigned, err := presigner.PresignGetObject(t.Context(), &service.GetObjectInput{
+			Bucket:       aws.String(bucket),
+			Key:          aws.String(checksummed),
+			ChecksumMode: types.ChecksumModeEnabled,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		presignedReq, err := http.NewRequestWithContext(t.Context(), http.MethodGet, presigned.URL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		presignedResp, err := httpClient.Do(presignedReq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		presignedResp.Body.Close()
+		if presignedResp.StatusCode != http.StatusOK {
+			t.Fatalf("unexpected status %d", presignedResp.StatusCode)
+		} else if got := presignedResp.Header.Get("x-amz-checksum-crc32"); got != crc32Checksum(data) {
+			t.Fatalf("checksum mismatch: expected %s, got %s", crc32Checksum(data), got)
+		} else if got := presignedResp.Header.Get("x-amz-checksum-type"); got != "FULL_OBJECT" {
+			t.Fatalf("unexpected checksum type %q", got)
+		}
+
+		// the SDK presigns with the mode enabled unless response validation
+		// is turned off, so this URL carries no mode at all
+		presigned, err = presigner.PresignGetObject(t.Context(), &service.GetObjectInput{
+			Bucket: aws.String(bucket),
+			Key:    aws.String(checksummed),
+		}, func(o *service.PresignOptions) {
+			o.ClientOptions = append(o.ClientOptions, func(co *service.Options) {
+				co.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
+			})
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		presignedReq, err = http.NewRequestWithContext(t.Context(), http.MethodGet, presigned.URL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		presignedResp, err = httpClient.Do(presignedReq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		presignedResp.Body.Close()
+		if presignedResp.StatusCode != http.StatusOK {
+			t.Fatalf("unexpected status %d", presignedResp.StatusCode)
+		} else if got := presignedResp.Header.Get("x-amz-checksum-crc32"); got != "" {
+			t.Fatalf("unexpected checksum %q on a presigned request without the mode", got)
 		}
 
 		// upload with a checksum that does not match the body
@@ -500,6 +594,66 @@ func TestPutObject(t *testing.T) {
 		s3Tester := testutil.NewTester(t, testutil.WithTLS(), testutil.WithKeyPair("other", "foo", "bar"))
 		test(t, s3Tester)
 	})
+}
+
+// TestPutObjectTrailingChecksum asserts a checksum the client sends after the
+// body is computed by the backend, echoed on the response and stored with the
+// object.
+func TestPutObjectTrailingChecksum(t *testing.T) {
+	rt := &recordingTransport{}
+	s3Tester := testutil.NewTester(t,
+		testutil.WithTLS(),
+		testutil.WithServiceOptions(func(o *service.Options) {
+			inner, ok := o.HTTPClient.(*http.Client)
+			if !ok {
+				t.Fatal("HTTPClient is not *http.Client")
+			}
+			rt.base = inner.Transport
+			o.HTTPClient = &recordingHTTPClient{rt: rt}
+		}),
+	)
+
+	const bucket = "trailing-checksum"
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	data := frand.Bytes(100)
+	var sum [4]byte
+	binary.BigEndian.PutUint32(sum[:], crc32.ChecksumIEEE(data))
+	want := base64.StdEncoding.EncodeToString(sum[:])
+
+	// an unseekable body leaves the client no way to send the checksum ahead of
+	// the data, so it arrives as a trailer
+	put, err := s3Tester.Client().PutObject(t.Context(), &service.PutObjectInput{
+		Bucket:            aws.String(bucket),
+		Key:               aws.String("obj"),
+		Body:              readerOnly{bytes.NewReader(data)},
+		ContentLength:     aws.Int64(int64(len(data))),
+		ChecksumAlgorithm: types.ChecksumAlgorithmCrc32,
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if got := rt.last(); got != "STREAMING-UNSIGNED-PAYLOAD-TRAILER" {
+		t.Fatalf("expected the put to use STREAMING-UNSIGNED-PAYLOAD-TRAILER, got %q", got)
+	} else if got := aws.ToString(put.ChecksumCRC32); got != want {
+		t.Fatalf("checksum mismatch: expected %s, got %s", want, got)
+	} else if put.ChecksumType != types.ChecksumTypeFullObject {
+		t.Fatalf("unexpected checksum type %q", put.ChecksumType)
+	}
+
+	head, err := s3Tester.Client().HeadObject(t.Context(), &service.HeadObjectInput{
+		Bucket:       aws.String(bucket),
+		Key:          aws.String("obj"),
+		ChecksumMode: types.ChecksumModeEnabled,
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if got := aws.ToString(head.ChecksumCRC32); got != want {
+		t.Fatalf("checksum mismatch: expected %s, got %s", want, got)
+	} else if head.ChecksumType != types.ChecksumTypeFullObject {
+		t.Fatalf("unexpected checksum type %q", head.ChecksumType)
+	}
 }
 
 func TestConditionalPutObject(t *testing.T) {
