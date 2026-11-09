@@ -44,6 +44,14 @@ const (
 	// deleting state before we effectively delete it.
 	snapshotConfirmDelay = time.Hour
 
+	// scheduledSnapshotPruneInterval is the interval at which the scheduled
+	// snapshot loop applies retention.
+	scheduledSnapshotPruneInterval = time.Hour
+
+	// scheduledSnapshotRetryDelay is how long the scheduled snapshot loop
+	// waits after a failed attempt before trying again.
+	scheduledSnapshotRetryDelay = time.Hour
+
 	// defaultLifecycleLoopInterval is the default interval at which the
 	// background lifecycle loop runs.
 	defaultLifecycleLoopInterval = time.Hour
@@ -102,6 +110,13 @@ func WithUploadWaste(pct float64) Option {
 func WithUploadDisabled() Option {
 	return func(s *Sia) {
 		s.uploadDisabled = true
+	}
+}
+
+// WithSnapshotsDisabled disables the background snapshots loop.
+func WithSnapshotsDisabled() Option {
+	return func(s *Sia) {
+		s.snapshotsDisabled = true
 	}
 }
 
@@ -175,6 +190,12 @@ type Sia struct {
 
 	lifecycleLoopInterval time.Duration
 	lifecycleDayDuration  time.Duration
+
+	snapshotMu         sync.Mutex
+	snapshotWake       chan struct{}
+	snapshotsDisabled  bool
+	snapshotRetryAt    time.Time
+	snapshotRetrySched s3.SnapshotSchedule
 
 	pinMu   sync.Mutex
 	pinWake chan struct{}
@@ -290,8 +311,8 @@ type Store interface {
 	Backup(ctx context.Context, destPath string) (int64, error)
 	DBVersion() int64
 
-	AdoptSnapshot(objectID types.Hash256, createdAt time.Time, gen, objectCount int64) (s3.Snapshot, error)
-	CreateSnapshot() (s3.Snapshot, int64, error)
+	AdoptSnapshot(objectID types.Hash256, createdAt time.Time, gen, objectCount int64, scheduled bool) (s3.Snapshot, error)
+	CreateSnapshot(scheduled bool) (s3.Snapshot, int64, error)
 	DeleteSnapshotsBySiaObject(objectID types.Hash256) (int64, error)
 	HasSnapshotObject(objectID types.Hash256) (bool, error)
 	ListSnapshots() ([]s3.Snapshot, error)
@@ -299,7 +320,10 @@ type Store interface {
 	MarkSnapshotPinning(id int64, objectID types.Hash256, objectCount int64) error
 	RollbackIncompleteSnapshots() (int64, error)
 	RollbackSnapshot(id int64) error
+	SnapshotSchedule() (s3.SnapshotSchedule, error)
 	SnapshotsForDeletion(before time.Time) ([]types.Hash256, error)
+	UpdateSnapshotSchedule(sched s3.SnapshotSchedule) error
+	UpdateSnapshotScheduleSince(sched s3.SnapshotSchedule, since time.Time) error
 }
 
 // New creates a new Sia backend instance.
@@ -323,6 +347,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 	sia.diskUsageWake = make(chan struct{})
 	sia.pinWake = make(chan struct{}, 1)
 	sia.orphanWake = make(chan struct{}, 1)
+	sia.snapshotWake = make(chan struct{}, 1)
 	for _, opt := range opts {
 		opt(sia)
 	}
@@ -397,6 +422,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		launchBgLoop(sia.syncMetadataLoop),
 		launchBgLoop(sia.uploadLoop),
 		launchBgLoop(sia.lifecycleLoop),
+		launchBgLoop(sia.snapshotsLoop),
 		launchBgLoop(sia.pinLoop),
 		launchBgLoop(sia.statsLoop),
 	); err != nil {
@@ -416,7 +442,12 @@ func (s *Sia) Close() error {
 // backs up the database, uploads it gzip compressed to Sia as a tagged
 // snapshot object, pins it, and marks the record pinned. On failure the
 // snapshot is rolled back.
-func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
+func (s *Sia) CreateSnapshot(ctx context.Context) (s3.Snapshot, error) {
+	return s.createSnapshot(ctx, false)
+}
+
+// createSnapshot implements CreateSnapshot with the scheduled flag.
+func (s *Sia) createSnapshot(ctx context.Context, scheduled bool) (_ s3.Snapshot, err error) {
 	// a snapshot backs up the metadata database, which stays worth capturing
 	// when an object cannot be flushed, so a failed flush is reported and the
 	// snapshot continues
@@ -436,7 +467,7 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 			zap.Int64("multipartUploads", stats.MultipartUploads))
 	}
 
-	snap, gen, err := s.store.CreateSnapshot()
+	snap, gen, err := s.store.CreateSnapshot(scheduled)
 	if err != nil {
 		return s3.Snapshot{}, fmt.Errorf("failed to create snapshot: %w", err)
 	}
@@ -487,6 +518,7 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 		Generation:  gen,
 		ObjectCount: objectCount,
 		S3DVersion:  build.Version(),
+		Scheduled:   scheduled,
 	})
 	if err != nil {
 		return s3.Snapshot{}, fmt.Errorf("failed to marshal snapshot metadata: %w", err)
@@ -875,6 +907,7 @@ func (s *Sia) syncBatch(ctx context.Context, cursor slabs.Cursor) (slabs.Cursor,
 		// waiting on a wake
 		if !s.synced.Swap(true) {
 			s.wakeOrphanLoop()
+			s.wakeSnapshotLoop()
 		}
 		return cursor, 0, false
 	}
@@ -981,7 +1014,7 @@ func (s *Sia) handleSnapshotObject(objectID types.Hash256, meta objects.Snapshot
 		return true
 	}
 
-	snap, err := s.store.AdoptSnapshot(objectID, meta.CreatedAt, meta.Generation, meta.ObjectCount)
+	snap, err := s.store.AdoptSnapshot(objectID, meta.CreatedAt, meta.Generation, meta.ObjectCount, meta.Scheduled)
 	if err != nil {
 		s.syncFailed("failed to adopt snapshot object", zap.Stringer("objectID", &objectID), zap.Error(err))
 		return false

@@ -226,6 +226,23 @@ s3d snapshots list
 reports whether the instance has finished syncing with the Sia network. Until it
 has, the list may be incomplete.
 
+### Scheduling
+
+`s3d` can take snapshots on a cron schedule and keep a number of daily, weekly
+and monthly ones.
+
+```sh
+s3d snapshots schedule set --keep-daily 7 --keep-weekly 4 --keep-monthly 12 "0 3 * * *"
+s3d snapshots schedule
+s3d snapshots schedule disable
+```
+
+The expression is standard cron or a descriptor like `@daily`, in the instance's
+local time zone. Each count keeps the newest scheduled snapshot of that many
+days, weeks or months and the sets are combined. At least one retention count
+must be positive. Retention never removes a snapshot created with
+`s3d snapshots create`.
+
 ### Deleting
 
 Deleting unpins the snapshot's Sia object and removes its record, releasing the
