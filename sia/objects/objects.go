@@ -55,6 +55,10 @@ type Object struct {
 	ContentMD5     [16]byte
 	LastModified   time.Time
 
+	// PartChecksum is the digest of the part a partNumber read selected, nil
+	// when the part carries none.
+	PartChecksum []byte
+
 	// ObjectLock is the version's lock state, nil when it carries none.
 	ObjectLock *s3.ObjectLockState
 }
@@ -116,12 +120,23 @@ type ObjectForUpload struct {
 	LastModified time.Time
 }
 
+// MultipartChecksum is the additional checksum a multipart upload was created
+// with, zero when the client asked for none.
+type MultipartChecksum struct {
+	Algorithm s3.ChecksumAlgorithm
+	Type      s3.ChecksumType
+}
+
 // Part represents a single part of a multipart upload.
 type Part struct {
 	PartNumber int
 	Filename   string
 	Size       int64
 	ContentMD5 [16]byte
+
+	// Checksum is the part's additional digest, nil when the upload has no
+	// algorithm.
+	Checksum []byte
 }
 
 // UnpinnedObject identifies a Sia object that has been uploaded but not yet
