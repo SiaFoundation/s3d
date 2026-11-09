@@ -453,6 +453,12 @@ type Backend interface {
 	//
 	// - If no such snapshot exists, [ErrSnapshotNotFound] must be returned.
 	DeleteSnapshot(ctx context.Context, objectID types.Hash256) error
+
+	// SnapshotSchedule returns the snapshot schedule.
+	SnapshotSchedule(ctx context.Context) (SnapshotSchedule, error)
+
+	// UpdateSnapshotSchedule replaces the snapshot schedule.
+	UpdateSnapshotSchedule(ctx context.Context, sched SnapshotSchedule) error
 }
 
 type s3 struct {
@@ -588,6 +594,9 @@ func NewAdmin(b Backend, opts ...Option) http.Handler {
 		"POST /snapshots":             s3.handleCreateSnapshot,
 		"GET /snapshots":              s3.handleListSnapshots,
 		"DELETE /snapshots/:objectID": s3.handleDeleteSnapshot,
+		"GET /settings/snapshots":     s3.handleGetSnapshotSchedule,
+		"PUT /settings/snapshots":     s3.handleUpdateSnapshotSchedule,
+		"DELETE /settings/snapshots":  s3.handleDeleteSnapshotSchedule,
 	})
 }
 

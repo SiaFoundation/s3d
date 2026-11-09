@@ -1168,7 +1168,7 @@ func TestOrphanedObjects(t *testing.T) {
 
 	// snapshot the object while "b" still references it, so the generation it
 	// pins withholds the object once its last reference is gone
-	snap, _, err := store.CreateSnapshot()
+	snap, _, err := store.CreateSnapshot(false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2001,12 +2001,18 @@ func TestObjectsForPinning(t *testing.T) {
 	sealedB := upload("b")
 	sealedC := upload("c")
 
-	// the default next_attempt_at is 0 (epoch), so all three are due now
+	// a fresh row is due at once, but not before it was uploaded
 	due, err = store.ObjectsForPinning(time.Now(), 10)
 	if err != nil {
 		t.Fatal(err)
 	} else if len(due) != 3 {
 		t.Fatalf("expected 3 due rows, got %d", len(due))
+	}
+	due, err = store.ObjectsForPinning(time.Now().Add(-time.Second), 10)
+	if err != nil {
+		t.Fatal(err)
+	} else if len(due) != 0 {
+		t.Fatalf("expected 0 due rows before the upload, got %d", len(due))
 	}
 
 	// limit caps the result

@@ -109,9 +109,12 @@ func (s *Sia) performObjectPinning(ctx context.Context) error {
 	s.pinMu.Lock()
 	defer s.pinMu.Unlock()
 
+	// objects uploaded after this point are left to the next cycle so a flush
+	// under a steady stream of uploads returns
+	until := time.Now()
 	for ctx.Err() == nil {
 		now := time.Now()
-		toPin, err := s.store.ObjectsForPinning(now, pinBatchSize)
+		toPin, err := s.store.ObjectsForPinning(until, pinBatchSize)
 		if err != nil {
 			return fmt.Errorf("failed to fetch unpinned objects: %w", err)
 		} else if len(toPin) == 0 {

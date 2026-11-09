@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -31,6 +32,7 @@ Commands:
 	list		List snapshots
 	delete		Delete a snapshot and unpin its Sia object
 	restore		Restore a database from a snapshot on Sia
+	schedule	Manage the snapshot schedule
 `
 
 	snapshotsCreateUsage = `Usage: s3d snapshots create
@@ -68,6 +70,42 @@ snapshot is created and by 'snapshots list'.
 The destination must be empty or missing, so a restore can never overwrite an
 existing database. Run 's3d config' for the restored directory before starting
 s3d.`
+
+	snapshotsScheduleUsage = `Usage: s3d snapshots schedule [command]
+
+Print the snapshot schedule and its retention.
+
+Commands:
+	set		Set the snapshot schedule and its retention
+	disable		Disable scheduled snapshots
+`
+
+	snapshotsScheduleSetUsage = `Usage: s3d snapshots schedule set [--keep-daily <n>] [--keep-weekly <n>] [--keep-monthly <n>] <expression>
+
+Take snapshots on a cron schedule. The expression has five fields, minute,
+hour, day of month, month and day of week, or is one of these descriptors:
+
+	@hourly		0 * * * *	at the start of every hour
+	@daily		0 0 * * *	at midnight
+	@weekly		0 0 * * 0	at midnight on Sunday
+	@monthly	0 0 1 * *	at midnight on the first of the month
+	@yearly		0 0 1 1 *	at midnight on the first of January
+
+It runs in the local time zone of the instance, read when s3d starts.
+
+Each count keeps the newest scheduled snapshot of that many days, weeks or
+months and the sets are combined. At least one count must be positive. The
+command replaces the whole schedule, so a count left out is zero. Snapshots
+created with 'snapshots create' are never pruned.
+
+Examples:
+	s3d snapshots schedule set --keep-daily 7 "0 3 * * *"
+	s3d snapshots schedule set --keep-daily 7 --keep-weekly 4 --keep-monthly 12 @daily
+	s3d snapshots schedule set --keep-daily 14 "0 */6 * * *"`
+
+	snapshotsScheduleDisableUsage = `Usage: s3d snapshots schedule disable
+
+Stop taking scheduled snapshots. Existing snapshots are kept.`
 )
 
 func runSnapshotsCreate(ctx context.Context, cmd *flag.FlagSet) {
@@ -79,7 +117,7 @@ func runSnapshotsCreate(ctx context.Context, cmd *flag.FlagSet) {
 
 	fmt.Println("Backing up the database and uploading it to Sia. This may take a while...")
 	var snapshot s3.Snapshot
-	err := adminRequest(ctx, http.MethodPost, cfg.AdminAddress, cfg.AdminPassword, "/snapshots", &snapshot)
+	err := adminRequest(ctx, http.MethodPost, cfg.AdminAddress, cfg.AdminPassword, "/snapshots", nil, &snapshot)
 	checkFatalError("failed to create snapshot", err)
 
 	fmt.Printf("Created snapshot %s with %d objects.\n", snapshot.SiaObjectID, snapshot.ObjectCount)
@@ -93,7 +131,7 @@ func runSnapshotsList(ctx context.Context, cmd *flag.FlagSet) {
 	requireAdminConfig()
 
 	var list s3.SnapshotList
-	err := adminRequest(ctx, http.MethodGet, cfg.AdminAddress, cfg.AdminPassword, "/snapshots", &list)
+	err := adminRequest(ctx, http.MethodGet, cfg.AdminAddress, cfg.AdminPassword, "/snapshots", nil, &list)
 	checkFatalError("failed to list snapshots", err)
 
 	if list.Synced {
@@ -108,9 +146,9 @@ func runSnapshotsList(ctx context.Context, cmd *flag.FlagSet) {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "SIA OBJECT ID\tCREATED\tOBJECTS")
+	fmt.Fprintln(w, "SIA OBJECT ID\tCREATED\tOBJECTS\tSCHEDULED")
 	for _, snap := range list.Snapshots {
-		fmt.Fprintf(w, "%s\t%s\t%d\n", snap.SiaObjectID, snap.CreatedAt.Format(time.RFC3339), snap.ObjectCount)
+		fmt.Fprintf(w, "%s\t%s\t%d\t%s\n", snap.SiaObjectID, snap.CreatedAt.Format(time.RFC3339), snap.ObjectCount, scheduledMark(snap.Scheduled))
 	}
 	w.Flush()
 }
@@ -125,7 +163,7 @@ func runSnapshotsDelete(ctx context.Context, cmd *flag.FlagSet) {
 	var objectID types.Hash256
 	checkFatalError("invalid Sia object id", objectID.UnmarshalText([]byte(cmd.Arg(0))))
 
-	err := adminRequest(ctx, http.MethodDelete, cfg.AdminAddress, cfg.AdminPassword, "/snapshots/"+objectID.String(), nil)
+	err := adminRequest(ctx, http.MethodDelete, cfg.AdminAddress, cfg.AdminPassword, "/snapshots/"+objectID.String(), nil, nil)
 	checkFatalError("failed to delete snapshot", err)
 
 	fmt.Println("Deleted snapshot", objectID)
@@ -204,6 +242,55 @@ func runSnapshotsRestore(ctx context.Context, cmd *flag.FlagSet, out string) {
 	fmt.Println("Run 's3d config' for this directory, then start s3d to reconcile it with the network.")
 }
 
+func runSnapshotsSchedule(ctx context.Context, cmd *flag.FlagSet) {
+	if len(cmd.Args()) != 0 {
+		cmd.Usage()
+		os.Exit(1)
+	}
+
+	requireAdminConfig()
+
+	var sched s3.SnapshotSchedule
+	err := adminRequest(ctx, http.MethodGet, cfg.AdminAddress, cfg.AdminPassword, "/settings/snapshots", nil, &sched)
+	checkFatalError("failed to load snapshot schedule", err)
+
+	if sched.Expression == "" {
+		fmt.Println("Scheduled snapshots are disabled.")
+		return
+	}
+	printSnapshotSchedule(sched)
+}
+
+func runSnapshotsScheduleSet(ctx context.Context, cmd *flag.FlagSet, sched s3.SnapshotSchedule) {
+	if len(cmd.Args()) != 1 {
+		cmd.Usage()
+		os.Exit(1)
+	}
+	sched.Expression = strings.TrimSpace(cmd.Arg(0))
+	if sched.Expression == "" {
+		cmd.Usage()
+		os.Exit(1)
+	}
+	requireAdminConfig()
+
+	err := adminRequest(ctx, http.MethodPut, cfg.AdminAddress, cfg.AdminPassword, "/settings/snapshots", sched, nil)
+	checkFatalError("failed to set snapshot schedule", err)
+	printSnapshotSchedule(sched)
+}
+
+func runSnapshotsScheduleDisable(ctx context.Context, cmd *flag.FlagSet) {
+	if len(cmd.Args()) != 0 {
+		cmd.Usage()
+		os.Exit(1)
+	}
+
+	requireAdminConfig()
+
+	err := adminRequest(ctx, http.MethodDelete, cfg.AdminAddress, cfg.AdminPassword, "/settings/snapshots", nil, nil)
+	checkFatalError("failed to disable scheduled snapshots", err)
+	fmt.Println("Scheduled snapshots are disabled.")
+}
+
 // openRestoreSDK builds an SDK client from the app key recorded in the
 // configured data directory and prompts the user to log in when that key is
 // missing or no longer authorized. No database is created either way.
@@ -246,7 +333,7 @@ func promptSnapshot(snapshots []sia.RemoteSnapshot) sia.RemoteSnapshot {
 
 	var restorable int
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "#\tSIA OBJECT ID\tCREATED\tOBJECTS\tDB VERSION\tS3D VERSION")
+	fmt.Fprintln(w, "#\tSIA OBJECT ID\tCREATED\tOBJECTS\tSCHEDULED\tDB VERSION\tS3D VERSION")
 	for i, snap := range snapshots {
 		m, note := snap.Metadata, ""
 		if checkSnapshotVersion(snap) != nil {
@@ -254,7 +341,7 @@ func promptSnapshot(snapshots []sia.RemoteSnapshot) sia.RemoteSnapshot {
 		} else {
 			restorable++
 		}
-		fmt.Fprintf(w, "%d\t%s\t%s\t%d\t%d\t%s%s\n", i+1, snap.ObjectID, m.CreatedAt.Format(time.RFC3339), m.ObjectCount, m.DBVersion, m.S3DVersion, note)
+		fmt.Fprintf(w, "%d\t%s\t%s\t%d\t%s\t%d\t%s%s\n", i+1, snap.ObjectID, m.CreatedAt.Format(time.RFC3339), m.ObjectCount, scheduledMark(m.Scheduled), m.DBVersion, m.S3DVersion, note)
 	}
 	w.Flush()
 	fmt.Println("")
@@ -327,4 +414,19 @@ func checkSnapshotVersion(snap sia.RemoteSnapshot) error {
 		return fmt.Errorf("snapshot encoding %q is not supported by this build", enc)
 	}
 	return nil
+}
+
+// scheduledMark renders the scheduled column of a snapshot table.
+func scheduledMark(scheduled bool) string {
+	if scheduled {
+		return "yes"
+	}
+	return ""
+}
+
+func printSnapshotSchedule(sched s3.SnapshotSchedule) {
+	fmt.Printf("Schedule:     %s\n", sched.Expression)
+	fmt.Printf("Keep daily:   %d\n", sched.KeepDaily)
+	fmt.Printf("Keep weekly:  %d\n", sched.KeepWeekly)
+	fmt.Printf("Keep monthly: %d\n", sched.KeepMonthly)
 }

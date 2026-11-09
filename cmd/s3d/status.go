@@ -80,7 +80,7 @@ func fetchUploadStats(ctx context.Context, addr, password string) (s3.UploadStat
 	defer cancel()
 
 	var stats s3.UploadStats
-	err := adminRequest(ctx, http.MethodGet, addr, password, "/stats/uploads", &stats)
+	err := adminRequest(ctx, http.MethodGet, addr, password, "/stats/uploads", nil, &stats)
 	return stats, err
 }
 

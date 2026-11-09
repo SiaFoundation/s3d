@@ -7,12 +7,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -501,6 +503,78 @@ func TestFlushObjects(t *testing.T) {
 	} else if !bytes.Equal(body, data) {
 		t.Fatal("data mismatch after flush")
 	}
+
+	// objects uploaded while the flush pins are left to the pin loop, so a
+	// flush under a steady stream of uploads returns. Every pin stages one
+	// more uploaded object.
+	bid := bucketID(t, store, bucket)
+	var stageMu sync.Mutex
+	var arrivals int
+	var stageErr error
+	stage := func() error {
+		stageMu.Lock()
+		defer stageMu.Unlock()
+		arrivals++
+		name := fmt.Sprintf("arrival-%d", arrivals)
+		arrival := frand.Bytes(16)
+		siaObj, err := memSDK.AddObject(t.Context(), bytes.NewReader(arrival))
+		if err != nil {
+			return err
+		}
+		sealed, err := memSDK.SealObject(siaObj)
+		if err != nil {
+			return err
+		}
+		fn := name + ".upload"
+		sum := frand.Entropy128()
+		if _, _, err := store.PutObject(bid, name, objects.PutOptions{ContentMD5: sum, Length: int64(len(arrival)), FileName: &fn}); err != nil {
+			return err
+		}
+		return store.MarkObjectUploaded(bid, name, "", sum, sealed, time.Now().Add(time.Hour))
+	}
+	memSDK.SetPinHook(func(*sdk.Object) {
+		if err := stage(); err != nil {
+			stageMu.Lock()
+			stageErr = errors.Join(stageErr, err)
+			stageMu.Unlock()
+		}
+	})
+	for range sia.PinBatchSize {
+		if err := stage(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	flushed := make(chan error, 1)
+	go func() { flushed <- backend.FlushObjects(t.Context()) }()
+	select {
+	case err := <-flushed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		memSDK.SetPinHook(nil)
+		t.Fatal("flush waited for objects uploaded after it began")
+	}
+	memSDK.SetPinHook(nil)
+	stageMu.Lock()
+	err = stageErr
+	stageMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// the arrivals await the next pin cycle
+	if _, ok, err := store.NextPinningAttempt(); err != nil {
+		t.Fatal(err)
+	} else if !ok {
+		t.Fatal("expected objects uploaded during the flush to await their pin")
+	} else if err := backend.PinObjects(t.Context()); err != nil {
+		t.Fatal(err)
+	} else if _, ok, err := store.NextPinningAttempt(); err != nil {
+		t.Fatal(err)
+	} else if ok {
+		t.Fatal("expected every object to be pinned")
+	}
 }
 
 func TestCopyObject(t *testing.T) {
@@ -980,7 +1054,7 @@ func TestSyncMetadata(t *testing.T) {
 	deletedKey := stypes.Hash256{1, 2, 3}
 
 	// record a snapshot whose Sia object matches the deleted event
-	if snap, _, err := store.CreateSnapshot(); err != nil {
+	if snap, _, err := store.CreateSnapshot(false); err != nil {
 		t.Fatal(err)
 	} else if err := store.MarkSnapshotPinning(snap.ID, deletedKey, snap.ObjectCount); err != nil {
 		t.Fatal(err)
@@ -1071,7 +1145,7 @@ func TestSyncMetadata(t *testing.T) {
 
 	// record one snapshot object locally, leak another with no local record
 	recorded := uploadSnapshotObject(snapMeta)
-	if rec, _, err := store.CreateSnapshot(); err != nil {
+	if rec, _, err := store.CreateSnapshot(false); err != nil {
 		t.Fatal(err)
 	} else if err := store.MarkSnapshotPinning(rec.ID, memSDK.ObjectID(recorded), rec.ObjectCount); err != nil {
 		t.Fatal(err)
@@ -1105,7 +1179,7 @@ func TestSyncMetadata(t *testing.T) {
 	// an unknown snapshot object is adopted even while an upload is in flight,
 	// and the cursor advances past its event
 	foreign := uploadSnapshotObject(snapMeta)
-	pending, _, err := store.CreateSnapshot()
+	pending, _, err := store.CreateSnapshot(false)
 	if err != nil {
 		t.Fatal(err)
 	}
