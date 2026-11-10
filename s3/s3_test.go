@@ -2,10 +2,13 @@ package s3_test
 
 import (
 	"bytes"
+	"crypto/md5"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json/v2"
+	"encoding/xml"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -747,8 +750,8 @@ func TestSignedUploadWithoutPayloadHash(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected status %d, got %d: %s", http.StatusBadRequest, rec.Code, rec.Body)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "<Code>InvalidRequest</Code>") {
+		t.Fatalf("expected %d InvalidRequest, got %d: %s", http.StatusBadRequest, rec.Code, rec.Body)
 	}
 }
 
@@ -920,4 +923,201 @@ func TestPutObjectContentMD5(t *testing.T) {
 				size, expected.HTTPStatus, expected.Code, rec.Code, rec.Body)
 		}
 	}
+}
+
+// serveRaw sends a hand-built request to handler, signed with the tester's key
+// pair unless anonymous.
+func serveRaw(t *testing.T, handler http.Handler, method, target, body string, headers map[string]string, anonymous bool) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, "http://localhost"+target, strings.NewReader(body))
+	req.Host = "localhost"
+	if body != "" {
+		req.Header.Set("Content-Length", strconv.Itoa(len(body)))
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	if !anonymous {
+		signRequest(t, req, body, testutil.AccessKeyID, testutil.SecretAccessKey)
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	return rec
+}
+
+// newRawHandler returns a handler serving a bucket named "bucket" that holds
+// "object" with the body "hello world" and no stored Content-Type.
+func newRawHandler(t *testing.T) http.Handler {
+	t.Helper()
+	backend, _ := testutil.NewBackend(t)
+	handler := s3.New(backend, s3.WithLogger(zaptest.NewLogger(t)))
+	if rec := serveRaw(t, handler, http.MethodPut, "/bucket", "", nil, false); rec.Code != http.StatusOK {
+		t.Fatalf("create bucket: %d %s", rec.Code, rec.Body)
+	} else if rec := serveRaw(t, handler, http.MethodPut, "/bucket/object", "hello world", nil, false); rec.Code != http.StatusOK {
+		t.Fatalf("put object: %d %s", rec.Code, rec.Body)
+	}
+	return handler
+}
+
+func contentMD5(body string) string {
+	sum := md5.Sum([]byte(body))
+	return base64.StdEncoding.EncodeToString(sum[:])
+}
+
+func assertRawCode(t *testing.T, rec *httptest.ResponseRecorder, status int, code string) {
+	t.Helper()
+	if rec.Code != status || (code != "" && !strings.Contains(rec.Body.String(), "<Code>"+code+"</Code>")) {
+		t.Fatalf("expected %d %s, got %d: %s", status, code, rec.Code, rec.Body)
+	}
+}
+
+// TestRangeFallback checks that a Range header S3 cannot serve as one byte
+// range is ignored, while a well formed range past the end is still refused.
+func TestRangeFallback(t *testing.T) {
+	handler := newRawHandler(t)
+	for _, rng := range []string{"bytes=abc", "bytes=0-1,3-4"} {
+		rec := serveRaw(t, handler, http.MethodGet, "/bucket/object", "", map[string]string{"Range": rng}, false)
+		assertRawCode(t, rec, http.StatusOK, "")
+		if rec.Body.String() != "hello world" {
+			t.Fatalf("%s: expected the whole object, got %q", rng, rec.Body)
+		}
+	}
+	rec := serveRaw(t, handler, http.MethodGet, "/bucket/object", "", map[string]string{"Range": "bytes=100-200"}, false)
+	assertRawCode(t, rec, http.StatusRequestedRangeNotSatisfiable, "InvalidRange")
+}
+
+// TestContentTypeOverrides checks the default Content-Type of an object stored
+// without one, that signed and presigned response overrides apply without
+// changing the stored metadata, and that an anonymous read may not override.
+func TestContentTypeOverrides(t *testing.T) {
+	handler := newRawHandler(t)
+
+	assertStoredType := func() {
+		t.Helper()
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			rec := serveRaw(t, handler, method, "/bucket/object", "", nil, false)
+			assertRawCode(t, rec, http.StatusOK, "")
+			if got := rec.Header().Get("Content-Type"); got != "binary/octet-stream" {
+				t.Fatalf("%s: expected binary/octet-stream, got %q", method, got)
+			}
+		}
+	}
+	assertStoredType()
+
+	const overrides = "?response-content-type=text%2Fplain&response-cache-control=no-cache"
+	assertOverridden := func(rec *httptest.ResponseRecorder) {
+		t.Helper()
+		assertRawCode(t, rec, http.StatusOK, "")
+		if rec.Header().Get("Content-Type") != "text/plain" || rec.Header().Get("Cache-Control") != "no-cache" {
+			t.Fatalf("overrides not applied: %v", rec.Header())
+		}
+	}
+
+	// signed
+	assertOverridden(serveRaw(t, handler, http.MethodGet, "/bucket/object"+overrides, "", nil, false))
+	assertStoredType()
+
+	// presigned
+	req := httptest.NewRequest(http.MethodGet, "http://localhost/bucket/object"+overrides+"&X-Amz-Expires=60", nil)
+	creds := aws.Credentials{AccessKeyID: testutil.AccessKeyID, SecretAccessKey: testutil.SecretAccessKey}
+	presigned, _, err := v4.NewSigner().PresignHTTP(t.Context(), creds, req, "UNSIGNED-PAYLOAD", "s3", "us-east-1", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, presigned, nil))
+	assertOverridden(rec)
+	assertStoredType()
+
+	// anonymous, with a policy that allows the read itself
+	policy := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*","Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/*"}]}`
+	assertRawCode(t, serveRaw(t, handler, http.MethodPut, "/bucket?policy", policy, nil, false), http.StatusNoContent, "")
+	assertRawCode(t, serveRaw(t, handler, http.MethodGet, "/bucket/object", "", nil, true), http.StatusOK, "")
+	assertRawCode(t, serveRaw(t, handler, http.MethodGet, "/bucket/object"+overrides, "", nil, true), http.StatusBadRequest, "InvalidRequest")
+}
+
+// TestBodyDigestRequirements checks that DeleteObjects and lifecycle PUT
+// require a body digest and leave state unchanged when it is missing or wrong,
+// while an object's tag set may omit one.
+func TestBodyDigestRequirements(t *testing.T) {
+	handler := newRawHandler(t)
+
+	t.Run("DeleteObjects", func(t *testing.T) {
+		body := "<Delete><Object><Key>object</Key></Object></Delete>"
+		assertRawCode(t, serveRaw(t, handler, http.MethodPost, "/bucket?delete", body, nil, false), http.StatusBadRequest, "InvalidRequest")
+		assertRawCode(t, serveRaw(t, handler, http.MethodPost, "/bucket?delete", body, map[string]string{"Content-MD5": contentMD5("other")}, false), http.StatusBadRequest, "BadDigest")
+		assertRawCode(t, serveRaw(t, handler, http.MethodHead, "/bucket/object", "", nil, false), http.StatusOK, "")
+
+		assertRawCode(t, serveRaw(t, handler, http.MethodPost, "/bucket?delete", body, map[string]string{"Content-MD5": contentMD5(body)}, false), http.StatusOK, "")
+		assertRawCode(t, serveRaw(t, handler, http.MethodHead, "/bucket/object", "", nil, false), http.StatusNotFound, "")
+	})
+
+	t.Run("Lifecycle", func(t *testing.T) {
+		body := "<LifecycleConfiguration><Rule><ID>a</ID><Filter><Prefix>x/</Prefix></Filter><Status>Enabled</Status><Expiration><Days>1</Days></Expiration></Rule></LifecycleConfiguration>"
+		assertRawCode(t, serveRaw(t, handler, http.MethodPut, "/bucket?lifecycle", body, nil, false), http.StatusBadRequest, "InvalidRequest")
+		assertRawCode(t, serveRaw(t, handler, http.MethodPut, "/bucket?lifecycle", body, map[string]string{"Content-MD5": contentMD5("other")}, false), http.StatusBadRequest, "BadDigest")
+		assertRawCode(t, serveRaw(t, handler, http.MethodGet, "/bucket?lifecycle", "", nil, false), http.StatusNotFound, "NoSuchLifecycleConfiguration")
+
+		assertRawCode(t, serveRaw(t, handler, http.MethodPut, "/bucket?lifecycle", body, map[string]string{"Content-MD5": contentMD5(body)}, false), http.StatusOK, "")
+		assertRawCode(t, serveRaw(t, handler, http.MethodGet, "/bucket?lifecycle", "", nil, false), http.StatusOK, "")
+	})
+
+	t.Run("ObjectTagging", func(t *testing.T) {
+		if rec := serveRaw(t, handler, http.MethodPut, "/bucket/tagged", "x", nil, false); rec.Code != http.StatusOK {
+			t.Fatalf("put object: %d %s", rec.Code, rec.Body)
+		}
+		body := "<Tagging><TagSet><Tag><Key>a</Key><Value>b</Value></Tag></TagSet></Tagging>"
+		assertRawCode(t, serveRaw(t, handler, http.MethodPut, "/bucket/tagged?tagging", body, nil, false), http.StatusOK, "")
+		rec := serveRaw(t, handler, http.MethodGet, "/bucket/tagged?tagging", "", nil, false)
+		assertRawCode(t, rec, http.StatusOK, "")
+		if !strings.Contains(rec.Body.String(), "<Key>a</Key>") {
+			t.Fatalf("tag not stored: %s", rec.Body)
+		}
+	})
+}
+
+// TestListingParameterValidation checks that listings refuse an unknown
+// encoding-type and a negative limit.
+func TestListingParameterValidation(t *testing.T) {
+	handler := newRawHandler(t)
+	for _, query := range []string{
+		"encoding-type=bogus",
+		"list-type=2&encoding-type=bogus",
+		"versions&encoding-type=bogus",
+		"max-keys=-1",
+		"list-type=2&max-keys=-1",
+		"versions&max-keys=-1",
+		"uploads&max-uploads=-1",
+	} {
+		rec := serveRaw(t, handler, http.MethodGet, "/bucket?"+query, "", nil, false)
+		assertRawCode(t, rec, http.StatusBadRequest, "InvalidArgument")
+	}
+}
+
+// TestCompletePartChecksumMismatch checks that a completion naming the right
+// ETag but another part checksum is refused with InvalidPart, and that the
+// upload can then be completed with the right checksum.
+func TestCompletePartChecksumMismatch(t *testing.T) {
+	handler := newRawHandler(t)
+
+	rec := serveRaw(t, handler, http.MethodPost, "/bucket/mp?uploads", "", map[string]string{"X-Amz-Checksum-Algorithm": "SHA256"}, false)
+	assertRawCode(t, rec, http.StatusOK, "")
+	var initiated s3.InitiateMultipartUploadResponse
+	if err := xml.Unmarshal(rec.Body.Bytes(), &initiated); err != nil {
+		t.Fatal(err)
+	}
+	target := "/bucket/mp?uploadId=" + initiated.UploadID
+
+	sum := sha256.Sum256([]byte("part"))
+	checksum := base64.StdEncoding.EncodeToString(sum[:])
+	rec = serveRaw(t, handler, http.MethodPut, "/bucket/mp?partNumber=1&uploadId="+initiated.UploadID, "part", map[string]string{"X-Amz-Checksum-Sha256": checksum}, false)
+	assertRawCode(t, rec, http.StatusOK, "")
+	etag := rec.Header().Get("ETag")
+
+	complete := func(partChecksum string) *httptest.ResponseRecorder {
+		body := fmt.Sprintf("<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>%s</ETag><ChecksumSHA256>%s</ChecksumSHA256></Part></CompleteMultipartUpload>", etag, partChecksum)
+		return serveRaw(t, handler, http.MethodPost, target, body, nil, false)
+	}
+	assertRawCode(t, complete(base64.StdEncoding.EncodeToString(make([]byte, sha256.Size))), http.StatusBadRequest, "InvalidPart")
+	assertRawCode(t, complete(checksum), http.StatusOK, "")
 }
