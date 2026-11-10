@@ -2,4 +2,4 @@
 default: patch
 ---
 
-# Clearer CLI errors when s3d is unreachable or the admin API rejects a request
+# Clearer errors from the CLI commands that use the admin API

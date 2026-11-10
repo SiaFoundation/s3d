@@ -14,6 +14,10 @@ import (
 )
 
 func TestAdminClientErrors(t *testing.T) {
+	origFile := configFile
+	t.Cleanup(func() { configFile = origFile })
+	configFile = "s3d.yml"
+
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -26,7 +30,7 @@ func TestAdminClientErrors(t *testing.T) {
 	err = client.request(t.Context(), http.MethodGet, "/stats/uploads", nil, nil)
 	if err == nil {
 		t.Fatal("expected an error")
-	} else if !strings.Contains(err.Error(), "not reachable at "+addr) {
+	} else if err.Error() != "s3d is not reachable at "+addr+", check that it is running and that adminAddress in s3d.yml is correct" {
 		t.Fatal("unexpected", err)
 	} else if !errors.As(err, &opErr) {
 		t.Fatal("unexpected", err)
@@ -41,7 +45,7 @@ func TestAdminClientErrors(t *testing.T) {
 	err = client.request(t.Context(), http.MethodGet, "/stats/uploads", nil, nil)
 	if err == nil {
 		t.Fatal("expected an error")
-	} else if !strings.Contains(err.Error(), "adminPassword") {
+	} else if err.Error() != "s3d rejected the admin password, check adminPassword in s3d.yml" {
 		t.Fatal("unexpected", err)
 	}
 

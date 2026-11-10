@@ -21,8 +21,9 @@ func TestSnapshotScheduleCommands(t *testing.T) {
 	backend, store := testutil.NewBackend(t)
 	server := httptest.NewServer(jape.BasicAuth("password")(s3.NewAdmin(backend)))
 	t.Cleanup(server.Close)
-	orig := cfg
-	t.Cleanup(func() { cfg = orig })
+	orig, origFile := cfg, configFile
+	t.Cleanup(func() { cfg, configFile = orig, origFile })
+	configFile = "s3d.yml"
 	cfg.AdminAddress = strings.TrimPrefix(server.URL, "http://")
 	cfg.AdminPassword = "password"
 	cfg.Directory = filepath.Join(t.TempDir(), "unused")
