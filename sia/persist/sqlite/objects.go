@@ -330,13 +330,16 @@ func (s *Store) ObjectAttributes(bucket s3.BucketID, name string, version s3.Ver
 			return nil
 		}
 
+		// the page is taken by position, since part_number keeps the upload's
+		// numbering the part file is stored under and a completion may have
+		// named a subset of the uploaded parts
 		rows, err := tx.Query(`
-			SELECT part_number, content_length, checksum
+			SELECT content_length, checksum
 			FROM object_parts
-			WHERE bucket_id = $1 AND name = $2 AND version_id = $3 AND part_number > $4
+			WHERE bucket_id = $1 AND name = $2 AND version_id = $3
 			ORDER BY part_number ASC
-			LIMIT $5
-		`, bid, name, attrs.VersionID, page.PartNumberMarker, page.MaxParts+1)
+			LIMIT $4 OFFSET $5
+		`, bid, name, attrs.VersionID, page.MaxParts+1, page.PartNumberMarker)
 		if err != nil {
 			return err
 		}
@@ -347,8 +350,8 @@ func (s *Store) ObjectAttributes(bucket s3.BucketID, name string, version s3.Ver
 				attrs.IsTruncated = true
 				break
 			}
-			var part s3.ObjectPart
-			if err := rows.Scan(&part.PartNumber, &part.Size, &part.Checksum); err != nil {
+			part := s3.ObjectPart{PartNumber: page.PartNumberMarker + len(attrs.Parts) + 1}
+			if err := rows.Scan(&part.Size, &part.Checksum); err != nil {
 				return err
 			}
 			attrs.Parts = append(attrs.Parts, part)

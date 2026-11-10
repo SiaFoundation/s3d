@@ -44,6 +44,8 @@ var objectAttributeNames = []string{
 
 // ObjectPart is one part of a multipart object.
 type ObjectPart struct {
+	// PartNumber is the part's position among the completed parts, which is
+	// what a partNumber read of the object addresses.
 	PartNumber int
 	Size       int64
 
