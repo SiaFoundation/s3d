@@ -704,6 +704,26 @@ func TestCompleteMultipartUploadSubset(t *testing.T) {
 	})
 	testutil.AssertS3Error(t, s3errs.ErrInvalidPart, err)
 
+	// the attributes listing counts positions too, so every number it hands out
+	// is one a part read accepts
+	attrs, err := s3Tester.Client().GetObjectAttributes(t.Context(), &service.GetObjectAttributesInput{
+		Bucket:           aws.String(bucket),
+		Key:              aws.String(object),
+		ObjectAttributes: []s3Types.ObjectAttributes{s3Types.ObjectAttributesObjectParts},
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if attrs.ObjectParts == nil {
+		t.Fatal("expected object parts")
+	} else if len(attrs.ObjectParts.Parts) != 2 {
+		t.Fatal("unexpected", len(attrs.ObjectParts.Parts))
+	}
+	for i, part := range attrs.ObjectParts.Parts {
+		if aws.ToInt32(part.PartNumber) != int32(i+1) {
+			t.Fatal("unexpected", aws.ToInt32(part.PartNumber))
+		}
+	}
+
 	if err := s3Tester.DeleteObject(t.Context(), bucket, object); err != nil {
 		t.Fatal(err)
 	}
