@@ -2,4 +2,4 @@
 default: patch
 ---
 
-# Tell the user when s3d is not reachable at the admin API address
+# Clearer CLI errors when s3d is unreachable or the admin API rejects a request
