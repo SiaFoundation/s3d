@@ -7,14 +7,31 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 )
 
-// adminClient sends requests to the admin API of the running s3d instance.
-type adminClient struct {
-	addr     string
-	password string
+type (
+	// adminClient sends requests to the admin API of the running s3d instance.
+	adminClient struct {
+		addr     string
+		password string
+	}
+
+	// adminUnreachableError reports that nothing answered at the admin API address.
+	adminUnreachableError struct {
+		addr string
+		err  error
+	}
+)
+
+func (e adminUnreachableError) Error() string {
+	return fmt.Sprintf("s3d is not reachable at %s, check that it is running and that adminAddress in the config file is correct", e.addr)
+}
+
+func (e adminUnreachableError) Unwrap() error {
+	return e.err
 }
 
 // newAdminClient returns a client for the configured admin API, exiting if the
@@ -55,7 +72,10 @@ func (c adminClient) request(ctx context.Context, method, route string, body, ou
 	}
 
 	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && opErr.Op == "dial" {
+		return adminUnreachableError{addr: c.addr, err: err}
+	} else if err != nil {
 		return fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
