@@ -171,12 +171,25 @@ func checkWritePreconditions(tx *txn, bid int64, name string, p s3.ObjectPrecond
 	return p.CheckWrite(&attrs)
 }
 
-// GetObject retrieves an object. An unspecified version returns the current
-// version (ErrNoSuchKey if the key has no versions); a specified version returns
-// that version (ErrNoSuchVersion if absent). The result may be a delete marker.
+// GetObject retrieves an object without its tag set. An unspecified version
+// returns the current version (ErrNoSuchKey if the key has no versions); a
+// specified version returns that version (ErrNoSuchVersion if absent). The
+// result may be a delete marker.
 func (s *Store) GetObject(bucket s3.BucketID, name string, version s3.VersionRequest, partNumber *int32) (*objects.Object, error) {
+	return s.resolveObject(bucket, name, version, partNumber, false)
+}
+
+// GetObjectWithTags is like GetObject but also returns the tag set of the
+// addressed version.
+func (s *Store) GetObjectWithTags(bucket s3.BucketID, name string, version s3.VersionRequest, partNumber *int32) (*objects.Object, error) {
+	return s.resolveObject(bucket, name, version, partNumber, true)
+}
+
+// resolveObject implements GetObject and GetObjectWithTags.
+func (s *Store) resolveObject(bucket s3.BucketID, name string, version s3.VersionRequest, partNumber *int32, withTags bool) (*objects.Object, error) {
 	var obj objects.Object
 	err := s.transaction(func(tx *txn) error {
+		obj = objects.Object{} // reset if the transaction retries
 		bid, status, err := bucketIDAndVersioning(tx, bucket)
 		if err != nil {
 			return err
@@ -185,6 +198,13 @@ func (s *Store) GetObject(bucket s3.BucketID, name string, version s3.VersionReq
 			return err
 		}
 		obj.Versioned = status != ""
+		if withTags && !obj.IsDeleteMarker {
+			tags, err := objectTags(tx, bid, name, obj.VersionID)
+			if err != nil {
+				return err
+			}
+			obj.Tags = tags
+		}
 		return nil
 	})
 	if errors.Is(err, sql.ErrNoRows) {
@@ -228,11 +248,6 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, version s3.
 	}
 	obj.VersionID = versionID
 	obj.ObjectLock = storedObjectLock(lock)
-	tags, err := objectTags(tx, bid, name, versionID)
-	if err != nil {
-		return err
-	}
-	obj.Tags = tags
 
 	// return full object if no part specified, or this is a delete marker
 	if partNumber == nil || obj.PartsCount == 0 || obj.IsDeleteMarker {
@@ -260,7 +275,7 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, version s3.
 	// part specified, return part info. the MD5 read is the object's, not the
 	// part's, because ContentMD5 and PartsCount are the object's ETag inputs
 	var partObjID sql.Null[sqlHash256]
-	err = tx.QueryRow(`
+	err := tx.QueryRow(`
 		SELECT o.filename, o.sia_object_id, o.metadata, o.updated_at, o.size, p.offset, p.content_length, o.content_md5
 		FROM object_parts p
 		JOIN objects o ON o.bucket_id = p.bucket_id AND o.name = p.name AND o.version_id = p.version_id
@@ -683,8 +698,13 @@ func (s *Store) CopyObject(srcBucket s3.BucketID, srcName string, srcVersion s3.
 
 		// the caller was authorized against the source's tags outside this
 		// transaction
-		if opts.CopyTags && !slices.Equal(obj.Tags, opts.Tags) {
-			return s3.CopySourceError{Err: fmt.Errorf("the source's tags changed during the copy: %w", s3errs.ErrConditionalRequestConflict)}
+		if opts.CopyTags {
+			srcTags, err := objectTags(tx, srcBid, srcName, srcInternalVersion)
+			if err != nil {
+				return s3.CopySourceError{Err: err}
+			} else if !slices.Equal(srcTags, opts.Tags) {
+				return s3.CopySourceError{Err: fmt.Errorf("the source's tags changed during the copy: %w", s3errs.ErrConditionalRequestConflict)}
+			}
 		}
 		obj.Tags = opts.Tags
 		if opts.Replace {

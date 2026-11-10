@@ -26,7 +26,7 @@ func TestTagging(t *testing.T) {
 	} else if _, _, err := store.PutObject(bid, "other", objects.PutOptions{Tags: s3.TagSet{{Key: "project", Value: "two"}}}); err != nil {
 		t.Fatal(err)
 	}
-	obj, err := store.GetObject(bid, "match", s3.NoVersion(), nil)
+	obj, err := store.GetObjectWithTags(bid, "match", s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if !reflect.DeepEqual(obj.Tags, tags) {
@@ -100,7 +100,7 @@ func TestTaggingCopySourceChanged(t *testing.T) {
 	} else if _, _, err := store.CopyObject(bid, "a", tagging.Version, bid, "a-copy", opts); err != nil {
 		t.Fatal(err)
 	}
-	obj, err := store.GetObject(bid, "a-copy", s3.NoVersion(), nil)
+	obj, err := store.GetObjectWithTags(bid, "a-copy", s3.NoVersion(), nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if !reflect.DeepEqual(obj.Tags, tags) {

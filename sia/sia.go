@@ -235,6 +235,7 @@ type Store interface {
 	DeleteBucket(bucket s3.BucketID) error
 	DeleteObject(bucket s3.BucketID, objectID s3.ObjectID, bypass bool) (string, bool, objects.OrphanedFile, error)
 	GetObject(bucket s3.BucketID, object string, version s3.VersionRequest, partNumber *int32) (*objects.Object, error)
+	GetObjectWithTags(bucket s3.BucketID, object string, version s3.VersionRequest, partNumber *int32) (*objects.Object, error)
 	DiskUsage() (uint64, error)
 	BucketAccessInfo(name string) (s3.BucketAccessInfo, error)
 	GetBucketVersioning(bucket s3.BucketID) (string, error)

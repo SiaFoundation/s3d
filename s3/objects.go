@@ -291,19 +291,19 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, dst *bucketAcces
 		return s3errs.ErrInvalidRequest
 	}
 
-	src, err := s.authorizeCopySource(r, dst, srcBucket, srcObject, srcVersion)
+	copyTags := directive != TaggingDirectiveReplace
+	src, err := s.authorizeCopySource(r, dst, srcBucket, srcObject, srcVersion, copyTags)
 	if err != nil {
 		return err
 	}
 
-	tags, copyTags := src.tags, directive != TaggingDirectiveReplace
+	tags := src.tags
 	if !copyTags {
 		tags, err = requestTags(r.Header)
 		if err != nil {
 			return err
 		}
 	}
-	// copying the source's tags needs no tagging permission on the source
 	if err := dst.assertWriteAllowed(dstObject, tags); err != nil {
 		return err
 	}

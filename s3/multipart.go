@@ -379,7 +379,7 @@ func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, dst *bucketAccess,
 		return err
 	}
 
-	src, err := s.authorizeCopySource(r, dst, srcBucket, srcObject, srcVersion)
+	src, err := s.authorizeCopySource(r, dst, srcBucket, srcObject, srcVersion, false)
 	if err != nil {
 		return err
 	}

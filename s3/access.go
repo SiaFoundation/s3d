@@ -147,8 +147,9 @@ type copySource struct {
 }
 
 // authorizeCopySource looks up srcVersion of srcObject and checks that the
-// caller may read it, reusing dst's access for a same-bucket copy.
-func (s *s3) authorizeCopySource(r *http.Request, dst *bucketAccess, srcBucket, srcObject string, srcVersion VersionRequest) (copySource, error) {
+// caller may read it, reusing dst's access for a same-bucket copy. A copy that
+// keeps the source's tag set also needs s3:GetObjectTagging on the source.
+func (s *s3) authorizeCopySource(r *http.Request, dst *bucketAccess, srcBucket, srcObject string, srcVersion VersionRequest, copyTags bool) (copySource, error) {
 	src := dst
 	if srcBucket != dst.bucket {
 		var err error
@@ -165,6 +166,10 @@ func (s *s3) authorizeCopySource(r *http.Request, dst *bucketAccess, srcBucket, 
 		return copySource{}, src.hideMissing(CopySourceError{Err: err}, srcObject)
 	} else if err != nil {
 		return copySource{}, err
+	} else if copyTags && len(tagging.Tags) > 0 {
+		if err := src.assertVersionAllowed(versionedAction(srcVersion, actionGetObjectTagging, actionGetObjectVersionTagging), srcObject, srcVersion, nil); err != nil {
+			return copySource{}, err
+		}
 	}
 	return copySource{access: src, version: tagging.Version, tags: tagging.Tags}, nil
 }
