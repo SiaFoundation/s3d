@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -489,8 +490,11 @@ func main() {
 func checkFatalError(context string, err error) {
 	if err == nil {
 		return
+	} else if strings.HasPrefix(err.Error(), context+": ") {
+		fmt.Fprintln(os.Stderr, err)
+	} else {
+		fmt.Fprintf(os.Stderr, "%s: %s\n", context, err)
 	}
-	fmt.Fprintf(os.Stderr, "%s: %s\n", context, err)
 	os.Exit(1)
 }
 
