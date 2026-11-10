@@ -93,14 +93,17 @@ func (c adminClient) request(ctx context.Context, method, route string, body, ou
 }
 
 // adminResponseError returns an error describing an admin API response whose
-// status is not 200, including the response body when the server provided one.
+// status is not 200, using the response body as the message when the server
+// provided one.
 func adminResponseError(resp *http.Response) error {
 	if resp.StatusCode == http.StatusOK {
 		return nil
+	} else if resp.StatusCode == http.StatusUnauthorized {
+		return errors.New("s3d rejected the admin password, check adminPassword in the config file")
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10)) // 8 KiB
-	if len(body) > 0 {
-		return fmt.Errorf("unexpected status %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	if msg := strings.TrimSpace(string(body)); msg != "" {
+		return errors.New(msg)
 	}
 	return fmt.Errorf("unexpected status %s", resp.Status)
 }
