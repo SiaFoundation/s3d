@@ -98,6 +98,7 @@ CREATE TABLE objects (
     object_lock_mode TEXT NOT NULL DEFAULT '' CHECK (object_lock_mode IN ('', 'GOVERNANCE', 'COMPLIANCE')),
     object_lock_retain_until INTEGER CHECK ((object_lock_mode = '' AND object_lock_retain_until IS NULL) OR (object_lock_mode != '' AND object_lock_retain_until IS NOT NULL)), -- unix milliseconds
     object_lock_legal_hold TEXT NOT NULL DEFAULT '' CHECK (object_lock_legal_hold IN ('', 'ON', 'OFF')), -- '' means never set
+    noncurrent_at INTEGER, -- set when a version stops being current, which is when its successor was written
     -- non-empty objects must have a filename, a sia_object_id, or both (between uploading and pinning)
     CHECK ((size = 0 AND filename IS NULL AND sia_object_id IS NULL) OR (size > 0 AND (filename IS NOT NULL OR sia_object_id IS NOT NULL))),
     CHECK (is_delete_marker IN (FALSE, TRUE)),
@@ -109,6 +110,8 @@ CREATE INDEX objects_filename_idx ON objects(filename) WHERE filename IS NOT NUL
 CREATE INDEX objects_bucket_id_updated_at_idx ON objects(bucket_id, updated_at);
 CREATE INDEX objects_bucket_name_seq_idx ON objects(bucket_id, name, seq DESC);
 CREATE UNIQUE INDEX objects_is_latest_idx ON objects(bucket_id, name) WHERE is_latest = TRUE;
+CREATE INDEX objects_noncurrent_at_idx ON objects(bucket_id, noncurrent_at) WHERE is_latest = FALSE;
+CREATE INDEX objects_delete_marker_updated_at_idx ON objects(bucket_id, updated_at) WHERE is_latest = TRUE AND is_delete_marker = TRUE;
 
 CREATE TABLE unpinned_objects (
     sia_object_id BLOB PRIMARY KEY,
@@ -126,6 +129,8 @@ CREATE TABLE multipart_uploads (
     object_lock_mode TEXT NOT NULL DEFAULT '' CHECK (object_lock_mode IN ('', 'GOVERNANCE', 'COMPLIANCE')),
     object_lock_retain_until INTEGER CHECK ((object_lock_mode = '' AND object_lock_retain_until IS NULL) OR (object_lock_mode != '' AND object_lock_retain_until IS NOT NULL)), -- unix milliseconds
     object_lock_legal_hold TEXT NOT NULL DEFAULT '' CHECK (object_lock_legal_hold IN ('', 'ON', 'OFF')),
+    checksum_algorithm TEXT NOT NULL DEFAULT '' CHECK (checksum_algorithm IN ('', 'CRC32', 'CRC32C', 'CRC64NVME', 'SHA1', 'SHA256')),
+    checksum_type TEXT NOT NULL DEFAULT '' CHECK (checksum_type IN ('', 'COMPOSITE', 'FULL_OBJECT')) CHECK ((checksum_algorithm = '') = (checksum_type = '')),
     FOREIGN KEY (bucket_id) REFERENCES buckets(id)
 );
 CREATE INDEX multipart_uploads_bucket_id_name_idx ON multipart_uploads(bucket_id, name);
@@ -139,6 +144,7 @@ CREATE TABLE multipart_parts (
     content_md5 BLOB NOT NULL,
     content_length INTEGER NOT NULL,
     created_at INTEGER NOT NULL,
+    checksum BLOB,
     FOREIGN KEY (upload_id) REFERENCES multipart_uploads(upload_id) ON DELETE CASCADE,
     PRIMARY KEY (upload_id, part_number)
 );
@@ -161,6 +167,7 @@ CREATE TABLE object_parts (
     content_md5 BLOB NOT NULL,
     content_length INTEGER NOT NULL,
     offset INTEGER NOT NULL,
+    checksum BLOB,
     FOREIGN KEY (bucket_id, name, version_id) REFERENCES objects(bucket_id, name, version_id) ON DELETE CASCADE,
     PRIMARY KEY (bucket_id, name, version_id, part_number)
 );
@@ -194,7 +201,8 @@ CREATE TABLE snapshots (
     gen_completed INTEGER, -- generation it completed at, NULL until pinned
 
     state INTEGER NOT NULL, -- lifecycle state, values defined in snapshots.go
-    state_since INTEGER NOT NULL -- when the current state was entered
+    state_since INTEGER NOT NULL, -- when the current state was entered
+    scheduled INTEGER NOT NULL DEFAULT FALSE CHECK (scheduled IN (FALSE, TRUE)) -- taken by the snapshot schedule
 );
 
 -- serves the orphan guard, both halves probe by completion generation
@@ -232,6 +240,12 @@ CREATE TABLE global_settings (
 	last_sync_at INTEGER NOT NULL DEFAULT 0,
 	last_sync_key BLOB NOT NULL DEFAULT X'0000000000000000000000000000000000000000000000000000000000000000',
 	snapshot_gen INTEGER NOT NULL DEFAULT 0,
+	snapshot_schedule TEXT NOT NULL DEFAULT '',
+	snapshot_schedule_since INTEGER NOT NULL DEFAULT 0,
+	-- a retention count requires a schedule to take the snapshots it keeps
+	snapshot_keep_daily INTEGER NOT NULL DEFAULT 0 CHECK (snapshot_keep_daily = 0 OR snapshot_schedule != ''),
+	snapshot_keep_weekly INTEGER NOT NULL DEFAULT 0 CHECK (snapshot_keep_weekly = 0 OR snapshot_schedule != ''),
+	snapshot_keep_monthly INTEGER NOT NULL DEFAULT 0 CHECK (snapshot_keep_monthly = 0 OR snapshot_schedule != ''),
 	-- app_key and indexer_url are always set or nulled together
 	CHECK ((app_key IS NULL AND indexer_url IS NULL) OR (app_key IS NOT NULL AND indexer_url IS NOT NULL))
 );

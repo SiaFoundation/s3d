@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"time"
+
+	"github.com/SiaFoundation/s3d/s3"
 )
 
 // Backup writes a consistent, compacted copy of the database to destPath
@@ -54,6 +56,12 @@ func (s *Store) Backup(ctx context.Context, destPath string) (objectCount int64,
 		backup.Close()
 		return 0, fmt.Errorf("failed to remove buffered objects from backup: %w", err)
 	}
+	// a node started from the copy would otherwise take and prune snapshots
+	// on the account of the node that made it
+	if err := backup.UpdateSnapshotSchedule(s3.SnapshotSchedule{}); err != nil {
+		backup.Close()
+		return 0, fmt.Errorf("failed to clear the snapshot schedule in backup: %w", err)
+	}
 	var result string
 	err = backup.db.QueryRowContext(ctx, "PRAGMA integrity_check").Scan(&result)
 	if err = errors.Join(err, backup.Close()); err != nil {
@@ -96,7 +104,7 @@ func (s *Store) removeBufferedObjects() (remaining int64, err error) {
 		}
 
 		for _, obj := range buffered {
-			row, _, err := deleteObjectRow(tx, obj.bid, obj.name, obj.version)
+			row, _, err := deleteObjectRow(tx, obj.bid, obj.name, obj.version, true)
 			if err != nil {
 				return err
 			} else if _, err := orphanDeleted(tx, row); err != nil {

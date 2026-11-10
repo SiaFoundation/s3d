@@ -3,6 +3,7 @@ package s3_test
 import (
 	"bytes"
 	"crypto/md5"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
@@ -19,6 +20,7 @@ import (
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	service "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"lukechampine.com/frand"
@@ -1146,6 +1148,162 @@ func TestCopyObject(t *testing.T) {
 	} else if obj.LastModified.Before(copyTime) {
 		t.Fatalf("last modified mismatch: expected after %v, got %v", copyTime, obj.LastModified)
 	}
+}
+
+func TestCopyObjectChecksum(t *testing.T) {
+	s3Tester := testutil.NewTester(t)
+
+	const (
+		bucket    = "checksum-bucket"
+		object    = "composite"
+		copied    = "composite-copy"
+		partSum   = "arcu6553sHVAiX4MjW0j7I7vD4w6R+Gz9Ok0Q9lTa+0="
+		objectSum = "Ok6Cs5b96ux6+MWQkJO7UBT5sKPBeXBLwvj/hK89smg=-1"
+	)
+
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	created, err := s3Tester.Client().CreateMultipartUpload(t.Context(), &service.CreateMultipartUploadInput{
+		Bucket:            aws.String(bucket),
+		Key:               aws.String(object),
+		ChecksumAlgorithm: types.ChecksumAlgorithmSha256,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data := bytes.Repeat([]byte("A"), 1024)
+	uploaded, err := s3Tester.Client().UploadPart(t.Context(), &service.UploadPartInput{
+		Bucket:         aws.String(bucket),
+		Key:            aws.String(object),
+		UploadId:       created.UploadId,
+		PartNumber:     aws.Int32(1),
+		Body:           bytes.NewReader(data),
+		ContentLength:  aws.Int64(int64(len(data))),
+		ChecksumSHA256: aws.String(partSum),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s3Tester.CompleteMultipartUpload(t.Context(), bucket, object, *created.UploadId, []types.CompletedPart{{
+		PartNumber:     aws.Int32(1),
+		ETag:           uploaded.ETag,
+		ChecksumSHA256: aws.String(partSum),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// a copy that replaces the metadata keeps the object's checksum
+	if _, err := s3Tester.CopyObject(t.Context(), bucket, object, bucket, copied, types.MetadataDirectiveReplace, map[string]string{"foo": "bar"}); err != nil {
+		t.Fatal(err)
+	}
+
+	head, err := s3Tester.Client().HeadObject(t.Context(), &service.HeadObjectInput{
+		Bucket:       aws.String(bucket),
+		Key:          aws.String(copied),
+		ChecksumMode: types.ChecksumModeEnabled,
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if got := aws.ToString(head.ChecksumSHA256); got != objectSum {
+		t.Fatalf("expected checksum %s, got %s", objectSum, got)
+	} else if head.ChecksumType != types.ChecksumTypeComposite {
+		t.Fatalf("expected type %q, got %q", types.ChecksumTypeComposite, head.ChecksumType)
+	} else if head.Metadata["foo"] != "bar" {
+		t.Fatalf("metadata mismatch: %+v", head.Metadata)
+	}
+
+	// the copy's part read reports the part's digest
+	part, err := s3Tester.Client().GetObject(t.Context(), &service.GetObjectInput{
+		Bucket:       aws.String(bucket),
+		Key:          aws.String(copied),
+		PartNumber:   aws.Int32(1),
+		ChecksumMode: types.ChecksumModeEnabled,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	part.Body.Close()
+	if got := aws.ToString(part.ChecksumSHA256); got != partSum {
+		t.Fatalf("expected checksum %s, got %s", partSum, got)
+	} else if part.ChecksumType != types.ChecksumTypeComposite {
+		t.Fatalf("expected type %q, got %q", types.ChecksumTypeComposite, part.ChecksumType)
+	}
+
+	// a checksum value the copy request carries is dropped rather than stored,
+	// so neither directive reports a digest s3d never computed
+	const (
+		replaced = "composite-replaced"
+		merged   = "composite-merged"
+	)
+	stray := base64.StdEncoding.EncodeToString(frand.Bytes(4))
+
+	// the SDK has no field for a checksum value on a copy, so it is signed and
+	// sent by hand
+	rawCopy := func(dst, directive string) {
+		t.Helper()
+
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPut,
+			*s3Tester.Client().Options().BaseEndpoint+"/"+bucket+"/"+dst, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("X-Amz-Copy-Source", "/"+bucket+"/"+object)
+		if directive != "" {
+			req.Header.Set("X-Amz-Metadata-Directive", directive)
+		}
+		req.Header.Set(s3.ChecksumCRC32.Header(), stray)
+
+		empty := sha256.Sum256(nil)
+		payload := hex.EncodeToString(empty[:])
+		req.Header.Set("X-Amz-Content-Sha256", payload)
+		creds := aws.Credentials{AccessKeyID: testutil.AccessKeyID, SecretAccessKey: testutil.SecretAccessKey}
+		if err := v4.NewSigner().SignHTTP(t.Context(), creds, req, payload, "s3", "us-east-1", time.Now()); err != nil {
+			t.Fatal(err)
+		}
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		} else if resp.StatusCode != http.StatusOK {
+			t.Fatal("unexpected status", resp.StatusCode, string(body))
+		}
+	}
+
+	assertSourceChecksum := func(key string) {
+		t.Helper()
+
+		head, err := s3Tester.Client().HeadObject(t.Context(), &service.HeadObjectInput{
+			Bucket:       aws.String(bucket),
+			Key:          aws.String(key),
+			ChecksumMode: types.ChecksumModeEnabled,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if head.ChecksumCRC32 != nil {
+			t.Fatalf("expected no CRC32 checksum, got %s", *head.ChecksumCRC32)
+		}
+		if got := aws.ToString(head.ChecksumSHA256); got != objectSum {
+			t.Fatalf("expected checksum %s, got %s", objectSum, got)
+		} else if head.ChecksumType != types.ChecksumTypeComposite {
+			t.Fatalf("expected type %q, got %q", types.ChecksumTypeComposite, head.ChecksumType)
+		}
+	}
+
+	rawCopy(replaced, "REPLACE")
+	assertSourceChecksum(replaced)
+
+	rawCopy(merged, "")
+	assertSourceChecksum(merged)
 }
 
 func TestRangeRequest(t *testing.T) {

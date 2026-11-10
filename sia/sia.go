@@ -44,6 +44,14 @@ const (
 	// deleting state before we effectively delete it.
 	snapshotConfirmDelay = time.Hour
 
+	// scheduledSnapshotPruneInterval is the interval at which the scheduled
+	// snapshot loop applies retention.
+	scheduledSnapshotPruneInterval = time.Hour
+
+	// scheduledSnapshotRetryDelay is how long the scheduled snapshot loop
+	// waits after a failed attempt before trying again.
+	scheduledSnapshotRetryDelay = time.Hour
+
 	// defaultLifecycleLoopInterval is the default interval at which the
 	// background lifecycle loop runs.
 	defaultLifecycleLoopInterval = time.Hour
@@ -62,22 +70,6 @@ const (
 	// TmpDirectory is the directory name used for temporary files, e.g.
 	// database snapshots awaiting upload. It is cleared on startup.
 	TmpDirectory = "tmp"
-)
-
-var (
-	// ErrUserAlreadyExists is returned when creating a user that already exists.
-	ErrUserAlreadyExists = errors.New("user already exists")
-
-	// ErrReservedUserName is returned when creating a user whose name bucket
-	// policies use for anonymous callers.
-	ErrReservedUserName = errors.New("user name is reserved")
-
-	// ErrUserNotFound is returned when a user does not exist.
-	ErrUserNotFound = errors.New("user not found")
-
-	// ErrAccessKeyAlreadyExists is returned when creating an access key that
-	// already exists.
-	ErrAccessKeyAlreadyExists = errors.New("access key already exists")
 )
 
 // Option is a configuration option for the S3 API handler.
@@ -102,6 +94,13 @@ func WithUploadWaste(pct float64) Option {
 func WithUploadDisabled() Option {
 	return func(s *Sia) {
 		s.uploadDisabled = true
+	}
+}
+
+// WithSnapshotsDisabled disables the background snapshots loop.
+func WithSnapshotsDisabled() Option {
+	return func(s *Sia) {
+		s.snapshotsDisabled = true
 	}
 }
 
@@ -151,7 +150,7 @@ func WithUploadDeadline(d time.Duration) Option {
 	}
 }
 
-// Sia implements the s3.Backend interface for storing data on Sia.
+// Sia implements the s3.Backend and s3.AdminBackend interfaces for storing data on Sia.
 type Sia struct {
 	sdk   SDK
 	store Store
@@ -175,6 +174,12 @@ type Sia struct {
 
 	lifecycleLoopInterval time.Duration
 	lifecycleDayDuration  time.Duration
+
+	snapshotMu         sync.Mutex
+	snapshotWake       chan struct{}
+	snapshotsDisabled  bool
+	snapshotRetryAt    time.Time
+	snapshotRetrySched s3.SnapshotSchedule
 
 	pinMu   sync.Mutex
 	pinWake chan struct{}
@@ -211,13 +216,6 @@ type SDK interface {
 	UnsealObject(sealed sdk.SealedObject) (*sdk.Object, error)
 }
 
-// AccessKeyInfo contains metadata about an access key.
-type AccessKeyInfo struct {
-	AccessKeyID string
-	SecretKey   string
-	UserName    string
-}
-
 // Store represents the storage backend used by the Sia backend.
 type Store interface {
 	// user and access key management
@@ -226,7 +224,7 @@ type Store interface {
 	ListUsers() ([]string, error)
 	CreateAccessKey(userName, accessKeyID, secretKey string) error
 	DeleteAccessKey(accessKeyID string) error
-	ListAccessKeys(userName *string) ([]AccessKeyInfo, error)
+	ListAccessKeys(userName *string) ([]s3.AccessKeyMetadata, error)
 	LoadSecret(accessKeyID string) (secret, userName string, err error)
 
 	AllFilenames() ([]string, error)
@@ -272,13 +270,14 @@ type Store interface {
 	UpdateSiaObjects(siaObjects []objects.SiaObject) (int64, error)
 	RemoveOrphanedObject(objectID types.Hash256) error
 	AbortMultipartUpload(bucket s3.BucketID, name string, uploadID s3.UploadID) (int64, error)
-	AddMultipartPart(bucket s3.BucketID, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64) (string, int64, error)
-	CreateMultipartUpload(bucket s3.BucketID, name string, uploadID s3.UploadID, meta map[string]string, tags s3.TagSet, lock *s3.ObjectLockState) error
-	CompleteMultipartUpload(bucket s3.BucketID, name string, uploadID s3.UploadID, contentMD5 [16]byte, contentLength int64, preconditions s3.ObjectPreconditions) (string, objects.OrphanedFile, error)
+	AddMultipartPart(bucket s3.BucketID, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64, checksum []byte) (string, int64, error)
+	CreateMultipartUpload(bucket s3.BucketID, name string, uploadID s3.UploadID, meta map[string]string, tags s3.TagSet, lock *s3.ObjectLockState, checksum objects.MultipartChecksum) error
+	CompleteMultipartUpload(bucket s3.BucketID, name string, uploadID s3.UploadID, parts []objects.Part, checksum *s3.ObjectChecksum, preconditions s3.ObjectPreconditions) (string, objects.OrphanedFile, []objects.Part, error)
 	HasMultipartUpload(bucket s3.BucketID, name string, uploadID s3.UploadID) (hasParts bool, err error)
 	ListMultipartUploads(bucket s3.BucketID, prefix s3.Prefix, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error)
 	ListParts(bucket s3.BucketID, name string, uploadID s3.UploadID, partNumberMarker int, maxParts int64) (*s3.ListPartsResult, error)
-	MultipartParts(bucket s3.BucketID, name string, uploadID s3.UploadID) ([]objects.Part, error)
+	MultipartParts(bucket s3.BucketID, name string, uploadID s3.UploadID) (objects.MultipartChecksum, []objects.Part, error)
+	MultipartUploadChecksum(bucket s3.BucketID, name string, uploadID s3.UploadID) (objects.MultipartChecksum, error)
 	UploadStats() (s3.UploadStats, error)
 
 	PutBucketLifecycleConfiguration(bucket s3.BucketID, config string) error
@@ -287,12 +286,14 @@ type Store interface {
 	AllBucketLifecycleConfigurations() ([]BucketLifecycleConfiguration, error)
 	AbortMultipartUploads(bucket s3.BucketID, prefix string, before time.Time, limit int) ([]AbortedUpload, error)
 	ExpireObjects(bucket s3.BucketID, prefix string, sizeGreaterThan, sizeLessThan *int64, before time.Time, limit int) (int, []objects.OrphanedFile, error)
+	ExpireNoncurrentVersions(bucket s3.BucketID, prefix string, sizeGreaterThan, sizeLessThan *int64, retain int, before time.Time, limit int) (int, []objects.OrphanedFile, error)
+	ExpireDeleteMarkers(bucket s3.BucketID, prefix string, before time.Time, limit int) (int, []objects.OrphanedFile, error)
 
 	Backup(ctx context.Context, destPath string) (int64, error)
 	DBVersion() int64
 
-	AdoptSnapshot(objectID types.Hash256, createdAt time.Time, gen, objectCount int64) (s3.Snapshot, error)
-	CreateSnapshot() (s3.Snapshot, int64, error)
+	AdoptSnapshot(objectID types.Hash256, createdAt time.Time, gen, objectCount int64, scheduled bool) (s3.Snapshot, error)
+	CreateSnapshot(scheduled bool) (s3.Snapshot, int64, error)
 	DeleteSnapshotsBySiaObject(objectID types.Hash256) (int64, error)
 	HasSnapshotObject(objectID types.Hash256) (bool, error)
 	ListSnapshots() ([]s3.Snapshot, error)
@@ -300,7 +301,10 @@ type Store interface {
 	MarkSnapshotPinning(id int64, objectID types.Hash256, objectCount int64) error
 	RollbackIncompleteSnapshots() (int64, error)
 	RollbackSnapshot(id int64) error
+	SnapshotSchedule() (s3.SnapshotSchedule, error)
 	SnapshotsForDeletion(before time.Time) ([]types.Hash256, error)
+	UpdateSnapshotSchedule(sched s3.SnapshotSchedule) error
+	UpdateSnapshotScheduleSince(sched s3.SnapshotSchedule, since time.Time) error
 }
 
 // New creates a new Sia backend instance.
@@ -324,6 +328,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 	sia.diskUsageWake = make(chan struct{})
 	sia.pinWake = make(chan struct{}, 1)
 	sia.orphanWake = make(chan struct{}, 1)
+	sia.snapshotWake = make(chan struct{}, 1)
 	for _, opt := range opts {
 		opt(sia)
 	}
@@ -398,6 +403,7 @@ func New(ctx context.Context, sdk SDK, store Store, directory string, opts ...Op
 		launchBgLoop(sia.syncMetadataLoop),
 		launchBgLoop(sia.uploadLoop),
 		launchBgLoop(sia.lifecycleLoop),
+		launchBgLoop(sia.snapshotsLoop),
 		launchBgLoop(sia.pinLoop),
 		launchBgLoop(sia.statsLoop),
 	); err != nil {
@@ -417,7 +423,12 @@ func (s *Sia) Close() error {
 // backs up the database, uploads it gzip compressed to Sia as a tagged
 // snapshot object, pins it, and marks the record pinned. On failure the
 // snapshot is rolled back.
-func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
+func (s *Sia) CreateSnapshot(ctx context.Context) (s3.Snapshot, error) {
+	return s.createSnapshot(ctx, false)
+}
+
+// createSnapshot implements CreateSnapshot with the scheduled flag.
+func (s *Sia) createSnapshot(ctx context.Context, scheduled bool) (_ s3.Snapshot, err error) {
 	// a snapshot backs up the metadata database, which stays worth capturing
 	// when an object cannot be flushed, so a failed flush is reported and the
 	// snapshot continues
@@ -437,7 +448,7 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 			zap.Int64("multipartUploads", stats.MultipartUploads))
 	}
 
-	snap, gen, err := s.store.CreateSnapshot()
+	snap, gen, err := s.store.CreateSnapshot(scheduled)
 	if err != nil {
 		return s3.Snapshot{}, fmt.Errorf("failed to create snapshot: %w", err)
 	}
@@ -488,6 +499,7 @@ func (s *Sia) CreateSnapshot(ctx context.Context) (_ s3.Snapshot, err error) {
 		Generation:  gen,
 		ObjectCount: objectCount,
 		S3DVersion:  build.Version(),
+		Scheduled:   scheduled,
 	})
 	if err != nil {
 		return s3.Snapshot{}, fmt.Errorf("failed to marshal snapshot metadata: %w", err)
@@ -876,6 +888,7 @@ func (s *Sia) syncBatch(ctx context.Context, cursor slabs.Cursor) (slabs.Cursor,
 		// waiting on a wake
 		if !s.synced.Swap(true) {
 			s.wakeOrphanLoop()
+			s.wakeSnapshotLoop()
 		}
 		return cursor, 0, false
 	}
@@ -982,7 +995,7 @@ func (s *Sia) handleSnapshotObject(objectID types.Hash256, meta objects.Snapshot
 		return true
 	}
 
-	snap, err := s.store.AdoptSnapshot(objectID, meta.CreatedAt, meta.Generation, meta.ObjectCount)
+	snap, err := s.store.AdoptSnapshot(objectID, meta.CreatedAt, meta.Generation, meta.ObjectCount, meta.Scheduled)
 	if err != nil {
 		s.syncFailed("failed to adopt snapshot object", zap.Stringer("objectID", &objectID), zap.Error(err))
 		return false

@@ -23,9 +23,9 @@ func runStatus(ctx context.Context, cmd *flag.FlagSet) {
 		os.Exit(1)
 	}
 
-	requireAdminConfig()
+	client := newAdminClient()
 
-	stats, err := fetchUploadStats(ctx, cfg.AdminAddress, cfg.AdminPassword)
+	stats, err := fetchUploadStats(ctx, client)
 	checkFatalError("failed to fetch status", err)
 
 	fmt.Println("Upload Pipeline")
@@ -75,12 +75,12 @@ func runStatus(ctx context.Context, cmd *flag.FlagSet) {
 	}
 }
 
-func fetchUploadStats(ctx context.Context, addr, password string) (s3.UploadStats, error) {
+func fetchUploadStats(ctx context.Context, client adminClient) (s3.UploadStats, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	var stats s3.UploadStats
-	err := adminRequest(ctx, http.MethodGet, addr, password, "/stats/uploads", &stats)
+	err := client.request(ctx, http.MethodGet, "/stats/uploads", nil, &stats)
 	return stats, err
 }
 

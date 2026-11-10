@@ -72,9 +72,9 @@ func TestBackup(t *testing.T) {
 	stage(versioned, "versioned", true, true)
 	stage(versioned, "versioned", false, false)
 	uploadID := s3.NewUploadID()
-	if err := store.CreateMultipartUpload(ids[plain], "multipart", uploadID, nil, nil, nil); err != nil {
+	if err := store.CreateMultipartUpload(ids[plain], "multipart", uploadID, nil, nil, nil, objects.MultipartChecksum{}); err != nil {
 		t.Fatal(err)
-	} else if _, _, err := store.AddMultipartPart(ids[plain], "multipart", uploadID, "part1", 1, frand.Entropy128(), 16); err != nil {
+	} else if _, _, err := store.AddMultipartPart(ids[plain], "multipart", uploadID, "part1", 1, frand.Entropy128(), 16, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -92,6 +92,9 @@ func TestBackup(t *testing.T) {
 	}
 	live, err := store.UploadStats()
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateSnapshotSchedule(s3.SnapshotSchedule{Expression: "@daily", Since: time.Now(), KeepDaily: 7}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -147,6 +150,11 @@ func TestBackup(t *testing.T) {
 		} else if stats.UploadedObjects != 2 || objectCount != 2 {
 			t.Fatal("unexpected", stats.UploadedObjects, objectCount)
 		}
+		if sched, err := backup.SnapshotSchedule(); err != nil {
+			t.Fatal(err)
+		} else if sched.Expression != "" || sched.KeepDaily != 0 {
+			t.Fatal("expected no snapshot schedule in the copy", sched)
+		}
 	}
 
 	t.Run("Backup", func(t *testing.T) {
@@ -162,6 +170,10 @@ func TestBackup(t *testing.T) {
 			t.Fatal(err)
 		} else if !reflect.DeepEqual(stats, live) {
 			t.Fatal("mismatch", stats)
+		} else if sched, err := store.SnapshotSchedule(); err != nil {
+			t.Fatal(err)
+		} else if sched.Expression != "@daily" {
+			t.Fatal("source schedule changed", sched)
 		} else if entries, err := os.ReadDir(filepath.Dir(destPath)); err != nil {
 			t.Fatal(err)
 		} else if len(entries) != 1 {

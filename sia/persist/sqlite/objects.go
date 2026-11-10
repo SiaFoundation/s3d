@@ -25,7 +25,8 @@ func claimCurrentSeq(tx *txn, bid int64, name string) (seq int64, err error) {
 	if err != nil {
 		return 0, err
 	}
-	_, err = tx.Exec(`UPDATE objects SET is_latest = FALSE WHERE bucket_id = $1 AND name = $2 AND is_latest = TRUE`, bid, name)
+	_, err = tx.Exec(`UPDATE objects SET is_latest = FALSE, noncurrent_at = $1 WHERE bucket_id = $2 AND name = $3 AND is_latest = TRUE`,
+		sqlTime(time.Now()), bid, name)
 	return seq, err
 }
 
@@ -273,14 +274,19 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, version s3.
 	}
 
 	// part specified, return part info. the MD5 read is the object's, not the
-	// part's, because ContentMD5 and PartsCount are the object's ETag inputs
+	// part's, because ContentMD5 and PartsCount are the object's ETag inputs.
+	// the requested number is a position among the completed parts, since
+	// part_number keeps the upload's numbering the part file is stored under
+	// and a completion may have named a subset of the uploaded parts
 	var partObjID sql.Null[sqlHash256]
 	err := tx.QueryRow(`
-		SELECT o.filename, o.sia_object_id, o.metadata, o.updated_at, o.size, p.offset, p.content_length, o.content_md5
+		SELECT o.filename, o.sia_object_id, o.metadata, o.updated_at, o.size, p.offset, p.content_length, o.content_md5, p.checksum
 		FROM object_parts p
 		JOIN objects o ON o.bucket_id = p.bucket_id AND o.name = p.name AND o.version_id = p.version_id
-		WHERE o.bucket_id = $1 AND o.name = $2 AND o.version_id = $3 AND p.part_number = $4
-	`, bid, name, versionID, *partNumber).Scan(&obj.FileName, &partObjID, (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Size, &obj.Offset, &obj.Length, (*sqlMD5)(&obj.ContentMD5))
+		WHERE o.bucket_id = $1 AND o.name = $2 AND o.version_id = $3
+		ORDER BY p.part_number
+		LIMIT 1 OFFSET $4
+	`, bid, name, versionID, *partNumber-1).Scan(&obj.FileName, &partObjID, (*sqlMetaJSON)(&obj.Meta), (*sqlTime)(&obj.LastModified), &obj.Size, &obj.Offset, &obj.Length, (*sqlMD5)(&obj.ContentMD5), &obj.PartChecksum)
 	if err != nil {
 		return err
 	}
@@ -397,11 +403,11 @@ func (s *Store) MarkObjectUploaded(bucket s3.BucketID, name, versionID string, c
 			return err
 		}
 		if _, err := tx.Exec(`
-			INSERT INTO unpinned_objects (sia_object_id, pin_before)
-			VALUES ($1, $2)
+			INSERT INTO unpinned_objects (sia_object_id, pin_before, next_attempt_at)
+			VALUES ($1, $2, $3)
 			ON CONFLICT (sia_object_id) DO UPDATE
 				SET pin_before = max(unpinned_objects.pin_before, excluded.pin_before)
-		`, sqlHash256(sealed.ID()), sqlTime(pinBefore)); err != nil {
+		`, sqlHash256(sealed.ID()), sqlTime(pinBefore), sqlTime(time.Now())); err != nil {
 			return err
 		}
 		if !exists {
@@ -708,7 +714,14 @@ func (s *Store) CopyObject(srcBucket s3.BucketID, srcName string, srcVersion s3.
 		}
 		obj.Tags = opts.Tags
 		if opts.Replace {
-			obj.Meta = opts.Meta
+			// the copy holds the same bytes, so the source's additional
+			// checksum survives a metadata replacement
+			checksum := s3.ObjectChecksumFromMeta(obj.Meta)
+			obj.Meta = make(map[string]string, len(opts.Meta))
+			maps.Copy(obj.Meta, opts.Meta)
+			if checksum != nil {
+				checksum.StoreInMeta(obj.Meta)
+			}
 		} else {
 			maps.Copy(obj.Meta, opts.Meta)
 		}
@@ -734,7 +747,7 @@ func (s *Store) CopyObject(srcBucket s3.BucketID, srcName string, srcVersion s3.
 				return err
 			}
 			_, err = tx.Exec(`
-				UPDATE objects SET seq = $1, metadata = $2, updated_at = $3, is_latest = TRUE
+				UPDATE objects SET seq = $1, metadata = $2, updated_at = $3, is_latest = TRUE, noncurrent_at = NULL
 				WHERE bucket_id = $4 AND name = $5 AND version_id = $6
 			`, seq, sqlMetaJSON(obj.Meta), sqlTime(time.Now()), dstBid, dstName, srcInternalVersion)
 			if err != nil {
@@ -754,8 +767,8 @@ func (s *Store) CopyObject(srcBucket s3.BucketID, srcName string, srcVersion s3.
 
 		if obj.PartsCount > 0 {
 			_, err = tx.Exec(`
-				INSERT INTO object_parts (bucket_id, name, version_id, part_number, filename, content_md5, content_length, offset)
-				SELECT $1, $2, $3, part_number, filename, content_md5, content_length, offset
+				INSERT INTO object_parts (bucket_id, name, version_id, part_number, filename, content_md5, content_length, offset, checksum)
+				SELECT $1, $2, $3, part_number, filename, content_md5, content_length, offset, checksum
 				FROM object_parts
 				WHERE bucket_id = $4 AND name = $5 AND version_id = $6
 			`, dstBid, dstName, dstVersion, srcBid, srcName, srcInternalVersion)
@@ -977,15 +990,25 @@ type deletedRow struct {
 // deleted row. found is false when no such row exists (the returned row is
 // then the zero value). It does not orphan the row's data; callers pass the
 // returned row to orphanDeleted for that.
-func deleteObject(tx *txn, bid int64, name string, version string, bypass bool) (row deletedRow, found bool, _ error) {
+func deleteObject(tx *txn, bid int64, name string, version string, bypass bool) (deletedRow, bool, error) {
 	if err := checkObjectLock(tx, bid, name, version, bypass); err != nil {
 		return deletedRow{}, false, err
 	}
-	return deleteObjectRow(tx, bid, name, version)
+	return deleteObjectRow(tx, bid, name, version, true)
+}
+
+// deleteNullVersion deletes the null version of (bid, name) for a caller that
+// writes its replacement in the same transaction, leaving the preceding
+// version noncurrent rather than promoting it.
+func deleteNullVersion(tx *txn, bid int64, name string) (deletedRow, bool, error) {
+	if err := checkObjectLock(tx, bid, name, nullVersion, false); err != nil {
+		return deletedRow{}, false, err
+	}
+	return deleteObjectRow(tx, bid, name, nullVersion, false)
 }
 
 // deleteObjectRow removes the version regardless of its object lock.
-func deleteObjectRow(tx *txn, bid int64, name string, version string) (row deletedRow, found bool, _ error) {
+func deleteObjectRow(tx *txn, bid int64, name string, version string, promote bool) (row deletedRow, found bool, _ error) {
 	var id sql.Null[sqlHash256]
 	var wasLatest bool
 	err := tx.QueryRow(`
@@ -999,9 +1022,9 @@ func deleteObjectRow(tx *txn, bid int64, name string, version string) (row delet
 	}
 	// removing the current version promotes the next-highest seq to current
 	// (a no-op when no versions remain).
-	if wasLatest {
+	if promote && wasLatest {
 		if _, err := tx.Exec(`
-			UPDATE objects SET is_latest = TRUE
+			UPDATE objects SET is_latest = TRUE, noncurrent_at = NULL
 			WHERE bucket_id = $1 AND name = $2
 			  AND seq = (SELECT MAX(seq) FROM objects WHERE bucket_id = $3 AND name = $4)`,
 			bid, name, bid, name); err != nil {
