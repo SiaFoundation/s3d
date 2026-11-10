@@ -18,6 +18,24 @@ import (
 	"go.uber.org/zap"
 )
 
+// VersionIDValidator is implemented by a backend that can tell a version ID
+// it could have issued from one it never could, so a malformed ID is refused
+// as S3 refuses it rather than reported as a missing version.
+type VersionIDValidator interface {
+	// ValidVersionID reports whether id has the form of a version ID the
+	// backend issues. It is never called for the null version.
+	ValidVersionID(id string) bool
+}
+
+// validVersion reports whether a requested version could exist.
+func (s *s3) validVersion(version VersionRequest) bool {
+	validator, ok := s.backend.(VersionIDValidator)
+	if !ok || !version.Specified || version.ID == "" {
+		return true
+	}
+	return validator.ValidVersionID(version.ID)
+}
+
 // Backend defines the interface for an S3 backend that data uploaded via the S3
 // API will be stored in. Bucket and object operations receive already authorized
 // requests and must attribute objects and storage to the bucket owner.
@@ -108,6 +126,9 @@ type Backend interface {
 	//
 	// - If the requested range is not satisfiable, [ErrInvalidRange] must be
 	//   returned. You can use the 'Range' method on 'rnge' for that.
+	//
+	// - If partNumber exceeds the object's parts, a non-multipart object
+	//   having only part 1, [ErrInvalidPart] must be returned.
 	//
 	// - version unspecified returns the current version; a specified request
 	//   returns that exact version ("" is the null version, [ErrNoSuchVersion]
@@ -704,6 +725,9 @@ func (s *s3) routeBase(w http.ResponseWriter, r *http.Request, caller *auth.Call
 	} else if err == nil {
 		var access *bucketAccess
 		access, err = s.authorize(r, caller, bucket, object, op)
+		if err == nil && object != "" && !s.validVersion(VersionFromQuery(r.URL.Query()["versionId"])) {
+			err = s3errs.ErrInvalidArgumentVersionID
+		}
 		if err == nil {
 			err = op.serve(w, r, access)
 		}

@@ -137,12 +137,9 @@ func HandleAuth(req *http.Request, store KeyStore, region string, now time.Time)
 	case presigned:
 		return handleAuthV4Presigned(req, query, store, region, now)
 	case authHeader != "":
-		// NOTE: S3 does something interesting here. You'd expect AccessDenied,
-		// but for some reason it returns an ErrInvalidDigest with 403. Even
-		// though ErrInvalidDigest is usually returned with a 400.
-		err := s3errs.ErrInvalidDigest
-		err.HTTPStatus = http.StatusForbidden
-		return nil, err
+		// any other scheme, such as Signature Version 2, is refused the way a
+		// region that only supports Signature Version 4 refuses it
+		return nil, s3errs.ErrInvalidRequestAuthMechanism
 	default:
 		return nil, handleAnonymousPayload(req)
 	}
@@ -174,15 +171,16 @@ func isPresigned(query url.Values) bool {
 
 // handleAuthV4 handles AWS Signature Version 4 authentication using HMAC.
 func handleAuthV4(req *http.Request, query url.Values, store KeyStore, region string, now time.Time) (*Caller, error) {
+	// S3 requires every request signed in the Authorization header to state
+	// how its payload is signed
+	if req.Header.Get(HeaderXAMZContentSHA256) == "" {
+		return nil, s3errs.ErrInvalidRequestMissingContentSHA256
+	}
+
 	// verify the signed request first
 	result, err := verifyV4SignedRequest(req, query, store, region, now)
 	if err != nil {
 		return nil, err
-	}
-	// a missing payload hash was signed as the empty payload's, so the body
-	// must be verified against it rather than treated as unsigned
-	if req.Header.Get(HeaderXAMZContentSHA256) == "" {
-		req.Header.Set(HeaderXAMZContentSHA256, emptySha256Hex)
 	}
 
 	// at this point the signature is valid, but we still need to check if the

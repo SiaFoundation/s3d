@@ -275,9 +275,18 @@ func (s *s3) copyObject(w http.ResponseWriter, r *http.Request, dst *bucketAcces
 		return err
 	}
 
+	// S3 spells the directives in uppercase and refuses any other value
+	var replace bool
+	switch r.Header.Get("x-amz-metadata-directive") {
+	case "", "COPY":
+	case "REPLACE":
+		replace = true
+	default:
+		return s3errs.ErrInvalidArgumentMetadataDirective
+	}
+
 	// copying to the same key without REPLACE is not allowed, unless a specific
 	// source version is addressed (a version restore).
-	replace := r.Header.Get("x-amz-metadata-directive") == "REPLACE"
 	if srcBucket == dstBucket && srcObject == dstObject && !replace && !srcVersion.Specified {
 		return s3errs.ErrInvalidRequest
 	}
@@ -353,11 +362,12 @@ func (s *s3) deleteObjects(w http.ResponseWriter, r *http.Request, access *bucke
 	log.Debug("delete objects")
 
 	var req DeleteRequest
-	if err := decodeXMLBody(r.Body, &req); err != nil {
+	if err := decodeDigestedXMLBody(r, true, &req); err != nil {
 		return err
 	}
 
-	if len(req.Objects) > MaxBucketKeys {
+	// S3 refuses a request naming no objects as it refuses one naming too many
+	if len(req.Objects) == 0 || len(req.Objects) > MaxBucketKeys {
 		return s3errs.ErrMalformedXML
 	}
 
@@ -426,16 +436,21 @@ func (s *s3) serveObject(w http.ResponseWriter, r *http.Request, access *bucketA
 		log.Debug("get object")
 	}
 
-	partNumber, err := parsePartNumber(r.URL.Query().Get("partNumber"))
+	query := r.URL.Query()
+	partNumber, err := parsePartNumber(query.Get("partNumber"))
 	if err != nil {
 		return err
 	}
 
-	rnge, err := parseRangeHeader(r.Header.Get("Range"))
-	if err != nil {
-		return err
-	} else if rnge != nil && partNumber != nil {
+	rnge := parseRangeHeader(r.Header.Get("Range"))
+	if rnge != nil && partNumber != nil {
 		return s3errs.ErrInvalidRequest // can't combine range and partNumber
+	}
+
+	// the response headers a request may override are only overridden for a
+	// signed request
+	if access.caller == nil && hasResponseHeaderOverrides(query) {
+		return s3errs.ErrInvalidRequestAnonymousOverrides
 	}
 
 	// retrieve object (HEAD fetches metadata only)
@@ -590,7 +605,12 @@ func (s *s3) listObjectsV1(w http.ResponseWriter, r *http.Request, access *bucke
 	// parse arguments
 	q := r.URL.Query()
 	prefix := prefixFromQuery(q)
-	maxKeys, err := parseClampedInt(q.Get("max-keys"), DefaultMaxBucketKeys, 0, MaxBucketKeys)
+	maxKeys, err := parseClampedInt(q.Get("max-keys"), DefaultMaxBucketKeys, 0, MaxBucketKeys, s3errs.ErrInvalidArgumentMaxKeys)
+	if err != nil {
+		return err
+	}
+
+	encodeURL, err := urlEncodingFromQuery(q)
 	if err != nil {
 		return err
 	}
@@ -610,7 +630,7 @@ func (s *s3) listObjectsV1(w http.ResponseWriter, r *http.Request, access *bucke
 	setOwner(objects, access.owner)
 
 	// URL-escape object keys and common prefixes if requested
-	if r.FormValue("encoding-type") == "url" {
+	if encodeURL {
 		for i := range objects.Contents {
 			objects.Contents[i].Key = urlEscape(objects.Contents[i].Key)
 		}
@@ -631,8 +651,12 @@ func (s *s3) listObjectsV1(w http.ResponseWriter, r *http.Request, access *bucke
 			MaxKeys:        page.MaxKeys,
 			EncodingType:   q.Get("encoding-type"),
 		},
-		Marker:     q.Get("marker"),
-		NextMarker: objects.NextMarker,
+		Marker: q.Get("marker"),
+	}
+	// S3 only reports where to resume a listing that rolls keys up by a
+	// delimiter, and otherwise leaves the client to resume after the last key
+	if prefix.Delimiter != "" {
+		result.NextMarker = objects.NextMarker
 	}
 
 	return writeXMLResponse(w, http.StatusOK, result)
@@ -647,6 +671,10 @@ func (s *s3) listObjectsV2(w http.ResponseWriter, r *http.Request, access *bucke
 	q := r.URL.Query()
 	prefix := prefixFromQuery(q)
 	page, err := listObjectsPageFromQuery(q)
+	if err != nil {
+		return err
+	}
+	encodeURL, err := urlEncodingFromQuery(q)
 	if err != nil {
 		return err
 	}
@@ -665,7 +693,7 @@ func (s *s3) listObjectsV2(w http.ResponseWriter, r *http.Request, access *bucke
 	}
 
 	// URL-escape object keys and common prefixes if requested
-	if r.FormValue("encoding-type") == "url" {
+	if encodeURL {
 		for i := range objects.Contents {
 			objects.Contents[i].Key = urlEscape(objects.Contents[i].Key)
 		}
@@ -721,13 +749,16 @@ func (s *s3) listObjectVersions(w http.ResponseWriter, r *http.Request, access *
 	if err != nil {
 		return err
 	}
+	encodeURL, err := urlEncodingFromQuery(q)
+	if err != nil {
+		return err
+	}
 
 	versions, err := s.backend.ListObjectVersions(r.Context(), access.bucketID, prefix, page)
 	if err != nil {
 		return err
 	}
 
-	encodeURL := q.Get("encoding-type") == "url"
 	escape := func(s string) string {
 		if encodeURL {
 			return urlEscape(s)
@@ -943,6 +974,12 @@ const (
 // Streaming trailers carry their checksum after the body instead and are
 // validated in the auth layer.
 func requestChecksum(headers http.Header) (*RequestChecksum, error) {
+	// S3 refuses a request naming the algorithm the SDK checksummed its body
+	// with that carries the checksum neither in a header nor in a trailer
+	if headers.Get("X-Amz-Sdk-Checksum-Algorithm") != "" && !declaresChecksum(headers) {
+		return nil, s3errs.ErrInvalidRequestSDKChecksumAlgorithm
+	}
+
 	var algorithm string
 	var size int
 	var count int
@@ -1054,10 +1091,22 @@ func declaresChecksum(headers http.Header) bool {
 	return false
 }
 
-// readDigestedBody reads an XML body that S3 requires to carry Content-MD5 or
-// a checksum, and checks every digest the request carries. A checksum the
-// backend cannot compute is left unverified, as in [requestChecksum].
-func readDigestedBody(r *http.Request) ([]byte, error) {
+// decodeDigestedXMLBody reads an XML body with [readDigestedBody] and decodes
+// it into v.
+func decodeDigestedXMLBody(r *http.Request, required bool, v any) error {
+	body, err := readDigestedBody(r, required)
+	if err != nil {
+		return err
+	}
+	return decodeXMLBody(bytes.NewReader(body), v)
+}
+
+// readDigestedBody reads an XML body and checks every digest the request
+// carries. When required, the body has to carry Content-MD5 or a checksum, as
+// S3 requires of the configuration and batch requests it cannot afford to
+// apply from a corrupted body. A checksum the backend cannot compute is left
+// unverified, as in [requestChecksum].
+func readDigestedBody(r *http.Request, required bool) ([]byte, error) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxXMLBodySize+1))
 	if errors.Is(err, io.ErrUnexpectedEOF) {
 		return nil, s3errs.ErrIncompleteBody
@@ -1081,10 +1130,6 @@ func readDigestedBody(r *http.Request) ([]byte, error) {
 		return nil, err
 	}
 	declared := declaresChecksum(r.Header)
-	// S3 refuses x-amz-sdk-checksum-algorithm without the checksum it names
-	if r.Header.Get("X-Amz-Sdk-Checksum-Algorithm") != "" && !declared {
-		return nil, s3errs.ErrInvalidRequest
-	}
 
 	if value, ok := r.Header["Content-Md5"]; ok {
 		if len(value) != 1 {
@@ -1096,8 +1141,8 @@ func readDigestedBody(r *http.Request) ([]byte, error) {
 		} else if md5.Sum(body) != *digest {
 			return nil, s3errs.ErrBadDigest
 		}
-	} else if !declared {
-		return nil, fmt.Errorf("Content-MD5 or a checksum is required: %w", s3errs.ErrInvalidRequest)
+	} else if required && !declared {
+		return nil, s3errs.ErrInvalidRequestMissingContentMD5
 	}
 	if checksum != nil {
 		h := checksum.NewHash()
@@ -1192,6 +1237,41 @@ func parseSource(source string) (bucket, object string, version VersionRequest, 
 		version = VersionFromQuery(q["versionId"])
 	}
 	return srcBucket, srcObject, version, nil
+}
+
+// defaultObjectContentType is the Content-Type S3 serves an object stored
+// without one.
+const defaultObjectContentType = "binary/octet-stream"
+
+// responseHeaderOverrides maps the query parameters a signed GET or HEAD may set
+// to the response header each overrides.
+var responseHeaderOverrides = map[string]string{
+	"response-cache-control":       "Cache-Control",
+	"response-content-disposition": "Content-Disposition",
+	"response-content-encoding":    "Content-Encoding",
+	"response-content-language":    "Content-Language",
+	"response-content-type":        "Content-Type",
+	"response-expires":             "Expires",
+}
+
+// hasResponseHeaderOverrides reports whether the query overrides a response
+// header.
+func hasResponseHeaderOverrides(query url.Values) bool {
+	for param := range responseHeaderOverrides {
+		if query.Has(param) {
+			return true
+		}
+	}
+	return false
+}
+
+// applyResponseHeaderOverrides sets the response headers the query overrides.
+func applyResponseHeaderOverrides(h http.Header, query url.Values) {
+	for param, header := range responseHeaderOverrides {
+		if query.Has(param) {
+			h.Set(header, query.Get(param))
+		}
+	}
 }
 
 // objectMetadataHeaders are the header names stored with the object rather than
@@ -1491,8 +1571,21 @@ func decodeXMLBody(r io.Reader, v interface{}) error {
 	return nil
 }
 
+// urlEncodingFromQuery reports whether a listing asked for its keys to be URL
+// encoded. "url" is the only encoding S3 knows, and any other is refused.
+func urlEncodingFromQuery(query url.Values) (bool, error) {
+	switch query.Get("encoding-type") {
+	case "":
+		return false, nil
+	case "url":
+		return true, nil
+	default:
+		return false, s3errs.ErrInvalidArgumentEncodingType
+	}
+}
+
 func listObjectsPageFromQuery(query url.Values) (page ListObjectsPage, rerr error) {
-	maxKeys, err := parseClampedInt(query.Get("max-keys"), DefaultMaxBucketKeys, 0, MaxBucketKeys)
+	maxKeys, err := parseClampedInt(query.Get("max-keys"), DefaultMaxBucketKeys, 0, MaxBucketKeys, s3errs.ErrInvalidArgumentMaxKeys)
 	if err != nil {
 		return page, err
 	}
@@ -1522,7 +1615,7 @@ func listObjectsPageFromQuery(query url.Values) (page ListObjectsPage, rerr erro
 }
 
 func listObjectVersionsPageFromQuery(query url.Values) (page ListObjectVersionsPage, rerr error) {
-	maxKeys, err := parseClampedInt(query.Get("max-keys"), DefaultMaxBucketKeys, 0, MaxBucketKeys)
+	maxKeys, err := parseClampedInt(query.Get("max-keys"), DefaultMaxBucketKeys, 0, MaxBucketKeys, s3errs.ErrInvalidArgumentMaxKeysVersions)
 	if err != nil {
 		return page, err
 	}
@@ -1548,15 +1641,15 @@ func listObjectVersionsPageFromQuery(query url.Values) (page ListObjectVersionsP
 	return page, nil
 }
 
-func parseClampedInt(in string, defaultValue, minValue, maxValue int64) (int64, error) {
+func parseClampedInt(in string, defaultValue, minValue, maxValue int64, invalid s3errs.Error) (int64, error) {
 	var v int64
 	if in == "" {
 		v = defaultValue
 	} else {
 		var err error
 		v, err = strconv.ParseInt(in, 10, 0)
-		if err != nil {
-			return defaultValue, s3errs.ErrInvalidArgument
+		if err != nil || v < 0 {
+			return defaultValue, invalid
 		}
 	}
 
@@ -1569,64 +1662,53 @@ func parseClampedInt(in string, defaultValue, minValue, maxValue int64) (int64, 
 	return v, nil
 }
 
-// parseRangeHeader parses a single byte range from the Range header.
+// parseRangeHeader parses a single byte range from the Range header. A header
+// S3 cannot serve as one byte range, because it is malformed, names another
+// unit or asks for several ranges, is ignored and the whole object is served,
+// as RFC 9110 allows and S3 does. A well formed range the object cannot
+// satisfy is refused once the object's size is known.
 //
 // Amazon S3 doesn't support retrieving multiple ranges of data per GET request:
 // https://docs.aws.amazon.com/AmazonS3/latest/API/RESTObjectGET.html
-func parseRangeHeader(s string) (*ObjectRangeRequest, error) {
-	if s == "" {
-		return nil, nil
-	}
-
+func parseRangeHeader(s string) *ObjectRangeRequest {
 	const b = "bytes="
 	if !strings.HasPrefix(s, b) {
-		return nil, s3errs.ErrInvalidRange
+		return nil
 	}
 
-	ranges := strings.Split(s[len(b):], ",")
-	if len(ranges) > 1 {
-		return nil, s3errs.ErrInvalidRange
-	}
-
-	rnge := strings.TrimSpace(ranges[0])
-	if rnge == "" {
-		return nil, s3errs.ErrInvalidRange
-	}
-
+	rnge := strings.TrimSpace(s[len(b):])
 	i := strings.Index(rnge, "-")
-	if i < 0 {
-		return nil, s3errs.ErrInvalidRange
+	if i < 0 || strings.Contains(rnge, ",") {
+		return nil
 	}
 
 	var o ObjectRangeRequest
-
 	start, end := strings.TrimSpace(rnge[:i]), strings.TrimSpace(rnge[i+1:])
 	if start == "" {
+		suffix, err := strconv.ParseInt(end, 10, 64)
+		if err != nil || suffix < 0 {
+			return nil
+		}
 		o.FromEnd = true
-
-		i, err := strconv.ParseInt(end, 10, 64)
-		if err != nil {
-			return nil, s3errs.ErrInvalidRange
-		}
-		o.End = i
-	} else {
-		i, err := strconv.ParseInt(start, 10, 64)
-		if err != nil || i < 0 {
-			return nil, s3errs.ErrInvalidRange
-		}
-		o.Start = i
-		if end != "" {
-			i, err := strconv.ParseInt(end, 10, 64)
-			if err != nil || o.Start > i {
-				return nil, s3errs.ErrInvalidRange
-			}
-			o.End = i
-		} else {
-			o.End = -1
-		}
+		o.End = suffix
+		return &o
 	}
 
-	return &o, nil
+	first, err := strconv.ParseInt(start, 10, 64)
+	if err != nil || first < 0 {
+		return nil
+	}
+	o.Start = first
+	if end == "" {
+		o.End = -1
+		return &o
+	}
+	last, err := strconv.ParseInt(end, 10, 64)
+	if err != nil || last < first {
+		return nil
+	}
+	o.End = last
+	return &o
 }
 
 // setLifecycleExpirationHeader sets the x-amz-expiration response header when an
@@ -1711,13 +1793,17 @@ func writeGetOrHeadObjectHeaders(obj *Object, w http.ResponseWriter, r *http.Req
 		return err
 	}
 
-	if partRead {
-		partsCount := int32(1) // a non-multipart object reads as a single part
-		if obj.PartsCount != nil {
-			partsCount = *obj.PartsCount
-		}
-		w.Header().Set("x-amz-mp-parts-count", fmt.Sprintf("%d", partsCount))
+	// only an object uploaded in parts reports how many it has
+	if partRead && obj.PartsCount != nil {
+		w.Header().Set("x-amz-mp-parts-count", fmt.Sprintf("%d", *obj.PartsCount))
 	}
+
+	// an object stored without a type is served as S3 serves it, rather than
+	// leaving the type to be sniffed from its content
+	if w.Header().Get("Content-Type") == "" {
+		w.Header().Set("Content-Type", defaultObjectContentType)
+	}
+	applyResponseHeaderOverrides(w.Header(), r.URL.Query())
 
 	writeObjectLockHeaders(w.Header(), obj.ObjectLock)
 

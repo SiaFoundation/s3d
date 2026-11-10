@@ -65,7 +65,8 @@ func (p policyPrincipal) matches(caller *auth.Caller) bool {
 				return true
 			}
 			id, _ := principalUserID(value)
-			if caller != nil && caller.UserID == id {
+			// user names are unique regardless of case
+			if caller != nil && strings.EqualFold(caller.UserID, id) {
 				return true
 			}
 		}

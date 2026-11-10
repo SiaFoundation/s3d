@@ -285,22 +285,22 @@ func TestRequestObjectLock(t *testing.T) {
 		{
 			name:    "ModeWithoutDate",
 			headers: map[string]string{HeaderObjectLockMode: ObjectLockModeGovernance},
-			err:     &s3errs.ErrInvalidRequest,
+			err:     &s3errs.ErrInvalidArgumentLockHeaders,
 		},
 		{
 			name:    "DateWithoutMode",
 			headers: map[string]string{HeaderObjectLockRetainUntilDate: future},
-			err:     &s3errs.ErrInvalidRequest,
+			err:     &s3errs.ErrInvalidArgumentLockHeaders,
 		},
 		{
 			name:    "UnknownMode",
 			headers: map[string]string{HeaderObjectLockMode: "governance", HeaderObjectLockRetainUntilDate: future},
-			err:     &s3errs.ErrInvalidRequest,
+			err:     &s3errs.ErrInvalidArgumentLockMode,
 		},
 		{
 			name:    "DateInThePast",
 			headers: map[string]string{HeaderObjectLockMode: ObjectLockModeGovernance, HeaderObjectLockRetainUntilDate: past},
-			err:     &s3errs.ErrInvalidRequest,
+			err:     &s3errs.ErrInvalidArgumentRetainUntilDate,
 		},
 		{
 			name:    "UnparseableDate",
@@ -310,7 +310,7 @@ func TestRequestObjectLock(t *testing.T) {
 		{
 			name:    "UnknownLegalHold",
 			headers: map[string]string{HeaderObjectLockLegalHold: "on"},
-			err:     &s3errs.ErrInvalidRequest,
+			err:     &s3errs.ErrInvalidArgumentLegalHold,
 		},
 		{
 			name:    "EventHold",
@@ -402,8 +402,8 @@ func TestTagSetValidate(t *testing.T) {
 				t.Fatal(err)
 			}
 			tags = append(tags, Tag{Key: "extra", Value: "v"})
-			if err := tags.validate(limits); !errors.Is(err, s3errs.ErrInvalidTag) {
-				t.Fatalf("expected %v, got %v", s3errs.ErrInvalidTag, err)
+			if err := tags.validate(limits); !errors.Is(err, limits.tooMany) {
+				t.Fatalf("expected %v, got %v", limits.tooMany, err)
 			}
 		})
 	}

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3/auth"
+	"github.com/SiaFoundation/s3d/s3/s3errs"
 )
 
 // AnonymousUserID is the aws:userid and aws:PrincipalAccount of anonymous
@@ -152,7 +153,7 @@ func (a *bucketAccess) actionPolicyContext(action string) (policyContext, error)
 		}
 		// a listing always has a limit; HeadBucket is not a listing
 		if a.request.Method == http.MethodGet {
-			maxKeys, err := parseClampedInt(query.Get("max-keys"), DefaultMaxBucketKeys, 0, MaxBucketKeys)
+			maxKeys, err := parseClampedInt(query.Get("max-keys"), DefaultMaxBucketKeys, 0, MaxBucketKeys, s3errs.ErrInvalidArgumentMaxKeys)
 			if err != nil {
 				return nil, err
 			}

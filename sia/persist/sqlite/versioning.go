@@ -21,6 +21,20 @@ func newDBVersion() string {
 	return hex.EncodeToString(frand.Bytes(32))
 }
 
+// ValidVersionID reports whether id has the form of a version ID issued by
+// [newDBVersion]: 32 bytes in lowercase hex.
+func (s *Store) ValidVersionID(id string) bool {
+	if len(id) != 64 {
+		return false
+	}
+	for _, c := range id {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 // reportedWriteVersion is the version ID to report for a write; only an enabled
 // bucket reports one.
 func reportedWriteVersion(status, v string) string {

@@ -348,7 +348,7 @@ func (s *s3) createMultipartUpload(w http.ResponseWriter, r *http.Request, acces
 func (s *s3) listMultipartUploads(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
 	bucket := access.bucket
 	query := r.URL.Query()
-	maxUploads, err := parseClampedInt(query.Get("max-uploads"), DefaultMaxMultipartUploads, 1, MaxMultipartUploads)
+	maxUploads, err := parseClampedInt(query.Get("max-uploads"), DefaultMaxMultipartUploads, 1, MaxMultipartUploads, s3errs.ErrInvalidArgumentMaxUploads)
 	if err != nil {
 		return err
 	} else if utf8.RuneCountInString(query.Get("delimiter")) > 1 {
@@ -604,7 +604,7 @@ func (s *s3) completeMultipartUpload(w http.ResponseWriter, r *http.Request, acc
 	if err := decodeXMLBody(r.Body, &req); err != nil {
 		return err
 	} else if len(req.Parts) == 0 {
-		return fmt.Errorf("%w: no parts provided", s3errs.ErrInvalidRequest)
+		return fmt.Errorf("%w: no parts provided", s3errs.ErrMalformedXML)
 	} else if len(req.Parts) > MaxUploadPartNumber {
 		return fmt.Errorf("%w: too many parts: %d (maximum is %d)", s3errs.ErrInvalidRequest, len(req.Parts), MaxUploadPartNumber)
 	}

@@ -139,6 +139,9 @@ func (s *s3) bucketAccess(r *http.Request, caller *auth.Caller, bucket string) (
 // authorizeCopySource checks that the caller may read srcVersion of srcObject,
 // reusing dst's access for a same-bucket copy.
 func (s *s3) authorizeCopySource(r *http.Request, dst *bucketAccess, srcBucket, srcObject string, srcVersion VersionRequest) (*bucketAccess, error) {
+	if !s.validVersion(srcVersion) {
+		return nil, s3errs.ErrInvalidRequestCopySourceVersion
+	}
 	src := dst
 	if srcBucket != dst.bucket {
 		var err error

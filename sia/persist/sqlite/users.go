@@ -3,6 +3,7 @@ package sqlite
 import (
 	"database/sql"
 	"errors"
+	"strings"
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
@@ -19,14 +20,16 @@ func userIDForAccessKey(tx *txn, accessKeyID string) (int64, error) {
 	return uid, err
 }
 
-// CreateUser creates a new user with the given name.
+// CreateUser creates a new user with the given name. Names are unique
+// regardless of case, like AWS IAM user names, and the case it was created
+// with is kept.
 func (s *Store) CreateUser(name string) error {
 	// a user's name is its S3 user ID
-	if name == s3.AnonymousUserID {
+	if strings.EqualFold(name, s3.AnonymousUserID) {
 		return s3.ErrReservedUserName
 	}
 	return s.transaction(func(tx *txn) error {
-		res, err := tx.Exec("INSERT INTO users (name) VALUES ($1) ON CONFLICT (name) DO NOTHING", name)
+		res, err := tx.Exec("INSERT INTO users (name) VALUES ($1) ON CONFLICT DO NOTHING", name)
 		if err != nil {
 			return err
 		}
@@ -40,13 +43,13 @@ func (s *Store) CreateUser(name string) error {
 	})
 }
 
-// DeleteUser deletes the user with the given name. Access keys belonging to
-// the user are deleted via cascade. Returns an error if the user owns any
-// buckets.
+// DeleteUser deletes the user with the given name, matched regardless of
+// case. Access keys belonging to the user are deleted via cascade. Returns an
+// error if the user owns any buckets.
 func (s *Store) DeleteUser(name string) error {
 	return s.transaction(func(tx *txn) error {
 		var userID int64
-		err := tx.QueryRow("SELECT id FROM users WHERE name = $1", name).Scan(&userID)
+		err := tx.QueryRow("SELECT id FROM users WHERE name = $1 COLLATE NOCASE", name).Scan(&userID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return s3.ErrUserNotFound
 		} else if err != nil {
@@ -92,7 +95,7 @@ func (s *Store) ListUsers() ([]string, error) {
 func (s *Store) CreateAccessKey(userName, accessKeyID, secretKey string) error {
 	return s.transaction(func(tx *txn) error {
 		var userID int64
-		err := tx.QueryRow("SELECT id FROM users WHERE name = $1", userName).Scan(&userID)
+		err := tx.QueryRow("SELECT id FROM users WHERE name = $1 COLLATE NOCASE", userName).Scan(&userID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return s3.ErrUserNotFound
 		} else if err != nil {
@@ -150,7 +153,7 @@ func (s *Store) ListAccessKeys(userName *string) ([]s3.AccessKeyMetadata, error)
 				SELECT ak.access_key_id, u.name
 				FROM access_keys ak
 				INNER JOIN users u ON ak.user_id = u.id
-				WHERE u.name = $1
+				WHERE u.name = $1 COLLATE NOCASE
 				ORDER BY ak.access_key_id ASC`, *userName)
 		}
 		if err != nil {

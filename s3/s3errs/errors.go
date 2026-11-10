@@ -80,7 +80,7 @@ var (
 	ErrInvalidHttpMethod                              = Error{"InvalidHttpMethod", "Request used an unexpected HTTP method.", http.StatusBadRequest}
 	ErrInvalidLocationConstraint                      = Error{"InvalidLocationConstraint", "The specified Region constraint is not valid.", http.StatusBadRequest}
 	ErrInvalidObjectState                             = Error{"InvalidObjectState", "Operation is not valid for the object's current state.", http.StatusForbidden}
-	ErrInvalidPart                                    = Error{"InvalidPart", "One or more parts not found or ETag did not match.", http.StatusBadRequest}
+	ErrInvalidPart                                    = Error{"InvalidPart", "One or more of the specified parts could not be found. The part may not have been uploaded, or the specified entity tag may not match the part's entity tag.", http.StatusBadRequest}
 	ErrInvalidPartOrder                               = Error{"InvalidPartOrder", "Parts list is not in ascending part-number order.", http.StatusBadRequest}
 	ErrInvalidPayer                                   = Error{"InvalidPayer", "All access to this object has been disabled.", http.StatusForbidden}
 	ErrInvalidPolicyDocument                          = Error{"InvalidPolicyDocument", "Form content does not meet the policy document conditions.", http.StatusBadRequest}
@@ -181,4 +181,36 @@ var (
 	ErrMalformedPolicyInapplicable = Error{"MalformedPolicy", "Action does not apply to any resource(s) in statement.", http.StatusBadRequest}
 	ErrMalformedPolicyPrincipal    = Error{"MalformedPolicy", "Invalid principal in policy.", http.StatusBadRequest}
 	ErrMalformedPolicyResource     = Error{"MalformedPolicy", "Policy has invalid resource.", http.StatusBadRequest}
+
+	ErrBadRequestBucketTagCount           = Error{"BadRequest", "Bucket tag count cannot be greater than 50", http.StatusBadRequest}
+	ErrBadRequestObjectTagCount           = Error{"BadRequest", "Object tags cannot be greater than 10", http.StatusBadRequest}
+	ErrInvalidArgumentEncodingType        = Error{"InvalidArgument", "Invalid Encoding Method specified in Request", http.StatusBadRequest}
+	ErrInvalidArgumentLegalHold           = Error{"InvalidArgument", "Legal Hold must be either of 'ON' or 'OFF'", http.StatusBadRequest}
+	ErrInvalidArgumentLockHeaders         = Error{"InvalidArgument", "x-amz-object-lock-retain-until-date and x-amz-object-lock-mode must both be supplied", http.StatusBadRequest}
+	ErrInvalidArgumentLockMode            = Error{"InvalidArgument", "Unknown wormMode directive.", http.StatusBadRequest}
+	ErrInvalidArgumentMaxKeysVersions     = Error{"InvalidArgument", "max-keys cannot be negative", http.StatusBadRequest}
+	ErrInvalidArgumentMaxUploads          = Error{"InvalidArgument", "Argument max-uploads must be an integer between 0 and 2147483647", http.StatusBadRequest}
+	ErrInvalidArgumentPostKey             = Error{"InvalidArgument", "Bucket POST must contain a field named 'key'.  If it is specified, please check the order of the fields.", http.StatusBadRequest}
+	ErrInvalidArgumentMaxKeys             = Error{"InvalidArgument", "Argument maxKeys must be an integer between 0 and 2147483647", http.StatusBadRequest}
+	ErrInvalidArgumentMetadataDirective   = Error{"InvalidArgument", "Unknown metadata directive.", http.StatusBadRequest}
+	ErrInvalidArgumentNoncurrentDays      = Error{"InvalidArgument", "'NoncurrentDays' for NoncurrentVersionExpiration action must be a positive integer", http.StatusBadRequest}
+	ErrInvalidArgumentPostFile            = Error{"InvalidArgument", "POST requires exactly one file upload per request.", http.StatusBadRequest}
+	ErrInvalidArgumentRetainUntilDate     = Error{"InvalidArgument", "The retain until date must be in the future!", http.StatusBadRequest}
+	ErrInvalidArgumentVersionID           = Error{"InvalidArgument", "Invalid version id specified", http.StatusBadRequest}
+	ErrInvalidRequestAuthMechanism        = Error{"InvalidRequest", "The authorization mechanism you have provided is not supported. Please use AWS4-HMAC-SHA256.", http.StatusBadRequest}
+	ErrInvalidRequestAnonymousOverrides   = Error{"InvalidRequest", "Request specific response headers cannot be used for anonymous GET requests.", http.StatusBadRequest}
+	ErrInvalidRequestCopySourceVersion    = Error{"InvalidRequest", "Invalid Request", http.StatusBadRequest}
+	ErrInvalidRequestDefaultRetention     = Error{"InvalidRequest", "DefaultRetention must specify a fixed retention (Days or Years) or a DefaultEventHold.", http.StatusBadRequest}
+	ErrInvalidRequestLifecycleAction      = Error{"InvalidRequest", "At least one action needs to be specified in a rule", http.StatusBadRequest}
+	ErrInvalidRequestLifecycleSize        = Error{"InvalidRequest", "'ObjectSizeLessThan' has to be a value greater than 'ObjectSizeGreaterThan'.", http.StatusBadRequest}
+	ErrInvalidRequestMissingContentMD5    = Error{"InvalidRequest", "Missing required header for this request: Content-MD5 OR x-amz-checksum-*", http.StatusBadRequest}
+	ErrInvalidRequestMissingContentSHA256 = Error{"InvalidRequest", "Missing required header for this request: x-amz-content-sha256", http.StatusBadRequest}
+	ErrInvalidRequestSDKChecksumAlgorithm = Error{"InvalidRequest", "x-amz-sdk-checksum-algorithm specified, but no corresponding x-amz-checksum-* or x-amz-trailer headers were found.", http.StatusBadRequest}
 )
+
+// WithDescription returns a copy of e with a more specific description, for
+// errors whose S3 message names the input that caused them.
+func (e Error) WithDescription(description string) Error {
+	e.Description = description
+	return e
+}
