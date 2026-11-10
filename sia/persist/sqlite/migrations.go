@@ -572,6 +572,37 @@ CREATE TABLE object_tags (
 		return err
 	},
 	func(tx *txn, _ *zap.Logger) error {
+		_, err := tx.Exec(`ALTER TABLE snapshots ADD COLUMN scheduled INTEGER NOT NULL DEFAULT FALSE CHECK (scheduled IN (FALSE, TRUE));
+ALTER TABLE global_settings ADD COLUMN snapshot_schedule TEXT NOT NULL DEFAULT '';
+ALTER TABLE global_settings ADD COLUMN snapshot_schedule_since INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE global_settings ADD COLUMN snapshot_keep_daily INTEGER NOT NULL DEFAULT 0 CHECK (snapshot_keep_daily = 0 OR snapshot_schedule != '');
+ALTER TABLE global_settings ADD COLUMN snapshot_keep_weekly INTEGER NOT NULL DEFAULT 0 CHECK (snapshot_keep_weekly = 0 OR snapshot_schedule != '');
+ALTER TABLE global_settings ADD COLUMN snapshot_keep_monthly INTEGER NOT NULL DEFAULT 0 CHECK (snapshot_keep_monthly = 0 OR snapshot_schedule != '');`)
+		return err
+	},
+	func(tx *txn, _ *zap.Logger) error {
+
+		_, err := tx.Exec(`
+ALTER TABLE multipart_uploads ADD COLUMN checksum_algorithm TEXT NOT NULL DEFAULT '' CHECK (checksum_algorithm IN ('', 'CRC32', 'CRC32C', 'CRC64NVME', 'SHA1', 'SHA256'));
+ALTER TABLE multipart_uploads ADD COLUMN checksum_type TEXT NOT NULL DEFAULT '' CHECK (checksum_type IN ('', 'COMPOSITE', 'FULL_OBJECT')) CHECK ((checksum_algorithm = '') = (checksum_type = ''));
+ALTER TABLE multipart_parts ADD COLUMN checksum BLOB;
+ALTER TABLE object_parts ADD COLUMN checksum BLOB;`)
+		return err
+	},
+	// record when each version stopped being current
+	func(tx *txn, _ *zap.Logger) error {
+		_, err := tx.Exec(`
+ALTER TABLE objects ADD COLUMN noncurrent_at INTEGER;
+UPDATE objects SET noncurrent_at = COALESCE((
+	SELECT nxt.updated_at FROM objects nxt
+	WHERE nxt.bucket_id = objects.bucket_id AND nxt.name = objects.name AND nxt.seq > objects.seq
+	ORDER BY nxt.seq LIMIT 1
+), updated_at) WHERE is_latest = FALSE;
+CREATE INDEX objects_noncurrent_at_idx ON objects(bucket_id, noncurrent_at) WHERE is_latest = FALSE;
+CREATE INDEX objects_delete_marker_updated_at_idx ON objects(bucket_id, updated_at) WHERE is_latest = TRUE AND is_delete_marker = TRUE;`)
+		return err
+	},
+	func(tx *txn, _ *zap.Logger) error {
 		_, err := tx.Exec(`CREATE TABLE multipart_upload_tags (
     upload_id BLOB NOT NULL,
     position INTEGER NOT NULL, -- keeps the order the client gave

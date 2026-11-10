@@ -18,9 +18,9 @@ func runFlush(ctx context.Context, cmd *flag.FlagSet) {
 		cmd.Usage()
 		os.Exit(1)
 	}
-	requireAdminConfig()
+	client := newAdminClient()
 
 	fmt.Println("Flushing pending objects to Sia. This may take a while...")
-	checkFatalError("failed to flush objects", adminRequest(ctx, http.MethodPost, cfg.AdminAddress, cfg.AdminPassword, "/objects/flush", nil))
+	checkFatalError("failed to flush objects", client.request(ctx, http.MethodPost, "/objects/flush", nil, nil))
 	fmt.Println("Flushed all pending objects.")
 }

@@ -3,11 +3,14 @@ package sia_test
 import (
 	"bytes"
 	"crypto/md5"
+	"encoding/binary"
 	"errors"
+	"hash/crc32"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -20,6 +23,7 @@ import (
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	service "github.com/aws/aws-sdk-go-v2/service/s3"
 	s3Types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"go.uber.org/zap"
 )
@@ -118,9 +122,10 @@ func TestMultipartAddPart(t *testing.T) {
 	s3Tester := testutil.NewCustomTester(t, dir, store, testutil.NewMemorySDK(), zap.NewNop())
 
 	const (
-		unknownID = "001f6350ae92ef759626ac909dbc027e"
-		bucket    = "bucket"
-		object    = "object"
+		unknownID      = "001f6350ae92ef759626ac909dbc027e"
+		bucket         = "bucket"
+		object         = "object"
+		checksumObject = "checksum-object"
 	)
 
 	// create target bucket
@@ -191,7 +196,7 @@ func TestMultipartAddPart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parts, err := store.MultipartParts(bucketID(t, store, bucket), object, uid)
+	_, parts, err := store.MultipartParts(bucketID(t, store, bucket), object, uid)
 	if err != nil {
 		t.Fatal(err)
 	} else if len(parts) != 1 {
@@ -202,6 +207,34 @@ func TestMultipartAddPart(t *testing.T) {
 		t.Fatalf("expected part size %d, got %d", len(part), parts[0].Size)
 	} else if parts[0].ContentMD5 != md5Sum {
 		t.Fatalf("expected content MD5 %x, got %x", md5Sum, parts[0].ContentMD5)
+	}
+
+	// an upload created with an algorithm stores a digest for every part
+	checksummed, err := s3Tester.Client().CreateMultipartUpload(t.Context(), &service.CreateMultipartUploadInput{
+		Bucket:            aws.String(bucket),
+		Key:               aws.String(checksumObject),
+		ChecksumAlgorithm: s3Types.ChecksumAlgorithmCrc32,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s3Tester.UploadPart(t.Context(), bucket, checksumObject, *checksummed.UploadId, 1, part); err != nil {
+		t.Fatal(err)
+	}
+	checksumUID, err := s3.ParseUploadID(*checksummed.UploadId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, checksumParts, err := store.MultipartParts(bucketID(t, store, bucket), checksumObject, checksumUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var crc32Sum [4]byte
+	binary.BigEndian.PutUint32(crc32Sum[:], crc32.ChecksumIEEE(part))
+	if len(checksumParts) != 1 {
+		t.Fatalf("expected 1 part in database, got %d", len(checksumParts))
+	} else if !bytes.Equal(checksumParts[0].Checksum, crc32Sum[:]) {
+		t.Fatalf("expected part checksum %x, got %x", crc32Sum, checksumParts[0].Checksum)
 	}
 
 	// assert multipart upload is aborted and part files are removed
@@ -490,6 +523,196 @@ func TestCompleteMultipartUpload(t *testing.T) {
 	}
 	if !bytes.Equal(data, append(part1, smallPart...)) {
 		t.Fatalf("unexpected object data length=%d", len(data))
+	}
+
+	// a composite upload stores the digest over its part digests
+	const (
+		composite       = "composite"
+		compositePart   = "arcu6553sHVAiX4MjW0j7I7vD4w6R+Gz9Ok0Q9lTa+0="
+		compositeObject = "Ok6Cs5b96ux6+MWQkJO7UBT5sKPBeXBLwvj/hK89smg=-1"
+	)
+	created, err := s3Tester.Client().CreateMultipartUpload(t.Context(), &service.CreateMultipartUploadInput{
+		Bucket:            aws.String(bucket),
+		Key:               aws.String(composite),
+		ChecksumAlgorithm: s3Types.ChecksumAlgorithmSha256,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	uploadID = *created.UploadId
+
+	compositeData := bytes.Repeat([]byte("A"), 1024)
+	uploaded, err := s3Tester.Client().UploadPart(t.Context(), &service.UploadPartInput{
+		Bucket:         aws.String(bucket),
+		Key:            aws.String(composite),
+		UploadId:       aws.String(uploadID),
+		PartNumber:     aws.Int32(1),
+		Body:           bytes.NewReader(compositeData),
+		ContentLength:  aws.Int64(int64(len(compositeData))),
+		ChecksumSHA256: aws.String(compositePart),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	completed, err := s3Tester.Client().CompleteMultipartUpload(t.Context(), &service.CompleteMultipartUploadInput{
+		Bucket:         aws.String(bucket),
+		Key:            aws.String(composite),
+		UploadId:       aws.String(uploadID),
+		ChecksumSHA256: aws.String(compositeObject),
+		ChecksumType:   s3Types.ChecksumTypeComposite,
+		MpuObjectSize:  aws.Int64(int64(len(compositeData))),
+		MultipartUpload: &s3Types.CompletedMultipartUpload{
+			Parts: []s3Types.CompletedPart{
+				{PartNumber: aws.Int32(1), ETag: uploaded.ETag, ChecksumSHA256: aws.String(compositePart)},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if got := aws.ToString(completed.ChecksumSHA256); got != compositeObject {
+		t.Fatalf("expected checksum %s, got %s", compositeObject, got)
+	}
+
+	stored, err := store.GetObject(bucketID(t, store, bucket), composite, s3.NoVersion(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checksum := s3.ObjectChecksumFromMeta(stored.Meta)
+	if checksum == nil {
+		t.Fatal("expected a stored checksum")
+	} else if *checksum != (s3.ObjectChecksum{Algorithm: s3.ChecksumSHA256, Type: s3.ChecksumTypeComposite, Value: compositeObject}) {
+		t.Fatalf("unexpected stored checksum %+v", *checksum)
+	}
+}
+
+func TestCompleteMultipartUploadSubset(t *testing.T) {
+	log := zap.NewNop()
+	dir := t.TempDir()
+	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	if err := store.CreateUser(testutil.Owner); err != nil {
+		t.Fatal(err)
+	} else if err := store.CreateAccessKey(testutil.Owner, testutil.AccessKeyID, testutil.SecretAccessKey); err != nil {
+		t.Fatal(err)
+	}
+
+	backend, err := sia.New(t.Context(), testutil.NewMemorySDK(), store, dir,
+		sia.WithUploadDisabled(),
+		sia.WithLogger(log))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { backend.Close() })
+	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
+
+	const (
+		bucket = "subset-bucket"
+		object = "object"
+	)
+
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := s3Tester.CreateMultipartUpload(t.Context(), bucket, object, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uploadID := *res.UploadId
+
+	// upload three parts and name only the first and the last on completion
+	bodies := [][]byte{
+		bytes.Repeat([]byte("a"), int(s3.MinUploadPartSize)),
+		bytes.Repeat([]byte("b"), int(s3.MinUploadPartSize)),
+		bytes.Repeat([]byte("c"), int(s3.MinUploadPartSize)),
+	}
+	var completedParts []s3Types.CompletedPart
+	for i, body := range bodies {
+		number := int32(i + 1)
+		up, err := s3Tester.UploadPart(t.Context(), bucket, object, uploadID, number, body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if number != 2 {
+			completedParts = append(completedParts, s3Types.CompletedPart{PartNumber: aws.Int32(number), ETag: up.ETag})
+		}
+	}
+
+	stats, err := backend.UploadStats(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	} else if stats.BufferUsed != 3*s3.MinUploadPartSize {
+		t.Fatal("unexpected", stats.BufferUsed)
+	}
+
+	if _, err := s3Tester.CompleteMultipartUpload(t.Context(), bucket, object, uploadID, completedParts); err != nil {
+		t.Fatal(err)
+	}
+
+	// the dropped part leaves the disk and the reservation with it
+	if _, err := os.Stat(filepath.Join(dir, sia.UploadsDirectory, uploadID, "2")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatal("unexpected", err)
+	}
+
+	stats, err = backend.UploadStats(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	} else if stats.BufferUsed != 2*s3.MinUploadPartSize {
+		t.Fatal("unexpected", stats.BufferUsed)
+	}
+
+	objRes, err := s3Tester.GetObject(t.Context(), bucket, object, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := io.ReadAll(objRes.Body)
+	if err != nil {
+		t.Fatal(err)
+	} else if !bytes.Equal(data, slices.Concat(bodies[0], bodies[2])) {
+		t.Fatal("unexpected object body")
+	}
+
+	// the object's parts are read by their position, so its second part is the
+	// third one uploaded
+	partRes, err := s3Tester.Client().GetObject(t.Context(), &service.GetObjectInput{
+		Bucket:     aws.String(bucket),
+		Key:        aws.String(object),
+		PartNumber: aws.Int32(2),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	part, err := io.ReadAll(partRes.Body)
+	partRes.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	} else if !bytes.Equal(part, bodies[2]) {
+		t.Fatal("unexpected part body")
+	} else if aws.ToInt32(partRes.PartsCount) != 2 {
+		t.Fatal("unexpected", aws.ToInt32(partRes.PartsCount))
+	}
+
+	_, err = s3Tester.Client().GetObject(t.Context(), &service.GetObjectInput{
+		Bucket:     aws.String(bucket),
+		Key:        aws.String(object),
+		PartNumber: aws.Int32(3),
+	})
+	testutil.AssertS3Error(t, s3errs.ErrInvalidPart, err)
+
+	if err := s3Tester.DeleteObject(t.Context(), bucket, object); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err = backend.UploadStats(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	} else if stats.BufferUsed != 0 {
+		t.Fatal("unexpected", stats.BufferUsed)
 	}
 }
 

@@ -13,6 +13,13 @@ import (
 	"github.com/SiaFoundation/s3d/sia/objects"
 )
 
+// expiringVersion identifies one row of the objects table selected for
+// expiration.
+type expiringVersion struct {
+	name    string
+	version string
+}
+
 // PutBucketLifecycleConfiguration stores the serialized lifecycle configuration
 // for a bucket, replacing any existing configuration.
 func (s *Store) PutBucketLifecycleConfiguration(bucket s3.BucketID, config string) error {
@@ -155,8 +162,8 @@ func (s *Store) AbortMultipartUploads(bucket s3.BucketID, prefix string, before 
 // ExpireObjects expires up to limit objects whose current version matches the
 // prefix, size bounds and tags and was last modified at or before the cutoff,
 // applying a versioning-aware delete (see [deleteCurrentObject]) to each.
-// NoncurrentVersionExpiration is not supported. Returns the number of objects
-// expired; performs no ownership checks.
+// Noncurrent versions are left to [Store.ExpireNoncurrentVersions]. Returns the
+// number of objects expired and performs no ownership checks.
 func (s *Store) ExpireObjects(bucket s3.BucketID, prefix string, sizeGreaterThan, sizeLessThan *int64, tags s3.TagSet, before time.Time, limit int) (deleted int, orphans []objects.OrphanedFile, err error) {
 	err = s.transaction(func(tx *txn) error {
 		deleted = 0
@@ -230,4 +237,150 @@ func (s *Store) ExpireObjects(bucket s3.BucketID, prefix string, sizeGreaterThan
 		return nil
 	})
 	return
+}
+
+// ExpireNoncurrentVersions expires up to limit noncurrent versions in bucket
+// whose key matches the prefix, whose size matches the bounds, that carry every
+// tag in tags, that became noncurrent at or before the cutoff, and that sit
+// behind at least retain newer noncurrent versions of the same key. A retain of
+// 0 applies no such bound, delete markers are exempt from the size bounds but
+// carry no tags, and a version under retention or a legal hold is left alone.
+// Returns the number of versions expired and performs no ownership checks.
+func (s *Store) ExpireNoncurrentVersions(bucket s3.BucketID, prefix string, sizeGreaterThan, sizeLessThan *int64, tags s3.TagSet, retain int, before time.Time, limit int) (deleted int, orphans []objects.OrphanedFile, err error) {
+	err = s.transaction(func(tx *txn) error {
+		deleted = 0
+		orphans = nil
+
+		bid, err := existingBucketID(tx, bucket)
+		if err != nil {
+			return err
+		}
+
+		where := []string{
+			"o.bucket_id = ?",
+			"o.is_latest = FALSE",
+			"o.noncurrent_at <= ?",
+			// a version under a legal hold or an unexpired retention cannot be
+			// deleted, so it waits for a later sweep instead of failing this one
+			"o.object_lock_legal_hold != ?",
+			"(o.object_lock_mode = '' OR o.object_lock_retain_until < ?)",
+		}
+		args := []any{bid, sqlTime(before), s3.LegalHoldOn, time.Now().UnixMilli()}
+		if prefix != "" {
+			where = append(where, "o.name >= ? AND o.name < ?")
+			args = append(args, prefix, prefix+"\xFF")
+		}
+		// a delete marker holds no data, so the size bounds never exclude it
+		if sizeGreaterThan != nil {
+			where = append(where, "(o.is_delete_marker = TRUE OR o.size > ?)")
+			args = append(args, *sizeGreaterThan)
+		}
+		if sizeLessThan != nil {
+			where = append(where, "(o.is_delete_marker = TRUE OR o.size < ?)")
+			args = append(args, *sizeLessThan)
+		}
+		for _, tag := range tags {
+			where = append(where, `EXISTS (SELECT 1 FROM object_tags t WHERE t.bucket_id = o.bucket_id AND t.name = o.name AND t.version_id = o.version_id AND t.tag_key = ? AND t.tag_value = ?)`)
+			args = append(args, tag.Key, tag.Value)
+		}
+		if retain > 0 {
+			// newer noncurrent versions count toward retain even when the cutoff
+			// or the size bounds exclude them, so the subquery applies neither
+			where = append(where, `EXISTS (SELECT 1 FROM objects n
+				WHERE n.bucket_id = o.bucket_id AND n.name = o.name AND n.seq > o.seq AND n.is_latest = FALSE
+				LIMIT 1 OFFSET ?)`)
+			args = append(args, retain-1)
+		}
+		args = append(args, limit)
+
+		query := fmt.Sprintf(`SELECT o.name, o.version_id FROM objects o WHERE %s LIMIT ?`, strings.Join(where, " AND "))
+
+		versions, err := selectExpiringVersions(tx, query, args...)
+		if err != nil {
+			return err
+		}
+		return expireVersions(tx, bid, versions, &deleted, &orphans)
+	})
+	return
+}
+
+// ExpireDeleteMarkers removes up to limit delete markers in bucket whose key
+// matches the prefix, that were created at or before the cutoff, and that are
+// the last remaining version of their key. Returns the number removed and
+// performs no ownership checks.
+func (s *Store) ExpireDeleteMarkers(bucket s3.BucketID, prefix string, before time.Time, limit int) (deleted int, orphans []objects.OrphanedFile, err error) {
+	err = s.transaction(func(tx *txn) error {
+		deleted = 0
+		orphans = nil
+
+		bid, err := existingBucketID(tx, bucket)
+		if err != nil {
+			return err
+		}
+
+		where := []string{
+			"o.bucket_id = ?",
+			"o.is_latest = TRUE",
+			"o.is_delete_marker = TRUE",
+			"o.updated_at <= ?",
+			// an expired object delete marker is one with no other version left
+			`NOT EXISTS (SELECT 1 FROM objects x
+				WHERE x.bucket_id = o.bucket_id AND x.name = o.name AND x.version_id != o.version_id)`,
+		}
+		args := []any{bid, sqlTime(before)}
+		if prefix != "" {
+			where = append(where, "o.name >= ? AND o.name < ?")
+			args = append(args, prefix, prefix+"\xFF")
+		}
+		args = append(args, limit)
+
+		query := fmt.Sprintf(`SELECT o.name, o.version_id FROM objects o WHERE %s LIMIT ?`, strings.Join(where, " AND "))
+		versions, err := selectExpiringVersions(tx, query, args...)
+		if err != nil {
+			return err
+		}
+		return expireVersions(tx, bid, versions, &deleted, &orphans)
+	})
+	return
+}
+
+// selectExpiringVersions runs a query selecting a name and version_id pair per row.
+func selectExpiringVersions(tx *txn, query string, args ...any) ([]expiringVersion, error) {
+	rows, err := tx.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var versions []expiringVersion
+	for rows.Next() {
+		var v expiringVersion
+		if err := rows.Scan(&v.name, &v.version); err != nil {
+			return nil, err
+		}
+		versions = append(versions, v)
+	}
+	return versions, rows.Err()
+}
+
+// expireVersions deletes each version, orphaning its backing data, and reports
+// how many were removed. A version that vanished concurrently is skipped.
+func expireVersions(tx *txn, bid int64, versions []expiringVersion, deleted *int, orphans *[]objects.OrphanedFile) error {
+	for _, v := range versions {
+		row, found, err := deleteObject(tx, bid, v.name, v.version, false)
+		if err != nil {
+			return fmt.Errorf("failed to delete version: %w", err)
+		} else if !found {
+			continue
+		}
+		orphan, err := orphanDeleted(tx, row)
+		if err != nil {
+			return fmt.Errorf("failed to orphan deleted version: %w", err)
+		}
+		if orphan.Filename != "" {
+			*orphans = append(*orphans, orphan)
+		}
+		*deleted++
+	}
+	return nil
 }

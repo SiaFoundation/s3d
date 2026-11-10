@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
+	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.sia.tech/core/types"
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
@@ -585,7 +586,8 @@ func normalizeSchemaSQL(stmt string) string {
 		b.WriteString(line)
 		b.WriteString(" ")
 	}
-	return strings.Join(strings.Fields(strings.ReplaceAll(b.String(), `"`, "")), " ")
+	s := strings.Join(strings.Fields(strings.ReplaceAll(b.String(), `"`, "")), " ")
+	return strings.NewReplacer(" ,", ",", " )", ")").Replace(s)
 }
 
 // TestMigrationKeepsCustomIndexerURL checks the backfill only fills a missing
@@ -799,11 +801,56 @@ func TestMigrationTagging(t *testing.T) {
 	}
 }
 
+// TestMigrationNoncurrentTimestamp seeds versions at the schema version before
+// noncurrent_at and verifies the migration stamps each noncurrent version with
+// its successor's write time.
+func TestMigrationNoncurrentTimestamp(t *testing.T) {
+	log := zaptest.NewLogger(t)
+	fp := filepath.Join(t.TempDir(), "s3d.sqlite3")
+
+	const noncurrentAtVersion = 19
+	store := initDBVersion(t, fp, noncurrentAtVersion-1, log)
+	if _, err := store.db.Exec(`
+		INSERT INTO objects (bucket_id, name, version_id, seq, is_latest, content_md5, metadata, size, updated_at, filename) VALUES
+			(1, 'versioned', 'v1', 10, FALSE, x'00', '{}', 5, 100, 'v1.dat'),
+			(1, 'versioned', 'v2', 11, FALSE, x'00', '{}', 5, 200, 'v2.dat'),
+			(1, 'versioned', 'v3', 12, TRUE, x'00', '{}', 5, 300, 'v3.dat')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	migrated, err := OpenDatabase(fp, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer migrated.Close()
+
+	stamp := func(version string) sql.NullInt64 {
+		t.Helper()
+		var at sql.NullInt64
+		if err := migrated.db.QueryRow(`SELECT noncurrent_at FROM objects WHERE name = 'versioned' AND version_id = ?`, version).Scan(&at); err != nil {
+			t.Fatal(err)
+		}
+		return at
+	}
+	if at := stamp("v1"); !at.Valid || at.Int64 != 200 {
+		t.Fatalf("expected v1 stamped at its successor's write, got %v", at)
+	} else if at := stamp("v2"); !at.Valid || at.Int64 != 300 {
+		t.Fatalf("expected v2 stamped at its successor's write, got %v", at)
+	} else if at := stamp("v3"); at.Valid {
+		t.Fatalf("expected the current version unstamped, got %v", at)
+	}
+}
+
+// TestMigrationMultipartUploadTags checks that tags given when creating a
+// multipart upload carry over to the completed object after the migration.
 func TestMigrationMultipartUploadTags(t *testing.T) {
 	log := zaptest.NewLogger(t)
 	fp := filepath.Join(t.TempDir(), "s3d.sqlite3")
 
-	const multipartTagsVersion = 17
+	const multipartTagsVersion = 20
 	store := initDBVersion(t, fp, multipartTagsVersion-1, log)
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
@@ -817,17 +864,19 @@ func TestMigrationMultipartUploadTags(t *testing.T) {
 
 	uploadID := s3.NewUploadID()
 	tags := s3.TagSet{{Key: "project", Value: "one"}}
-	if err := migrated.CreateMultipartUpload(1, "obj", uploadID, nil, tags, nil); err != nil {
+	if err := migrated.CreateMultipartUpload(1, "obj", uploadID, nil, tags, nil, objects.MultipartChecksum{}); err != nil {
+		t.Fatal(err)
+	} else if _, _, err := migrated.AddMultipartPart(1, "obj", uploadID, "part1", 1, frand.Entropy128(), 10, nil); err != nil {
 		t.Fatal(err)
 	}
-	var got s3.TagSet
-	err = migrated.transaction(func(tx *txn) (err error) {
-		got, err = queryTags(tx, `SELECT tag_key, tag_value FROM multipart_upload_tags WHERE upload_id = $1 ORDER BY position`, sqlUploadID(uploadID))
-		return
-	})
+	_, parts, err := migrated.MultipartParts(1, "obj", uploadID)
 	if err != nil {
 		t.Fatal(err)
-	} else if !reflect.DeepEqual(got, tags) {
-		t.Fatalf("expected tags %v, got %v", tags, got)
+	} else if _, _, _, err := migrated.CompleteMultipartUpload(1, "obj", uploadID, parts, nil, s3.ObjectPreconditions{}); err != nil {
+		t.Fatal(err)
+	} else if tagging, err := migrated.GetObjectTagging(1, "obj", s3.NoVersion()); err != nil {
+		t.Fatal(err)
+	} else if !reflect.DeepEqual(tagging.Tags, tags) {
+		t.Fatalf("expected tags %v, got %v", tags, tagging.Tags)
 	}
 }

@@ -107,13 +107,29 @@ func (s *Sia) applyLifecycleRules(ctx context.Context, now time.Time) {
 				continue
 			}
 			prefix := rule.EffectivePrefix()
+			sizeGreaterThan, sizeLessThan := rule.EffectiveSizeRange()
+			tags := rule.EffectiveTags()
 
 			if rule.AbortIncompleteMultipartUpload != nil {
 				s.abortIncompleteUploads(ctx, bc, prefix, rule.AbortIncompleteMultipartUpload.AbortCutoff(now, s.lifecycleDayDuration))
 			}
-			if cutoff, ok := rule.Expiration.ExpiryCutoff(now, s.lifecycleDayDuration); ok {
-				sizeGreaterThan, sizeLessThan := rule.EffectiveSizeRange()
-				s.expireObjects(ctx, bc, prefix, sizeGreaterThan, sizeLessThan, rule.EffectiveTags(), cutoff)
+			cutoff, expires := rule.Expiration.ExpiryCutoff(now, s.lifecycleDayDuration)
+			if expires {
+				s.expireObjects(ctx, bc, prefix, sizeGreaterThan, sizeLessThan, tags, cutoff)
+			}
+			if e := rule.NoncurrentVersionExpiration; e != nil {
+				s.expireNoncurrentVersions(ctx, bc, prefix, sizeGreaterThan, sizeLessThan, tags, e.Retain(), e.NoncurrentCutoff(now, s.lifecycleDayDuration))
+			}
+			// S3 also reaps expired delete markers for a Days or Date
+			// expiration, without being asked. A marker holds no data, so the
+			// rule's object size bounds never apply to it, and it carries no
+			// tags, so a rule with a tag filter never matches it.
+			if len(tags) == 0 {
+				if rule.Expiration.ExpiresDeleteMarkers() {
+					s.expireDeleteMarkers(ctx, bc, prefix, now)
+				} else if expires {
+					s.expireDeleteMarkers(ctx, bc, prefix, cutoff)
+				}
 			}
 		}
 	}
@@ -167,6 +183,60 @@ func (s *Sia) expireObjects(ctx context.Context, bc BucketLifecycleConfiguration
 	}
 	if expired > 0 {
 		s.logger.Info("expired objects via lifecycle rule",
+			zap.String("bucket", bc.Bucket), zap.String("prefix", prefix), zap.Int("count", expired))
+	}
+}
+
+// expireNoncurrentVersions deletes noncurrent versions matching the prefix,
+// size bounds and tags in the given bucket that became noncurrent at or before the
+// cutoff and sit behind at least retain newer noncurrent versions.
+func (s *Sia) expireNoncurrentVersions(ctx context.Context, bc BucketLifecycleConfiguration, prefix string, sizeGreaterThan, sizeLessThan *int64, tags s3.TagSet, retain int, before time.Time) {
+	// batchSize bounds how many versions are expired per store transaction.
+	const batchSize = 100
+	var expired int
+	for ctx.Err() == nil {
+		deleted, orphans, err := s.store.ExpireNoncurrentVersions(bc.BucketID, prefix, sizeGreaterThan, sizeLessThan, tags, retain, before, batchSize)
+		if err != nil {
+			s.logger.Error("failed to expire noncurrent versions", zap.String("bucket", bc.Bucket), zap.Error(err))
+			return
+		}
+		for _, o := range orphans {
+			s.cleanupOrphan(filepath.Join(s.uploadDir(), o.Filename), o.Size)
+		}
+		expired += deleted
+		if deleted < batchSize {
+			break
+		}
+	}
+	if expired > 0 {
+		s.logger.Info("expired noncurrent versions via lifecycle rule",
+			zap.String("bucket", bc.Bucket), zap.String("prefix", prefix), zap.Int("count", expired))
+	}
+}
+
+// expireDeleteMarkers removes delete markers matching the prefix in the given
+// bucket that were created at or before the cutoff and are the last remaining
+// version of their key.
+func (s *Sia) expireDeleteMarkers(ctx context.Context, bc BucketLifecycleConfiguration, prefix string, before time.Time) {
+	// batchSize bounds how many markers are removed per store transaction.
+	const batchSize = 100
+	var expired int
+	for ctx.Err() == nil {
+		deleted, orphans, err := s.store.ExpireDeleteMarkers(bc.BucketID, prefix, before, batchSize)
+		if err != nil {
+			s.logger.Error("failed to expire delete markers", zap.String("bucket", bc.Bucket), zap.Error(err))
+			return
+		}
+		for _, o := range orphans {
+			s.cleanupOrphan(filepath.Join(s.uploadDir(), o.Filename), o.Size)
+		}
+		expired += deleted
+		if deleted < batchSize {
+			break
+		}
+	}
+	if expired > 0 {
+		s.logger.Info("expired delete markers via lifecycle rule",
 			zap.String("bucket", bc.Bucket), zap.String("prefix", prefix), zap.Int("count", expired))
 	}
 }

@@ -491,7 +491,7 @@ func TestBucketPolicyGrantsAreIndependent(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := s3Tester.PutBucketPolicy(t.Context(), bucket, statementPolicy(grant.action, grant.resource)); err != nil {
+			if err := s3Tester.PutBucketPolicy(t.Context(), bucket, statementPolicy(grant.resource, grant.action)); err != nil {
 				t.Fatal(err)
 			}
 
@@ -536,10 +536,10 @@ func TestBucketPolicyGrantsAreIndependent(t *testing.T) {
 	}
 }
 
-// statementPolicy grants action on resource to everyone.
-func statementPolicy(action, resource string) string {
+// statementPolicy grants actions on resource to everyone.
+func statementPolicy(resource string, actions ...string) string {
 	return fmt.Sprintf(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*",
-		"Action":"%s","Resource":"arn:aws:s3:::%s"}]}`, action, resource)
+		"Action":["%s"],"Resource":"arn:aws:s3:::%s"}]}`, strings.Join(actions, `","`), resource)
 }
 
 // TestBucketPolicyListingReportsBucketOwner checks that a listing attributes
@@ -1347,7 +1347,7 @@ func TestBucketPolicyObjectTagConditions(t *testing.T) {
 	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
 
 	// a PutObject grant does not grant stamping tags on the new object
-	policy = statementPolicy("s3:PutObject", bucket+"/*")
+	policy = statementPolicy(bucket+"/*", "s3:PutObject")
 	if err := s3Tester.PutBucketPolicy(t.Context(), bucket, policy); err != nil {
 		t.Fatal(err)
 	}
@@ -1368,15 +1368,15 @@ func TestBucketPolicyTaggingActions(t *testing.T) {
 		t.Fatal(err)
 	}
 	version := putTaggedObject(t, s3Tester, bucket, "key", "project=one")
-	setPolicy := func(action, resource string) {
+	setPolicy := func(resource string, actions ...string) {
 		t.Helper()
-		if err := s3Tester.PutBucketPolicy(t.Context(), bucket, statementPolicy(action, resource)); err != nil {
+		if err := s3Tester.PutBucketPolicy(t.Context(), bucket, statementPolicy(resource, actions...)); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	// GetObject alone does not disclose the tag count
-	setPolicy("s3:GetObject", bucket+"/*")
+	setPolicy(bucket+"/*", "s3:GetObject")
 	resp, err := other.Client().GetObject(t.Context(), &service.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String("key")})
 	if err != nil {
 		t.Fatal(err)
@@ -1387,7 +1387,7 @@ func TestBucketPolicyTaggingActions(t *testing.T) {
 	}
 
 	// the version action grants reading an explicit version only
-	setPolicy("s3:GetObjectVersionTagging", bucket+"/*")
+	setPolicy(bucket+"/*", "s3:GetObjectVersionTagging")
 	tagging, err := other.GetObjectTagging(t.Context(), bucket, "key", version.VersionId)
 	if err != nil {
 		t.Fatal(err)
@@ -1397,33 +1397,30 @@ func TestBucketPolicyTaggingActions(t *testing.T) {
 	_, err = other.GetObjectTagging(t.Context(), bucket, "key", nil)
 	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
 
-	// a copy that keeps the source's tags needs s3:PutObjectTagging, but one
-	// that replaces them with an empty set does not
-	policy := fmt.Sprintf(`{
-  "Version": "2012-10-17",
-  "Statement": [
-    {"Effect": "Allow", "Principal": "*", "Action": ["s3:GetObject", "s3:PutObject"], "Resource": "arn:aws:s3:::%s/*"}
-  ]
-}`, bucket)
-	if err := s3Tester.PutBucketPolicy(t.Context(), bucket, policy); err != nil {
+	// a copy that keeps the source's tag set needs s3:GetObjectTagging on the
+	// source and s3:PutObjectTagging on the copy, but one that replaces it with
+	// an empty tag set needs neither
+	copyObject := func(directive types.TaggingDirective) error {
+		_, err := other.Client().CopyObject(t.Context(), &service.CopyObjectInput{Bucket: aws.String(bucket), Key: aws.String("copy"), CopySource: aws.String(bucket + "/key"), TaggingDirective: directive})
+		return err
+	}
+	setPolicy(bucket+"/*", "s3:GetObject", "s3:PutObject", "s3:GetObjectTagging")
+	err = copyObject(types.TaggingDirectiveCopy)
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+	setPolicy(bucket+"/*", "s3:GetObject", "s3:PutObject", "s3:PutObjectTagging")
+	err = copyObject(types.TaggingDirectiveCopy)
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+	if err := copyObject(types.TaggingDirectiveReplace); err != nil {
 		t.Fatal(err)
 	}
-	_, err = other.Client().CopyObject(t.Context(), &service.CopyObjectInput{Bucket: aws.String(bucket), Key: aws.String("copy"), CopySource: aws.String(bucket + "/key")})
-	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
-	if _, err := other.Client().CopyObject(t.Context(), &service.CopyObjectInput{Bucket: aws.String(bucket), Key: aws.String("copy"), CopySource: aws.String(bucket + "/key"), TaggingDirective: types.TaggingDirectiveReplace}); err != nil {
+	setPolicy(bucket+"/*", "s3:GetObject", "s3:PutObject", "s3:GetObjectTagging", "s3:PutObjectTagging")
+	if err := copyObject(types.TaggingDirectiveCopy); err != nil {
 		t.Fatal(err)
 	}
 
 	// s3:PutBucketTagging grants deleting the tags as well
-	policy = fmt.Sprintf(`{
-  "Version": "2012-10-17",
-  "Statement": [
-    {"Effect": "Allow", "Principal": "*", "Action": ["s3:GetBucketTagging", "s3:PutBucketTagging"], "Resource": "arn:aws:s3:::%s"}
-  ]
-}`, bucket)
-	if err := s3Tester.PutBucketPolicy(t.Context(), bucket, policy); err != nil {
-		t.Fatal(err)
-	} else if err := other.PutBucketTagging(t.Context(), bucket, []types.Tag{{Key: aws.String("owner"), Value: aws.String("other")}}); err != nil {
+	setPolicy(bucket, "s3:GetBucketTagging", "s3:PutBucketTagging")
+	if err := other.PutBucketTagging(t.Context(), bucket, []types.Tag{{Key: aws.String("owner"), Value: aws.String("other")}}); err != nil {
 		t.Fatal(err)
 	} else if _, err := other.GetBucketTagging(t.Context(), bucket); err != nil {
 		t.Fatal(err)
@@ -1593,6 +1590,7 @@ func TestBucketPolicyWriteTagConditions(t *testing.T) {
 	}
 	putTaggedObject(t, s3Tester, bucket, "public", "classification=public")
 	putTaggedObject(t, s3Tester, bucket, "secret", "classification=secret")
+	// s3:GetObjectTagging lets the COPY directive copy the source's tag set
 	policy := fmt.Sprintf(`{
   "Version": "2012-10-17",
   "Statement": [
@@ -1606,7 +1604,7 @@ func TestBucketPolicyWriteTagConditions(t *testing.T) {
     {
       "Effect": "Allow",
       "Principal": %q,
-      "Action": ["s3:GetObject", "s3:PutObjectTagging"],
+      "Action": ["s3:GetObject", "s3:GetObjectTagging", "s3:PutObjectTagging"],
       "Resource": "arn:aws:s3:::%s/*"
     },
     {

@@ -63,21 +63,22 @@ s3d config
 For more information on configuration options, see the
 [Configuration](#configuration) section below.
 
-Next, create a user and generate an access key pair:
+Once logged in, start `s3d` with
+
+```sh
+s3d
+```
+
+Then create a user and generate an access key pair:
 
 ```sh
 s3d users create <username>
 s3d keys create [--access-key <id> --secret-key <secret>] <username>
 ```
 
-The access key pair is auto-generated when both flags are omitted. Save the
-printed credentials. The secret key is only shown once.
-
-Once logged in and credentials are set up, start `s3d` with
-
-```sh
-s3d
-```
+The commands talk to the admin API of the running instance. The access key pair
+is auto-generated when both flags are omitted. Save the printed credentials. The
+secret key is only shown once.
 
 ## Docker
 
@@ -111,21 +112,21 @@ volumes:
 docker compose run --rm s3d login
 ```
 
-### 3. Create a user and access key
-
-```sh
-docker compose run --rm s3d users create <username>
-docker compose run --rm s3d keys create [--access-key <id> --secret-key <secret>] <username>
-```
-
-The access key pair is auto-generated when both flags are omitted. Save the
-printed credentials. The secret key is only shown once.
-
-### 4. Start `s3d`
+### 3. Start `s3d`
 
 ```sh
 docker compose up -d
 ```
+
+### 4. Create a user and access key
+
+```sh
+docker compose exec s3d s3d users create <username>
+docker compose exec s3d s3d keys create [--access-key <id> --secret-key <secret>] <username>
+```
+
+The access key pair is auto-generated when both flags are omitted. Save the
+printed credentials. The secret key is only shown once.
 
 ### Building the image
 
@@ -173,10 +174,10 @@ assembling objects from existing data without re-uploading.
 
 ## Admin API
 
-`s3d` serves an admin API on a separate HTTP address for monitoring. It is
-always enabled and defaults to `127.0.0.1:8001`. The admin password is set
-during `s3d config`, or via `adminAddress` and `adminPassword` in the config
-file:
+`s3d` serves an admin API on a separate HTTP address for monitoring and for
+managing users and access keys. It is always enabled and defaults to
+`127.0.0.1:8001`. The admin password is set during `s3d config`, or via
+`adminAddress` and `adminPassword` in the config file:
 
 ```yaml
 adminAddress: 127.0.0.1:8001 # must differ from apiAddress
@@ -184,7 +185,9 @@ adminPassword: change-me # required
 ```
 
 Requests are authenticated via HTTP Basic authentication using the configured
-password; the username is ignored.
+password; the username is ignored. The API is served over plain HTTP and the
+password can issue access keys for every user, so keep the address on loopback
+or put a reverse proxy that terminates TLS in front of it.
 
 The admin API is documented in [`openapi.yml`](openapi.yml) and rendered at
 [api.sia.tech/s3d](https://api.sia.tech/s3d). It serves upload pipeline metrics
@@ -192,6 +195,15 @@ in the Prometheus text exposition format.
 
 ```sh
 curl -u ":change-me" http://127.0.0.1:8001/prometheus
+```
+
+Users and access keys are managed through the API. The `users` and `keys`
+commands call the same endpoints, so they need a running instance. A secret key
+is only returned when it is created.
+
+```sh
+curl -u ":change-me" -X POST http://127.0.0.1:8001/users -d '{"name":"alice"}'
+curl -u ":change-me" -X POST http://127.0.0.1:8001/keys -d '{"userName":"alice"}'
 ```
 
 ## Snapshots
@@ -225,6 +237,23 @@ s3d snapshots list
 `list` reads the running instance's own records, newest first. Its first line
 reports whether the instance has finished syncing with the Sia network. Until it
 has, the list may be incomplete.
+
+### Scheduling
+
+`s3d` can take snapshots on a cron schedule and keep a number of daily, weekly
+and monthly ones.
+
+```sh
+s3d snapshots schedule set --keep-daily 7 --keep-weekly 4 --keep-monthly 12 "0 3 * * *"
+s3d snapshots schedule
+s3d snapshots schedule disable
+```
+
+The expression is standard cron or a descriptor like `@daily`, in the instance's
+local time zone. Each count keeps the newest scheduled snapshot of that many
+days, weeks or months and the sets are combined. At least one retention count
+must be positive. Retention never removes a snapshot created with
+`s3d snapshots create`.
 
 ### Deleting
 
@@ -301,7 +330,22 @@ AWS Signature V4 exclusively. SigV4A is not implemented. Supported
 (`s3.example.com/bucket/object`) and virtual-hosted-style
 (`bucket.s3.example.com/object`) addressing are supported.
 
-Bucket lifecycle configuration supports prefix-based `AbortIncompleteMultipartUpload` rules and current-object `Expiration` rules. Rules may also filter by object size with `ObjectSizeGreaterThan` and `ObjectSizeLessThan`, which exclude their own values, and a filter combining a non-empty prefix with size bounds must wrap them in `And`.
+Bucket lifecycle configuration supports `AbortIncompleteMultipartUpload` rules,
+`Expiration` of the current version, `NoncurrentVersionExpiration` of older
+versions, and `ExpiredObjectDeleteMarker` for a delete marker left as the last
+version of its key. A `Days` or `Date` expiration also removes such a marker
+once the marker itself is old enough, as S3 does.
+
+`NoncurrentVersionExpiration` honors `NoncurrentDays` and
+`NewerNoncurrentVersions`. The latter retains between 1 and 100 versions and
+requires a `Filter`, and when both are given a version expires only once it is
+both old enough and behind enough newer versions. Noncurrent age is counted from
+the moment a version was superseded, which is when its successor was written.
+
+Rules may filter by prefix and by object size with `ObjectSizeGreaterThan` and
+`ObjectSizeLessThan`, which exclude their own values. A filter combining a
+non-empty prefix with size bounds must wrap them in `And`. Tag filters and
+storage class transitions are rejected.
 
 Object Lock is supported in both `GOVERNANCE` and `COMPLIANCE` mode, with
 retention periods, legal holds and bucket default retention rules. Creating a
@@ -382,8 +426,22 @@ header against the body and echo the checksum back on the response. A trailing
 checksum sent with `PutObject` is validated and stored the same way.
 `HeadObject` and `GetObject` return the stored checksum and
 `x-amz-checksum-type` only when the request carries `x-amz-checksum-mode` set
-to `ENABLED`, and a ranged response never carries one. An object assembled by
-`CompleteMultipartUpload` has no checksum of its own yet.
+to `ENABLED`, and a ranged response never carries one. A read of a single part
+through `partNumber` returns that part's checksum rather than the object's.
+
+`CreateMultipartUpload` accepts an `x-amz-checksum-algorithm` of `CRC32`,
+`CRC32C`, `CRC64NVME`, `SHA1` or `SHA256` and an `x-amz-checksum-type` of
+`COMPOSITE` or `FULL_OBJECT`. `FULL_OBJECT` is allowed only for the three CRC
+algorithms. When the type is omitted, `CRC64NVME` defaults to `FULL_OBJECT` and
+the others to `COMPOSITE`. Every part is hashed with the upload's algorithm
+whether or not the client sends a value of its own, and a part checksum of
+another algorithm is refused. A `CompleteMultipartUpload` request may omit the
+part checksum elements for either type and any element it carries must match the
+stored part digest.
+
+`CopyObject` keeps the source checksum and its type unchanged, where AWS would
+recompute a full object value, because s3d copies metadata without reading the
+data.
 
 ### Operations
 
@@ -406,7 +464,7 @@ to `ENABLED`, and a ranged response never carries one. An object assembled by
 | DeleteBucketPolicy | ✓ | |
 | GetBucketPolicyStatus | ✓ | |
 | GetBucketLifecycle | ✓ | |
-| PutBucketLifecycle | ◐ | Prefix, tag and object-size filters, with `AbortIncompleteMultipartUpload` and current-object `Expiration` rules; tag and size filters cannot be used to abort uploads |
+| PutBucketLifecycle | ◐ | Storage class transitions are rejected, and tag and object-size filters cannot be used to abort uploads |
 | DeleteBucketLifecycle | ✓ | |
 | GetBucketCors | ✗ | |
 | PutBucketCors | ✗ | |
@@ -478,7 +536,7 @@ generate one.
 | Port | Protocol | Description |
 |------|----------|-------------|
 | 8000 | TCP | S3 API |
-| 8001 | TCP | Admin API (disabled by default, see [Admin API](#admin-api)) |
+| 8001 | TCP | Admin API, see [Admin API](#admin-api) |
 
 ### Default Paths
 
@@ -538,6 +596,6 @@ s3:
     - s3.example.com
 ```
 
-Access keys are managed via the `s3d users` and `s3d keys` CLI commands and
-stored in the SQLite database. See [Getting Started](#getting-started) for
-details.
+Access keys are managed via the `s3d users` and `s3d keys` CLI commands or
+the [Admin API](#admin-api) and stored in the SQLite database. See
+[Getting Started](#getting-started) for details.
