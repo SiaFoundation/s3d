@@ -107,3 +107,76 @@ func TestAuthorizeCurrentPolicy(t *testing.T) {
 		}
 	}
 }
+
+// backendCalls counts the backend calls that serve a request.
+type backendCalls struct {
+	getObjectTagging    int
+	getObject           int
+	deleteObjectTagging int
+}
+
+// countingBackend is [authorizationBackend] serving one object, "key", tagged
+// project=one, and counting the calls that serve each request.
+type countingBackend struct {
+	authorizationBackend
+	calls backendCalls
+}
+
+func (b *countingBackend) GetObjectTagging(context.Context, BucketID, string, VersionRequest) (ObjectTagging, error) {
+	b.calls.getObjectTagging++
+	return ObjectTagging{Tags: TagSet{{Key: "project", Value: "one"}}, Version: SpecificVersion("v1")}, nil
+}
+
+func (b *countingBackend) GetObject(context.Context, BucketID, string, VersionRequest, *ObjectRangeRequest, *int32) (*Object, error) {
+	b.calls.getObject++
+	return nil, s3errs.ErrNoSuchKey
+}
+
+func (b *countingBackend) DeleteObjectTagging(context.Context, BucketID, string, VersionRequest) (*ObjectTaggingResult, error) {
+	b.calls.deleteObjectTagging++
+	return &ObjectTaggingResult{}, nil
+}
+
+// TestAuthorizeExistingTags checks that the existing tags of the addressed
+// version are looked up before the check only when a statement naming the
+// action reads them, and that a read they deny is refused before the object is
+// retrieved.
+func TestAuthorizeExistingTags(t *testing.T) {
+	tests := []struct {
+		name     string
+		method   string
+		target   string
+		caller   *auth.Caller
+		err      error
+		want     backendCalls
+		document string
+	}{
+		// without a statement reading existing tags, the tagging delete does
+		// not look the version up first
+		{name: "unconditioned tagging delete", method: http.MethodDelete, target: "/bucket/key?tagging", caller: ownerCaller, want: backendCalls{deleteObjectTagging: 1}},
+		{name: "denied by existing tags", method: http.MethodGet, target: "/bucket/key", err: s3errs.ErrAccessDenied, want: backendCalls{getObjectTagging: 1}, document: `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Principal":"*","Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/*","Condition":{"StringEquals":{"s3:ExistingObjectTag/project":"two"}}}}`},
+		// a read no existing tags could allow is refused without a lookup
+		{name: "no existing tags could allow", method: http.MethodGet, target: "/bucket/key", err: s3errs.ErrAccessDenied, document: `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Principal":"*","Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/public/*","Condition":{"StringEquals":{"s3:ExistingObjectTag/project":"one"}}}}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			backend := &countingBackend{authorizationBackend: authorizationBackend{document: test.document}}
+			handler := &s3{backend: backend, logger: zaptest.NewLogger(t)}
+			req := httptest.NewRequest(test.method, test.target, nil)
+			op, err := handler.route(req, "bucket", "key")
+			if err != nil {
+				t.Fatal(err)
+			}
+			access, err := handler.authorize(req, test.caller, "bucket", "key", op)
+			if err == nil {
+				err = op.serve(httptest.NewRecorder(), req, access)
+			}
+			if !errors.Is(err, test.err) {
+				t.Fatalf("expected %v, got %v", test.err, err)
+			}
+			if backend.calls != test.want {
+				t.Fatalf("expected calls %+v, got %+v", test.want, backend.calls)
+			}
+		})
+	}
+}

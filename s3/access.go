@@ -55,8 +55,9 @@ type operation struct {
 	// read them.
 	bodyConditions bool
 	// existingTagConditions marks an action whose condition keys include the
-	// addressed version's tags, so its handler checks the action once it has
-	// looked the version up.
+	// existing tags of the addressed version, so its handler checks the
+	// action, against those tags when a statement naming the action reads
+	// them.
 	existingTagConditions bool
 	// headerTagConditions marks a request whose X-Amz-Tagging tags are
 	// condition keys of its action.
@@ -101,9 +102,10 @@ func (s *s3) authorize(r *http.Request, caller *auth.Caller, bucket, object stri
 		// addressed version supplies its keys
 		err = access.assertAnyAllowedInBucket(op.action)
 	case isObjectAction(op.action) && access.usesExistingTags(op.action):
-		// serveObject checks the read against the tags of the version it
-		// looks up
-		err = access.assertAnyAllowedInBucket(op.action)
+		// serveObject checks the read against the existing tags of the
+		// version it looks up, so only a read no existing tags could allow
+		// is denied here
+		err = access.assertObjectCouldBeAllowed(op.action, object)
 	case isObjectAction(op.action):
 		err = access.assertObjectAllowed(op.action, object)
 	default:
@@ -236,6 +238,19 @@ func (a *bucketAccess) assertObjectContextAllowed(action, object string, extra p
 		return err
 	}
 	return a.check(requestContext.merge(extra), action, objectARN(a.bucket, object))
+}
+
+// assertObjectCouldBeAllowed is [bucketAccess.assertObjectAllowed] for an
+// action whose existing tag conditions wait for the handler to look the version
+// up. It denies up front a request that no existing tags could allow.
+func (a *bucketAccess) assertObjectCouldBeAllowed(action, object string) error {
+	requestContext, err := a.actionPolicyContext(action)
+	if err != nil {
+		return err
+	} else if !a.policy.couldAllow(a.caller, requestContext, a.isOwner, action, objectARN(a.bucket, object)) {
+		return s3errs.ErrAccessDenied
+	}
+	return nil
 }
 
 // assertAnyAllowedInBucket denies a request up front when no statement could

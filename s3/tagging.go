@@ -330,7 +330,8 @@ func (s *s3) deleteBucketTagging(w http.ResponseWriter, r *http.Request, access 
 }
 
 // routeObjectTagging routes the ?tagging object subresource. Each action is
-// checked by its handler against the existing tags of the addressed version.
+// checked by its handler, against the existing tags of the addressed version
+// when a statement naming the action reads them.
 func (s *s3) routeObjectTagging(r *http.Request, object string, version VersionRequest) (operation, error) {
 	var action string
 	var handler func(http.ResponseWriter, *http.Request, *bucketAccess, string, string, VersionRequest) error
@@ -357,17 +358,19 @@ func (s *s3) putObjectTagging(w http.ResponseWriter, r *http.Request, access *bu
 
 	// an invalid body is reported only once the action is allowed
 	tags, bodyErr := readTagging(r, objectTagLimits)
-	tagging, err := s.authorizeObjectTagging(r, access, action, object, version, requestTagPolicyContext(tags))
+	target, err := s.authorizeTaggingUpdate(r, access, action, object, version, requestTagPolicyContext(tags))
 	if err != nil {
 		return err
 	} else if bodyErr != nil {
 		return bodyErr
-	} else if _, err := s.backend.PutObjectTagging(r.Context(), access.bucketID, object, tagging.Version, tags); err != nil {
+	}
+	result, err := s.backend.PutObjectTagging(r.Context(), access.bucketID, object, target, tags)
+	if err != nil {
 		// the authorized version may have been deleted since
 		return access.hideMissing(err, object)
 	}
-	if tagging.VersionID != "" {
-		w.Header().Set("x-amz-version-id", tagging.VersionID)
+	if result.VersionID != "" {
+		w.Header().Set("x-amz-version-id", result.VersionID)
 	}
 	return nil
 }
@@ -397,23 +400,25 @@ func (s *s3) getObjectTagging(w http.ResponseWriter, r *http.Request, access *bu
 func (s *s3) deleteObjectTagging(w http.ResponseWriter, r *http.Request, access *bucketAccess, action, object string, version VersionRequest) error {
 	s.logger.Debug("deleting object tagging", zap.String("bucket", access.bucket), zap.String("object", object))
 
-	tagging, err := s.authorizeObjectTagging(r, access, action, object, version, nil)
+	target, err := s.authorizeTaggingUpdate(r, access, action, object, version, nil)
 	if err != nil {
 		return err
-	} else if _, err := s.backend.DeleteObjectTagging(r.Context(), access.bucketID, object, tagging.Version); err != nil {
+	}
+	result, err := s.backend.DeleteObjectTagging(r.Context(), access.bucketID, object, target)
+	if err != nil {
 		// the authorized version may have been deleted since
 		return access.hideMissing(err, object)
 	}
-	if tagging.VersionID != "" {
-		w.Header().Set("x-amz-version-id", tagging.VersionID)
+	if result.VersionID != "" {
+		w.Header().Set("x-amz-version-id", result.VersionID)
 	}
 	w.WriteHeader(http.StatusNoContent)
 	return nil
 }
 
 // authorizeObjectTagging looks up the addressed version of object and checks
-// that the caller may perform action on it, given its existing tags and the
-// extra context keys.
+// that the caller may perform action on it, given the extra context keys and,
+// when a statement naming action reads them, its existing tags.
 func (s *s3) authorizeObjectTagging(r *http.Request, access *bucketAccess, action, object string, version VersionRequest, extra policyContext) (ObjectTagging, error) {
 	tagging, err := s.authorizeVersion(r, access, action, object, version, extra)
 	if isMissingOrDeleteMarker(err) {
@@ -422,9 +427,30 @@ func (s *s3) authorizeObjectTagging(r *http.Request, access *bucketAccess, actio
 	return tagging, err
 }
 
+// authorizeTaggingUpdate checks that the caller may perform action, which
+// replaces or removes the tags of the addressed version of object, and returns
+// the version the update must address. Only when a statement naming action
+// reads the existing tags does it look the version up, and then it returns the
+// version addressed explicitly.
+func (s *s3) authorizeTaggingUpdate(r *http.Request, access *bucketAccess, action, object string, version VersionRequest, extra policyContext) (VersionRequest, error) {
+	if !access.usesExistingTags(action) {
+		return version, access.assertVersionAllowed(action, object, version, nil, extra)
+	}
+	tagging, err := s.authorizeObjectTagging(r, access, action, object, version, extra)
+	return tagging.Version, err
+}
+
 // authorizeVersion is [s3.authorizeObjectTagging] without hiding a missing
-// version, which it reports only once the caller is allowed the action.
+// version, which it reports only once the caller is allowed the action. When
+// no statement naming action reads the existing tags, the caller is checked
+// before the lookup.
 func (s *s3) authorizeVersion(r *http.Request, access *bucketAccess, action, object string, version VersionRequest, extra policyContext) (ObjectTagging, error) {
+	if !access.usesExistingTags(action) {
+		if err := access.assertVersionAllowed(action, object, version, nil, extra); err != nil {
+			return ObjectTagging{}, err
+		}
+		return s.backend.GetObjectTagging(r.Context(), access.bucketID, object, version)
+	}
 	tagging, err := s.backend.GetObjectTagging(r.Context(), access.bucketID, object, version)
 	if err != nil && !isMissingOrDeleteMarker(err) {
 		return ObjectTagging{}, err
@@ -505,17 +531,4 @@ func referencesExistingTags(value string) bool {
 		}
 	}
 	return false
-}
-
-// existingTags returns the existing tags of a version of object when the
-// policy conditions action on them. A missing version has none.
-func (s *s3) existingTags(r *http.Request, access *bucketAccess, action, object string, version VersionRequest) (TagSet, error) {
-	if !access.usesExistingTags(action) {
-		return nil, nil
-	}
-	tagging, err := s.backend.GetObjectTagging(r.Context(), access.bucketID, object, version)
-	if isMissingOrDeleteMarker(err) {
-		return nil, nil
-	}
-	return tagging.Tags, err
 }
