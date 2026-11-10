@@ -211,13 +211,17 @@ func TestGetAndHeadObject(t *testing.T) {
 	}
 	matched.Body.Close()
 
-	// if-modified-since with a time in the future should return 304
-	_, err = s3Tester.Client().GetObject(t.Context(), &service.GetObjectInput{
+	// if-modified-since with a time in the future is ignored, as RFC 9110
+	// requires and S3 does
+	future, err := s3Tester.Client().GetObject(t.Context(), &service.GetObjectInput{
 		Bucket:          aws.String(bucket),
 		Key:             aws.String(object),
 		IfModifiedSince: aws.Time(time.Now().Add(time.Hour)),
 	})
-	testutil.AssertS3StatusCode(t, s3errs.ErrNotModified, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	future.Body.Close()
 
 	// if-modified-since equal to last-modified should return 304
 	_, err = s3Tester.Client().GetObject(t.Context(), &service.GetObjectInput{
@@ -227,13 +231,14 @@ func TestGetAndHeadObject(t *testing.T) {
 	})
 	testutil.AssertS3StatusCode(t, s3errs.ErrNotModified, err)
 
-	// head with if-modified-since in the future should return 304
-	_, err = s3Tester.Client().HeadObject(t.Context(), &service.HeadObjectInput{
+	// head with if-modified-since in the future ignores the condition
+	if _, err = s3Tester.Client().HeadObject(t.Context(), &service.HeadObjectInput{
 		Bucket:          aws.String(bucket),
 		Key:             aws.String(object),
 		IfModifiedSince: aws.Time(time.Now().Add(time.Hour)),
-	})
-	testutil.AssertS3StatusCode(t, s3errs.ErrNotModified, err)
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// head with if-modified-since in the past should return 200
 	_, err = s3Tester.Client().HeadObject(t.Context(), &service.HeadObjectInput{
@@ -374,8 +379,8 @@ func TestGetAndHeadObjectPart(t *testing.T) {
 	obj, err := s3Tester.HeadObjectPart(t.Context(), bucket, regular, 1)
 	if err != nil {
 		t.Fatal(err)
-	} else if obj.PartsCount == nil || *obj.PartsCount != 1 {
-		t.Fatalf("expected parts count 1, got %v", obj.PartsCount)
+	} else if obj.PartsCount != nil {
+		t.Fatalf("expected no parts count for an object not uploaded in parts, got %v", *obj.PartsCount)
 	} else if obj.ContentMD5 != regularHash {
 		t.Fatalf("expected MD5 %x, got %x", regularHash, obj.ContentMD5)
 	} else if obj.Size != int64(len(regularData)) {
@@ -386,8 +391,8 @@ func TestGetAndHeadObjectPart(t *testing.T) {
 	obj, err = s3Tester.GetObjectPart(t.Context(), bucket, regular, 1)
 	if err != nil {
 		t.Fatal(err)
-	} else if obj.PartsCount == nil || *obj.PartsCount != 1 {
-		t.Fatalf("expected parts count 1, got %v", obj.PartsCount)
+	} else if obj.PartsCount != nil {
+		t.Fatalf("expected no parts count for an object not uploaded in parts, got %v", *obj.PartsCount)
 	}
 	content, err := io.ReadAll(obj.Body)
 	if err != nil {
@@ -1010,7 +1015,7 @@ func TestConditionalDeleteObject(t *testing.T) {
 		{IfMatch: aws.String(`"whatever"`)},
 		{}, // unconditionally, for comparison
 	} {
-		if _, err := s3Tester.ConditionalDeleteObject(t.Context(), bucket, "versioned", aws.String("does-not-exist"), c); err != nil {
+		if _, err := s3Tester.ConditionalDeleteObject(t.Context(), bucket, "versioned", aws.String(strings.Repeat("0", 64)), c); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1494,7 +1499,12 @@ func TestListObjects(t *testing.T) {
 					}
 				}
 				assertCommonPrefixesEqual(t, tc.commonPrefixes, resp.CommonPrefixes)
-				assertMarkersEqual(t, false, tc.nextMarker, resp.NextMarker)
+				// S3 only reports a V1 NextMarker for a delimited listing
+				nextMarker := tc.nextMarker
+				if tc.delimiter == nil {
+					nextMarker = nil
+				}
+				assertMarkersEqual(t, false, nextMarker, resp.NextMarker)
 			})
 
 			t.Run("ListObjectsV2", func(t *testing.T) {

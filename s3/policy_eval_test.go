@@ -25,6 +25,7 @@ func TestPolicyEvaluation(t *testing.T) {
 		{name: "implicit deny", statements: `{"Effect":"Allow","Principal":"other","Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/*"}`},
 		{name: "account root", caller: otherCaller, want: true, statements: `{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::other:root"},"Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/*"}`},
 		{name: "canonical ID", caller: otherCaller, want: true, statements: `{"Effect":"Allow","Principal":{"CanonicalUser":"other"},"Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/*"}`},
+		{name: "principal case insensitive", caller: otherCaller, want: true, statements: `{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::OTHER:root"},"Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/*"}`},
 		{name: "principal array", caller: otherCaller, want: true, statements: `{"Effect":"Allow","Principal":{"AWS":["owner","other"]},"Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/*"}`},
 		{name: "named principal excludes anonymous", statements: `{"Effect":"Allow","Principal":{"AWS":"other"},"Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/*"}`},
 		{name: "deny beats allow", object: "secret/file", statements: `{"Effect":"Allow","Principal":"*","Action":"s3:*","Resource":"*"},{"Effect":"Deny","Principal":"*","Action":"s3:Get*","Resource":"arn:aws:s3:::bucket/secret/*"}`},

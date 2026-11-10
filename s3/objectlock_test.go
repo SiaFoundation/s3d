@@ -31,7 +31,7 @@ func TestObjectLockConfigurationValidate(t *testing.T) {
 		{"unknown mode", retention(s3.DefaultRetention{Mode: "abc", Years: aws.Int(1)}), s3errs.ErrMalformedXML},
 		{"lowercase mode", retention(s3.DefaultRetention{Mode: "governance", Years: aws.Int(1)}), s3errs.ErrMalformedXML},
 		{"days and years", retention(s3.DefaultRetention{Mode: s3.ObjectLockModeGovernance, Days: aws.Int(1), Years: aws.Int(1)}), s3errs.ErrMalformedXML},
-		{"no period", retention(s3.DefaultRetention{Mode: s3.ObjectLockModeGovernance}), s3errs.ErrMalformedXML},
+		{"no period", retention(s3.DefaultRetention{Mode: s3.ObjectLockModeGovernance}), s3errs.ErrInvalidRequestDefaultRetention},
 		{"zero days", retention(s3.DefaultRetention{Mode: s3.ObjectLockModeGovernance, Days: aws.Int(0)}), s3errs.ErrInvalidRetentionPeriod},
 		{"negative years", retention(s3.DefaultRetention{Mode: s3.ObjectLockModeGovernance, Years: aws.Int(-1)}), s3errs.ErrInvalidRetentionPeriod},
 		{"max days", retention(s3.DefaultRetention{Mode: s3.ObjectLockModeGovernance, Days: aws.Int(36500)}), nil},

@@ -729,9 +729,9 @@ func TestRouteValidationOrder(t *testing.T) {
 	}
 }
 
-// TestSignedUploadWithoutPayloadHash checks that a signed request without the
-// X-Amz-Content-Sha256 header is verified against the empty payload it was
-// signed for, so its body can't be swapped.
+// TestSignedUploadWithoutPayloadHash checks that a request signed in the
+// Authorization header without the X-Amz-Content-Sha256 header is refused, as
+// S3 refuses it, so its body can't be swapped.
 func TestSignedUploadWithoutPayloadHash(t *testing.T) {
 	backend, _ := testutil.NewBackend(t)
 	if err := backend.CreateBucket(t.Context(), testutil.AccessKeyID, "bucket", s3.CreateBucketOptions{}); err != nil {

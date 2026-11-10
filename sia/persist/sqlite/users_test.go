@@ -32,6 +32,14 @@ func TestUsersCRUD(t *testing.T) {
 		t.Fatal("expected ErrUserAlreadyExists", err)
 	}
 
+	// names are unique regardless of case, and the reserved anonymous name
+	// is refused in any case
+	if err := store.CreateUser("ALICE"); !errors.Is(err, s3.ErrUserAlreadyExists) {
+		t.Fatal("expected ErrUserAlreadyExists", err)
+	} else if err := store.CreateUser("Anonymous"); !errors.Is(err, s3.ErrReservedUserName) {
+		t.Fatal("expected ErrReservedUserName", err)
+	}
+
 	// list returns both, sorted by name
 	users, err = store.ListUsers()
 	if err != nil {
@@ -133,6 +141,19 @@ func TestAccessKeysCRUD(t *testing.T) {
 		t.Fatal("expected error for unknown key")
 	}
 
+	// a user is found regardless of the case it is named in, and keeps the
+	// case it was created with
+	upper := "ALICE"
+	if err := store.CreateAccessKey("Alice", "AKID5", "secret5"); err != nil {
+		t.Fatal(err)
+	} else if keys, err := store.ListAccessKeys(&upper); err != nil {
+		t.Fatal(err)
+	} else if len(keys) != 2 || keys[1].AccessKeyID != "AKID5" || keys[1].UserName != "alice" {
+		t.Fatal("unexpected keys", keys)
+	} else if err := store.DeleteAccessKey("AKID5"); err != nil {
+		t.Fatal(err)
+	}
+
 	// alice now has one key
 	keys, err = store.ListAccessKeys(&alice)
 	if err != nil {
@@ -142,7 +163,7 @@ func TestAccessKeysCRUD(t *testing.T) {
 	}
 
 	// deleting a user cascades keys
-	if err := store.DeleteUser("bob"); err != nil {
+	if err := store.DeleteUser("BOB"); err != nil {
 		t.Fatal(err)
 	}
 

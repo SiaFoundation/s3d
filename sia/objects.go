@@ -313,6 +313,11 @@ func (s *Sia) DeleteObjects(ctx context.Context, bucket s3.BucketID, objects []s
 	return &result, nil
 }
 
+// ValidVersionID implements [s3.VersionIDValidator].
+func (s *Sia) ValidVersionID(id string) bool {
+	return s.store.ValidVersionID(id)
+}
+
 // GetObject retrieves the object with the given key from the specified
 // bucket. The provided range is either nil if no range was requested, or
 // contains the requested byte range. version selects a specific version, or

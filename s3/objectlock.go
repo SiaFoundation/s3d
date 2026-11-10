@@ -87,10 +87,10 @@ func requestObjectLock(h http.Header) (*ObjectLockState, error) {
 
 	var state ObjectLockState
 	if (mode == "") != (date == "") {
-		return nil, fmt.Errorf("a retention needs both a mode and a retain until date: %w", s3errs.ErrInvalidRequest)
+		return nil, fmt.Errorf("a retention needs both a mode and a retain until date: %w", s3errs.ErrInvalidArgumentLockHeaders)
 	} else if mode != "" {
 		if mode != ObjectLockModeGovernance && mode != ObjectLockModeCompliance {
-			return nil, fmt.Errorf("unknown retention mode %q: %w", mode, s3errs.ErrInvalidRequest)
+			return nil, fmt.Errorf("unknown retention mode %q: %w", mode, s3errs.ErrInvalidArgumentLockMode)
 		}
 		retain, err := parseRetainUntilDate(date)
 		if err != nil {
@@ -101,7 +101,7 @@ func requestObjectLock(h http.Header) (*ObjectLockState, error) {
 
 	if hold != "" {
 		if hold != LegalHoldOn && hold != LegalHoldOff {
-			return nil, fmt.Errorf("unknown legal hold status %q: %w", hold, s3errs.ErrInvalidRequest)
+			return nil, fmt.Errorf("unknown legal hold status %q: %w", hold, s3errs.ErrInvalidArgumentLegalHold)
 		}
 		state.LegalHold = hold
 	}
@@ -132,7 +132,7 @@ func parseRetainUntilDate(s string) (time.Time, error) {
 	if err != nil {
 		return time.Time{}, fmt.Errorf("invalid retain until date %q: %w", s, s3errs.ErrInvalidRequest)
 	} else if !t.After(time.Now()) {
-		return time.Time{}, fmt.Errorf("retain until date %q is not in the future: %w", s, s3errs.ErrInvalidRequest)
+		return time.Time{}, fmt.Errorf("retain until date %q is not in the future: %w", s, s3errs.ErrInvalidArgumentRetainUntilDate)
 	}
 	return t.UTC().Add(time.Millisecond - time.Nanosecond).Truncate(time.Millisecond), nil
 }
@@ -165,7 +165,7 @@ func (d DefaultRetention) validate() error {
 	case d.Days != nil && d.Years != nil:
 		return fmt.Errorf("days and years are mutually exclusive: %w", s3errs.ErrMalformedXML)
 	case d.Days == nil && d.Years == nil:
-		return fmt.Errorf("a default retention requires days or years: %w", s3errs.ErrMalformedXML)
+		return fmt.Errorf("a default retention requires days or years: %w", s3errs.ErrInvalidRequestDefaultRetention)
 	case d.Days != nil && *d.Days <= 0:
 		return fmt.Errorf("days must be positive: %w", s3errs.ErrInvalidRetentionPeriod)
 	case d.Years != nil && *d.Years <= 0:
@@ -235,7 +235,8 @@ func (r ObjectRetention) Validate() error {
 	} else if r.Mode == "" && r.RetainUntilDate == "" {
 		return nil
 	} else if (r.Mode == "") != (r.RetainUntilDate == "") {
-		return fmt.Errorf("a retention needs both a mode and a retain until date: %w", s3errs.ErrInvalidRequest)
+		// S3 validates the document against its schema, which requires both
+		return fmt.Errorf("a retention needs both a mode and a retain until date: %w", s3errs.ErrMalformedXML)
 	} else if r.Mode != ObjectLockModeGovernance && r.Mode != ObjectLockModeCompliance {
 		return fmt.Errorf("unknown retention mode %q: %w", r.Mode, s3errs.ErrMalformedXML)
 	}
