@@ -27,20 +27,22 @@ type (
 )
 
 func (e adminUnreachableError) Error() string {
-	return fmt.Sprintf("s3d is not reachable at %s, check that it is running and that adminAddress in the config file is correct", e.addr)
+	return fmt.Sprintf("s3d is not reachable at %s, check that it is running and that adminAddress in %s is correct", e.addr, configFile)
 }
 
 func (e adminUnreachableError) Unwrap() error {
 	return e.err
 }
 
-// newAdminClient returns a client for the configured admin API, exiting if the
-// admin API address or password are unset.
+// newAdminClient returns a client for the configured admin API, exiting if no
+// config file was found or the admin API address or password are unset.
 func newAdminClient() adminClient {
-	if cfg.AdminAddress == "" {
-		checkFatalError("missing admin configuration", errors.New("adminAddress is not set in the config file"))
+	if configFile == "" {
+		checkFatalError("missing admin configuration", errors.New("no config file found, run from the directory holding s3d.yml or point "+configFileEnvVar+" at it"))
+	} else if cfg.AdminAddress == "" {
+		checkFatalError("missing admin configuration", fmt.Errorf("adminAddress is not set in %s", configFile))
 	} else if cfg.AdminPassword == "" {
-		checkFatalError("missing admin configuration", errors.New("adminPassword is not set in the config file"))
+		checkFatalError("missing admin configuration", fmt.Errorf("adminPassword is not set in %s", configFile))
 	}
 	return adminClient{
 		addr:     cfg.AdminAddress,
@@ -99,7 +101,7 @@ func adminResponseError(resp *http.Response) error {
 	if resp.StatusCode == http.StatusOK {
 		return nil
 	} else if resp.StatusCode == http.StatusUnauthorized {
-		return errors.New("s3d rejected the admin password, check adminPassword in the config file")
+		return fmt.Errorf("s3d rejected the admin password, check adminPassword in %s", configFile)
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10)) // 8 KiB
 	if msg := strings.TrimSpace(string(body)); msg != "" {
