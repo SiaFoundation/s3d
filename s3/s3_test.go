@@ -10,6 +10,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httptrace"
@@ -1120,4 +1121,80 @@ func TestCompletePartChecksumMismatch(t *testing.T) {
 	}
 	assertRawCode(t, complete(base64.StdEncoding.EncodeToString(make([]byte, sha256.Size))), http.StatusBadRequest, "InvalidPart")
 	assertRawCode(t, complete(checksum), http.StatusOK, "")
+}
+
+// TestCopySourceVersionValidation checks that CopyObject and UploadPartCopy
+// refuse a malformed source version ID, still report a well-formed absent one
+// as missing, and leave the destination unchanged.
+func TestCopySourceVersionValidation(t *testing.T) {
+	handler := newRawHandler(t)
+	assertRawCode(t, serveRaw(t, handler, http.MethodPut, "/bucket/dest", "original", nil, false), http.StatusOK, "")
+
+	rec := serveRaw(t, handler, http.MethodPost, "/bucket/mp?uploads", "", nil, false)
+	assertRawCode(t, rec, http.StatusOK, "")
+	var initiated s3.InitiateMultipartUploadResponse
+	if err := xml.Unmarshal(rec.Body.Bytes(), &initiated); err != nil {
+		t.Fatal(err)
+	}
+
+	absent := strings.Repeat("0", 64)
+	for _, tc := range []struct {
+		version string
+		status  int
+		code    string
+	}{
+		{"bogus", http.StatusBadRequest, "InvalidRequest"},
+		{absent, http.StatusNotFound, "NoSuchVersion"},
+	} {
+		source := map[string]string{"X-Amz-Copy-Source": "/bucket/object?versionId=" + tc.version}
+		assertRawCode(t, serveRaw(t, handler, http.MethodPut, "/bucket/dest", "", source, false), tc.status, tc.code)
+		assertRawCode(t, serveRaw(t, handler, http.MethodPut, "/bucket/mp?partNumber=1&uploadId="+initiated.UploadID, "", source, false), tc.status, tc.code)
+	}
+
+	if rec := serveRaw(t, handler, http.MethodGet, "/bucket/dest", "", nil, false); rec.Body.String() != "original" {
+		t.Fatalf("destination changed to %q", rec.Body)
+	}
+	rec = serveRaw(t, handler, http.MethodGet, "/bucket/mp?uploadId="+initiated.UploadID, "", nil, false)
+	assertRawCode(t, rec, http.StatusOK, "")
+	if strings.Contains(rec.Body.String(), "<Part>") {
+		t.Fatalf("expected no parts, got %s", rec.Body)
+	}
+}
+
+// TestPostObjectFormRejections checks that a POST Object form without a key,
+// one placing its fields after the file, and one signed with Signature Version
+// 2 are refused before anything is stored.
+func TestPostObjectFormRejections(t *testing.T) {
+	handler := newRawHandler(t)
+
+	post := func(parts [][2]string) *httptest.ResponseRecorder {
+		t.Helper()
+		var body bytes.Buffer
+		form := multipart.NewWriter(&body)
+		for _, part := range parts {
+			if part[0] == "file" {
+				w, err := form.CreateFormFile("file", "a.txt")
+				if err != nil {
+					t.Fatal(err)
+				}
+				w.Write([]byte(part[1]))
+				continue
+			}
+			if err := form.WriteField(part[0], part[1]); err != nil {
+				t.Fatal(err)
+			}
+		}
+		form.Close()
+		return serveRaw(t, handler, http.MethodPost, "/bucket", body.String(), map[string]string{"Content-Type": form.FormDataContentType()}, true)
+	}
+
+	assertRawCode(t, post([][2]string{{"policy", "e30="}, {"file", "x"}}), http.StatusBadRequest, "InvalidArgument")
+	assertRawCode(t, post([][2]string{{"file", "x"}, {"key", "posted"}}), http.StatusBadRequest, "InvalidArgument")
+	assertRawCode(t, post([][2]string{{"key", "posted"}, {"AWSAccessKeyId", testutil.AccessKeyID}, {"policy", "e30="}, {"signature", "c2ln"}, {"file", "x"}}), http.StatusBadRequest, "InvalidRequest")
+
+	rec := serveRaw(t, handler, http.MethodGet, "/bucket?list-type=2", "", nil, false)
+	assertRawCode(t, rec, http.StatusOK, "")
+	if !strings.Contains(rec.Body.String(), "<KeyCount>1</KeyCount>") {
+		t.Fatalf("expected only the existing object, got %s", rec.Body)
+	}
 }
