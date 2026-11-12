@@ -201,6 +201,9 @@ Users and access keys are managed through the API. The `users` and `keys`
 commands call the same endpoints, so they need a running instance. A secret key
 is only returned when it is created.
 
+User names are unique regardless of case, as in AWS IAM, so `alice` and `Alice`
+name the same user. A name keeps the case it was created with.
+
 ```sh
 curl -u ":change-me" -X POST http://127.0.0.1:8001/users -d '{"name":"alice"}'
 curl -u ":change-me" -X POST http://127.0.0.1:8001/keys -d '{"userName":"alice"}'

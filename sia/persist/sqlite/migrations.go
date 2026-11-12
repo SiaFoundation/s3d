@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"fmt"
+	"strings"
 
 	"go.sia.tech/core/types"
 	"go.uber.org/zap"
@@ -600,6 +601,39 @@ UPDATE objects SET noncurrent_at = COALESCE((
 ), updated_at) WHERE is_latest = FALSE;
 CREATE INDEX objects_noncurrent_at_idx ON objects(bucket_id, noncurrent_at) WHERE is_latest = FALSE;
 CREATE INDEX objects_delete_marker_updated_at_idx ON objects(bucket_id, updated_at) WHERE is_latest = TRUE AND is_delete_marker = TRUE;`)
+		return err
+	},
+	// make user names unique regardless of case
+	func(tx *txn, _ *zap.Logger) error {
+		// names differing only in case cannot be merged automatically, since
+		// each may own buckets and access keys, so the operator has to delete
+		// all but one of them with the previous release first
+		rows, err := tx.Query(`SELECT name FROM users WHERE LOWER(name) IN (SELECT LOWER(name) FROM users GROUP BY LOWER(name) HAVING COUNT(*) > 1) ORDER BY LOWER(name), name`)
+		if err != nil {
+			return err
+		}
+		var conflicts []string
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				rows.Close()
+				return err
+			}
+			conflicts = append(conflicts, name)
+		}
+		// an iteration that stopped on an error must not pass for a complete
+		// list
+		err = rows.Err()
+		if closeErr := rows.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			return err
+		} else if len(conflicts) > 0 {
+			return fmt.Errorf("user names must be unique regardless of case, delete all but one of %s before upgrading", strings.Join(conflicts, ", "))
+		}
+
+		_, err = tx.Exec(`CREATE UNIQUE INDEX users_name_nocase_idx ON users(name COLLATE NOCASE);`)
 		return err
 	},
 	func(tx *txn, _ *zap.Logger) error {

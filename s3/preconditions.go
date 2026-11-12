@@ -153,7 +153,13 @@ func (o ObjectID) CheckDelete(a ObjectAttrs) error {
 // requestPreconditions returns the preconditions carried by the request's own
 // If-* headers, which address the object the request operates on.
 func requestPreconditions(h http.Header) ObjectPreconditions {
-	return preconditionsFromHeaders(h, "")
+	p := preconditionsFromHeaders(h, "")
+	// a date later than the current time cannot be the time a representation
+	// was last seen, so RFC 9110 has it ignored, as S3 does
+	if p.IfModifiedSince != nil && p.IfModifiedSince.After(time.Now()) {
+		p.IfModifiedSince = nil
+	}
+	return p
 }
 
 // copySourcePreconditions returns the preconditions carried by the

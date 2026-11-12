@@ -11,6 +11,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -24,18 +25,21 @@ import (
 // regard to case and the AWS SDKs disagree on how they spell them, so a name is
 // lowercased as the form is parsed.
 const (
-	postFieldAlgorithm  = "x-amz-algorithm"
-	postFieldBucket     = "bucket"
-	postFieldContentMD5 = "content-md5"
-	postFieldCredential = "x-amz-credential"
-	postFieldDate       = "x-amz-date"
-	postFieldFile       = "file"
-	postFieldKey        = "key"
-	postFieldPolicy     = "policy"
-	postFieldRedirect   = "success_action_redirect"
-	postFieldSignature  = "x-amz-signature"
-	postFieldStatus     = "success_action_status"
-	postFieldToken      = "x-amz-security-token"
+	postFieldAlgorithm = "x-amz-algorithm"
+	// postFieldAccessKeyIDV2 carries the access key of a form signed with
+	// Signature Version 2, which is not supported.
+	postFieldAccessKeyIDV2 = "awsaccesskeyid"
+	postFieldBucket        = "bucket"
+	postFieldContentMD5    = "content-md5"
+	postFieldCredential    = "x-amz-credential"
+	postFieldDate          = "x-amz-date"
+	postFieldFile          = "file"
+	postFieldKey           = "key"
+	postFieldPolicy        = "policy"
+	postFieldRedirect      = "success_action_redirect"
+	postFieldSignature     = "x-amz-signature"
+	postFieldStatus        = "success_action_status"
+	postFieldToken         = "x-amz-security-token"
 )
 
 const (
@@ -150,7 +154,7 @@ func parsePostForm(r *http.Request) (postForm, *multipart.Part, error) {
 			return postForm{}, nil, s3errs.ErrMaxPostPreDataLengthExceededError
 		} else if errors.Is(err, io.EOF) {
 			// the file is required and every field has to precede it
-			return postForm{}, nil, s3errs.ErrIncorrectNumberOfFilesInPostRequest
+			return postForm{}, nil, s3errs.ErrInvalidArgumentPostFile
 		} else if err != nil {
 			return postForm{}, nil, s3errs.ErrMalformedPOSTRequest
 		}
@@ -190,6 +194,21 @@ type postMatch struct {
 	field      string
 	value      string
 	startsWith bool
+}
+
+// String formats the condition the way S3 quotes it when a form fails it,
+// which spells an exact match in its operator form.
+func (m postMatch) String() string {
+	operator := "eq"
+	if m.startsWith {
+		operator = "starts-with"
+	}
+	quoted := make([]string, 0, 3)
+	for _, s := range []string{operator, "$" + m.field, m.value} {
+		encoded, _ := json.Marshal(s)
+		quoted = append(quoted, string(encoded))
+	}
+	return "[" + strings.Join(quoted, ", ") + "]"
 }
 
 func (m postMatch) check(value string) bool {
@@ -329,8 +348,10 @@ func parsePostSize(element jsontext.Value) (int64, error) {
 // satisfied and every field has to be named by a condition, which is what stops
 // a client from adding a field the signer never approved.
 func (p postPolicy) check(form postForm, now time.Time) error {
+	// S3 refuses a form its policy does not allow as access denied, and names
+	// the condition or the fields that failed
 	if now.After(p.expiration) {
-		return s3errs.ErrAccessDeniedExpired
+		return s3errs.ErrAccessDenied.WithDescription("Invalid according to Policy: Policy expired.")
 	}
 
 	named := make(map[string]struct{}, len(p.matches))
@@ -338,10 +359,11 @@ func (p postPolicy) check(form postForm, now time.Time) error {
 		// a field the form left out is matched as empty, so a condition that
 		// demands a particular value fails while one that demands nothing holds
 		if !match.check(form.get(match.field)) {
-			return s3errs.ErrInvalidPolicyDocument
+			return s3errs.ErrAccessDenied.WithDescription("Invalid according to Policy: Policy Condition failed: " + match.String())
 		}
 		named[match.field] = struct{}{}
 	}
+	var extra []string
 	for field := range form.fields {
 		if _, ok := named[field]; ok {
 			continue
@@ -353,8 +375,12 @@ func (p postPolicy) check(form postForm, now time.Time) error {
 		case field == postFieldPolicy, field == postFieldSignature:
 		case strings.HasPrefix(field, "x-ignore-"):
 		default:
-			return s3errs.ErrInvalidPolicyDocument
+			extra = append(extra, field)
 		}
+	}
+	if len(extra) > 0 {
+		slices.Sort(extra)
+		return s3errs.ErrAccessDenied.WithDescription("Invalid according to Policy: Extra input fields: " + strings.Join(extra, ", "))
 	}
 	return nil
 }
@@ -398,6 +424,15 @@ func (s *s3) postObject(w http.ResponseWriter, r *http.Request, header *bucketAc
 	form, file, err := parsePostForm(r)
 	if err != nil {
 		return err
+	}
+
+	// before authenticating the form, S3 refuses one without a key, which is
+	// also how a form placing its fields after the file reads, and one signed
+	// with Signature Version 2
+	if _, ok := form.fields[postFieldKey]; !ok {
+		return s3errs.ErrInvalidArgumentPostKey
+	} else if _, ok := form.fields[postFieldAccessKeyIDV2]; ok && form.get(postFieldAlgorithm) == "" {
+		return s3errs.ErrInvalidRequestAuthMechanism
 	}
 
 	caller, err := auth.PostPolicyAuth{

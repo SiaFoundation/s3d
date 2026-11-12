@@ -83,7 +83,7 @@ func TestRequestChecksum(t *testing.T) {
 
 			got, err := requestChecksum(h)
 			if tt.wantErr != nil {
-				if !errors.Is(err, tt.wantErr) {
+				if s3errs.ErrorCode(err) != s3errs.ErrorCode(tt.wantErr) {
 					t.Fatalf("expected %v, got %v", tt.wantErr, err)
 				}
 				return

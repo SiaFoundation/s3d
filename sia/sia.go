@@ -218,6 +218,10 @@ type SDK interface {
 
 // Store represents the storage backend used by the Sia backend.
 type Store interface {
+	// ValidVersionID reports whether id has the form of a version ID the store
+	// issues.
+	ValidVersionID(id string) bool
+
 	// user and access key management
 	CreateUser(name string) error
 	DeleteUser(name string) error

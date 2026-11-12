@@ -65,12 +65,37 @@ func (p policyPrincipal) matches(caller *auth.Caller) bool {
 				return true
 			}
 			id, _ := principalUserID(value)
-			if caller != nil && caller.UserID == id {
+			// user names are unique regardless of ASCII case, as the store
+			// compares them
+			if caller != nil && asciiEqualFold(caller.UserID, id) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// asciiEqualFold reports whether a and b are equal under ASCII case folding.
+// Unlike strings.EqualFold it does not fold other characters onto ASCII ones,
+// such as U+017F onto 's', so a principal only matches the user the store
+// would find for it.
+func asciiEqualFold(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range len(a) {
+		x, y := a[i], b[i]
+		if 'A' <= x && x <= 'Z' {
+			x += 'a' - 'A'
+		}
+		if 'A' <= y && y <= 'Z' {
+			y += 'a' - 'A'
+		}
+		if x != y {
+			return false
+		}
+	}
+	return true
 }
 
 // patternEscaper escapes a variable's value so matchGlob reads its wildcard

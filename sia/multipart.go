@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/SiaFoundation/s3d/s3"
 	"github.com/SiaFoundation/s3d/s3/s3errs"
@@ -115,10 +116,13 @@ func (s *Sia) UploadPart(ctx context.Context, bucket s3.BucketID, object string,
 		return nil, err
 	}
 
+	// a part checksum has to use the upload's algorithm. A part without one
+	// has it computed in the upload's algorithm, which S3 would refuse on a
+	// composite upload but s3d allows
 	if upload.Algorithm != "" && opts.Checksum != nil {
 		algorithm, ok := s3.ChecksumAlgorithmFromSuffix(opts.Checksum.Algorithm)
 		if !ok || algorithm != upload.Algorithm {
-			return nil, s3errs.ErrInvalidRequest
+			return nil, s3errs.ErrInvalidRequest.WithDescription(fmt.Sprintf("Checksum Type mismatch occurred, expected checksum Type: %s, actual checksum Type: %s", strings.ToLower(string(upload.Algorithm)), strings.ToLower(opts.Checksum.Algorithm)))
 		}
 	}
 
@@ -526,9 +530,11 @@ func checkPartChecksum(upload objects.MultipartChecksum, requested s3.CompleteMu
 		return s3errs.ErrInvalidRequest
 	}
 
+	// S3 reports a part whose checksum differs as it reports one whose ETag
+	// differs
 	sum, err := base64.StdEncoding.DecodeString(value)
 	if err != nil || !bytes.Equal(sum, part.Checksum) {
-		return s3errs.ErrBadDigest
+		return s3errs.ErrInvalidPart
 	}
 	return nil
 }

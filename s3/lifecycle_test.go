@@ -84,12 +84,12 @@ func TestBucketLifecycleConfiguration(t *testing.T) {
 	err = s3Tester.PutBucketLifecycleConfiguration(t.Context(), "nonexistent", rules)
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchBucket, err)
 
-	// a malformed configuration maps onto ErrMalformedXML
+	// a rule without an action is refused as S3 refuses it
 	err = s3Tester.PutBucketLifecycleConfiguration(t.Context(), bucket, []types.LifecycleRule{{
 		Status: types.ExpirationStatusEnabled,
 		Filter: &types.LifecycleRuleFilter{Prefix: aws.String("")},
 	}})
-	testutil.AssertS3Error(t, s3errs.ErrMalformedXML, err)
+	testutil.AssertS3Error(t, s3errs.ErrInvalidRequestLifecycleAction, err)
 
 	// an unsupported feature maps onto ErrNotImplemented; a transition must be
 	// rejected, not silently dropped from the stored configuration
@@ -282,7 +282,7 @@ func TestLifecycleConfigurationValidate(t *testing.T) {
 		{"bad status", s3.LifecycleConfiguration{Rules: []s3.LifecycleRule{{Status: "Bogus", Expiration: &s3.LifecycleExpiration{Days: 1}}}}, s3errs.ErrMalformedXML},
 		{"prefix and filter", enabled(s3.LifecycleRule{Prefix: aws.String(""), Filter: &s3.LifecycleFilter{}, Expiration: &s3.LifecycleExpiration{Days: 1}}), s3errs.ErrMalformedXML},
 		{"no prefix or filter", s3.LifecycleConfiguration{Rules: []s3.LifecycleRule{{Status: s3.LifecycleStatusEnabled, Expiration: &s3.LifecycleExpiration{Days: 1}}}}, s3errs.ErrMalformedXML},
-		{"no action", enabled(s3.LifecycleRule{}), s3errs.ErrMalformedXML},
+		{"no action", enabled(s3.LifecycleRule{}), s3errs.ErrInvalidRequestLifecycleAction},
 		{"days and date", enabled(s3.LifecycleRule{Expiration: &s3.LifecycleExpiration{Days: 1, Date: "2020-01-01T00:00:00.000Z"}}), s3errs.ErrMalformedXML},
 		{"negative days", enabled(s3.LifecycleRule{Expiration: &s3.LifecycleExpiration{Days: -1}}), s3errs.ErrInvalidArgument},
 		{"zero days", enabled(s3.LifecycleRule{Expiration: &s3.LifecycleExpiration{}}), s3errs.ErrInvalidArgument},
@@ -310,8 +310,8 @@ func TestLifecycleConfigurationValidate(t *testing.T) {
 		{"and size filter with abort", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{And: &s3.LifecycleAndOperator{Prefix: aws.String("logs/"), ObjectSizeLessThan: aws.Int64(1000)}}, AbortIncompleteMultipartUpload: &s3.AbortIncompleteMultipartUpload{DaysAfterInitiation: 7}}), s3errs.ErrInvalidRequest},
 		{"size filter with abort and expiration", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{ObjectSizeGreaterThan: aws.Int64(1000)}, Expiration: &s3.LifecycleExpiration{Days: 1}, AbortIncompleteMultipartUpload: &s3.AbortIncompleteMultipartUpload{DaysAfterInitiation: 7}}), s3errs.ErrInvalidRequest},
 		{"prefix filter with abort", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{Prefix: aws.String("logs/")}, AbortIncompleteMultipartUpload: &s3.AbortIncompleteMultipartUpload{DaysAfterInitiation: 7}}), nil},
-		{"inverted size range", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{And: &s3.LifecycleAndOperator{ObjectSizeGreaterThan: aws.Int64(1024), ObjectSizeLessThan: aws.Int64(128)}}, Expiration: &s3.LifecycleExpiration{Days: 1}}), s3errs.ErrInvalidArgument},
-		{"empty size range", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{And: &s3.LifecycleAndOperator{ObjectSizeGreaterThan: aws.Int64(128), ObjectSizeLessThan: aws.Int64(128)}}, Expiration: &s3.LifecycleExpiration{Days: 1}}), s3errs.ErrInvalidArgument},
+		{"inverted size range", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{And: &s3.LifecycleAndOperator{ObjectSizeGreaterThan: aws.Int64(1024), ObjectSizeLessThan: aws.Int64(128)}}, Expiration: &s3.LifecycleExpiration{Days: 1}}), s3errs.ErrInvalidRequestLifecycleSize},
+		{"empty size range", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{And: &s3.LifecycleAndOperator{ObjectSizeGreaterThan: aws.Int64(128), ObjectSizeLessThan: aws.Int64(128)}}, Expiration: &s3.LifecycleExpiration{Days: 1}}), s3errs.ErrInvalidRequestLifecycleSize},
 		{"negative size bound", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{ObjectSizeGreaterThan: aws.Int64(-1)}, Expiration: &s3.LifecycleExpiration{Days: 1}}), s3errs.ErrInvalidArgument},
 		{"and tag filter", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{And: &s3.LifecycleAndOperator{Prefix: aws.String("logs/"), Tags: s3.TagSet{{Key: "k", Value: "v"}}}}, Expiration: &s3.LifecycleExpiration{Days: 1}}), nil},
 		{"duplicate tag keys", enabled(s3.LifecycleRule{Filter: &s3.LifecycleFilter{And: &s3.LifecycleAndOperator{Tags: s3.TagSet{{Key: "k", Value: "v"}, {Key: "k", Value: "w"}}}}, Expiration: &s3.LifecycleExpiration{Days: 1}}), s3errs.ErrInvalidTag},
@@ -325,8 +325,8 @@ func TestLifecycleConfigurationValidate(t *testing.T) {
 		{"newer noncurrent versions above limit", enabled(s3.LifecycleRule{NoncurrentVersionExpiration: &s3.LifecycleNoncurrentVersionExpiration{NewerNoncurrentVersions: aws.Int(101)}}), s3errs.ErrInvalidArgument},
 		{"newer noncurrent versions below one", enabled(s3.LifecycleRule{NoncurrentVersionExpiration: &s3.LifecycleNoncurrentVersionExpiration{NewerNoncurrentVersions: aws.Int(0)}}), s3errs.ErrInvalidArgument},
 		{"newer noncurrent versions without filter", s3.LifecycleConfiguration{Rules: []s3.LifecycleRule{{Status: s3.LifecycleStatusEnabled, Prefix: aws.String("logs/"), NoncurrentVersionExpiration: &s3.LifecycleNoncurrentVersionExpiration{NewerNoncurrentVersions: aws.Int(10)}}}}, s3errs.ErrInvalidRequest},
-		{"negative noncurrent days", enabled(s3.LifecycleRule{NoncurrentVersionExpiration: &s3.LifecycleNoncurrentVersionExpiration{NoncurrentDays: -1}}), s3errs.ErrInvalidArgument},
-		{"empty noncurrent expiration", enabled(s3.LifecycleRule{NoncurrentVersionExpiration: &s3.LifecycleNoncurrentVersionExpiration{}}), s3errs.ErrMalformedXML},
+		{"negative noncurrent days", enabled(s3.LifecycleRule{NoncurrentVersionExpiration: &s3.LifecycleNoncurrentVersionExpiration{NoncurrentDays: -1}}), s3errs.ErrInvalidArgumentNoncurrentDays},
+		{"empty noncurrent expiration", enabled(s3.LifecycleRule{NoncurrentVersionExpiration: &s3.LifecycleNoncurrentVersionExpiration{}}), s3errs.ErrInvalidArgumentNoncurrentDays},
 		{"expired delete marker", enabled(s3.LifecycleRule{Expiration: &s3.LifecycleExpiration{ExpiredObjectDeleteMarker: aws.Bool(true)}}), nil},
 		{"expired delete marker with noncurrent expiration", enabled(s3.LifecycleRule{Expiration: &s3.LifecycleExpiration{ExpiredObjectDeleteMarker: aws.Bool(true)}, NoncurrentVersionExpiration: &s3.LifecycleNoncurrentVersionExpiration{NoncurrentDays: 30}}), nil},
 	}

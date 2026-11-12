@@ -808,8 +808,8 @@ func TestMigrationNoncurrentTimestamp(t *testing.T) {
 	log := zaptest.NewLogger(t)
 	fp := filepath.Join(t.TempDir(), "s3d.sqlite3")
 
-	const noncurrentAtVersion = 19
-	store := initDBVersion(t, fp, noncurrentAtVersion-1, log)
+	const noncurrentVersion = 19
+	store := initDBVersion(t, fp, noncurrentVersion-1, log)
 	if _, err := store.db.Exec(`
 		INSERT INTO objects (bucket_id, name, version_id, seq, is_latest, content_md5, metadata, size, updated_at, filename) VALUES
 			(1, 'versioned', 'v1', 10, FALSE, x'00', '{}', 5, 100, 'v1.dat'),
@@ -844,13 +844,53 @@ func TestMigrationNoncurrentTimestamp(t *testing.T) {
 	}
 }
 
+// TestMigrationUserNameCase verifies the migration making user names unique
+// regardless of case refuses a database holding names that differ only in case
+// and leaves it untouched, and that it applies once they are resolved.
+func TestMigrationUserNameCase(t *testing.T) {
+	log := zaptest.NewLogger(t)
+	fp := filepath.Join(t.TempDir(), "s3d.sqlite3")
+
+	const userNameCaseVersion = 20
+	store := initDBVersion(t, fp, userNameCaseVersion-1, log)
+	if _, err := store.db.Exec(`INSERT INTO users (name) VALUES ('Carol'), ('carol'), ('dave')`); err != nil {
+		t.Fatal(err)
+	}
+
+	// the conflicting names are reported and the database stays at the
+	// previous version
+	if err := store.init(userNameCaseVersion); err == nil || !strings.Contains(err.Error(), "Carol, carol") {
+		t.Fatalf("expected the conflicting names to be reported, got %v", err)
+	} else if version := getDBVersion(store.db); version != userNameCaseVersion-1 {
+		t.Fatalf("expected version %d, got %d", userNameCaseVersion-1, version)
+	}
+
+	if _, err := store.db.Exec(`DELETE FROM users WHERE name = 'carol'`); err != nil {
+		t.Fatal(err)
+	} else if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	migrated, err := OpenDatabase(fp, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer migrated.Close()
+
+	if err := migrated.CreateUser("CAROL"); !errors.Is(err, s3.ErrUserAlreadyExists) {
+		t.Fatal("expected ErrUserAlreadyExists", err)
+	} else if err := migrated.CreateAccessKey("DAVE", "AKID", "secret"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestMigrationMultipartUploadTags checks that tags given when creating a
 // multipart upload carry over to the completed object after the migration.
 func TestMigrationMultipartUploadTags(t *testing.T) {
 	log := zaptest.NewLogger(t)
 	fp := filepath.Join(t.TempDir(), "s3d.sqlite3")
 
-	const multipartTagsVersion = 20
+	const multipartTagsVersion = 21
 	store := initDBVersion(t, fp, multipartTagsVersion-1, log)
 	if err := store.Close(); err != nil {
 		t.Fatal(err)

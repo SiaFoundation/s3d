@@ -281,7 +281,7 @@ func (r LifecycleRule) Validate() error {
 	} else if len(r.Transitions) > 0 || len(r.NoncurrentVersionTransitions) > 0 {
 		return fmt.Errorf("transition lifecycle actions are not supported: %w", s3errs.ErrNotImplemented)
 	} else if r.Expiration == nil && r.AbortIncompleteMultipartUpload == nil && r.NoncurrentVersionExpiration == nil {
-		return fmt.Errorf("rule must specify at least one action: %w", s3errs.ErrMalformedXML)
+		return fmt.Errorf("rule must specify at least one action: %w", s3errs.ErrInvalidRequestLifecycleAction)
 	}
 
 	if e := r.Expiration; e != nil {
@@ -305,9 +305,9 @@ func (r LifecycleRule) Validate() error {
 	}
 	if e := r.NoncurrentVersionExpiration; e != nil {
 		if e.NoncurrentDays < 0 {
-			return fmt.Errorf("NoncurrentDays must be a positive integer: %w", s3errs.ErrInvalidArgument)
+			return fmt.Errorf("NoncurrentDays must be a positive integer: %w", s3errs.ErrInvalidArgumentNoncurrentDays)
 		} else if e.NoncurrentDays == 0 && e.NewerNoncurrentVersions == nil {
-			return fmt.Errorf("noncurrent version expiration must specify NoncurrentDays or NewerNoncurrentVersions: %w", s3errs.ErrMalformedXML)
+			return fmt.Errorf("noncurrent version expiration must specify NoncurrentDays or NewerNoncurrentVersions: %w", s3errs.ErrInvalidArgumentNoncurrentDays)
 		} else if v := e.NewerNoncurrentVersions; v != nil {
 			if *v < 1 || *v > NewerNoncurrentVersionsLimit {
 				return fmt.Errorf("NewerNoncurrentVersions must be between 1 and %d: %w", NewerNoncurrentVersionsLimit, s3errs.ErrInvalidArgument)
@@ -421,7 +421,7 @@ func validateSizeRange(greaterThan, lessThan *int64) error {
 	} else if lessThan != nil && *lessThan < 0 {
 		return fmt.Errorf("ObjectSizeLessThan must not be negative: %w", s3errs.ErrInvalidArgument)
 	} else if greaterThan != nil && lessThan != nil && *greaterThan >= *lessThan {
-		return fmt.Errorf("ObjectSizeGreaterThan must be less than ObjectSizeLessThan: %w", s3errs.ErrInvalidArgument)
+		return fmt.Errorf("ObjectSizeGreaterThan must be less than ObjectSizeLessThan: %w", s3errs.ErrInvalidRequestLifecycleSize)
 	}
 	return nil
 }
@@ -448,7 +448,7 @@ func (s *s3) putBucketLifecycle(w http.ResponseWriter, r *http.Request, access *
 	s.logger.Debug("putting bucket lifecycle configuration", zap.String("bucket", access.bucket))
 
 	var config LifecycleConfiguration
-	if err := decodeXMLBody(r.Body, &config); err != nil {
+	if err := decodeDigestedXMLBody(r, true, &config); err != nil {
 		return err
 	}
 	if err := config.Validate(); err != nil {
