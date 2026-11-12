@@ -22,6 +22,7 @@ type (
 		db      *sql.DB
 		readers *sql.DB
 		log     *zap.Logger
+		cache   lookupCache
 	}
 )
 

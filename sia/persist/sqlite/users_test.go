@@ -132,8 +132,12 @@ func TestAccessKeysCRUD(t *testing.T) {
 	}
 
 	// delete a key
-	if err := store.DeleteAccessKey("AKID2"); err != nil {
+	if _, _, err := store.LoadSecret("AKID2"); err != nil {
 		t.Fatal(err)
+	} else if err := store.DeleteAccessKey("AKID2"); err != nil {
+		t.Fatal(err)
+	} else if _, _, err := store.LoadSecret("AKID2"); !errors.Is(err, s3errs.ErrInvalidAccessKeyId) {
+		t.Fatalf("expected %v after deleting the key, got %v", s3errs.ErrInvalidAccessKeyId, err)
 	}
 
 	// deleting unknown key fails

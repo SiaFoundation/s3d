@@ -68,15 +68,27 @@ func TestBucketAccessInfo(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	const document = `{"Version":"2012-10-17","Statement":[]}`
-	if err := store.PutBucketPolicy(bid, document); err != nil {
-		t.Fatal(err)
-	}
 	info, err := store.BucketAccessInfo(bucket)
 	if err != nil {
 		t.Fatal(err)
+	} else if info.Owner.ID != owner || info.PolicyDocument != "" {
+		t.Fatalf("unexpected access info: %+v", info)
+	}
+
+	const document = `{"Version":"2012-10-17","Statement":[]}`
+	if err := store.PutBucketPolicy(bid, document); err != nil {
+		t.Fatal(err)
+	} else if info, err = store.BucketAccessInfo(bucket); err != nil {
+		t.Fatal(err)
 	} else if info.Owner.ID != owner || info.PolicyDocument != document {
 		t.Fatalf("unexpected access info: %+v", info)
+	}
+	if err := store.DeleteBucketPolicy(bid); err != nil {
+		t.Fatal(err)
+	} else if info, err = store.BucketAccessInfo(bucket); err != nil {
+		t.Fatal(err)
+	} else if info.PolicyDocument != "" {
+		t.Fatalf("unexpected policy %q", info.PolicyDocument)
 	}
 	if _, err := store.BucketAccessInfo("missing"); !errors.Is(err, s3errs.ErrNoSuchBucket) {
 		t.Fatalf("expected %v, got %v", s3errs.ErrNoSuchBucket, err)
