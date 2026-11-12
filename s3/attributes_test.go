@@ -250,6 +250,56 @@ func TestGetObjectAttributes(t *testing.T) {
 		t.Fatal("expected no object parts")
 	}
 
+	// a multipart object without an additional checksum reports its parts
+	// count and no part entries
+	const plainKey = "plain"
+	plainCreated, err := s3Tester.Client().CreateMultipartUpload(t.Context(), &service.CreateMultipartUploadInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(plainKey),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plainParts := make([]types.CompletedPart, len(partData))
+	for i, body := range partData {
+		number := int32(i + 1)
+		uploaded, err := s3Tester.Client().UploadPart(t.Context(), &service.UploadPartInput{
+			Bucket:        aws.String(bucket),
+			Key:           aws.String(plainKey),
+			UploadId:      plainCreated.UploadId,
+			PartNumber:    aws.Int32(number),
+			Body:          bytes.NewReader(body),
+			ContentLength: aws.Int64(int64(len(body))),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		plainParts[i] = types.CompletedPart{PartNumber: aws.Int32(number), ETag: uploaded.ETag}
+	}
+	if _, err := s3Tester.Client().CompleteMultipartUpload(t.Context(), &service.CompleteMultipartUploadInput{
+		Bucket:          aws.String(bucket),
+		Key:             aws.String(plainKey),
+		UploadId:        plainCreated.UploadId,
+		MultipartUpload: &types.CompletedMultipartUpload{Parts: plainParts},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	plain, err := attributes(plainKey, allAttributes, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if plain.Checksum != nil {
+		t.Fatal("expected no checksum")
+	} else if plain.ObjectParts == nil {
+		t.Fatal("expected object parts")
+	} else if aws.ToInt32(plain.ObjectParts.TotalPartsCount) != int32(len(partData)) {
+		t.Fatal("unexpected", aws.ToInt32(plain.ObjectParts.TotalPartsCount))
+	} else if aws.ToBool(plain.ObjectParts.IsTruncated) {
+		t.Fatal("expected a complete listing")
+	} else if len(plain.ObjectParts.Parts) != 0 {
+		t.Fatal("unexpected", len(plain.ObjectParts.Parts))
+	}
+
 	// assert [s3errs.ErrInvalidArgument] for a request naming no attribute
 	resp, body := rawRequest(http.MethodGet, "/"+bucket+"/"+singleKey+"?attributes", nil)
 	var parsed s3.ErrorResponse

@@ -295,7 +295,7 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, version s3.
 
 // ObjectAttributes returns the attributes of an object together with one page
 // of its parts, read in a single transaction. A nil page skips the parts and
-// reports no truncation.
+// reports no truncation, as does an object without an additional checksum.
 func (s *Store) ObjectAttributes(bucket s3.BucketID, name string, version s3.VersionRequest, page *s3.ListPartsPage) (*s3.ObjectAttributes, error) {
 	var attrs s3.ObjectAttributes
 	err := s.transaction(func(tx *txn) error {
@@ -326,7 +326,7 @@ func (s *Store) ObjectAttributes(bucket s3.BucketID, name string, version s3.Ver
 			return err
 		}
 		attrs.Checksum = s3.ObjectChecksumFromMeta(meta)
-		if page == nil || attrs.IsDeleteMarker || attrs.PartsCount == 0 {
+		if page == nil || attrs.IsDeleteMarker || attrs.PartsCount == 0 || attrs.Checksum == nil {
 			return nil
 		}
 

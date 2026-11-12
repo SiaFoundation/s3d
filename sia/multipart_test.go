@@ -619,7 +619,12 @@ func TestCompleteMultipartUploadSubset(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := s3Tester.CreateMultipartUpload(t.Context(), bucket, object, nil)
+	// the attributes listing below needs the object to carry a checksum
+	res, err := s3Tester.Client().CreateMultipartUpload(t.Context(), &service.CreateMultipartUploadInput{
+		Bucket:            aws.String(bucket),
+		Key:               aws.String(object),
+		ChecksumAlgorithm: s3Types.ChecksumAlgorithmCrc32,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

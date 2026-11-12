@@ -75,7 +75,7 @@ type ObjectAttributes struct {
 	Checksum *ObjectChecksum
 
 	// Parts is the page of parts the request asked for, empty for an object
-	// that was not uploaded in parts.
+	// that was not uploaded in parts or carries no additional checksum.
 	Parts []ObjectPart
 
 	// IsTruncated reports whether parts beyond the page remain.
