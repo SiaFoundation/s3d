@@ -7,6 +7,8 @@ CREATE TABLE users (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL UNIQUE
 );
+-- user names are unique regardless of case, like AWS IAM user names
+CREATE UNIQUE INDEX users_name_nocase_idx ON users(name COLLATE NOCASE);
 
 CREATE TABLE access_keys (
     access_key_id TEXT PRIMARY KEY,

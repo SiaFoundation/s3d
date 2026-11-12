@@ -477,19 +477,19 @@ func TestPostObjectRejections(t *testing.T) {
 	// a field no condition names
 	upload = newPostUpload(bucket, "rejected")
 	upload.unsigned = [][2]string{{"x-amz-meta-injected", "value"}}
-	assertRejected(upload, s3errs.ErrInvalidPolicyDocument)
+	assertRejected(upload, s3errs.ErrAccessDenied)
 
 	// a condition the form does not satisfy
 	upload = newPostUpload(bucket, "rejected")
 	upload.conditions = []any{[]any{"starts-with", "$key", "approved/"}}
-	assertRejected(upload, s3errs.ErrInvalidPolicyDocument)
+	assertRejected(upload, s3errs.ErrAccessDenied)
 
 	// every entry in a comma-separated Content-Type has to satisfy its
 	// starts-with condition
 	upload = newPostUpload(bucket, "rejected")
 	upload.conditions = []any{[]any{"starts-with", "$Content-Type", "image/"}}
 	upload.unsigned = [][2]string{{"Content-Type", "image/png, text/plain"}}
-	assertRejected(upload, s3errs.ErrInvalidPolicyDocument)
+	assertRejected(upload, s3errs.ErrAccessDenied)
 
 	// a bucket field that disagrees with the URL
 	upload = newPostUpload(bucket, "rejected")
@@ -525,7 +525,7 @@ func TestPostObjectRejections(t *testing.T) {
 	upload = newPostUpload(bucket, "rejected")
 	upload.policy = base64.StdEncoding.EncodeToString(
 		[]byte(`{"expiration":"` + expires + `","CONDITIONS":[["bogus","$key",""]]}`))
-	assertRejected(upload, s3errs.ErrInvalidPolicyDocument)
+	assertRejected(upload, s3errs.ErrAccessDenied)
 
 	// a checksum field that does not decode to a digest of the right length
 	upload = newPostUpload(bucket, "rejected")
@@ -546,7 +546,7 @@ func TestPostObjectRejections(t *testing.T) {
 	// a form without a file
 	upload = newPostUpload(bucket, "rejected")
 	upload.omitFile = true
-	assertRejected(upload, s3errs.ErrIncorrectNumberOfFilesInPostRequest)
+	assertRejected(upload, s3errs.ErrInvalidArgumentPostFile)
 
 	// a file above the content-length-range maximum
 	upload = newPostUpload(bucket, "rejected")

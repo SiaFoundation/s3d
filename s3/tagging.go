@@ -54,11 +54,14 @@ type ObjectTaggingResult struct {
 type tagLimits struct {
 	count      int
 	countUTF16 bool // count lengths in UTF-16 code units, not characters
+
+	// tooMany is returned for a set over count
+	tooMany s3errs.Error
 }
 
 var (
-	objectTagLimits = tagLimits{count: 10, countUTF16: true}
-	bucketTagLimits = tagLimits{count: 50}
+	objectTagLimits = tagLimits{count: 10, countUTF16: true, tooMany: s3errs.ErrBadRequestObjectTagCount}
+	bucketTagLimits = tagLimits{count: 50, tooMany: s3errs.ErrBadRequestBucketTagCount}
 )
 
 // the maximum lengths of a tag key and value
@@ -73,7 +76,7 @@ const (
 // safely.
 func (tags TagSet) validate(limits tagLimits) error {
 	if len(tags) > limits.count {
-		return fmt.Errorf("at most %d tags are allowed: %w", limits.count, s3errs.ErrInvalidTag)
+		return limits.tooMany
 	}
 	seen := make(map[string]bool)
 	for _, tag := range tags {
@@ -247,10 +250,10 @@ func requestTags(h http.Header) (TagSet, error) {
 	return tags, nil
 }
 
-// readTagging reads a tag set from a request body, which S3 requires to carry
-// Content-MD5 or a checksum.
-func readTagging(r *http.Request, limits tagLimits) (TagSet, error) {
-	body, err := readDigestedBody(r)
+// readTagging reads a tag set from a request body. S3 requires a bucket's tag
+// set to carry Content-MD5 or a checksum, while an object's may omit both.
+func readTagging(r *http.Request, limits tagLimits, digestRequired bool) (TagSet, error) {
+	body, err := readDigestedBody(r, digestRequired)
 	if err != nil {
 		return nil, err
 	}
@@ -278,7 +281,7 @@ func (s *s3) routeBucketTagging(r *http.Request) (operation, error) {
 func (s *s3) putBucketTagging(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
 	s.logger.Debug("putting bucket tagging", zap.String("bucket", access.bucket))
 
-	tags, err := readTagging(r, bucketTagLimits)
+	tags, err := readTagging(r, bucketTagLimits, true)
 	if err != nil {
 		return err
 	} else if err := s.backend.PutBucketTagging(r.Context(), access.bucketID, tags); err != nil {
@@ -344,7 +347,7 @@ func (s *s3) routeObjectTagging(r *http.Request, object string, version VersionR
 func (s *s3) putObjectTagging(w http.ResponseWriter, r *http.Request, access *bucketAccess, object string, version VersionRequest) error {
 	s.logger.Debug("putting object tagging", zap.String("bucket", access.bucket), zap.String("object", object))
 
-	tags, err := readTagging(r, objectTagLimits)
+	tags, err := readTagging(r, objectTagLimits, false)
 	if err != nil {
 		return err
 	} else if err := access.assertTaggingActionAllowed(versionedAction(version, actionPutObjectTagging, actionPutObjectVersionTagging), object, tags); err != nil {

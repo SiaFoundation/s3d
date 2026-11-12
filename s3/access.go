@@ -150,6 +150,9 @@ type copySource struct {
 // caller may read it, reusing dst's access for a same-bucket copy. A copy that
 // keeps the source's tag set also needs s3:GetObjectTagging on the source.
 func (s *s3) authorizeCopySource(r *http.Request, dst *bucketAccess, srcBucket, srcObject string, srcVersion VersionRequest, copyTags bool) (copySource, error) {
+	if !s.validVersion(srcVersion) {
+		return copySource{}, s3errs.ErrInvalidRequestCopySourceVersion
+	}
 	src := dst
 	if srcBucket != dst.bucket {
 		var err error

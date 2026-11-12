@@ -3,6 +3,7 @@ package sia_test
 import (
 	"bytes"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/SiaFoundation/s3d/internal/testutil"
@@ -187,7 +188,7 @@ func TestVersionedObjects(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		_, err := s3Tester.GetObjectVersion(t.Context(), bucket, "key", aws.String("does-not-exist"))
+		_, err := s3Tester.GetObjectVersion(t.Context(), bucket, "key", aws.String(strings.Repeat("0", 64)))
 		testutil.AssertS3Error(t, s3errs.ErrNoSuchVersion, err)
 	})
 

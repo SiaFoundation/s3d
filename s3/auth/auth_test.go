@@ -190,7 +190,8 @@ func TestPresignedURLRawSemicolon(t *testing.T) {
 		t.Fatalf("expected an escaped semicolon in %s", get.URL)
 	}
 
-	// the version doesn't exist, so both spellings have to fail the same way
+	// the version could never have been issued, so both spellings have to fail
+	// the same way
 	tests := []struct {
 		name string
 		url  string
@@ -200,8 +201,8 @@ func TestPresignedURLRawSemicolon(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			body := send(t, s3Tester, get.Method, tc.url, nil, nil, http.StatusNotFound)
-			assertErrorResponse(t, s3errs.ErrNoSuchVersion, body)
+			body := send(t, s3Tester, get.Method, tc.url, nil, nil, http.StatusBadRequest)
+			assertErrorResponse(t, s3errs.ErrInvalidArgumentVersionID, body)
 		})
 	}
 }

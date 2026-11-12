@@ -68,7 +68,7 @@ func TestBucketTagging(t *testing.T) {
 		// one tag too many is rejected
 		tooMany := append(append([]types.Tag{}, tags...), types.Tag{Key: aws.String("extra"), Value: aws.String("")})
 		err = s3Tester.PutBucketTagging(t.Context(), bucket, tooMany)
-		testutil.AssertS3Error(t, s3errs.ErrInvalidTag, err)
+		testutil.AssertS3Error(t, s3errs.ErrBadRequestBucketTagCount, err)
 
 		// a PUT replaces the whole set
 		tags = []types.Tag{{Key: aws.String("replacement"), Value: aws.String("")}}
@@ -219,7 +219,7 @@ func TestObjectTagging(t *testing.T) {
 	assertTags(object, second.VersionId, map[string]string{})
 
 	// a missing version and a delete marker have no tags
-	_, err = s3Tester.GetObjectTagging(t.Context(), bucket, object, aws.String("absent"))
+	_, err = s3Tester.GetObjectTagging(t.Context(), bucket, object, aws.String(strings.Repeat("0", 64)))
 	testutil.AssertS3Error(t, s3errs.ErrNoSuchVersion, err)
 	marker, err := client.DeleteObject(t.Context(), &service.DeleteObjectInput{Bucket: aws.String(bucket), Key: aws.String(object)})
 	if err != nil {

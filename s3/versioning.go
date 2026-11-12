@@ -34,10 +34,12 @@ func (s *s3) putBucketVersioning(w http.ResponseWriter, r *http.Request, access 
 		return s3errs.ErrNotImplemented
 	}
 
+	// S3 validates the status against its schema, so an unknown one is
+	// malformed XML
 	switch config.Status {
 	case VersioningStatusEnabled, VersioningStatusSuspended:
 	default:
-		return s3errs.ErrIllegalVersioningConfigurationException
+		return s3errs.ErrMalformedXML
 	}
 
 	return s.backend.PutBucketVersioning(r.Context(), access.bucketID, config.Status)
