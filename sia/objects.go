@@ -277,15 +277,19 @@ func (s *Sia) DeleteObject(ctx context.Context, bucket s3.BucketID, object s3.Ob
 func (s *Sia) DeleteObjects(ctx context.Context, bucket s3.BucketID, objects []s3.ObjectID, opts s3.DeleteObjectOptions) (*s3.ObjectsDeleteResult, error) {
 	var result s3.ObjectsDeleteResult
 
-	for _, obj := range objects {
-		versionID, isDeleteMarker, orphan, err := s.store.DeleteObject(bucket, obj, opts.BypassGovernanceRetention)
-		if err == nil {
-			s.cleanupOrphanFile(orphan)
+	results, err := s.store.DeleteObjects(bucket, objects, opts.BypassGovernanceRetention)
+	if err != nil {
+		return nil, err
+	}
+	for i, obj := range objects {
+		res := results[i]
+		if res.Err == nil {
+			s.cleanupOrphanFile(res.Orphan)
 		}
 
-		if err != nil && !errors.Is(err, s3errs.ErrNoSuchKey) {
+		if res.Err != nil && !errors.Is(res.Err, s3errs.ErrNoSuchKey) {
 			var s3err s3errs.Error
-			if !errors.As(err, &s3err) {
+			if !errors.As(res.Err, &s3err) {
 				s3err = s3errs.ErrInternalError
 			}
 			failed := s3.ErrorResult{
@@ -302,11 +306,11 @@ func (s *Sia) DeleteObjects(ctx context.Context, bucket s3.BucketID, objects []s
 
 		deleted := s3.DeletedObject{Key: obj.Key}
 		if obj.VersionID != nil {
-			deleted.VersionID = versionID
+			deleted.VersionID = res.VersionID
 		}
-		if isDeleteMarker {
+		if res.IsDeleteMarker {
 			deleted.DeleteMarker = true
-			deleted.DeleteMarkerVersionID = versionID
+			deleted.DeleteMarkerVersionID = res.VersionID
 		}
 		result.Deleted = append(result.Deleted, deleted)
 	}
