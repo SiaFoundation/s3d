@@ -492,7 +492,8 @@ func TestObjectAttributes(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, _, _, err := store.CompleteMultipartUpload(bid, name, uploadID, mustMultipartParts(t, store, bid, name, uploadID), nil, s3.ObjectPreconditions{}); err != nil {
+	checksum := &s3.ObjectChecksum{Algorithm: upload.Algorithm, Type: upload.Type, Value: "x=-4"}
+	if _, _, _, err := store.CompleteMultipartUpload(bid, name, uploadID, mustMultipartParts(t, store, bid, name, uploadID), checksum, s3.ObjectPreconditions{}); err != nil {
 		t.Fatal(err)
 	}
 
