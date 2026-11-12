@@ -313,6 +313,28 @@ func TestGetObjectAttributes(t *testing.T) {
 		t.Fatal("unexpected", resp.StatusCode, parsed.Code)
 	}
 
+	// the conditional headers are honored the way a HEAD honors them
+	singleETag := s3.FormatETag(dataMD5[:], 0)
+	resp, body = rawRequest(http.MethodGet, "/"+bucket+"/"+singleKey+"?attributes", http.Header{
+		"X-Amz-Object-Attributes": []string{"ETag"},
+		"If-Match":                []string{`"0123456789abcdef0123456789abcdef"`},
+	})
+	if err := xml.Unmarshal(body, &parsed); err != nil {
+		t.Fatal(err)
+	} else if resp.StatusCode != s3errs.ErrPreconditionFailed.HTTPStatus || parsed.Code != s3errs.ErrPreconditionFailed.Code {
+		t.Fatal("unexpected", resp.StatusCode, parsed.Code)
+	}
+
+	resp, body = rawRequest(http.MethodGet, "/"+bucket+"/"+singleKey+"?attributes", http.Header{
+		"X-Amz-Object-Attributes": []string{"ETag"},
+		"If-None-Match":           []string{singleETag},
+	})
+	if resp.StatusCode != http.StatusNotModified {
+		t.Fatal("unexpected", resp.StatusCode)
+	} else if len(body) != 0 {
+		t.Fatal("expected no body")
+	}
+
 	// a delete marker is reported the way a HEAD reports it
 	const versionedBucket = "versioned-attributes"
 	if err := s3Tester.CreateBucket(t.Context(), versionedBucket); err != nil {

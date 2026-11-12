@@ -145,10 +145,15 @@ func (s *s3) getObjectAttributes(w http.ResponseWriter, r *http.Request, access 
 	setVersionHeaders(w, obj)
 	w.Header().Set("Last-Modified", attrs.LastModified.UTC().Format(http.TimeFormat))
 
+	etag := FormatETag(attrs.ContentMD5[:], int(attrs.PartsCount))
+	if err := requestPreconditions(r.Header).check(etag, attrs.LastModified); err != nil {
+		return err
+	}
+
 	resp := GetObjectAttributesResponse{Xmlns: "http://s3.amazonaws.com/doc/2006-03-01/"}
 	if requested[attributeETag] {
 		// the element carries the ETag without the quotes a header spells it with
-		resp.ETag = strings.Trim(FormatETag(attrs.ContentMD5[:], int(attrs.PartsCount)), `"`)
+		resp.ETag = strings.Trim(etag, `"`)
 	}
 	if requested[attributeObjectSize] {
 		resp.ObjectSize = aws.Int64(attrs.Size)

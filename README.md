@@ -411,10 +411,10 @@ When running behind a reverse proxy, add its address to `s3.trustedProxies`.
 `X-Forwarded-For` and `X-Forwarded-Proto` are only used from trusted proxies.
 The proxy must overwrite these headers.
 
-Conditional requests are supported. `GetObject` and `HeadObject` honor
-`If-Match`, `If-None-Match`, `If-Modified-Since` and `If-Unmodified-Since`, and
-the copy source of `CopyObject` and `UploadPartCopy` honors the matching
-`x-amz-copy-source-if-*` headers.
+Conditional requests are supported. `GetObject`, `HeadObject` and
+`GetObjectAttributes` honor `If-Match`, `If-None-Match`, `If-Modified-Since`
+and `If-Unmodified-Since`, and the copy source of `CopyObject` and
+`UploadPartCopy` honors the matching `x-amz-copy-source-if-*` headers.
 
 `PutObject`, `CopyObject` and `CompleteMultipartUpload` honor `If-Match` and
 `If-None-Match` against the current version of the destination, evaluated
