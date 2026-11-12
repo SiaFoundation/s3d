@@ -18,9 +18,10 @@ import (
 type (
 	// A Store is a persistent store that uses a SQL database as its backend.
 	Store struct {
-		db   *sql.DB
-		path string
-		log  *zap.Logger
+		db    *sql.DB
+		path  string
+		log   *zap.Logger
+		cache lookupCache
 	}
 )
 

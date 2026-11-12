@@ -51,6 +51,7 @@ func (s *Store) GetBucketObjectLockConfiguration(bucket s3.BucketID) (config s3.
 // replaces its default retention rule. A configuration carrying no rule clears
 // the default retention.
 func (s *Store) PutBucketObjectLockConfiguration(bucket s3.BucketID, config s3.ObjectLockConfiguration) error {
+	defer s.cache.reset()
 	return s.transaction(func(tx *txn) error {
 		bid, status, err := bucketIDAndVersioning(tx, bucket)
 		if err != nil {
