@@ -80,6 +80,9 @@ func sqliteFilepath(fp string) string {
 		"_journal_mode=WAL",
 		"_auto_vacuum=INCREMENTAL",
 		"_cache_size=-65536", // 64MiB
+		// the store issues well over a hundred distinct queries, so the cache
+		// is sized to hold them all rather than evict between requests
+		"_stmt_cache_size=256",
 	}
 	return "file:" + fp + "?" + strings.Join(params, "&")
 }
