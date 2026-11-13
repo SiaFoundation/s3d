@@ -108,24 +108,28 @@ func (s *Sia) applyLifecycleRules(ctx context.Context, now time.Time) {
 			}
 			prefix := rule.EffectivePrefix()
 			sizeGreaterThan, sizeLessThan := rule.EffectiveSizeRange()
+			tags := rule.EffectiveTags()
 
 			if rule.AbortIncompleteMultipartUpload != nil {
 				s.abortIncompleteUploads(ctx, bc, prefix, rule.AbortIncompleteMultipartUpload.AbortCutoff(now, s.lifecycleDayDuration))
 			}
 			cutoff, expires := rule.Expiration.ExpiryCutoff(now, s.lifecycleDayDuration)
 			if expires {
-				s.expireObjects(ctx, bc, prefix, sizeGreaterThan, sizeLessThan, cutoff)
+				s.expireObjects(ctx, bc, prefix, sizeGreaterThan, sizeLessThan, tags, cutoff)
 			}
 			if e := rule.NoncurrentVersionExpiration; e != nil {
-				s.expireNoncurrentVersions(ctx, bc, prefix, sizeGreaterThan, sizeLessThan, e.Retain(), e.NoncurrentCutoff(now, s.lifecycleDayDuration))
+				s.expireNoncurrentVersions(ctx, bc, prefix, sizeGreaterThan, sizeLessThan, tags, e.Retain(), e.NoncurrentCutoff(now, s.lifecycleDayDuration))
 			}
 			// S3 also reaps expired delete markers for a Days or Date
 			// expiration, without being asked. A marker holds no data, so the
-			// rule's object size bounds never apply to it.
-			if rule.Expiration.ExpiresDeleteMarkers() {
-				s.expireDeleteMarkers(ctx, bc, prefix, now)
-			} else if expires {
-				s.expireDeleteMarkers(ctx, bc, prefix, cutoff)
+			// rule's object size bounds never apply to it, and it carries no
+			// tags, so a rule with a tag filter never matches it.
+			if len(tags) == 0 {
+				if rule.Expiration.ExpiresDeleteMarkers() {
+					s.expireDeleteMarkers(ctx, bc, prefix, now)
+				} else if expires {
+					s.expireDeleteMarkers(ctx, bc, prefix, cutoff)
+				}
 			}
 		}
 	}
@@ -157,14 +161,14 @@ func (s *Sia) abortIncompleteUploads(ctx context.Context, bc BucketLifecycleConf
 	}
 }
 
-// expireObjects deletes objects matching the prefix and size bounds in the
-// given bucket that were last modified at or before the cutoff.
-func (s *Sia) expireObjects(ctx context.Context, bc BucketLifecycleConfiguration, prefix string, sizeGreaterThan, sizeLessThan *int64, before time.Time) {
+// expireObjects deletes objects matching the prefix, size bounds and tags in
+// the given bucket that were last modified at or before the cutoff.
+func (s *Sia) expireObjects(ctx context.Context, bc BucketLifecycleConfiguration, prefix string, sizeGreaterThan, sizeLessThan *int64, tags s3.TagSet, before time.Time) {
 	// batchSize bounds how many objects are expired per store transaction.
 	const batchSize = 100
 	var expired int
 	for ctx.Err() == nil {
-		deleted, orphans, err := s.store.ExpireObjects(bc.BucketID, prefix, sizeGreaterThan, sizeLessThan, before, batchSize)
+		deleted, orphans, err := s.store.ExpireObjects(bc.BucketID, prefix, sizeGreaterThan, sizeLessThan, tags, before, batchSize)
 		if err != nil {
 			s.logger.Error("failed to expire objects", zap.String("bucket", bc.Bucket), zap.Error(err))
 			return
@@ -183,15 +187,15 @@ func (s *Sia) expireObjects(ctx context.Context, bc BucketLifecycleConfiguration
 	}
 }
 
-// expireNoncurrentVersions deletes noncurrent versions matching the prefix and
-// size bounds in the given bucket that became noncurrent at or before the
+// expireNoncurrentVersions deletes noncurrent versions matching the prefix,
+// size bounds and tags in the given bucket that became noncurrent at or before the
 // cutoff and sit behind at least retain newer noncurrent versions.
-func (s *Sia) expireNoncurrentVersions(ctx context.Context, bc BucketLifecycleConfiguration, prefix string, sizeGreaterThan, sizeLessThan *int64, retain int, before time.Time) {
+func (s *Sia) expireNoncurrentVersions(ctx context.Context, bc BucketLifecycleConfiguration, prefix string, sizeGreaterThan, sizeLessThan *int64, tags s3.TagSet, retain int, before time.Time) {
 	// batchSize bounds how many versions are expired per store transaction.
 	const batchSize = 100
 	var expired int
 	for ctx.Err() == nil {
-		deleted, orphans, err := s.store.ExpireNoncurrentVersions(bc.BucketID, prefix, sizeGreaterThan, sizeLessThan, retain, before, batchSize)
+		deleted, orphans, err := s.store.ExpireNoncurrentVersions(bc.BucketID, prefix, sizeGreaterThan, sizeLessThan, tags, retain, before, batchSize)
 		if err != nil {
 			s.logger.Error("failed to expire noncurrent versions", zap.String("bucket", bc.Bucket), zap.Error(err))
 			return

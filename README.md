@@ -387,7 +387,7 @@ included in their `ListBuckets` response.
 `aws:userid` and `aws:PrincipalAccount` are the username, or `anonymous` for
 unsigned requests. `aws:PrincipalArn` is `arn:aws:iam::<username>:root`.
 Condition keys for unsupported features evaluate as missing. Unknown condition
-keys are rejected, as are `s3:BucketTag` and `s3:ExistingObjectTag`.
+keys are rejected, as is `s3:BucketTag`.
 
 This policy allows `alice` to read and write objects under `alice/`:
 
@@ -467,7 +467,7 @@ data.
 | DeleteBucketPolicy | ✓ | |
 | GetBucketPolicyStatus | ✓ | |
 | GetBucketLifecycle | ✓ | |
-| PutBucketLifecycle | ◐ | Tag filters and storage class transitions are rejected |
+| PutBucketLifecycle | ◐ | Storage class transitions are rejected, and tag and object-size filters cannot be used to abort uploads |
 | DeleteBucketLifecycle | ✓ | |
 | GetBucketCors | ✗ | |
 | PutBucketCors | ✗ | |

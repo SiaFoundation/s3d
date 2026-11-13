@@ -165,12 +165,13 @@ func TestS3(t *testing.T) {
 			// the two policy-status tests with _acl in their names only use bucket
 			// policies, so they are kept despite the general ACL exclusion
 			// the lifecycle exclusions drop tests for unimplemented features,
-			// namely tag filters and transitions. two are excluded despite
-			// their names reading otherwise, since lifecycle_expiration_tags
-			// and lifecycle_expiration_versioned both rely on object tagging,
-			// and noncur_tags reaches it through a helper. Object size filters,
-			// noncurrent version expiration and delete marker expiration are
-			// all supported and run.
+			// namely transitions. lifecycle_expiration_tags and
+			// lifecycle_expiration_versioned_tags2 put Prefix, Tag and And side
+			// by side in one Filter and are marked fails_on_aws, and noncur_tags
+			// reaches object tagging through a helper. Plain expiration on a
+			// versioned bucket, noncurrent version expiration, delete marker
+			// expiration and the tag and object-size filters are all supported
+			// and run.
 			//
 			// the two delete_marker_* tests are excluded because check_delete_marker
 			// reads an x-amz-delete-marker header off the 404, which s3d does not
@@ -200,7 +201,7 @@ func TestS3(t *testing.T) {
 			//
 			// put_excess_tags expects RGW's InvalidTag for more than 10 object
 			// tags. s3d returns BadRequest, matching AWS.
-			"-k","(not _acl or publicpolicy_acl_bucket_policy_status or nonpublicpolicy_acl_bucket_policy_status) and not multipart_reupload_checksum and not use_cksum_helper and not checksum_object_attributes and not post_object and not _torrent and not cors and not notification and not replication and not website and not _select and not lifecycle_expiration_tags and not lifecycle_expiration_versioned and not tags_head and not noncur_tags and not delete_marker_nonversioned and not delete_marker_expiration and not lifecycle_transition_set_invalid_date and not bucket_list_return_data_versioning and not bucket_recreate_not_overriding and not versioning_concurrent_multi_object_delete and not existing_tag and not request_obj_tag and not put_obj_with_tags and not put_excess_tags",
+			"-k", "(not _acl or publicpolicy_acl_bucket_policy_status or nonpublicpolicy_acl_bucket_policy_status) and not multipart_reupload_checksum and not use_cksum_helper and not checksum_object_attributes and not post_object and not _torrent and not cors and not notification and not replication and not website and not _select and not lifecycle_expiration_tags and not lifecycle_expiration_versioned and not noncur_tags and not delete_marker_nonversioned and not delete_marker_expiration and not lifecycle_transition_set_invalid_date and not bucket_list_return_data_versioning and not bucket_recreate_not_overriding and not versioning_concurrent_multi_object_delete and not request_obj_tag and not put_obj_with_tags and not put_excess_tags",
 		)
 	})
 

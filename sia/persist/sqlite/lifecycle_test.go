@@ -165,7 +165,7 @@ func TestExpireObjects(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deleted, orphans, err := store.ExpireObjects(bid, "logs/", nil, nil, cutoff, 100)
+	deleted, orphans, err := store.ExpireObjects(bid, "logs/", nil, nil, nil, cutoff, 100)
 	if err != nil {
 		t.Fatal(err)
 	} else if deleted != 1 {
@@ -183,7 +183,7 @@ func TestExpireObjects(t *testing.T) {
 	// the bounds exclude their own value, so a lower bound of 200 skips the
 	// 200 byte object and takes the 300 byte one
 	size := func(n int64) *int64 { return &n }
-	deleted, orphans, err = store.ExpireObjects(bid, "", size(200), nil, cutoff, 100)
+	deleted, orphans, err = store.ExpireObjects(bid, "", size(200), nil, nil, cutoff, 100)
 	if err != nil {
 		t.Fatal(err)
 	} else if deleted != 1 {
@@ -194,14 +194,14 @@ func TestExpireObjects(t *testing.T) {
 	store.assertCount(1, "objects")
 
 	// an upper bound of 200 excludes the 200 byte object as well
-	if deleted, _, err := store.ExpireObjects(bid, "", nil, size(200), cutoff, 100); err != nil {
+	if deleted, _, err := store.ExpireObjects(bid, "", nil, size(200), nil, cutoff, 100); err != nil {
 		t.Fatal(err)
 	} else if deleted != 0 {
 		t.Fatalf("expected no deleted objects, got %d", deleted)
 	}
 	store.assertCount(1, "objects")
 
-	if deleted, _, err := store.ExpireObjects(bid, "", nil, size(201), cutoff, 100); err != nil {
+	if deleted, _, err := store.ExpireObjects(bid, "", nil, size(201), nil, cutoff, 100); err != nil {
 		t.Fatal(err)
 	} else if deleted != 1 {
 		t.Fatalf("expected 1 deleted object, got %d", deleted)
@@ -240,7 +240,7 @@ func TestExpireObjectsVersions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deleted, orphans, err := store.ExpireObjects(bid, "logs/", nil, nil, cutoff, 100)
+	deleted, orphans, err := store.ExpireObjects(bid, "logs/", nil, nil, nil, cutoff, 100)
 	if err != nil {
 		t.Fatal(err)
 	} else if deleted != 0 {
@@ -254,6 +254,44 @@ func TestExpireObjectsVersions(t *testing.T) {
 		t.Fatalf("expected current version %q, got %q", currentVersion, obj.VersionID)
 	} else if _, err := store.GetObject(bid, key, s3.SpecificVersion(oldVersion), nil); err != nil {
 		t.Fatalf("expected old noncurrent version to remain, got %v", err)
+	}
+}
+
+func TestExpireObjectsTags(t *testing.T) {
+	const (
+		accessKeyID = testAccessKeyID
+		bucket      = "tagged-bucket"
+	)
+
+	store := initTestDB(t, zap.NewNop())
+	if err := store.CreateBucket(accessKeyID, bucket, false); err != nil {
+		t.Fatal(err)
+	}
+	bid := store.bucketID(bucket)
+
+	tags := s3.TagSet{{Key: "project", Value: "one"}, {Key: "empty", Value: ""}}
+	if _, _, err := store.PutObject(bid, "match", objects.PutOptions{Tags: tags}); err != nil {
+		t.Fatal(err)
+	} else if _, _, err := store.PutObject(bid, "other", objects.PutOptions{Tags: s3.TagSet{{Key: "project", Value: "two"}}}); err != nil {
+		t.Fatal(err)
+	} else if _, _, err := store.PutObject(bid, "untagged", objects.PutOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// a tag filter expires only the objects carrying every tag in it
+	deleted, _, err := store.ExpireObjects(bid, "", nil, nil, tags, time.Now().Add(time.Hour), 100)
+	if err != nil {
+		t.Fatal(err)
+	} else if deleted != 1 {
+		t.Fatalf("expected 1 deleted object, got %d", deleted)
+	}
+	if _, err := store.GetObject(bid, "match", s3.NoVersion(), nil); !errors.Is(err, s3errs.ErrNoSuchKey) {
+		t.Fatalf("expected %v, got %v", s3errs.ErrNoSuchKey, err)
+	}
+	for _, name := range []string{"other", "untagged"} {
+		if _, err := store.GetObject(bid, name, s3.NoVersion(), nil); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -313,7 +351,7 @@ func TestExpireNoncurrentVersions(t *testing.T) {
 		backdate(bid, key, v[0], 48*time.Hour)
 		backdate(bid, key, v[1], 48*time.Hour)
 
-		deleted, _, err := store.ExpireNoncurrentVersions(bid, "logs/", nil, nil, 0, time.Now().Add(-24*time.Hour), 100)
+		deleted, _, err := store.ExpireNoncurrentVersions(bid, "logs/", nil, nil, nil, 0, time.Now().Add(-24*time.Hour), 100)
 		if err != nil {
 			t.Fatal(err)
 		} else if deleted != 2 {
@@ -329,7 +367,7 @@ func TestExpireNoncurrentVersions(t *testing.T) {
 	t.Run("RetainCount", func(t *testing.T) {
 		bid, key, v := setup("retain")
 		// no age bound, so only the retain count decides
-		deleted, _, err := store.ExpireNoncurrentVersions(bid, "logs/", nil, nil, 1, time.Now(), 100)
+		deleted, _, err := store.ExpireNoncurrentVersions(bid, "logs/", nil, nil, nil, 1, time.Now(), 100)
 		if err != nil {
 			t.Fatal(err)
 		} else if deleted != 2 {
@@ -349,7 +387,7 @@ func TestExpireNoncurrentVersions(t *testing.T) {
 		for _, version := range v[:3] {
 			backdate(bid, key, version, 48*time.Hour)
 		}
-		deleted, _, err := store.ExpireNoncurrentVersions(bid, "logs/", nil, nil, 2, time.Now().Add(-24*time.Hour), 100)
+		deleted, _, err := store.ExpireNoncurrentVersions(bid, "logs/", nil, nil, nil, 2, time.Now().Add(-24*time.Hour), 100)
 		if err != nil {
 			t.Fatal(err)
 		} else if deleted != 1 {
@@ -362,7 +400,7 @@ func TestExpireNoncurrentVersions(t *testing.T) {
 		}
 
 		// the age bound alone keeps a young version even when the count allows
-		if deleted, _, err := store.ExpireNoncurrentVersions(bid, "logs/", nil, nil, 0, time.Now().Add(-72*time.Hour), 100); err != nil {
+		if deleted, _, err := store.ExpireNoncurrentVersions(bid, "logs/", nil, nil, nil, 0, time.Now().Add(-72*time.Hour), 100); err != nil {
 			t.Fatal(err)
 		} else if deleted != 0 {
 			t.Fatalf("expected nothing to expire before the cutoff, got %d", deleted)
@@ -376,7 +414,7 @@ func TestExpireNoncurrentVersions(t *testing.T) {
 		}
 		// every version is 1 byte, so an exclusive lower bound of 1 matches none
 		size := func(n int64) *int64 { return &n }
-		if deleted, _, err := store.ExpireNoncurrentVersions(bid, "logs/", size(1), nil, 0, time.Now(), 100); err != nil {
+		if deleted, _, err := store.ExpireNoncurrentVersions(bid, "logs/", size(1), nil, nil, 0, time.Now(), 100); err != nil {
 			t.Fatal(err)
 		} else if deleted != 0 {
 			t.Fatalf("expected the size bound to exclude every version, got %d", deleted)
@@ -392,7 +430,7 @@ func TestExpireNoncurrentVersions(t *testing.T) {
 		if _, _, err := store.PutObject(bid, key, objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 1, FileName: new(string)}); err != nil {
 			t.Fatal(err)
 		}
-		if deleted, _, err := store.ExpireNoncurrentVersions(bid, "logs/", size(1), nil, 0, time.Now(), 100); err != nil {
+		if deleted, _, err := store.ExpireNoncurrentVersions(bid, "logs/", size(1), nil, nil, 0, time.Now(), 100); err != nil {
 			t.Fatal(err)
 		} else if deleted != 1 {
 			t.Fatalf("expected only the delete marker to expire, got %d", deleted)
@@ -400,10 +438,35 @@ func TestExpireNoncurrentVersions(t *testing.T) {
 			t.Fatal("expected the noncurrent delete marker to be expired")
 		}
 		// a prefix that matches nothing also selects nothing
-		if deleted, _, err := store.ExpireNoncurrentVersions(bid, "other/", nil, nil, 0, time.Now(), 100); err != nil {
+		if deleted, _, err := store.ExpireNoncurrentVersions(bid, "other/", nil, nil, nil, 0, time.Now(), 100); err != nil {
 			t.Fatal(err)
 		} else if deleted != 0 {
 			t.Fatalf("expected the prefix to exclude every version, got %d", deleted)
+		}
+	})
+
+	t.Run("Tags", func(t *testing.T) {
+		bid, key, v := setup("tags")
+		tags := s3.TagSet{{Key: "project", Value: "one"}}
+		if _, err := store.PutObjectTagging(bid, key, s3.SpecificVersion(v[0]), tags); err != nil {
+			t.Fatal(err)
+		} else if _, err := store.PutObjectTagging(bid, key, s3.SpecificVersion(v[1]), s3.TagSet{{Key: "project", Value: "two"}}); err != nil {
+			t.Fatal(err)
+		}
+		// a delete marker carries no tags, so the filter keeps it too
+		if _, _, _, err := store.DeleteObject(bid, s3.ObjectID{Key: key}, false); err != nil {
+			t.Fatal(err)
+		} else if _, _, err := store.PutObject(bid, key, objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 1, FileName: new(string)}); err != nil {
+			t.Fatal(err)
+		}
+		if deleted, _, err := store.ExpireNoncurrentVersions(bid, "logs/", nil, nil, tags, 0, time.Now(), 100); err != nil {
+			t.Fatal(err)
+		} else if deleted != 1 {
+			t.Fatalf("expected only the matching version to expire, got %d", deleted)
+		} else if exists(bid, key, v[0]) {
+			t.Fatal("expected the tagged version to be expired")
+		} else if !exists(bid, key, v[1]) || !exists(bid, key, v[2]) {
+			t.Fatal("expected the other noncurrent versions to remain")
 		}
 	})
 
@@ -419,7 +482,7 @@ func TestExpireNoncurrentVersions(t *testing.T) {
 			t.Fatal(err)
 		}
 		// the locked versions are skipped rather than failing the sweep
-		if deleted, _, err := store.ExpireNoncurrentVersions(bid, "logs/", nil, nil, 0, time.Now(), 100); err != nil {
+		if deleted, _, err := store.ExpireNoncurrentVersions(bid, "logs/", nil, nil, nil, 0, time.Now(), 100); err != nil {
 			t.Fatal(err)
 		} else if deleted != 1 {
 			t.Fatalf("expected only the unlocked version to expire, got %d", deleted)
@@ -435,7 +498,7 @@ func TestExpireNoncurrentVersions(t *testing.T) {
 		} else if err := store.PutObjectLegalHold(bid, key, s3.SpecificVersion(v[1]), s3.LegalHoldOff); err != nil {
 			t.Fatal(err)
 		}
-		if deleted, _, err := store.ExpireNoncurrentVersions(bid, "logs/", nil, nil, 0, time.Now(), 100); err != nil {
+		if deleted, _, err := store.ExpireNoncurrentVersions(bid, "logs/", nil, nil, nil, 0, time.Now(), 100); err != nil {
 			t.Fatal(err)
 		} else if deleted != 2 {
 			t.Fatalf("expected the released versions to expire, got %d", deleted)
@@ -555,7 +618,7 @@ func BenchmarkExpireNoncurrentVersions(b *testing.B) {
 		bid := populate(fmt.Sprintf("bucket%d", i))
 		i++
 		b.StartTimer()
-		deleted, _, err := store.ExpireNoncurrentVersions(bid, "", nil, nil, retain, time.Now(), batchSize)
+		deleted, _, err := store.ExpireNoncurrentVersions(bid, "", nil, nil, nil, retain, time.Now(), batchSize)
 		if err != nil {
 			b.Fatal(err)
 		} else if deleted != batchSize {

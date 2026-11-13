@@ -159,8 +159,7 @@ func (a *bucketAccess) actionPolicyContext(action string) (policyContext, error)
 			}
 			extra["s3:max-keys"] = []string{strconv.FormatInt(maxKeys, 10)}
 		}
-	case actionGetObjectVersion, actionDeleteObjectVersion,
-		actionGetObjectVersionTagging, actionPutObjectVersionTagging, actionDeleteObjectVersionTagging:
+	case actionGetObjectVersion, actionDeleteObjectVersion:
 		if version := VersionFromQuery(query["versionId"]); version.Specified {
 			extra["s3:versionid"] = []string{FormatVersion(version.ID)}
 		}
@@ -170,10 +169,15 @@ func (a *bucketAccess) actionPolicyContext(action string) (policyContext, error)
 			extra["s3:if-match"] = []string{value}
 		}
 	case actionPutObject:
+		// a POST Object's handler supplies its form's tags. Invalid tags are
+		// left to the handler.
+		if a.headerTagConditions {
+			if tags, err := requestTags(a.request.Header); err == nil {
+				maps.Copy(extra, requestTagPolicyContext(tags))
+			}
+		}
 		// only CopyObject and UploadPartCopy, both PUTs, have a copy source
-		source := a.request.Header.Get("X-Amz-Copy-Source")
-		copies := source != "" && a.request.Method == http.MethodPut
-		if copies {
+		if source := a.request.Header.Get("X-Amz-Copy-Source"); source != "" && a.request.Method == http.MethodPut {
 			if bucket, object, _, err := parseSource(source); err == nil {
 				extra["s3:x-amz-copy-source"] = []string{bucket + "/" + object}
 			}
@@ -196,18 +200,6 @@ func (a *bucketAccess) actionPolicyContext(action string) (policyContext, error)
 		if lock, err := requestObjectLock(a.request.Header); err == nil && uploadID == "" {
 			maps.Copy(extra, objectLockPolicyContext(lock))
 		}
-		// PutObject and CreateMultipartUpload apply X-Amz-Tagging. The
-		// handlers of CopyObject and POST Object add the tags they apply. An
-		// invalid tag set is rejected by the handler.
-		appliesTags := query.Has("uploads")
-		if a.request.Method == http.MethodPut {
-			appliesTags = uploadID == "" && !copies
-		}
-		if appliesTags {
-			if tags, err := requestTags(a.request.Header); err == nil && len(tags) > 0 {
-				maps.Copy(extra, requestObjectTagPolicyContext(tags))
-			}
-		}
 	}
 	return a.requestContext.merge(extra), nil
 }
@@ -229,22 +221,36 @@ func objectLockPolicyContext(lock *ObjectLockState) policyContext {
 	return extra
 }
 
-// requestObjectTagPrefix prefixes the condition key of each tag a request
-// applies to an object.
-const requestObjectTagPrefix = "s3:requestobjecttag/"
+// The condition key prefixes of a tag the request applies and of a tag already
+// on the version, each followed by the lowercase tag key.
+const (
+	requestObjectTagPrefix  = "s3:requestobjecttag/"
+	existingObjectTagPrefix = "s3:existingobjecttag/"
+)
 
-// requestObjectTagPolicyContext returns the condition keys of a tag set the
-// request applies to an object.
-func requestObjectTagPolicyContext(tags TagSet) policyContext {
+// requestTagPolicyContext returns the condition keys of the tags the request
+// applies.
+func requestTagPolicyContext(tags TagSet) policyContext {
 	extra := make(policyContext)
-	keys := make([]string, 0, len(tags))
 	for _, tag := range tags {
-		keys = append(keys, tag.Key)
 		// TagSet.validate rejects keys differing only in case, so each tag
 		// has its own condition key
 		extra[requestObjectTagPrefix+strings.ToLower(tag.Key)] = []string{tag.Value}
+		extra["s3:requestobjecttagkeys"] = append(extra["s3:requestobjecttagkeys"], tag.Key)
 	}
-	extra["s3:requestobjecttagkeys"] = keys
+	return extra
+}
+
+// existingTagPolicyContext returns the condition keys of the existing tags of
+// the version a request acts on.
+func existingTagPolicyContext(tags TagSet) policyContext {
+	if len(tags) == 0 {
+		return nil
+	}
+	extra := make(policyContext)
+	for _, tag := range tags {
+		extra[existingObjectTagPrefix+strings.ToLower(tag.Key)] = []string{tag.Value}
+	}
 	return extra
 }
 
@@ -370,14 +376,15 @@ var validConditionKeys = map[string]bool{
 }
 
 // conditionKeyPrefixes are the condition keys that take a tag key suffix.
-// s3:BucketTag and s3:ExistingObjectTag are left out, so a policy using them is
-// rejected. Unlike other keys s3d cannot populate, they do not evaluate as
-// missing: s3d stores those tags, so a policy would expect them to apply.
+// s3:BucketTag is left out, so a policy using it is rejected. Unlike other keys
+// s3d cannot populate, it does not evaluate as missing: s3d stores bucket tags,
+// so a policy would expect them to apply.
 var conditionKeyPrefixes = []string{
 	"aws:principaltag/",
 	"aws:requesttag/",
 	"aws:resourcetag/",
 	"s3:accesspointtag/",
+	existingObjectTagPrefix,
 	requestObjectTagPrefix,
 }
 

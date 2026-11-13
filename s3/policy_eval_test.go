@@ -85,6 +85,36 @@ func TestPolicyEvaluation(t *testing.T) {
 	}
 }
 
+// TestPolicyCouldAllow checks that a read conditioned on existing tags is
+// denied before they are known only when no existing tags could allow it.
+func TestPolicyCouldAllow(t *testing.T) {
+	keyCondition := `,"Condition":{"StringEquals":{"s3:ExistingObjectTag/project":"one"}}`
+	tests := []struct {
+		name       string
+		statements string
+		want       bool
+	}{
+		{name: "tag condition", want: true, statements: `{"Effect":"Allow","Principal":"*","Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/*"` + keyCondition + `}`},
+		{name: "other resource", statements: `{"Effect":"Allow","Principal":"*","Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/public/*"` + keyCondition + `}`},
+		{name: "other conditions assumed", want: true, statements: `{"Effect":"Allow","Principal":"*","Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/*","Condition":{"StringEquals":{"s3:ExistingObjectTag/project":"one","aws:username":"nobody"}}}`},
+		{name: "explicit deny", statements: `{"Effect":"Allow","Principal":"*","Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/*"` + keyCondition + `},{"Effect":"Deny","Principal":"*","Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/key"}`},
+		{name: "tag deny not assumed", want: true, statements: `{"Effect":"Allow","Principal":"*","Action":"s3:GetObject","Resource":"*"},{"Effect":"Deny","Principal":"*","Action":"s3:GetObject","Resource":"*"` + keyCondition + `}`},
+		{name: "resource variable", want: true, statements: `{"Effect":"Allow","Principal":"*","Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/${s3:ExistingObjectTag/folder}/*"}`},
+		{name: "NotResource variable", want: true, statements: `{"Effect":"Allow","Principal":"*","Action":"s3:GetObject","NotResource":"arn:aws:s3:::bucket/${s3:ExistingObjectTag/folder}/*"}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			p, err := parseBucketPolicy("bucket", fmt.Sprintf(`{"Version":%q,"Statement":[%s]}`, policyVersion, test.statements))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := p.couldAllow(nil, nil, false, actionGetObject, objectARN("bucket", "key")); got != test.want {
+				t.Fatalf("expected %v, got %v", test.want, got)
+			}
+		})
+	}
+}
+
 // TestPolicyConditions checks each condition operator against request values.
 func TestPolicyConditions(t *testing.T) {
 	tests := []struct {

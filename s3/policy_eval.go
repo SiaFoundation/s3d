@@ -188,19 +188,44 @@ func (stmt policyStatement) principalMatches(caller *auth.Caller) bool {
 
 // matches reports whether stmt applies to the request.
 func (stmt *policyStatement) matches(caller *auth.Caller, e *expander, action, resource string) bool {
+	return stmt.couldMatch(caller, e, action, resource, true) && stmt.conditions.matches(e)
+}
+
+// couldMatch is [policyStatement.matches] without its conditions. When
+// existingTagsKnown is false, any resource reading the existing object tags is
+// assumed to match.
+func (stmt *policyStatement) couldMatch(caller *auth.Caller, e *expander, action, resource string, existingTagsKnown bool) bool {
 	if !stmt.principalMatches(caller) || !stmt.namesAction(action) {
 		return false
 	}
 	return elementMatches(stmt.Resource, stmt.NotResource, func(pattern string) bool {
+		if !existingTagsKnown && e.variables && referencesExistingTags(pattern) {
+			// a NotResource pattern matching would exclude the request
+			return stmt.NotResource == nil
+		}
 		expanded, ok := e.expand(pattern, true)
 		return ok && matchGlob(expanded, resource, true)
-	}) && stmt.conditions.matches(e)
+	})
 }
 
 // allows reports whether the caller may perform action on resource. An
 // explicit deny overrides both policy grants and the owner's access, except to
 // the bucket policy APIs, so the owner can always recover.
 func (p bucketPolicy) allows(caller *auth.Caller, requestContext policyContext, isOwner bool, action, resource string) bool {
+	return p.evaluate(caller, requestContext, isOwner, action, resource, true)
+}
+
+// couldAllow is [bucketPolicy.allows] for a request whose existing object tags
+// are not yet known. It is false only when no existing object tags would let
+// allows succeed: a statement reading them could allow, but is never assumed to
+// deny.
+func (p bucketPolicy) couldAllow(caller *auth.Caller, requestContext policyContext, isOwner bool, action, resource string) bool {
+	return p.evaluate(caller, requestContext, isOwner, action, resource, false)
+}
+
+// evaluate is [bucketPolicy.allows], or [bucketPolicy.couldAllow] when
+// existingTagsKnown is false.
+func (p bucketPolicy) evaluate(caller *auth.Caller, requestContext policyContext, isOwner bool, action, resource string, existingTagsKnown bool) bool {
 	if action == "" {
 		return false
 	}
@@ -215,7 +240,12 @@ func (p bucketPolicy) allows(caller *auth.Caller, requestContext policyContext, 
 		if allowed && stmt.Effect == policyEffectAllow {
 			continue
 		}
-		matched := stmt.matches(caller, e, action, resource)
+		var matched bool
+		if !existingTagsKnown && stmt.readsExistingTags(p.variables) {
+			matched = stmt.Effect == policyEffectAllow && stmt.couldMatch(caller, e, action, resource, false)
+		} else {
+			matched = stmt.matches(caller, e, action, resource)
+		}
 		// an exhausted budget may have skipped a Deny
 		if e.budget < 0 {
 			return false
