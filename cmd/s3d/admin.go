@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 )
 
@@ -37,7 +38,9 @@ func (e adminUnreachableError) Unwrap() error {
 // newAdminClient returns a client for the configured admin API, exiting if no
 // config file was found or the admin API address or password are unset.
 func newAdminClient() adminClient {
-	if configFile == "" {
+	if fp := os.Getenv(configFileEnvVar); configFile == "" && fp != "" {
+		checkFatalError("missing admin configuration", fmt.Errorf("%s is set to %s, but that file does not exist", configFileEnvVar, fp))
+	} else if configFile == "" {
 		checkFatalError("missing admin configuration", errors.New("no config file found, run from the directory holding s3d.yml or point "+configFileEnvVar+" at it"))
 	} else if cfg.AdminAddress == "" {
 		checkFatalError("missing admin configuration", fmt.Errorf("adminAddress is not set in %s", configFile))
