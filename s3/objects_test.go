@@ -1700,13 +1700,17 @@ func TestDeleteObjects(t *testing.T) {
 		t.Fatal("expected 1 deleted object, got", len(resp.Deleted))
 	}
 
-	// delete a few objects, including one that doesn't exist
+	// delete a few objects, including one that doesn't exist and one that
+	// fails its condition
 	delKeys := []string{"2", "4", "nonexistent"}
-	resp, err = s3Tester.DeleteObjects(t.Context(), bucket, testutil.ObjectIdentifiers(delKeys...), nil)
+	identifiers := append(testutil.ObjectIdentifiers(delKeys...), types.ObjectIdentifier{Key: aws.String("3"), ETag: aws.String("wrong")})
+	resp, err = s3Tester.DeleteObjects(t.Context(), bucket, identifiers, nil)
 	if err != nil {
 		t.Fatal(err)
 	} else if len(resp.Deleted) != 3 {
 		t.Fatalf("expected 3 deleted objects, got %d", len(resp.Deleted))
+	} else if len(resp.Errors) != 1 || *resp.Errors[0].Key != "3" || *resp.Errors[0].Code != s3errs.ErrPreconditionFailed.Code {
+		t.Fatalf("unexpected errors: %+v", resp.Errors)
 	}
 	assertDeleted(t, "2", resp.Deleted[0])
 	assertDeleted(t, "4", resp.Deleted[1])

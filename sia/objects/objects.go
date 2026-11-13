@@ -155,6 +155,14 @@ type OrphanedFile struct {
 	Size     int64
 }
 
+// DeleteResult is the outcome of deleting one key of a batch.
+type DeleteResult struct {
+	VersionID      string
+	IsDeleteMarker bool
+	Orphan         OrphanedFile
+	Err            error
+}
+
 // SnapshotMetadata is attached to a snapshot's Sia object. It lets recovery
 // find snapshots and refuse ones it cannot restore.
 type SnapshotMetadata struct {

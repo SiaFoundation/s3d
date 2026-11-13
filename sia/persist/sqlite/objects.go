@@ -62,39 +62,71 @@ func (s *Store) DiskUsage() (usage uint64, err error) {
 // filename is returned for cleanup if no longer referenced.
 func (s *Store) DeleteObject(bucket s3.BucketID, objectID s3.ObjectID, bypass bool) (versionID string, isDeleteMarker bool, orphan objects.OrphanedFile, _ error) {
 	err := s.transaction(func(tx *txn) error {
-		versionID, isDeleteMarker, orphan = "", false, objects.OrphanedFile{} // reset per attempt
-
 		bid, status, err := bucketIDAndVersioning(tx, bucket)
 		if err != nil {
 			return err
 		}
-
-		// a specific version ID permanently deletes exactly that version,
-		// independent of the bucket's versioning status.
-		if objectID.VersionID != nil {
-			version := *objectID.VersionID
-			res, err := deleteSpecificVersion(tx, bid, objectID.Key, version, objectID, bypass)
-			if errors.Is(err, sql.ErrNoRows) {
-				versionID = s3.FormatVersion(version) // idempotent: report as deleted
-				return nil
-			} else if err != nil {
-				return err
-			}
-			versionID, isDeleteMarker, orphan = res.reportVersionID, res.deleteMarker, res.orphanFile
-			return nil
-		}
-
-		// otherwise apply a versioning-aware delete to the current object.
-		res, err := deleteCurrentObject(tx, bid, objectID.Key, status, objectID)
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil // nothing to delete; report success without a version
-		} else if err != nil {
-			return err
-		}
-		versionID, isDeleteMarker, orphan = res.reportVersionID, res.deleteMarker, res.orphanFile
-		return nil
+		versionID, isDeleteMarker, orphan, err = deleteObjectID(tx, bid, status, objectID, bypass)
+		return err
 	})
 	return versionID, isDeleteMarker, orphan, err
+}
+
+// DeleteObjects deletes every object as DeleteObject would, in a single
+// transaction, and reports each key's outcome in order. A key that fails to
+// delete leaves the others unaffected.
+func (s *Store) DeleteObjects(bucket s3.BucketID, objectIDs []s3.ObjectID, bypass bool) (results []objects.DeleteResult, err error) {
+	err = s.transaction(func(tx *txn) error {
+		results = make([]objects.DeleteResult, len(objectIDs))
+		bid, status, err := bucketIDAndVersioning(tx, bucket)
+		if err != nil {
+			return err
+		}
+		for i, objectID := range objectIDs {
+			if _, err := tx.Exec(`SAVEPOINT delete_object`); err != nil {
+				return err
+			}
+			var res objects.DeleteResult
+			res.VersionID, res.IsDeleteMarker, res.Orphan, res.Err = deleteObjectID(tx, bid, status, objectID, bypass)
+			if isBusyError(res.Err) {
+				return res.Err
+			} else if res.Err != nil {
+				if _, err := tx.Exec(`ROLLBACK TO delete_object`); err != nil {
+					return err
+				}
+			}
+			if _, err := tx.Exec(`RELEASE delete_object`); err != nil {
+				return err
+			}
+			results[i] = res
+		}
+		return nil
+	})
+	return
+}
+
+func deleteObjectID(tx *txn, bid int64, status string, objectID s3.ObjectID, bypass bool) (versionID string, isDeleteMarker bool, orphan objects.OrphanedFile, _ error) {
+	// a specific version ID permanently deletes exactly that version,
+	// independent of the bucket's versioning status.
+	if objectID.VersionID != nil {
+		version := *objectID.VersionID
+		res, err := deleteSpecificVersion(tx, bid, objectID.Key, version, objectID, bypass)
+		if errors.Is(err, sql.ErrNoRows) {
+			return s3.FormatVersion(version), false, objects.OrphanedFile{}, nil // idempotent: report as deleted
+		} else if err != nil {
+			return "", false, objects.OrphanedFile{}, err
+		}
+		return res.reportVersionID, res.deleteMarker, res.orphanFile, nil
+	}
+
+	// otherwise apply a versioning-aware delete to the current object.
+	res, err := deleteCurrentObject(tx, bid, objectID.Key, status, objectID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, objects.OrphanedFile{}, nil // nothing to delete; report success without a version
+	} else if err != nil {
+		return "", false, objects.OrphanedFile{}, err
+	}
+	return res.reportVersionID, res.deleteMarker, res.orphanFile, nil
 }
 
 // scanObjectAttrs scans the attributes preconditions are matched against,
