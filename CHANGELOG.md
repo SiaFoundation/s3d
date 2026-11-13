@@ -1,3 +1,24 @@
+## 0.3.1 (2026-11-13)
+
+### Features
+
+#### Tag objects on upload and copy
+
+PutObject, CreateMultipartUpload and POST Object forms now accept tags, which
+require `s3:PutObjectTagging`. CopyObject keeps the source's tags, or replaces
+them when `x-amz-tagging-directive` is `REPLACE`, and GET and HEAD report
+`x-amz-tagging-count` to callers allowed to read the tags.
+
+#### Support tag policy conditions and lifecycle tag filters
+
+Bucket policies can now condition object actions on `s3:ExistingObjectTag/<key>`,
+`s3:RequestObjectTag/<key>` and `s3:RequestObjectTagKeys`, and lifecycle
+expiration rules can filter on tags.
+
+### Fixes
+
+- Enable the sqlite driver's prepared statement cache
+
 ## 0.3.0 (2026-11-12)
 
 ### Breaking Changes
