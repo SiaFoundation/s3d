@@ -293,9 +293,82 @@ func getObject(tx *txn, obj *objects.Object, bid int64, name string, version s3.
 	return attachSiaObject(tx, obj, partObjID)
 }
 
-// attachSiaObject loads the sealed object referenced by objectID from the
-// normalized sia object tables and attaches it to obj. A null objectID leaves
-// obj untouched.
+// ObjectAttributes returns the attributes of an object together with one page
+// of its parts, read in a single transaction. A nil page skips the parts and
+// reports no truncation, as does an object without an additional checksum.
+func (s *Store) ObjectAttributes(bucket s3.BucketID, name string, version s3.VersionRequest, page *s3.ListPartsPage) (*s3.ObjectAttributes, error) {
+	var attrs s3.ObjectAttributes
+	err := s.transaction(func(tx *txn) error {
+		attrs = s3.ObjectAttributes{} // reset per attempt
+
+		bid, status, err := bucketIDAndVersioning(tx, bucket)
+		if err != nil {
+			return err
+		}
+		attrs.Versioned = status != ""
+
+		var meta map[string]string
+		if version.Specified {
+			attrs.VersionID = version.ID
+			err = tx.QueryRow(`
+				SELECT parts_count, is_delete_marker, metadata, updated_at, size, content_md5
+				FROM objects
+				WHERE bucket_id = $1 AND name = $2 AND version_id = $3
+			`, bid, name, version.ID).Scan(&attrs.PartsCount, &attrs.IsDeleteMarker, (*sqlMetaJSON)(&meta), (*sqlTime)(&attrs.LastModified), &attrs.Size, (*sqlMD5)(&attrs.ContentMD5))
+		} else {
+			err = tx.QueryRow(`
+				SELECT version_id, parts_count, is_delete_marker, metadata, updated_at, size, content_md5
+				FROM objects
+				WHERE bucket_id = $1 AND name = $2 AND is_latest = TRUE
+			`, bid, name).Scan(&attrs.VersionID, &attrs.PartsCount, &attrs.IsDeleteMarker, (*sqlMetaJSON)(&meta), (*sqlTime)(&attrs.LastModified), &attrs.Size, (*sqlMD5)(&attrs.ContentMD5))
+		}
+		if err != nil {
+			return err
+		}
+		attrs.Checksum = s3.ObjectChecksumFromMeta(meta)
+		if page == nil || attrs.IsDeleteMarker || attrs.PartsCount == 0 || attrs.Checksum == nil {
+			return nil
+		}
+
+		// the page is taken by position, since part_number keeps the upload's
+		// numbering the part file is stored under and a completion may have
+		// named a subset of the uploaded parts
+		rows, err := tx.Query(`
+			SELECT content_length, checksum
+			FROM object_parts
+			WHERE bucket_id = $1 AND name = $2 AND version_id = $3
+			ORDER BY part_number ASC
+			LIMIT $4 OFFSET $5
+		`, bid, name, attrs.VersionID, page.MaxParts+1, page.PartNumberMarker)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			if int64(len(attrs.Parts)) >= page.MaxParts {
+				attrs.IsTruncated = true
+				break
+			}
+			part := s3.ObjectPart{PartNumber: page.PartNumberMarker + len(attrs.Parts) + 1}
+			if err := rows.Scan(&part.Size, &part.Checksum); err != nil {
+				return err
+			}
+			attrs.Parts = append(attrs.Parts, part)
+		}
+		return rows.Err()
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		if version.Specified {
+			return nil, s3errs.ErrNoSuchVersion
+		}
+		return nil, s3errs.ErrNoSuchKey
+	} else if err != nil {
+		return nil, err
+	}
+	return &attrs, nil
+}
+
 func attachSiaObject(tx *txn, obj *objects.Object, objectID sql.Null[sqlHash256]) error {
 	if !objectID.Valid {
 		return nil
