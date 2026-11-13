@@ -161,7 +161,7 @@ func TestS3(t *testing.T) {
 	t.Run("test_s3", func(t *testing.T) {
 		runTox(t, confPath, testsDir,
 			"s3tests/functional/test_s3.py",
-			"-m", "not s3d_unsupported and not bucket_logging and not encryption and not sse_s3 and not bucket_encryption and not lifecycle_transition and not tagging and not object_ownership and not cloud_transition and not cloud_restore and not iam_user and not iam_account",
+			"-m", "not s3d_unsupported and not bucket_logging and not encryption and not sse_s3 and not bucket_encryption and not lifecycle_transition and not object_ownership and not cloud_transition and not cloud_restore and not iam_user and not iam_account",
 			// the two policy-status tests with _acl in their names only use bucket
 			// policies, so they are kept despite the general ACL exclusion
 			// the lifecycle exclusions drop tests for unimplemented features,
@@ -197,7 +197,10 @@ func TestS3(t *testing.T) {
 			// use_cksum_helper and checksum_object_attributes read the stored
 			// checksums back through GetObjectAttributes, which s3d does not
 			// implement yet.
-			"-k", "(not _acl or publicpolicy_acl_bucket_policy_status or nonpublicpolicy_acl_bucket_policy_status) and not multipart_reupload_checksum and not use_cksum_helper and not checksum_object_attributes and not post_object and not _torrent and not cors and not notification and not replication and not website and not _select and not lifecycle_expiration_tags and not lifecycle_expiration_versioned and not tags_head and not noncur_tags and not delete_marker_nonversioned and not delete_marker_expiration and not lifecycle_transition_set_invalid_date and not bucket_list_return_data_versioning and not bucket_recreate_not_overriding and not versioning_concurrent_multi_object_delete",
+			//
+			// put_excess_tags expects RGW's InvalidTag for more than 10 object
+			// tags. s3d returns BadRequest, matching AWS.
+			"-k","(not _acl or publicpolicy_acl_bucket_policy_status or nonpublicpolicy_acl_bucket_policy_status) and not multipart_reupload_checksum and not use_cksum_helper and not checksum_object_attributes and not post_object and not _torrent and not cors and not notification and not replication and not website and not _select and not lifecycle_expiration_tags and not lifecycle_expiration_versioned and not tags_head and not noncur_tags and not delete_marker_nonversioned and not delete_marker_expiration and not lifecycle_transition_set_invalid_date and not bucket_list_return_data_versioning and not bucket_recreate_not_overriding and not versioning_concurrent_multi_object_delete and not existing_tag and not request_obj_tag and not put_obj_with_tags and not put_excess_tags",
 		)
 	})
 

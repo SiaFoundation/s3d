@@ -491,7 +491,7 @@ func TestBucketPolicyGrantsAreIndependent(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := s3Tester.PutBucketPolicy(t.Context(), bucket, statementPolicy(grant.action, grant.resource)); err != nil {
+			if err := s3Tester.PutBucketPolicy(t.Context(), bucket, statementPolicy(grant.resource, grant.action)); err != nil {
 				t.Fatal(err)
 			}
 
@@ -536,10 +536,10 @@ func TestBucketPolicyGrantsAreIndependent(t *testing.T) {
 	}
 }
 
-// statementPolicy grants action on resource to everyone.
-func statementPolicy(action, resource string) string {
+// statementPolicy grants actions on resource to everyone.
+func statementPolicy(resource string, actions ...string) string {
 	return fmt.Sprintf(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*",
-		"Action":"%s","Resource":"arn:aws:s3:::%s"}]}`, action, resource)
+		"Action":["%s"],"Resource":"arn:aws:s3:::%s"}]}`, strings.Join(actions, `","`), resource)
 }
 
 // TestBucketPolicyListingReportsBucketOwner checks that a listing attributes
@@ -1276,6 +1276,16 @@ func TestBucketPolicyObjectLockConditions(t *testing.T) {
 	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
 }
 
+// putTaggedObject stores data under object with the X-Amz-Tagging value tags.
+func putTaggedObject(t *testing.T, s3Tester *testutil.S3Tester, bucket, object, tags string) *service.PutObjectOutput {
+	t.Helper()
+	resp, err := s3Tester.Client().PutObject(t.Context(), &service.PutObjectInput{Bucket: aws.String(bucket), Key: aws.String(object), Body: strings.NewReader("data"), Tagging: aws.String(tags)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
 // TestBucketPolicyTaggingActions checks that each tagging API is granted by
 // its own action.
 func TestBucketPolicyTaggingActions(t *testing.T) {
@@ -1288,21 +1298,27 @@ func TestBucketPolicyTaggingActions(t *testing.T) {
 	} else if err := s3Tester.PutBucketVersioning(t.Context(), bucket, types.BucketVersioningStatusEnabled); err != nil {
 		t.Fatal(err)
 	}
-	version, err := s3Tester.Client().PutObject(t.Context(), &service.PutObjectInput{Bucket: aws.String(bucket), Key: aws.String("key"), Body: strings.NewReader("data")})
-	if err != nil {
-		t.Fatal(err)
-	} else if _, err := s3Tester.PutObjectTagging(t.Context(), bucket, "key", version.VersionId, []types.Tag{{Key: aws.String("project"), Value: aws.String("one")}}); err != nil {
-		t.Fatal(err)
-	}
-	setPolicy := func(action, resource string) {
+	version := putTaggedObject(t, s3Tester, bucket, "key", "project=one")
+	setPolicy := func(resource string, actions ...string) {
 		t.Helper()
-		if err := s3Tester.PutBucketPolicy(t.Context(), bucket, statementPolicy(action, resource)); err != nil {
+		if err := s3Tester.PutBucketPolicy(t.Context(), bucket, statementPolicy(resource, actions...)); err != nil {
 			t.Fatal(err)
 		}
 	}
 
+	// GetObject alone does not disclose the tag count
+	setPolicy(bucket+"/*", "s3:GetObject")
+	resp, err := other.Client().GetObject(t.Context(), &service.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String("key")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.TagCount != nil {
+		t.Fatalf("expected no tag count, got %d", *resp.TagCount)
+	}
+
 	// the version action grants reading an explicit version only
-	setPolicy("s3:GetObjectVersionTagging", bucket+"/*")
+	setPolicy(bucket+"/*", "s3:GetObjectVersionTagging")
 	tagging, err := other.GetObjectTagging(t.Context(), bucket, "key", version.VersionId)
 	if err != nil {
 		t.Fatal(err)
@@ -1312,22 +1328,125 @@ func TestBucketPolicyTaggingActions(t *testing.T) {
 	_, err = other.GetObjectTagging(t.Context(), bucket, "key", nil)
 	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
 
-	// s3:PutBucketTagging grants deleting the tags as well
-	policy := fmt.Sprintf(`{
-  "Version": "2012-10-17",
-  "Statement": [
-    {"Effect": "Allow", "Principal": "*", "Action": ["s3:GetBucketTagging", "s3:PutBucketTagging"], "Resource": "arn:aws:s3:::%s"}
-  ]
-}`, bucket)
-	if err := s3Tester.PutBucketPolicy(t.Context(), bucket, policy); err != nil {
+	// a copy that keeps the source's tag set needs s3:GetObjectTagging on the
+	// source and s3:PutObjectTagging on the copy, but one that replaces it with
+	// an empty tag set needs neither
+	copyObject := func(directive types.TaggingDirective) error {
+		_, err := other.Client().CopyObject(t.Context(), &service.CopyObjectInput{Bucket: aws.String(bucket), Key: aws.String("copy"), CopySource: aws.String(bucket + "/key"), TaggingDirective: directive})
+		return err
+	}
+	setPolicy(bucket+"/*", "s3:GetObject", "s3:PutObject", "s3:GetObjectTagging")
+	err = copyObject(types.TaggingDirectiveCopy)
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+	setPolicy(bucket+"/*", "s3:GetObject", "s3:PutObject", "s3:PutObjectTagging")
+	err = copyObject(types.TaggingDirectiveCopy)
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+	if err := copyObject(types.TaggingDirectiveReplace); err != nil {
 		t.Fatal(err)
-	} else if err := other.PutBucketTagging(t.Context(), bucket, []types.Tag{{Key: aws.String("owner"), Value: aws.String("other")}}); err != nil {
+	}
+	setPolicy(bucket+"/*", "s3:GetObject", "s3:PutObject", "s3:GetObjectTagging", "s3:PutObjectTagging")
+	if err := copyObject(types.TaggingDirectiveCopy); err != nil {
+		t.Fatal(err)
+	}
+
+	// s3:PutBucketTagging grants deleting the tags as well
+	setPolicy(bucket, "s3:GetBucketTagging", "s3:PutBucketTagging")
+	if err := other.PutBucketTagging(t.Context(), bucket, []types.Tag{{Key: aws.String("owner"), Value: aws.String("other")}}); err != nil {
 		t.Fatal(err)
 	} else if _, err := other.GetBucketTagging(t.Context(), bucket); err != nil {
 		t.Fatal(err)
 	} else if err := other.DeleteBucketTagging(t.Context(), bucket); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestBucketPolicyWriteTagConditions checks that s3:PutObject sees the tags a
+// write applies, both to grant and to deny it.
+func TestBucketPolicyWriteTagConditions(t *testing.T) {
+	const (
+		bucket = "bucket"
+		object = "key"
+	)
+
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
+	other := s3Tester.ChangeAccessKey(t, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey)
+
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+	putTaggedObject(t, s3Tester, bucket, "public", "classification=public")
+	putTaggedObject(t, s3Tester, bucket, "secret", "classification=secret")
+	// s3:GetObjectTagging lets the COPY directive copy the source's tag set
+	policy := fmt.Sprintf(`{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": %q,
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::%s/*",
+      "Condition": {"StringEquals": {"s3:RequestObjectTag/classification": "public"}}
+    },
+    {
+      "Effect": "Allow",
+      "Principal": %q,
+      "Action": ["s3:GetObject", "s3:GetObjectTagging", "s3:PutObjectTagging"],
+      "Resource": "arn:aws:s3:::%s/*"
+    },
+    {
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::%s/*",
+      "Condition": {"StringEquals": {"s3:RequestObjectTag/classification": "secret"}}
+    }
+  ]
+}`, testutil.OtherOwner, bucket, testutil.OtherOwner, bucket, bucket)
+	if err := s3Tester.PutBucketPolicy(t.Context(), bucket, policy); err != nil {
+		t.Fatal(err)
+	}
+
+	put := func(tester *testutil.S3Tester, tags string) error {
+		_, err := tester.Client().PutObject(t.Context(), &service.PutObjectInput{Bucket: aws.String(bucket), Key: aws.String(object), Body: strings.NewReader("data"), Tagging: aws.String(tags)})
+		return err
+	}
+	if err := put(other, "classification=public"); err != nil {
+		t.Fatal(err)
+	}
+	err := put(other, "project=one")
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+	err = put(other, "classification=secret")
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+	err = put(s3Tester, "classification=secret")
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+
+	createUpload := func(tester *testutil.S3Tester, tags string) error {
+		_, err := tester.Client().CreateMultipartUpload(t.Context(), &service.CreateMultipartUploadInput{Bucket: aws.String(bucket), Key: aws.String(object), Tagging: aws.String(tags)})
+		return err
+	}
+	if err := createUpload(other, "classification=public"); err != nil {
+		t.Fatal(err)
+	}
+	err = createUpload(s3Tester, "classification=secret")
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+
+	// a copy is checked with the tags it applies, its source's unless it
+	// replaces them
+	copyObject := func(tester *testutil.S3Tester, source string, directive types.TaggingDirective, tags *string) error {
+		_, err := tester.Client().CopyObject(t.Context(), &service.CopyObjectInput{Bucket: aws.String(bucket), Key: aws.String("copy"), CopySource: aws.String(bucket + "/" + source), TaggingDirective: directive, Tagging: tags})
+		return err
+	}
+	if err := copyObject(other, "public", types.TaggingDirectiveCopy, nil); err != nil {
+		t.Fatal(err)
+	} else if err := copyObject(other, "secret", types.TaggingDirectiveReplace, aws.String("classification=public")); err != nil {
+		t.Fatal(err)
+	}
+	err = copyObject(other, "secret", types.TaggingDirectiveCopy, nil)
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+	err = copyObject(s3Tester, "secret", types.TaggingDirectiveCopy, nil)
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+	err = copyObject(s3Tester, "public", types.TaggingDirectiveReplace, aws.String("classification=secret"))
+	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
 }
 
 // TestBucketPolicyTaggingConditions checks that tag conditions see the tags a

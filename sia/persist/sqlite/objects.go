@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"slices"
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
@@ -171,12 +172,25 @@ func checkWritePreconditions(tx *txn, bid int64, name string, p s3.ObjectPrecond
 	return p.CheckWrite(&attrs)
 }
 
-// GetObject retrieves an object. An unspecified version returns the current
-// version (ErrNoSuchKey if the key has no versions); a specified version returns
-// that version (ErrNoSuchVersion if absent). The result may be a delete marker.
+// GetObject retrieves an object without its tag set. An unspecified version
+// returns the current version (ErrNoSuchKey if the key has no versions); a
+// specified version returns that version (ErrNoSuchVersion if absent). The
+// result may be a delete marker.
 func (s *Store) GetObject(bucket s3.BucketID, name string, version s3.VersionRequest, partNumber *int32) (*objects.Object, error) {
+	return s.resolveObject(bucket, name, version, partNumber, false)
+}
+
+// GetObjectWithTags is like GetObject but also returns the tag set of the
+// addressed version.
+func (s *Store) GetObjectWithTags(bucket s3.BucketID, name string, version s3.VersionRequest, partNumber *int32) (*objects.Object, error) {
+	return s.resolveObject(bucket, name, version, partNumber, true)
+}
+
+// resolveObject implements GetObject and GetObjectWithTags.
+func (s *Store) resolveObject(bucket s3.BucketID, name string, version s3.VersionRequest, partNumber *int32, withTags bool) (*objects.Object, error) {
 	var obj objects.Object
 	err := s.transaction(func(tx *txn) error {
+		obj = objects.Object{} // reset if the transaction retries
 		bid, status, err := bucketIDAndVersioning(tx, bucket)
 		if err != nil {
 			return err
@@ -185,6 +199,13 @@ func (s *Store) GetObject(bucket s3.BucketID, name string, version s3.VersionReq
 			return err
 		}
 		obj.Versioned = status != ""
+		if withTags && !obj.IsDeleteMarker {
+			tags, err := objectTags(tx, bid, name, obj.VersionID)
+			if err != nil {
+				return err
+			}
+			obj.Tags = tags
+		}
 		return nil
 	})
 	if errors.Is(err, sql.ErrNoRows) {
@@ -309,7 +330,7 @@ func (s *Store) PutObject(bucket s3.BucketID, name string, opts objects.PutOptio
 		if err != nil {
 			return err
 		}
-		res, err := putObject(tx, bid, name, status, opts.ContentMD5, opts.Meta, opts.Length, 0, opts.FileName, nil, lock)
+		res, err := putObject(tx, bid, name, status, opts.ContentMD5, opts.Meta, opts.Tags, opts.Length, 0, opts.FileName, nil, lock)
 		versionID, orphan = res.reportVersionID, res.orphanFile
 		return err
 	})
@@ -681,6 +702,17 @@ func (s *Store) CopyObject(srcBucket s3.BucketID, srcName string, srcVersion s3.
 			srcVersionWire = s3.FormatVersion(srcInternalVersion)
 		}
 
+		// the caller was authorized against the source's tags outside this
+		// transaction
+		if opts.CopyTags {
+			srcTags, err := objectTags(tx, srcBid, srcName, srcInternalVersion)
+			if err != nil {
+				return s3.CopySourceError{Err: err}
+			} else if !slices.Equal(srcTags, opts.Tags) {
+				return s3.CopySourceError{Err: fmt.Errorf("the source's tags changed during the copy: %w", s3errs.ErrConditionalRequestConflict)}
+			}
+		}
+		obj.Tags = opts.Tags
 		if opts.Replace {
 			// the copy holds the same bytes, so the source's additional
 			// checksum survives a metadata replacement
@@ -718,12 +750,15 @@ func (s *Store) CopyObject(srcBucket s3.BucketID, srcName string, srcVersion s3.
 				UPDATE objects SET seq = $1, metadata = $2, updated_at = $3, is_latest = TRUE, noncurrent_at = NULL
 				WHERE bucket_id = $4 AND name = $5 AND version_id = $6
 			`, seq, sqlMetaJSON(obj.Meta), sqlTime(time.Now()), dstBid, dstName, srcInternalVersion)
+			if err != nil {
+				return err
+			}
 			obj.VersionID = srcInternalVersion
 			versionID = reportedWriteVersion(dstStatus, srcInternalVersion)
-			return err
+			return setObjectTags(tx, dstBid, dstName, srcInternalVersion, obj.Tags)
 		}
 
-		res, err := putObject(tx, dstBid, dstName, dstStatus, obj.ContentMD5, obj.Meta, obj.Length, obj.PartsCount, obj.FileName, obj.SiaObject, lock)
+		res, err := putObject(tx, dstBid, dstName, dstStatus, obj.ContentMD5, obj.Meta, obj.Tags, obj.Length, obj.PartsCount, obj.FileName, obj.SiaObject, lock)
 		if err != nil {
 			return err
 		}

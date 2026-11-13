@@ -73,7 +73,7 @@ func (s *Sia) CreateMultipartUpload(ctx context.Context, bucket s3.BucketID, obj
 
 	// create multipart upload in the database
 	checksum := objects.MultipartChecksum{Algorithm: opts.ChecksumAlgorithm, Type: opts.ChecksumType}
-	if err := s.store.CreateMultipartUpload(bucket, object, uploadID, opts.Meta, opts.ObjectLock, checksum); err != nil {
+	if err := s.store.CreateMultipartUpload(bucket, object, uploadID, opts.Meta, opts.Tags, opts.ObjectLock, checksum); err != nil {
 		s.cleanupOrphan(uploadDir, 0)
 		return nil, fmt.Errorf("failed to create multipart upload: %w", err)
 	}

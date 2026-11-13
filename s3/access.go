@@ -49,7 +49,8 @@ type operation struct {
 	// each object named in the body, so it is not given an action.
 	multiObjectDelete bool
 	// bodyConditions marks an action whose condition keys are read from the
-	// body, so its handler checks the action once it has read the body.
+	// body or a copy's source, so its handler checks the action once it has
+	// read them.
 	bodyConditions bool
 	// formAuth marks a POST Object request, which authenticates through its
 	// form fields. Its handler authorizes the caller once it has verified
@@ -86,7 +87,8 @@ func (s *s3) authorize(r *http.Request, caller *auth.Caller, bucket, object stri
 		// deleteObjects checks every key, including explicit denies
 		err = access.assertAnyAllowedInBucket(actionDeleteObject, actionDeleteObjectVersion)
 	case op.bodyConditions:
-		// the handler checks the action once the body supplies its keys
+		// the handler checks the action once the body or copy source supplies
+		// its keys
 		err = access.assertAnyAllowedInBucket(op.action)
 	case isObjectAction(op.action):
 		err = access.assertObjectAllowed(op.action, object)
@@ -136,23 +138,43 @@ func (s *s3) bucketAccess(r *http.Request, caller *auth.Caller, bucket string) (
 	return access, nil
 }
 
-// authorizeCopySource checks that the caller may read srcVersion of srcObject,
-// reusing dst's access for a same-bucket copy.
-func (s *s3) authorizeCopySource(r *http.Request, dst *bucketAccess, srcBucket, srcObject string, srcVersion VersionRequest) (*bucketAccess, error) {
+// copySource is a copy's source version, addressed explicitly so the backend
+// copies the version the caller was authorized to read.
+type copySource struct {
+	access  *bucketAccess
+	version VersionRequest
+	tags    TagSet
+}
+
+// authorizeCopySource looks up srcVersion of srcObject and checks that the
+// caller may read it, reusing dst's access for a same-bucket copy. A copy that
+// keeps the source's tag set also needs s3:GetObjectTagging on the source.
+func (s *s3) authorizeCopySource(r *http.Request, dst *bucketAccess, srcBucket, srcObject string, srcVersion VersionRequest, copyTags bool) (copySource, error) {
 	if !s.validVersion(srcVersion) {
-		return nil, s3errs.ErrInvalidRequestCopySourceVersion
+		return copySource{}, s3errs.ErrInvalidRequestCopySourceVersion
 	}
 	src := dst
 	if srcBucket != dst.bucket {
 		var err error
 		if src, err = s.bucketAccess(r, dst.caller, srcBucket); err != nil {
-			return nil, err
+			return copySource{}, err
 		}
 	}
-	if err := src.assertVersionAllowed(readAction(srcVersion), srcObject, srcVersion, nil); err != nil {
-		return nil, err
+	tagging, err := s.authorizeVersion(r, src, readAction(srcVersion), srcObject, srcVersion, nil)
+	if isMissingOrDeleteMarker(err) {
+		if errors.Is(err, s3errs.ErrMethodNotAllowed) {
+			// an addressed delete marker cannot be copied
+			err = s3errs.ErrInvalidRequest
+		}
+		return copySource{}, src.hideMissing(CopySourceError{Err: err}, srcObject)
+	} else if err != nil {
+		return copySource{}, err
+	} else if copyTags && len(tagging.Tags) > 0 {
+		if err := src.assertVersionAllowed(versionedAction(srcVersion, actionGetObjectTagging, actionGetObjectVersionTagging), srcObject, srcVersion, nil); err != nil {
+			return copySource{}, err
+		}
 	}
-	return src, nil
+	return copySource{access: src, version: tagging.Version, tags: tagging.Tags}, nil
 }
 
 // assertAuth returns the access key ID of a signed caller, or ErrAccessDenied
@@ -241,6 +263,27 @@ func (a *bucketAccess) assertLockActionAllowed(action, object string, lock *Obje
 		return err
 	}
 	return a.check(requestContext.merge(objectLockPolicyContext(lock)), action, objectARN(a.bucket, object))
+}
+
+// assertRequestTagsAllowed checks that the caller may stamp tags on a new
+// version of object.
+func (a *bucketAccess) assertRequestTagsAllowed(object string, tags TagSet) error {
+	if len(tags) == 0 {
+		return nil
+	}
+	return a.assertTaggingActionAllowed(actionPutObjectTagging, object, tags)
+}
+
+// assertWriteAllowed checks that the caller may write a new version of object
+// with tags, for the writes [s3.authorize] leaves to their handlers: copies,
+// whose tags may be their source's, and POST forms.
+func (a *bucketAccess) assertWriteAllowed(object string, tags TagSet) error {
+	if len(tags) == 0 {
+		return a.assertObjectAllowed(actionPutObject, object)
+	} else if err := a.assertTaggingActionAllowed(actionPutObject, object, tags); err != nil {
+		return err
+	}
+	return a.assertRequestTagsAllowed(object, tags)
 }
 
 // assertTaggingActionAllowed checks that the caller may perform action on

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
+	"github.com/SiaFoundation/s3d/sia/objects"
 	"go.sia.tech/core/types"
 	sdk "go.sia.tech/siastorage"
 	"go.uber.org/zap"
@@ -880,5 +881,42 @@ func TestMigrationUserNameCase(t *testing.T) {
 		t.Fatal("expected ErrUserAlreadyExists", err)
 	} else if err := migrated.CreateAccessKey("DAVE", "AKID", "secret"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestMigrationMultipartUploadTags checks that tags given when creating a
+// multipart upload carry over to the completed object after the migration.
+func TestMigrationMultipartUploadTags(t *testing.T) {
+	log := zaptest.NewLogger(t)
+	fp := filepath.Join(t.TempDir(), "s3d.sqlite3")
+
+	const multipartTagsVersion = 21
+	store := initDBVersion(t, fp, multipartTagsVersion-1, log)
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	migrated, err := OpenDatabase(fp, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer migrated.Close()
+
+	uploadID := s3.NewUploadID()
+	tags := s3.TagSet{{Key: "project", Value: "one"}}
+	if err := migrated.CreateMultipartUpload(1, "obj", uploadID, nil, tags, nil, objects.MultipartChecksum{}); err != nil {
+		t.Fatal(err)
+	} else if _, _, err := migrated.AddMultipartPart(1, "obj", uploadID, "part1", 1, frand.Entropy128(), 10, nil); err != nil {
+		t.Fatal(err)
+	}
+	_, parts, err := migrated.MultipartParts(1, "obj", uploadID)
+	if err != nil {
+		t.Fatal(err)
+	} else if _, _, _, err := migrated.CompleteMultipartUpload(1, "obj", uploadID, parts, nil, s3.ObjectPreconditions{}); err != nil {
+		t.Fatal(err)
+	} else if tagging, err := migrated.GetObjectTagging(1, "obj", s3.NoVersion()); err != nil {
+		t.Fatal(err)
+	} else if !reflect.DeepEqual(tagging.Tags, tags) {
+		t.Fatalf("expected tags %v, got %v", tags, tagging.Tags)
 	}
 }

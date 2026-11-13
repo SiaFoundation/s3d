@@ -237,6 +237,7 @@ type Store interface {
 	DeleteBucket(bucket s3.BucketID) error
 	DeleteObject(bucket s3.BucketID, objectID s3.ObjectID, bypass bool) (string, bool, objects.OrphanedFile, error)
 	GetObject(bucket s3.BucketID, object string, version s3.VersionRequest, partNumber *int32) (*objects.Object, error)
+	GetObjectWithTags(bucket s3.BucketID, object string, version s3.VersionRequest, partNumber *int32) (*objects.Object, error)
 	DiskUsage() (uint64, error)
 	BucketAccessInfo(name string) (s3.BucketAccessInfo, error)
 	GetBucketVersioning(bucket s3.BucketID) (string, error)
@@ -274,7 +275,7 @@ type Store interface {
 	RemoveOrphanedObject(objectID types.Hash256) error
 	AbortMultipartUpload(bucket s3.BucketID, name string, uploadID s3.UploadID) (int64, error)
 	AddMultipartPart(bucket s3.BucketID, name string, uploadID s3.UploadID, filename string, partNumber int, contentMD5 [16]byte, contentLength int64, checksum []byte) (string, int64, error)
-	CreateMultipartUpload(bucket s3.BucketID, name string, uploadID s3.UploadID, meta map[string]string, lock *s3.ObjectLockState, checksum objects.MultipartChecksum) error
+	CreateMultipartUpload(bucket s3.BucketID, name string, uploadID s3.UploadID, meta map[string]string, tags s3.TagSet, lock *s3.ObjectLockState, checksum objects.MultipartChecksum) error
 	CompleteMultipartUpload(bucket s3.BucketID, name string, uploadID s3.UploadID, parts []objects.Part, checksum *s3.ObjectChecksum, preconditions s3.ObjectPreconditions) (string, objects.OrphanedFile, []objects.Part, error)
 	HasMultipartUpload(bucket s3.BucketID, name string, uploadID s3.UploadID) (hasParts bool, err error)
 	ListMultipartUploads(bucket s3.BucketID, prefix s3.Prefix, page s3.ListMultipartUploadsPage) (*s3.ListMultipartUploadsResult, error)

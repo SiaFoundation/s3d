@@ -333,7 +333,7 @@ func (s *Sia) HeadObject(ctx context.Context, bucket s3.BucketID, object string,
 }
 
 func (s *Sia) headOrGetObject(ctx context.Context, bucket s3.BucketID, object string, version s3.VersionRequest, requestedRange *s3.ObjectRangeRequest, partNumber *int32, head bool) (*s3.Object, error) {
-	obj, err := s.store.GetObject(bucket, object, version, partNumber)
+	obj, err := s.store.GetObjectWithTags(bucket, object, version, partNumber)
 	if err != nil {
 		return nil, err
 	}
@@ -346,6 +346,7 @@ func (s *Sia) headOrGetObject(ctx context.Context, bucket s3.BucketID, object st
 		Versioned:      obj.Versioned,
 		IsDeleteMarker: obj.IsDeleteMarker,
 		ObjectLock:     obj.ObjectLock,
+		Tags:           obj.Tags,
 	}
 	switch {
 	case obj.IsDeleteMarker:
@@ -387,9 +388,9 @@ func (s *Sia) headOrGetObject(ctx context.Context, bucket s3.BucketID, object st
 	if obj.FileName != nil {
 		rc, err := s.openUpload(bucket, object, obj.VersionID, obj.FileName, obj.IsMultipart(), resp.Range)
 		if errors.Is(err, fs.ErrNotExist) {
-			// the upload loop moved the file to Sia between our GetObject
-			// and file open, re-fetch the same version to get the updated
-			// metadata and retry
+			// the upload loop moved the file to Sia between our lookup and
+			// file open, re-fetch the same version to get the updated
+			// metadata and retry. resp already carries the tag set.
 			obj, err = s.store.GetObject(bucket, object, s3.SpecificVersion(obj.VersionID), partNumber)
 			if err != nil {
 				return nil, err
@@ -616,6 +617,7 @@ func (s *Sia) PutObject(ctx context.Context, bucket s3.BucketID, object string, 
 		FileName:      fileName,
 		Preconditions: opts.Preconditions,
 		ObjectLock:    opts.ObjectLock,
+		Tags:          opts.Tags,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to store object metadata: %w", err)

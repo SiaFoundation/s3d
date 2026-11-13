@@ -63,7 +63,7 @@ func TestDiskUsage(t *testing.T) {
 
 	// add in-progress multipart parts
 	uid := s3.NewUploadID()
-	if err := store.CreateMultipartUpload(bid, "multipart", uid, nil, nil, objects.MultipartChecksum{}); err != nil {
+	if err := store.CreateMultipartUpload(bid, "multipart", uid, nil, nil, nil, objects.MultipartChecksum{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := store.AddMultipartPart(bid, "multipart", uid, "p1", 1, frand.Entropy128(), 500, nil); err != nil {
@@ -158,7 +158,7 @@ func TestAllFilenames(t *testing.T) {
 
 	// add an in-progress multipart upload
 	uid := s3.NewUploadID()
-	if err := store.CreateMultipartUpload(bid, "mp1", uid, nil, nil, objects.MultipartChecksum{}); err != nil {
+	if err := store.CreateMultipartUpload(bid, "mp1", uid, nil, nil, nil, objects.MultipartChecksum{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -280,7 +280,7 @@ func TestGetObject(t *testing.T) {
 	}
 
 	// create multipart object
-	err = store.CreateMultipartUpload(bid, multipart, multipartUploadID, multipartMeta, nil, objects.MultipartChecksum{})
+	err = store.CreateMultipartUpload(bid, multipart, multipartUploadID, multipartMeta, nil, nil, objects.MultipartChecksum{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +398,7 @@ func TestGetObjectPartFields(t *testing.T) {
 	bid := store.bucketID(bucket)
 
 	uploadID := s3.NewUploadID()
-	if err := store.CreateMultipartUpload(bid, name, uploadID, nil, nil, objects.MultipartChecksum{}); err != nil {
+	if err := store.CreateMultipartUpload(bid, name, uploadID, nil, nil, nil, objects.MultipartChecksum{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := store.AddMultipartPart(bid, name, uploadID, "part-1", 1, frand.Entropy128(), s3.MinUploadPartSize, nil); err != nil {
@@ -472,7 +472,7 @@ func TestCopyObject(t *testing.T) {
 	// complete a multipart object carrying a composite checksum
 	uploadID := s3.NewUploadID()
 	upload := objects.MultipartChecksum{Algorithm: s3.ChecksumSHA256, Type: s3.ChecksumTypeComposite}
-	if err := store.CreateMultipartUpload(bid, name, uploadID, nil, nil, upload); err != nil {
+	if err := store.CreateMultipartUpload(bid, name, uploadID, nil, nil, nil, upload); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1619,7 +1619,7 @@ func TestObjectsForUpload(t *testing.T) {
 
 	// insert a completed multipart upload with 2 parts
 	uid := s3.NewUploadID()
-	if err := store.CreateMultipartUpload(bid, "multipart", uid, nil, nil, objects.MultipartChecksum{}); err != nil {
+	if err := store.CreateMultipartUpload(bid, "multipart", uid, nil, nil, nil, objects.MultipartChecksum{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := store.AddMultipartPart(bid, "multipart", uid, "p1", 1, frand.Entropy128(), s3.MinUploadPartSize, nil); err != nil {
@@ -1750,7 +1750,7 @@ func TestUploadStats(t *testing.T) {
 
 	// create an in-progress multipart upload
 	uid := s3.NewUploadID()
-	if err := store.CreateMultipartUpload(bid, "mp1", uid, nil, nil, objects.MultipartChecksum{}); err != nil {
+	if err := store.CreateMultipartUpload(bid, "mp1", uid, nil, nil, nil, objects.MultipartChecksum{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1830,7 +1830,7 @@ func TestUploadStats(t *testing.T) {
 
 	// creating then aborting a multipart upload leaves the counters unchanged
 	uid2 := s3.NewUploadID()
-	if err := store.CreateMultipartUpload(bid, "mp2", uid2, nil, nil, objects.MultipartChecksum{}); err != nil {
+	if err := store.CreateMultipartUpload(bid, "mp2", uid2, nil, nil, nil, objects.MultipartChecksum{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.AbortMultipartUpload(bid, "mp2", uid2); err != nil {

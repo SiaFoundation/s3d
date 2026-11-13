@@ -131,15 +131,10 @@ func TestObjectTagging(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tag := func(key, value string) types.Tag {
-		return types.Tag{Key: aws.String(key), Value: aws.String(value)}
-	}
-	putObject := func(tags ...types.Tag) *service.PutObjectOutput {
+	putObject := func(tagging string) *service.PutObjectOutput {
 		t.Helper()
-		resp, err := client.PutObject(t.Context(), &service.PutObjectInput{Bucket: aws.String(bucket), Key: aws.String(object), Body: strings.NewReader("data")})
+		resp, err := client.PutObject(t.Context(), &service.PutObjectInput{Bucket: aws.String(bucket), Key: aws.String(object), Body: strings.NewReader("data"), Tagging: aws.String(tagging)})
 		if err != nil {
-			t.Fatal(err)
-		} else if _, err := s3Tester.PutObjectTagging(t.Context(), bucket, object, resp.VersionId, tags); err != nil {
 			t.Fatal(err)
 		}
 		return resp
@@ -156,10 +151,18 @@ func TestObjectTagging(t *testing.T) {
 		}
 	}
 
-	// tags are stored and read back
-	putObject(tag("project", "one"), tag("empty", ""), tag("unicode", "界"))
+	// tags given on upload are stored and counted on GET
+	putObject("project=one&empty=&unicode=%E7%95%8C")
 	original := map[string]string{"project": "one", "empty": "", "unicode": "界"}
 	assertTags(object, nil, original)
+	resp, err := client.GetObject(t.Context(), &service.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(object)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if aws.ToInt32(resp.TagCount) != 3 {
+		t.Fatalf("expected a tag count of 3, got %v", aws.ToInt32(resp.TagCount))
+	}
 
 	// each version keeps its own tags
 	before, err := client.HeadObject(t.Context(), &service.HeadObjectInput{Bucket: aws.String(bucket), Key: aws.String(object)})
@@ -168,7 +171,7 @@ func TestObjectTagging(t *testing.T) {
 	} else if err := s3Tester.PutBucketVersioning(t.Context(), bucket, types.BucketVersioningStatusEnabled); err != nil {
 		t.Fatal(err)
 	}
-	second := putObject(tag("project", "two"))
+	second := putObject("project=two")
 	assertTags(object, aws.String("null"), original)
 	assertTags(object, second.VersionId, map[string]string{"project": "two"})
 
@@ -185,6 +188,28 @@ func TestObjectTagging(t *testing.T) {
 		t.Fatal(err)
 	} else if !before.LastModified.Equal(*after.LastModified) || aws.ToString(before.ETag) != aws.ToString(after.ETag) {
 		t.Fatal("expected a tag update to leave the version unchanged")
+	}
+
+	// a copy takes the source's tags unless it replaces them
+	tests := []struct {
+		name      string
+		directive types.TaggingDirective
+		tagging   *string
+		want      map[string]string
+	}{
+		{"default copy", "", aws.String("ignored=tags"), map[string]string{"project": "two"}},
+		{"explicit copy", types.TaggingDirectiveCopy, nil, map[string]string{"project": "two"}},
+		{"replace", types.TaggingDirectiveReplace, aws.String("replacement=tags"), map[string]string{"replacement": "tags"}},
+		{"clear", types.TaggingDirectiveReplace, nil, map[string]string{}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := client.CopyObject(t.Context(), &service.CopyObjectInput{Bucket: aws.String(bucket), Key: aws.String(tc.name), CopySource: aws.String(bucket + "/" + object), TaggingDirective: tc.directive, Tagging: tc.tagging})
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertTags(tc.name, resp.VersionId, tc.want)
+		})
 	}
 
 	// delete the tags of a version
@@ -215,15 +240,9 @@ func TestObjectTaggingOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// tags keep the order the client sent them in
+	// tags given in X-Amz-Tagging keep the order the client sent them in
 	want := []string{"zeta", "alpha", "mid"}
-	var tags []types.Tag
-	for i, key := range want {
-		tags = append(tags, types.Tag{Key: aws.String(key), Value: aws.String(fmt.Sprint(i))})
-	}
-	if _, err := s3Tester.PutObject(t.Context(), bucket, "key", strings.NewReader("data"), nil); err != nil {
-		t.Fatal(err)
-	} else if _, err := s3Tester.PutObjectTagging(t.Context(), bucket, "key", nil, tags); err != nil {
+	if _, err := s3Tester.Client().PutObject(t.Context(), &service.PutObjectInput{Bucket: aws.String(bucket), Key: aws.String("key"), Body: strings.NewReader("data"), Tagging: aws.String("zeta=1&alpha=2&mid=3")}); err != nil {
 		t.Fatal(err)
 	}
 	resp, err := s3Tester.GetObjectTagging(t.Context(), bucket, "key", nil)
@@ -236,6 +255,90 @@ func TestObjectTaggingOrder(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("expected %v, got %v", want, got)
+	}
+}
+
+func TestObjectTaggingSelfCopy(t *testing.T) {
+	s3Tester := testutil.NewTester(t)
+	client := s3Tester.Client()
+
+	const (
+		bucket = "self-tag-copy"
+		object = "key"
+	)
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	} else if _, err := client.PutObject(t.Context(), &service.PutObjectInput{Bucket: aws.String(bucket), Key: aws.String(object), Body: strings.NewReader("data"), Tagging: aws.String("project=one"), Metadata: map[string]string{"key": "value"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, versioned := range []bool{false, true} {
+		if versioned {
+			if err := s3Tester.PutBucketVersioning(t.Context(), bucket, types.BucketVersioningStatusEnabled); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		// as in S3, replacing only the tags does not make a self-copy legal
+		_, err := client.CopyObject(t.Context(), &service.CopyObjectInput{Bucket: aws.String(bucket), Key: aws.String(object), CopySource: aws.String(bucket + "/" + object), TaggingDirective: types.TaggingDirectiveReplace, Tagging: aws.String("project=two")})
+		testutil.AssertS3Error(t, s3errs.ErrInvalidRequest, err)
+
+		// replacing the metadata as well does
+		if _, err := client.CopyObject(t.Context(), &service.CopyObjectInput{Bucket: aws.String(bucket), Key: aws.String(object), CopySource: aws.String(bucket + "/" + object), TaggingDirective: types.TaggingDirectiveReplace, Tagging: aws.String("project=two"), MetadataDirective: types.MetadataDirectiveReplace, Metadata: map[string]string{"key": "value"}}); err != nil {
+			t.Fatal(err)
+		}
+		resp, err := s3Tester.GetObjectTagging(t.Context(), bucket, object, nil)
+		if err != nil {
+			t.Fatal(err)
+		} else if want := map[string]string{"project": "two"}; !reflect.DeepEqual(tagMap(resp.TagSet), want) {
+			t.Fatalf("expected tags %v, got %v", want, tagMap(resp.TagSet))
+		}
+
+		// the content and metadata are unchanged
+		obj, err := client.GetObject(t.Context(), &service.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(object)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(obj.Body)
+		obj.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		} else if string(body) != "data" {
+			t.Fatalf("expected body %q, got %q", "data", body)
+		} else if obj.Metadata["key"] != "value" {
+			t.Fatalf("expected metadata to be kept, got %v", obj.Metadata)
+		}
+	}
+}
+
+func TestMultipartUploadTagging(t *testing.T) {
+	s3Tester := testutil.NewTester(t)
+
+	const (
+		bucket = "multipart-tags"
+		object = "key"
+	)
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// an upload's tags are applied when it completes
+	upload, err := s3Tester.Client().CreateMultipartUpload(t.Context(), &service.CreateMultipartUploadInput{Bucket: aws.String(bucket), Key: aws.String(object), Tagging: aws.String("project=one")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	part, err := s3Tester.UploadPart(t.Context(), bucket, object, *upload.UploadId, 1, []byte("data"))
+	if err != nil {
+		t.Fatal(err)
+	} else if _, err := s3Tester.CompleteMultipartUpload(t.Context(), bucket, object, *upload.UploadId, []types.CompletedPart{{PartNumber: aws.Int32(1), ETag: part.ETag}}); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := s3Tester.GetObjectTagging(t.Context(), bucket, object, nil)
+	if err != nil {
+		t.Fatal(err)
+	} else if want := map[string]string{"project": "one"}; !reflect.DeepEqual(tagMap(resp.TagSet), want) {
+		t.Fatalf("expected tags %v, got %v", want, tagMap(resp.TagSet))
 	}
 }
 

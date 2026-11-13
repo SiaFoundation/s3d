@@ -65,7 +65,11 @@ func (s *Store) GetObjectTagging(bucket s3.BucketID, name string, version s3.Ver
 		if err != nil {
 			return err
 		}
-		tagging = s3.ObjectTagging{Tags: tags, VersionID: reportedTaggingVersion(status, v, version.Specified)}
+		tagging = s3.ObjectTagging{
+			Tags:      tags,
+			Version:   s3.SpecificVersion(v),
+			VersionID: reportedTaggingVersion(status, v, version.Specified),
+		}
 		return nil
 	})
 	return
@@ -113,6 +117,15 @@ func objectTags(tx *txn, bid int64, name, versionID string) (s3.TagSet, error) {
 		bid, name, versionID)
 }
 
+// insertObjectTags stores the tags of a new object version.
+func insertObjectTags(tx *txn, bid int64, name, versionID string, tags s3.TagSet) error {
+	if err := insertTags(tx, `INSERT INTO object_tags (bucket_id, name, version_id, position, tag_key, tag_value) VALUES ($1, $2, $3, $4, $5, $6)`,
+		tags, bid, name, versionID); err != nil {
+		return fmt.Errorf("failed to insert object tags: %w", err)
+	}
+	return nil
+}
+
 // insertTags inserts each tag with a query taking the owner columns followed by
 // position, tag_key and tag_value.
 func insertTags(tx *txn, query string, tags s3.TagSet, owner ...any) error {
@@ -128,11 +141,8 @@ func insertTags(tx *txn, query string, tags s3.TagSet, owner ...any) error {
 func setObjectTags(tx *txn, bid int64, name, versionID string, tags s3.TagSet) error {
 	if _, err := tx.Exec(`DELETE FROM object_tags WHERE bucket_id = $1 AND name = $2 AND version_id = $3`, bid, name, versionID); err != nil {
 		return fmt.Errorf("failed to delete object tags: %w", err)
-	} else if err := insertTags(tx, `INSERT INTO object_tags (bucket_id, name, version_id, position, tag_key, tag_value) VALUES ($1, $2, $3, $4, $5, $6)`,
-		tags, bid, name, versionID); err != nil {
-		return fmt.Errorf("failed to insert object tags: %w", err)
 	}
-	return nil
+	return insertObjectTags(tx, bid, name, versionID, tags)
 }
 
 // queryTags reads a tag set from a query selecting tag_key and tag_value.

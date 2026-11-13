@@ -70,6 +70,10 @@ type Backend interface {
 	//
 	// - opts.DestinationPreconditions must be evaluated against the current
 	//   version of the destination, via ObjectPreconditions.CheckWrite.
+	//
+	// - The copy's tags are opts.Tags. When opts.CopyTags is set they are the
+	//   source's tags the caller was authorized against. If the source's tags no
+	//   longer match, [ErrConditionalRequestConflict] must be returned.
 	CopyObject(ctx context.Context, srcBucket BucketID, srcObject string, srcVersion VersionRequest, dstBucket BucketID, dstObject string, opts CopyObjectOptions) (*CopyObjectResult, error)
 
 	// CreateBucket creates a new bucket owned by the user identified by the
@@ -424,7 +428,8 @@ type Backend interface {
 	//   returned; if an addressed version is one, [ErrMethodNotAllowed].
 	PutObjectTagging(ctx context.Context, bucket BucketID, object string, version VersionRequest, tags TagSet) (*ObjectTaggingResult, error)
 
-	// GetObjectTagging returns the tag set of the addressed version.
+	// GetObjectTagging returns the tag set of the addressed version, with the
+	// version addressed explicitly so a later call acts on the same one.
 	//
 	// - If the bucket does not exist, [ErrNoSuchBucket] must be returned.
 	//

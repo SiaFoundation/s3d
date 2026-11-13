@@ -24,6 +24,7 @@ import (
 // upload.
 type CreateMultipartUploadOptions struct {
 	Meta       map[string]string
+	Tags       TagSet
 	ObjectLock *ObjectLockState
 
 	// ChecksumAlgorithm and ChecksumType are the additional checksum every
@@ -318,6 +319,13 @@ func (s *s3) createMultipartUpload(w http.ResponseWriter, r *http.Request, acces
 		return err
 	}
 
+	tags, err := requestTags(r.Header)
+	if err != nil {
+		return err
+	} else if err := access.assertRequestTagsAllowed(object, tags); err != nil {
+		return err
+	}
+
 	algorithm, checksumType, err := requestMultipartChecksum(r.Header)
 	if err != nil {
 		return err
@@ -325,6 +333,7 @@ func (s *s3) createMultipartUpload(w http.ResponseWriter, r *http.Request, acces
 
 	result, err := s.backend.CreateMultipartUpload(r.Context(), access.bucketID, object, CreateMultipartUploadOptions{
 		Meta:              meta,
+		Tags:              tags,
 		ObjectLock:        lock,
 		ChecksumAlgorithm: algorithm,
 		ChecksumType:      checksumType,
@@ -429,18 +438,18 @@ func (s *s3) copyPart(w http.ResponseWriter, r *http.Request, dst *bucketAccess,
 		return err
 	}
 
-	src, err := s.authorizeCopySource(r, dst, srcBucket, srcObject, srcVersion)
+	src, err := s.authorizeCopySource(r, dst, srcBucket, srcObject, srcVersion, false)
 	if err != nil {
 		return err
 	}
 
-	result, err := s.backend.UploadPartCopy(r.Context(), src.bucketID, srcObject, srcVersion, dst.bucketID, dstObject, uploadID, UploadPartCopyOptions{
+	result, err := s.backend.UploadPartCopy(r.Context(), src.access.bucketID, srcObject, src.version, dst.bucketID, dstObject, uploadID, UploadPartCopyOptions{
 		PartNumber:          partNumber,
 		Range:               srcRange,
 		SourcePreconditions: copySourcePreconditions(r.Header),
 	})
 	if err != nil {
-		return src.hideMissingSource(err, srcObject)
+		return src.access.hideMissingSource(err, srcObject)
 	}
 
 	etag := FormatETag(result.ContentMD5[:], 0)
