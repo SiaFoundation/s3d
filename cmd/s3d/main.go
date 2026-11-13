@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -89,6 +90,9 @@ var cfg = Config{
 	S3: S3{},
 }
 
+// configFile is the absolute path of the loaded config file, empty when none was found.
+var configFile string
+
 func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -138,7 +142,12 @@ func main() {
 	snapshotsScheduleSetCmd.IntVar(&snapshotsSchedule.KeepMonthly, "keep-monthly", 0, "months of scheduled snapshots kept")
 
 	// attempt to load the config file
-	configPath := tryLoadConfig()
+	configFile = tryLoadConfig()
+	if configFile != "" {
+		var err error
+		configFile, err = filepath.Abs(configFile)
+		checkFatalError("failed to get absolute path of config file", err)
+	}
 
 	// apply environment variable overrides
 	applyEnvVars(&cfg)
@@ -208,7 +217,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		runConfigCmd(configPath)
+		runConfigCmd(configFile)
 		return
 	case loginCmd:
 		if len(cmd.Args()) != 0 {
@@ -216,7 +225,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		runLoginCmd(ctx, configPath, disableStdin)
+		runLoginCmd(ctx, configFile, disableStdin)
 		return
 	case statusCmd:
 		runStatus(ctx, statusCmd)
@@ -489,8 +498,11 @@ func main() {
 func checkFatalError(context string, err error) {
 	if err == nil {
 		return
+	} else if strings.HasPrefix(err.Error(), context+": ") {
+		fmt.Fprintln(os.Stderr, err)
+	} else {
+		fmt.Fprintf(os.Stderr, "%s: %s\n", context, err)
 	}
-	fmt.Fprintf(os.Stderr, "%s: %s\n", context, err)
 	os.Exit(1)
 }
 
