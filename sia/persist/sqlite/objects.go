@@ -88,7 +88,9 @@ func (s *Store) DeleteObjects(bucket s3.BucketID, objectIDs []s3.ObjectID, bypas
 			}
 			var res objects.DeleteResult
 			res.VersionID, res.IsDeleteMarker, res.Orphan, res.Err = deleteObjectID(tx, bid, status, objectID, bypass)
-			if res.Err != nil {
+			if isBusyError(res.Err) {
+				return res.Err
+			} else if res.Err != nil {
 				if _, err := tx.Exec(`ROLLBACK TO delete_object`); err != nil {
 					return err
 				}
