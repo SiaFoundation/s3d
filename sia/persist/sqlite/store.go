@@ -59,7 +59,7 @@ func (s *Store) transaction(fn func(*txn) error) error {
 		}
 
 		// return immediately if the error is not a busy error
-		if !strings.Contains(err.Error(), "database is locked") {
+		if !isBusyError(err) {
 			break
 		}
 		// exponential backoff
@@ -71,6 +71,10 @@ func (s *Store) transaction(fn func(*txn) error) error {
 		jitterSleep(sleep)
 	}
 	return fmt.Errorf("transaction failed (attempt %d): %w", attempt, err)
+}
+
+func isBusyError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "database is locked")
 }
 
 func sqliteFilepath(fp string) string {
