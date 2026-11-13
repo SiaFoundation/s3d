@@ -23,6 +23,7 @@ type expiringVersion struct {
 // PutBucketLifecycleConfiguration stores the serialized lifecycle configuration
 // for a bucket, replacing any existing configuration.
 func (s *Store) PutBucketLifecycleConfiguration(bucket s3.BucketID, config string) error {
+	defer s.cache.reset()
 	return s.transaction(func(tx *txn) error {
 		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
@@ -41,6 +42,13 @@ func (s *Store) PutBucketLifecycleConfiguration(bucket s3.BucketID, config strin
 // GetBucketLifecycleConfiguration returns the serialized lifecycle
 // configuration for a bucket, or ErrNoSuchLifecycleConfiguration if none is set.
 func (s *Store) GetBucketLifecycleConfiguration(bucket s3.BucketID) (config string, err error) {
+	v, gen, ok := s.cache.lifecycleConfig(bucket)
+	if ok {
+		if v.missing {
+			return "", s3errs.ErrNoSuchLifecycleConfiguration
+		}
+		return v.config, nil
+	}
 	err = s.transaction(func(tx *txn) error {
 		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
@@ -52,12 +60,16 @@ func (s *Store) GetBucketLifecycleConfiguration(bucket s3.BucketID) (config stri
 		}
 		return err
 	})
+	if err == nil || errors.Is(err, s3errs.ErrNoSuchLifecycleConfiguration) {
+		s.cache.putLifecycleConfig(gen, bucket, cachedLifecycle{config: config, missing: err != nil})
+	}
 	return
 }
 
 // DeleteBucketLifecycleConfiguration removes the lifecycle configuration for a
 // bucket. It is not an error if no configuration exists.
 func (s *Store) DeleteBucketLifecycleConfiguration(bucket s3.BucketID) error {
+	defer s.cache.reset()
 	return s.transaction(func(tx *txn) error {
 		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
