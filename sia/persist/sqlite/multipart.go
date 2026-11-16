@@ -272,7 +272,7 @@ func (s *Store) AddMultipartPart(bucket s3.BucketID, name string, uploadID s3.Up
 // HasMultipartUpload checks if a multipart upload exists and reports whether
 // any parts have been uploaded for it.
 func (s *Store) HasMultipartUpload(bucket s3.BucketID, name string, uploadID s3.UploadID) (hasParts bool, err error) {
-	err = s.transaction(func(tx *txn) error {
+	err = s.readTransaction(func(tx *txn) error {
 		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
 			return err
@@ -297,7 +297,7 @@ func (s *Store) HasMultipartUpload(bucket s3.BucketID, name string, uploadID s3.
 // MultipartParts returns the additional checksum the specified multipart
 // upload was created with and its parts.
 func (s *Store) MultipartParts(bucket s3.BucketID, name string, uploadID s3.UploadID) (checksum objects.MultipartChecksum, parts []objects.Part, _ error) {
-	if err := s.transaction(func(tx *txn) error {
+	if err := s.readTransaction(func(tx *txn) error {
 		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
 			return err
@@ -317,7 +317,7 @@ func (s *Store) MultipartParts(bucket s3.BucketID, name string, uploadID s3.Uplo
 // MultipartUploadChecksum returns the additional checksum the upload was
 // created with, zero when it carries none.
 func (s *Store) MultipartUploadChecksum(bucket s3.BucketID, name string, uploadID s3.UploadID) (checksum objects.MultipartChecksum, _ error) {
-	err := s.transaction(func(tx *txn) error {
+	err := s.readTransaction(func(tx *txn) error {
 		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
 			return err
@@ -337,7 +337,7 @@ func (s *Store) ListParts(bucket s3.BucketID, name string, uploadID s3.UploadID,
 		Parts: make([]s3.UploadPart, 0, maxParts),
 	}
 
-	if err := s.transaction(func(tx *txn) error {
+	if err := s.readTransaction(func(tx *txn) error {
 		res.Parts = res.Parts[:0] // reuse same slice if transaction retries
 		res.IsTruncated = false
 		res.NextPartNumberMarker = ""
@@ -423,7 +423,7 @@ func (s *Store) ListMultipartUploads(bucket s3.BucketID, prefix s3.Prefix, page 
 		CommonPrefixes: make([]string, 0, page.MaxUploads),
 	}
 
-	err = s.transaction(func(tx *txn) error {
+	err = s.readTransaction(func(tx *txn) error {
 		res.Uploads = res.Uploads[:0]               // reuse same slice if transaction retries
 		res.CommonPrefixes = res.CommonPrefixes[:0] // reuse same slice if transaction retries
 		res.IsTruncated = false                     // reset per transaction attempt

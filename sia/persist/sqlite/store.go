@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"runtime"
 	"strings"
 	"time"
 
@@ -18,15 +19,20 @@ import (
 type (
 	// A Store is a persistent store that uses a SQL database as its backend.
 	Store struct {
-		db   *sql.DB
-		path string
-		log  *zap.Logger
+		db      *sql.DB
+		readers *sql.DB
+		path    string
+		log     *zap.Logger
 	}
 )
 
 // Close closes the underlying database.
 func (s *Store) Close() error {
-	return s.db.Close()
+	var err error
+	if s.readers != nil {
+		err = s.readers.Close()
+	}
+	return errors.Join(err, s.db.Close())
 }
 
 // DBVersion returns the current database schema version.
@@ -44,6 +50,17 @@ func SchemaVersion() int64 {
 // transaction is committed. If the transaction fails due to a busy error, it is
 // retried up to 10 times before returning.
 func (s *Store) transaction(fn func(*txn) error) error {
+	return s.runTransaction(s.db, fn)
+}
+
+// readTransaction executes a function within a read only transaction on the
+// reader pool. It sees every transaction committed before its first query and
+// fails on any write.
+func (s *Store) readTransaction(fn func(*txn) error) error {
+	return s.runTransaction(s.readers, fn)
+}
+
+func (s *Store) runTransaction(db *sql.DB, fn func(*txn) error) error {
 	var err error
 	txnID := hex.EncodeToString(frand.Bytes(4))
 	log := s.log.Named("transaction").With(zap.String("id", txnID))
@@ -52,7 +69,7 @@ func (s *Store) transaction(fn func(*txn) error) error {
 	for ; attempt < maxRetryAttempts; attempt++ {
 		attemptStart := time.Now()
 		log := log.With(zap.Int("attempt", attempt))
-		err = doTransaction(s.db, log, fn)
+		err = doTransaction(db, log, fn)
 		if err == nil {
 			// no error, break out of the loop
 			return nil
@@ -77,18 +94,26 @@ func isBusyError(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "database is locked")
 }
 
+// commonParams are the connection parameters shared by every connection.
+var commonParams = []string{
+	fmt.Sprintf("_busy_timeout=%d", time.Minute.Milliseconds()),
+	"_cache_size=-65536", // 64MiB
+	// the store issues well over a hundred distinct queries, so the cache
+	// is sized to hold them all rather than evict between requests
+	"_stmt_cache_size=256",
+}
+
 func sqliteFilepath(fp string) string {
-	params := []string{
-		fmt.Sprintf("_busy_timeout=%d", time.Minute.Milliseconds()),
+	params := append([]string{
 		"_foreign_keys=true",
 		"_journal_mode=WAL",
 		"_auto_vacuum=INCREMENTAL",
-		"_cache_size=-65536", // 64MiB
-		// the store issues well over a hundred distinct queries, so the cache
-		// is sized to hold them all rather than evict between requests
-		"_stmt_cache_size=256",
-	}
+	}, commonParams...)
 	return "file:" + fp + "?" + strings.Join(params, "&")
+}
+
+func readerFilepath(fp string) string {
+	return "file:" + fp + "?mode=ro&" + strings.Join(commonParams, "&")
 }
 
 // doTransaction is a helper function to execute a function within a transaction. If fn returns
@@ -144,6 +169,19 @@ func OpenDatabase(fp string, log *zap.Logger) (*Store, error) {
 	if err := store.init(SchemaVersion()); err != nil {
 		return nil, err
 	}
+
+	// WAL readers never conflict with the writer, so reads get their own pool
+	// instead of queueing behind the single write connection
+	readers, err := sql.Open("sqlite3", readerFilepath(fp))
+	if err != nil {
+		return nil, fmt.Errorf("failed to open reader pool: %w", err)
+	}
+	readers.SetMaxOpenConns(runtime.NumCPU())
+	readers.SetMaxIdleConns(runtime.NumCPU())
+	if err := readers.Ping(); err != nil {
+		return nil, fmt.Errorf("failed to connect to reader pool: %w", err)
+	}
+	store.readers = readers
 	sqliteVersion, _, _ := sqlite3.Version()
 	log.Debug("database initialized", zap.String("sqliteVersion", sqliteVersion), zap.Int("schemaVersion", len(migrations)+1), zap.String("path", fp))
 	return store, nil
