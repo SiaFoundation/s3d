@@ -152,8 +152,11 @@ type Backend interface {
 	//
 	// - page bounds the parts reported, with ObjectAttributes.IsTruncated set
 	//   when parts beyond the page remain. A nil page reports no parts, and so
-	//   does an object without an additional checksum. The object and its parts
-	//   are read together, so they describe one version.
+	//   does an object without an additional checksum.
+	//
+	// - ObjectAttributes.Tags must be the tag set of the version, empty for a
+	//   delete marker. The object, its tag set and its parts are read
+	//   together, so they describe one version.
 	GetObjectAttributes(ctx context.Context, bucket BucketID, object string, version VersionRequest, page *ListPartsPage) (*ObjectAttributes, error)
 
 	// BucketAccessInfo returns the ID, owner and policy document of the bucket

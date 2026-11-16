@@ -358,6 +358,12 @@ func (s *Store) ObjectAttributes(bucket s3.BucketID, name string, version s3.Ver
 			return err
 		}
 		attrs.Checksum = s3.ObjectChecksumFromMeta(meta)
+		if !attrs.IsDeleteMarker {
+			attrs.Tags, err = objectTags(tx, bid, name, attrs.VersionID)
+			if err != nil {
+				return err
+			}
+		}
 		if page == nil || attrs.IsDeleteMarker || attrs.PartsCount == 0 || attrs.Checksum == nil {
 			return nil
 		}

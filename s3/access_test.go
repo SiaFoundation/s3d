@@ -3,6 +3,7 @@ package s3
 import (
 	"context"
 	"errors"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -112,6 +113,7 @@ func TestAuthorizeCurrentPolicy(t *testing.T) {
 type backendCalls struct {
 	getObjectTagging    int
 	getObject           int
+	getObjectAttributes int
 	deleteObjectTagging int
 }
 
@@ -132,6 +134,11 @@ func (b *countingBackend) GetObject(context.Context, BucketID, string, VersionRe
 	return nil, s3errs.ErrNoSuchKey
 }
 
+func (b *countingBackend) GetObjectAttributes(context.Context, BucketID, string, VersionRequest, *ListPartsPage) (*ObjectAttributes, error) {
+	b.calls.getObjectAttributes++
+	return &ObjectAttributes{Tags: TagSet{{Key: "project", Value: "one"}}}, nil
+}
+
 func (b *countingBackend) DeleteObjectTagging(context.Context, BucketID, string, VersionRequest) (*ObjectTaggingResult, error) {
 	b.calls.deleteObjectTagging++
 	return &ObjectTaggingResult{}, nil
@@ -146,6 +153,7 @@ func TestAuthorizeExistingTags(t *testing.T) {
 		name     string
 		method   string
 		target   string
+		header   http.Header
 		caller   *auth.Caller
 		err      error
 		want     backendCalls
@@ -157,12 +165,20 @@ func TestAuthorizeExistingTags(t *testing.T) {
 		{name: "denied by existing tags", method: http.MethodGet, target: "/bucket/key", err: s3errs.ErrAccessDenied, want: backendCalls{getObjectTagging: 1}, document: `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Principal":"*","Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/*","Condition":{"StringEquals":{"s3:ExistingObjectTag/project":"two"}}}}`},
 		// a read no existing tags could allow is refused without a lookup
 		{name: "no existing tags could allow", method: http.MethodGet, target: "/bucket/key", err: s3errs.ErrAccessDenied, document: `{"Version":"2012-10-17","Statement":{"Effect":"Allow","Principal":"*","Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/public/*","Condition":{"StringEquals":{"s3:ExistingObjectTag/project":"one"}}}}`},
+		// an attributes read is checked against the existing tags of the
+		// version it looks up, whichever of its two actions reads them
+		{name: "attributes denied by existing read tags", method: http.MethodGet, target: "/bucket/key?attributes", header: http.Header{HeaderXAMZObjectAttributes: {"ETag"}}, err: s3errs.ErrAccessDenied, want: backendCalls{getObjectAttributes: 1}, document: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*","Action":"s3:GetObjectAttributes","Resource":"arn:aws:s3:::bucket/*"},{"Effect":"Allow","Principal":"*","Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/*","Condition":{"StringEquals":{"s3:ExistingObjectTag/project":"two"}}}]}`},
+		{name: "attributes denied by existing attributes tags", method: http.MethodGet, target: "/bucket/key?attributes", header: http.Header{HeaderXAMZObjectAttributes: {"ETag"}}, err: s3errs.ErrAccessDenied, want: backendCalls{getObjectAttributes: 1}, document: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*","Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/*"},{"Effect":"Allow","Principal":"*","Action":"s3:GetObjectAttributes","Resource":"arn:aws:s3:::bucket/*","Condition":{"StringEquals":{"s3:ExistingObjectTag/project":"two"}}}]}`},
+		// an attributes read no existing tags could allow is refused without a
+		// lookup
+		{name: "no existing tags could allow attributes", method: http.MethodGet, target: "/bucket/key?attributes", header: http.Header{HeaderXAMZObjectAttributes: {"ETag"}}, err: s3errs.ErrAccessDenied, document: `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*","Action":"s3:GetObject","Resource":"arn:aws:s3:::bucket/*"},{"Effect":"Allow","Principal":"*","Action":"s3:GetObjectAttributes","Resource":"arn:aws:s3:::bucket/public/*","Condition":{"StringEquals":{"s3:ExistingObjectTag/project":"one"}}}]}`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			backend := &countingBackend{authorizationBackend: authorizationBackend{document: test.document}}
 			handler := &s3{backend: backend, logger: zaptest.NewLogger(t)}
 			req := httptest.NewRequest(test.method, test.target, nil)
+			maps.Copy(req.Header, test.header)
 			op, err := handler.route(req, "bucket", "key")
 			if err != nil {
 				t.Fatal(err)
