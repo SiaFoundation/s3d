@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"time"
 
 	"go.sia.tech/core/types"
 )
@@ -33,7 +32,7 @@ func (s *Store) AppKey() (types.PrivateKey, string, error) {
 // in the database at fp. The database is opened readonly, so it is neither
 // initialized nor migrated.
 func ReadAppKey(fp string) (types.PrivateKey, string, error) {
-	db, err := sql.Open("sqlite3", fmt.Sprintf("file:%s?mode=ro&_busy_timeout=%d", fp, time.Minute.Milliseconds()))
+	db, err := sql.Open("sqlite3", readerFilepath(fp))
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to open database: %w", err)
 	}

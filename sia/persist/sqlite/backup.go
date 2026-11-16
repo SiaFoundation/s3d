@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
 )
@@ -29,7 +28,7 @@ func (s *Store) Backup(ctx context.Context, destPath string) (objectCount int64,
 
 	// a dedicated readonly connection leaves the store's connection free, a
 	// reader never blocks the writer in WAL mode
-	src, err := sql.Open("sqlite3", fmt.Sprintf("file:%s?mode=ro&_busy_timeout=%d", s.path, time.Minute.Milliseconds()))
+	src, err := sql.Open("sqlite3", readerFilepath(s.path))
 	if err != nil {
 		return 0, fmt.Errorf("failed to open source database: %w", err)
 	}

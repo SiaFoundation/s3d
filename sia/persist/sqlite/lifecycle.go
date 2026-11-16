@@ -41,7 +41,7 @@ func (s *Store) PutBucketLifecycleConfiguration(bucket s3.BucketID, config strin
 // GetBucketLifecycleConfiguration returns the serialized lifecycle
 // configuration for a bucket, or ErrNoSuchLifecycleConfiguration if none is set.
 func (s *Store) GetBucketLifecycleConfiguration(bucket s3.BucketID) (config string, err error) {
-	err = s.transaction(func(tx *txn) error {
+	err = s.readTransaction(func(tx *txn) error {
 		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
 			return err

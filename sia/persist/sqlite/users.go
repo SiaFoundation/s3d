@@ -176,7 +176,7 @@ func (s *Store) ListAccessKeys(userName *string) ([]s3.AccessKeyMetadata, error)
 // LoadSecret returns the secret key for the given access key ID and the name
 // of the user it belongs to.
 func (s *Store) LoadSecret(accessKeyID string) (secret, userName string, err error) {
-	err = s.transaction(func(tx *txn) error {
+	err = s.readTransaction(func(tx *txn) error {
 		return tx.QueryRow(`
 			SELECT ak.secret_key, u.name FROM access_keys ak
 			INNER JOIN users u ON u.id = ak.user_id
