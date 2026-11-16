@@ -1574,6 +1574,74 @@ func TestBucketPolicyUploadPartCopyExistingTags(t *testing.T) {
 	testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
 }
 
+// TestBucketPolicyGetObjectAttributesExistingTags checks that both actions a
+// GetObjectAttributes request requires are checked against the existing tags
+// of the version it reports, whichever of them a statement conditions on them.
+func TestBucketPolicyGetObjectAttributesExistingTags(t *testing.T) {
+	const (
+		bucket     = "bucket"
+		reads      = `["s3:GetObject", "s3:GetObjectVersion"]`
+		attributes = `["s3:GetObjectAttributes", "s3:GetObjectVersionAttributes"]`
+	)
+
+	s3Tester := testutil.NewTester(t, testutil.WithKeyPair(testutil.OtherOwner, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey))
+	other := s3Tester.ChangeAccessKey(t, testutil.OtherAccessKeyID, testutil.OtherSecretAccessKey)
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	} else if err := s3Tester.PutBucketVersioning(t.Context(), bucket, types.BucketVersioningStatusEnabled); err != nil {
+		t.Fatal(err)
+	}
+	allowed := putTaggedObject(t, s3Tester, bucket, "allowed", "project=one").VersionId
+	denied := putTaggedObject(t, s3Tester, bucket, "denied", "project=two").VersionId
+
+	// statement applies effect to actions on every object, or only on those
+	// tagged project=value when value is set
+	statement := func(effect, actions, value string) string {
+		var condition string
+		if value != "" {
+			condition = fmt.Sprintf(`, "Condition": {"StringEquals": {"s3:ExistingObjectTag/project": %q}}`, value)
+		}
+		return fmt.Sprintf(`{"Effect": %q, "Principal": "*", "Action": %s, "Resource": "arn:aws:s3:::%s/*"%s}`, effect, actions, bucket, condition)
+	}
+
+	// assertAttributes reads the attributes of object, both as the current
+	// version and addressed by ID
+	assertAttributes := func(object string, version *string, allow bool) {
+		t.Helper()
+		for _, addressed := range []*string{nil, version} {
+			_, err := other.Client().GetObjectAttributes(t.Context(), &service.GetObjectAttributesInput{
+				Bucket:           aws.String(bucket),
+				Key:              aws.String(object),
+				VersionId:        addressed,
+				ObjectAttributes: []types.ObjectAttributes{types.ObjectAttributesEtag},
+			})
+			if allow && err != nil {
+				t.Fatal(err)
+			} else if !allow {
+				testutil.AssertS3Error(t, s3errs.ErrAccessDenied, err)
+			}
+		}
+	}
+
+	// every policy allows the attributes of the object tagged project=one and
+	// not those of the object tagged project=two, whichever of the two actions
+	// the condition sits on and whether it grants or refuses
+	policies := []string{
+		fmt.Sprintf(`[%s, %s]`, statement("Allow", reads, "one"), statement("Allow", attributes, "")),
+		fmt.Sprintf(`[%s, %s]`, statement("Allow", reads, ""), statement("Allow", attributes, "one")),
+		fmt.Sprintf(`[%s, %s, %s]`, statement("Allow", reads, ""), statement("Allow", attributes, ""), statement("Deny", reads, "two")),
+		fmt.Sprintf(`[%s, %s, %s]`, statement("Allow", reads, ""), statement("Allow", attributes, ""), statement("Deny", attributes, "two")),
+	}
+	for _, statements := range policies {
+		policy := fmt.Sprintf(`{"Version": "2012-10-17", "Statement": %s}`, statements)
+		if err := s3Tester.PutBucketPolicy(t.Context(), bucket, policy); err != nil {
+			t.Fatal(err)
+		}
+		assertAttributes("allowed", allowed, true)
+		assertAttributes("denied", denied, false)
+	}
+}
+
 // TestBucketPolicyWriteTagConditions checks that s3:PutObject sees the tags a
 // write applies, both to grant and to deny it.
 func TestBucketPolicyWriteTagConditions(t *testing.T) {

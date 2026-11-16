@@ -479,6 +479,8 @@ func isMissingOrDeleteMarker(err error) bool {
 var existingTagActions = map[string]struct{}{
 	actionGetObject:                  {},
 	actionGetObjectVersion:           {},
+	actionGetObjectAttributes:        {},
+	actionGetObjectVersionAttributes: {},
 	actionGetObjectTagging:           {},
 	actionGetObjectVersionTagging:    {},
 	actionPutObjectTagging:           {},

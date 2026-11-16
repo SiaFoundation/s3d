@@ -70,6 +70,9 @@ type ObjectAttributes struct {
 	// IsDeleteMarker is true when the requested version is a delete marker.
 	IsDeleteMarker bool
 
+	// Tags is the tag set of the version, empty for a delete marker.
+	Tags TagSet
+
 	// Checksum is the additional checksum stored with the object, nil when it
 	// carries none.
 	Checksum *ObjectChecksum
@@ -103,8 +106,15 @@ func (s *s3) getObjectAttributes(w http.ResponseWriter, r *http.Request, access 
 		zap.String("version", version.LogValue()))
 
 	// S3 requires the attributes action alongside the read action the route
-	// already checked
-	if err := access.assertObjectAllowed(attributesAction(version), object); err != nil {
+	// already checked. An attributes action conditioned on existing tags is
+	// checked once the version is looked up, so only a request no existing
+	// tags could allow is denied here.
+	attrsAction := attributesAction(version)
+	if access.usesExistingTags(attrsAction) {
+		if err := access.assertObjectCouldBeAllowed(attrsAction, object); err != nil {
+			return err
+		}
+	} else if err := access.assertObjectAllowed(attrsAction, object); err != nil {
 		return err
 	}
 	requested, err := parseObjectAttributes(r.Header)
@@ -123,6 +133,15 @@ func (s *s3) getObjectAttributes(w http.ResponseWriter, r *http.Request, access 
 	attrs, err := s.backend.GetObjectAttributes(r.Context(), access.bucketID, object, version, partsPage)
 	if err != nil {
 		return access.hideMissing(err, object)
+	}
+
+	// check the read and the attributes action against the existing tags of
+	// the version looked up. A delete marker has none.
+	existing := existingTagPolicyContext(attrs.Tags)
+	for _, action := range []string{readAction(version), attrsAction} {
+		if err := access.assertObjectContextAllowed(action, object, existing); err != nil {
+			return err
+		}
 	}
 
 	// a delete marker and a versioned read report the headers a HEAD reports

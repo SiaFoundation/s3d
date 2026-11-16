@@ -102,7 +102,7 @@ func (s *s3) authorize(r *http.Request, caller *auth.Caller, bucket, object stri
 		// addressed version supplies its keys
 		err = access.assertAnyAllowedInBucket(op.action)
 	case isObjectAction(op.action) && access.usesExistingTags(op.action):
-		// serveObject checks the read against the existing tags of the
+		// the handler checks the read against the existing tags of the
 		// version it looks up, so only a read no existing tags could allow
 		// is denied here
 		err = access.assertObjectCouldBeAllowed(op.action, object)
