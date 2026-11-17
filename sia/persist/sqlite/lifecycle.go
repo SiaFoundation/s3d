@@ -23,8 +23,7 @@ type expiringVersion struct {
 // PutBucketLifecycleConfiguration stores the serialized lifecycle configuration
 // for a bucket, replacing any existing configuration.
 func (s *Store) PutBucketLifecycleConfiguration(bucket s3.BucketID, config string) error {
-	defer s.cache.reset()
-	return s.transaction(func(tx *txn) error {
+	return s.invalidatingTransaction(func(tx *txn) error {
 		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
 			return err
@@ -69,8 +68,7 @@ func (s *Store) GetBucketLifecycleConfiguration(bucket s3.BucketID) (config stri
 // DeleteBucketLifecycleConfiguration removes the lifecycle configuration for a
 // bucket. It is not an error if no configuration exists.
 func (s *Store) DeleteBucketLifecycleConfiguration(bucket s3.BucketID) error {
-	defer s.cache.reset()
-	return s.transaction(func(tx *txn) error {
+	return s.invalidatingTransaction(func(tx *txn) error {
 		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
 			return err

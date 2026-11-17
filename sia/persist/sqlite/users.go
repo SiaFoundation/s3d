@@ -24,12 +24,11 @@ func userIDForAccessKey(tx *txn, accessKeyID string) (int64, error) {
 // regardless of case, like AWS IAM user names, and the case it was created
 // with is kept.
 func (s *Store) CreateUser(name string) error {
-	defer s.cache.reset()
 	// a user's name is its S3 user ID
 	if strings.EqualFold(name, s3.AnonymousUserID) {
 		return s3.ErrReservedUserName
 	}
-	return s.transaction(func(tx *txn) error {
+	return s.invalidatingTransaction(func(tx *txn) error {
 		res, err := tx.Exec("INSERT INTO users (name) VALUES ($1) ON CONFLICT DO NOTHING", name)
 		if err != nil {
 			return err
@@ -48,8 +47,7 @@ func (s *Store) CreateUser(name string) error {
 // case. Access keys belonging to the user are deleted via cascade. Returns an
 // error if the user owns any buckets.
 func (s *Store) DeleteUser(name string) error {
-	defer s.cache.reset()
-	return s.transaction(func(tx *txn) error {
+	return s.invalidatingTransaction(func(tx *txn) error {
 		var userID int64
 		err := tx.QueryRow("SELECT id FROM users WHERE name = $1 COLLATE NOCASE", name).Scan(&userID)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -95,8 +93,7 @@ func (s *Store) ListUsers() ([]string, error) {
 
 // CreateAccessKey creates a new access key for the given user.
 func (s *Store) CreateAccessKey(userName, accessKeyID, secretKey string) error {
-	defer s.cache.reset()
-	return s.transaction(func(tx *txn) error {
+	return s.invalidatingTransaction(func(tx *txn) error {
 		var userID int64
 		err := tx.QueryRow("SELECT id FROM users WHERE name = $1 COLLATE NOCASE", userName).Scan(&userID)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -121,8 +118,7 @@ func (s *Store) CreateAccessKey(userName, accessKeyID, secretKey string) error {
 
 // DeleteAccessKey deletes the access key with the given ID.
 func (s *Store) DeleteAccessKey(accessKeyID string) error {
-	defer s.cache.reset()
-	return s.transaction(func(tx *txn) error {
+	return s.invalidatingTransaction(func(tx *txn) error {
 		res, err := tx.Exec("DELETE FROM access_keys WHERE access_key_id = $1", accessKeyID)
 		if err != nil {
 			return err

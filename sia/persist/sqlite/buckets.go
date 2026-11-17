@@ -12,8 +12,7 @@ import (
 // CreateBucket creates a new bucket owned by the user associated with the
 // given access key. objectLock also enables versioning.
 func (s *Store) CreateBucket(accessKeyID, name string, objectLock bool) error {
-	defer s.cache.reset()
-	return s.transaction(func(tx *txn) error {
+	return s.invalidatingTransaction(func(tx *txn) error {
 		uid, err := userIDForAccessKey(tx, accessKeyID)
 		if err != nil {
 			return err
@@ -49,8 +48,7 @@ func (s *Store) CreateBucket(accessKeyID, name string, objectLock bool) error {
 
 // DeleteBucket deletes a bucket if it is empty.
 func (s *Store) DeleteBucket(bucket s3.BucketID) error {
-	defer s.cache.reset()
-	return s.transaction(func(tx *txn) error {
+	return s.invalidatingTransaction(func(tx *txn) error {
 		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
 			return err
@@ -120,8 +118,7 @@ func (s *Store) GetBucketVersioning(bucket s3.BucketID) (status string, err erro
 // PutBucketVersioning sets the versioning status of the bucket to status, which
 // must be "Enabled" or "Suspended".
 func (s *Store) PutBucketVersioning(bucket s3.BucketID, status string) error {
-	defer s.cache.reset()
-	return s.transaction(func(tx *txn) error {
+	return s.invalidatingTransaction(func(tx *txn) error {
 		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
 			return err
@@ -153,8 +150,7 @@ func bucketIDAndVersioning(tx *txn, bucket s3.BucketID) (bid int64, status strin
 // PutBucketPolicy stores the bucket's policy document, replacing any existing
 // one.
 func (s *Store) PutBucketPolicy(bucket s3.BucketID, document string) error {
-	defer s.cache.reset()
-	return s.transaction(func(tx *txn) error {
+	return s.invalidatingTransaction(func(tx *txn) error {
 		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
 			return err
@@ -167,8 +163,7 @@ func (s *Store) PutBucketPolicy(bucket s3.BucketID, document string) error {
 // DeleteBucketPolicy removes the bucket's policy. It is not an error if the
 // bucket has none.
 func (s *Store) DeleteBucketPolicy(bucket s3.BucketID) error {
-	defer s.cache.reset()
-	return s.transaction(func(tx *txn) error {
+	return s.invalidatingTransaction(func(tx *txn) error {
 		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
 			return err
