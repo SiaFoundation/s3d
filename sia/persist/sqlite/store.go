@@ -149,7 +149,7 @@ func doTransaction(db *sql.DB, log *zap.Logger, fn func(tx *txn) error) error {
 
 // OpenDatabase creates a new SQLite store and initializes the database. If the
 // database does not exist, it is created.
-func OpenDatabase(fp string, log *zap.Logger) (*Store, error) {
+func OpenDatabase(fp string, log *zap.Logger) (_ *Store, err error) {
 	log = log.Named("sqlite")
 
 	db, err := sql.Open("sqlite3", sqliteFilepath(fp))
@@ -166,6 +166,13 @@ func OpenDatabase(fp string, log *zap.Logger) (*Store, error) {
 		path: fp,
 		log:  log,
 	}
+	// a caller that gets an error gets no store to close, and an sql.DB that is
+	// never closed is never collected
+	defer func() {
+		if err != nil {
+			store.Close()
+		}
+	}()
 	if err := store.init(SchemaVersion()); err != nil {
 		return nil, err
 	}
@@ -178,10 +185,10 @@ func OpenDatabase(fp string, log *zap.Logger) (*Store, error) {
 	}
 	readers.SetMaxOpenConns(runtime.NumCPU())
 	readers.SetMaxIdleConns(runtime.NumCPU())
+	store.readers = readers
 	if err := readers.Ping(); err != nil {
 		return nil, fmt.Errorf("failed to connect to reader pool: %w", err)
 	}
-	store.readers = readers
 	sqliteVersion, _, _ := sqlite3.Version()
 	log.Debug("database initialized", zap.String("sqliteVersion", sqliteVersion), zap.Int("schemaVersion", len(migrations)+1), zap.String("path", fp))
 	return store, nil
