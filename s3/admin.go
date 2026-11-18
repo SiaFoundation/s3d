@@ -297,17 +297,62 @@ func (s UploadStats) PrometheusMetric() []prometheus.Metric {
 	}
 }
 
+// PrometheusMetric implements the prometheus.Marshaller interface for the
+// snapshot list. The latest snapshot metrics are omitted when there are no
+// snapshots.
+func (l SnapshotList) PrometheusMetric() []prometheus.Metric {
+	synced := 0.0
+	if l.Synced {
+		synced = 1
+	}
+	metrics := []prometheus.Metric{
+		{
+			Name:  "s3d_snapshots",
+			Value: float64(len(l.Snapshots)),
+		},
+		{
+			Name:  "s3d_snapshots_synced",
+			Value: synced,
+		},
+	}
+	if len(l.Snapshots) == 0 {
+		return metrics
+	}
+	latest := l.Snapshots[0]
+	for _, snap := range l.Snapshots[1:] {
+		if snap.CreatedAt.After(latest.CreatedAt) {
+			latest = snap
+		}
+	}
+	return append(metrics,
+		prometheus.Metric{
+			Name:  "s3d_snapshot_latest_timestamp_seconds",
+			Value: float64(latest.CreatedAt.Unix()),
+		},
+		prometheus.Metric{
+			Name:  "s3d_snapshot_latest_objects",
+			Value: float64(latest.ObjectCount),
+		},
+	)
+}
+
 // handlePrometheus serves the admin API metrics in the Prometheus text
-// exposition format. Currently the only metrics exposed are the background
-// upload stats.
+// exposition format: the background upload stats and the database snapshots.
 func (s *s3) handlePrometheus(jc jape.Context) {
 	stats, err := s.admin.UploadStats(jc.Request.Context())
 	if jc.Check("failed to get upload stats", err) != nil {
 		return
 	}
+	snapshots, err := s.admin.ListSnapshots(jc.Request.Context())
+	if jc.Check("failed to list snapshots", err) != nil {
+		return
+	}
 
 	jc.ResponseWriter.Header().Set("Content-Type", "text/plain; version=0.0.4")
-	if jc.Check("failed to marshal prometheus response", prometheus.NewEncoder(jc.ResponseWriter).Append(stats)) != nil {
+	enc := prometheus.NewEncoder(jc.ResponseWriter)
+	if jc.Check("failed to marshal prometheus response", enc.Append(stats)) != nil {
+		return
+	} else if jc.Check("failed to marshal prometheus response", enc.Append(snapshots)) != nil {
 		return
 	}
 }

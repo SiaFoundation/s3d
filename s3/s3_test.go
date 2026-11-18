@@ -78,6 +78,35 @@ func TestPrometheus(t *testing.T) {
 		t.Fatalf("expected prometheus metrics, got %q", body)
 	} else if !bytes.Contains(body, []byte("s3d_transfer_ingress_bytes_total 0")) {
 		t.Fatalf("expected transfer metrics, got %q", body)
+	} else if !bytes.Contains(body, []byte("s3d_snapshots 0")) {
+		t.Fatalf("expected snapshot metrics, got %q", body)
+	} else if bytes.Contains(body, []byte("s3d_snapshot_latest_timestamp_seconds")) {
+		t.Fatalf("expected no latest snapshot metrics without snapshots, got %q", body)
+	}
+}
+
+func TestSnapshotListPrometheusMetric(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	list := s3.SnapshotList{
+		Synced: true,
+		Snapshots: []s3.Snapshot{
+			{CreatedAt: now.Add(-time.Hour), ObjectCount: 1},
+			{CreatedAt: now, ObjectCount: 2},
+		},
+	}
+
+	values := make(map[string]float64)
+	for _, m := range list.PrometheusMetric() {
+		values[m.Name] = m.Value
+	}
+	if values["s3d_snapshots"] != 2 {
+		t.Fatalf("expected 2 snapshots, got %v", values["s3d_snapshots"])
+	} else if values["s3d_snapshots_synced"] != 1 {
+		t.Fatalf("expected synced, got %v", values["s3d_snapshots_synced"])
+	} else if values["s3d_snapshot_latest_timestamp_seconds"] != float64(now.Unix()) {
+		t.Fatalf("expected latest timestamp %d, got %v", now.Unix(), values["s3d_snapshot_latest_timestamp_seconds"])
+	} else if values["s3d_snapshot_latest_objects"] != 2 {
+		t.Fatalf("expected latest object count 2, got %v", values["s3d_snapshot_latest_objects"])
 	}
 }
 
