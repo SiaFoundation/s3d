@@ -138,10 +138,8 @@ func TestS3(t *testing.T) {
 	// we ignore the following tests
 	//  - the ones that require AWSv2 signatures since s3d only supports
 	//    v4
-	//  - tests around the "Expect" header since Go's http server doesn't
-	//    give us enough control over it. S3 ignores bad Expect headers,
-	//    but Go's http server responds with "417 Expectation Failed"
-	//    instead
+	//  - tests sending a mismatched "Expect" header, which S3 ignores but
+	//    Go's http server answers with "417 Expectation Failed"
 	//  - tests that are marked as "fails_on_rgw" since they are known to
 	//    fail due to the tests not being able to correctly manipulate
 	//    request headers
@@ -151,7 +149,7 @@ func TestS3(t *testing.T) {
 		runTox(t, confPath, testsDir,
 			"s3tests/functional/test_headers.py",
 			"-m", "not s3d_unsupported and not auth_aws2 and not fails_on_rgw",
-			"-k", "not _create_bad_expect_ and not _acl",
+			"-k", "not _create_bad_expect_mismatch and not _acl",
 		)
 	})
 
@@ -161,30 +159,29 @@ func TestS3(t *testing.T) {
 	t.Run("test_s3", func(t *testing.T) {
 		runTox(t, confPath, testsDir,
 			"s3tests/functional/test_s3.py",
-			"-m", "not s3d_unsupported and not bucket_logging and not encryption and not sse_s3 and not bucket_encryption and not lifecycle_transition and not object_ownership and not cloud_transition and not cloud_restore and not iam_user and not iam_account",
-			// the two policy-status tests with _acl in their names only use bucket
-			// policies, so they are kept despite the general ACL exclusion
+			"-m", "not s3d_unsupported and not bucket_logging and not encryption and not sse_s3 and not bucket_encryption and not lifecycle_transition and not object_ownership and not cloud_restore and not iam_user and not iam_account",
+			// the two policy-status tests and the two tags_acl_public tests
+			// carry _acl in their names but only use bucket policies, so they
+			// are kept despite the general ACL exclusion.
+			//
 			// the lifecycle exclusions drop tests for unimplemented features,
 			// namely transitions. lifecycle_expiration_tags and
 			// lifecycle_expiration_versioned_tags2 put Prefix, Tag and And side
-			// by side in one Filter and are marked fails_on_aws, and noncur_tags
-			// reaches object tagging through a helper. Plain expiration on a
-			// versioned bucket, noncurrent version expiration, delete marker
-			// expiration and the tag and object-size filters are all supported
-			// and run.
+			// by side in one Filter and are marked fails_on_aws. Plain
+			// expiration on a versioned bucket, noncurrent version expiration,
+			// delete marker expiration and the tag and object-size filters are
+			// all supported and run.
 			//
 			// the two delete_marker_* tests are excluded because check_delete_marker
 			// reads an x-amz-delete-marker header off the 404, which s3d does not
 			// report. Neither turns on lifecycle behavior that the deletemarker
 			// tests do not already cover.
 			//
-			// bucket_list_return_data_versioning is excluded because it calls
-			// get_object_acl, which s3d does not implement (the test name has no
-			// _acl suffix, so the marker/keyword filters above do not catch it).
-			//
-			// bucket_recreate_not_overriding expects re-creating an owned bucket
-			// to succeed idempotently, which is the legacy-region behavior; s3d
-			// follows the default region and returns BucketAlreadyOwnedByYou.
+			// bucket_recreate_not_overriding, bucket_list_return_data_versioning
+			// and versioning_concurrent_multi_object_delete each re-create a
+			// bucket they already own and expect that to succeed. AWS answers
+			// that way only in us-east-1, as legacy compatibility. s3d answers
+			// BucketAlreadyOwnedByYou in every region by choice, see PR 277.
 			//
 			// post_object stays excluded because all 36 POST tests sign their
 			// form with SigV2 or send it anonymously, so not one of them
@@ -197,7 +194,15 @@ func TestS3(t *testing.T) {
 			//
 			// put_excess_tags expects RGW's InvalidTag for more than 10 object
 			// tags. s3d returns BadRequest, matching AWS.
-			"-k", "(not _acl or publicpolicy_acl_bucket_policy_status or nonpublicpolicy_acl_bucket_policy_status) and not multipart_reupload_checksum and not post_object and not _torrent and not cors and not notification and not replication and not website and not _select and not lifecycle_expiration_tags and not lifecycle_expiration_versioned and not noncur_tags and not delete_marker_nonversioned and not delete_marker_expiration and not lifecycle_transition_set_invalid_date and not bucket_list_return_data_versioning and not bucket_recreate_not_overriding and not versioning_concurrent_multi_object_delete and not request_obj_tag and not put_obj_with_tags and not put_excess_tags",
+			//
+			// put_obj_with_tags expects the tag set back sorted by key, which
+			// the AWS GetObjectTagging reference does not specify. s3d returns
+			// the order the client sent in X-Amz-Tagging.
+			//
+			// request_obj_tag registers its X-Amz-Tagging hook on the owner's
+			// client and then uploads with the alt client, so the tagged
+			// request is never sent. The test is marked fails_on_rgw.
+			"-k", "(not _acl or publicpolicy_acl_bucket_policy_status or nonpublicpolicy_acl_bucket_policy_status or get_tags_acl_public or put_tags_acl_public) and not multipart_reupload_checksum and not post_object and not _torrent and not cors and not lifecycle_expiration_tags and not lifecycle_expiration_versioned and not delete_marker_nonversioned and not delete_marker_expiration and not lifecycle_transition_set_invalid_date and not bucket_recreate_not_overriding and not bucket_list_return_data_versioning and not versioning_concurrent_multi_object_delete and not request_obj_tag and not put_obj_with_tags and not put_excess_tags",
 		)
 	})
 
