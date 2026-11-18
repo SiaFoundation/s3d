@@ -163,6 +163,8 @@ func (s *s3) deleteBucket(w http.ResponseWriter, r *http.Request, access *bucket
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadBucket.html
 func (s *s3) headBucket(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
 	s.logger.Debug("heading bucket", zap.String("bucket", access.bucket))
+	// named here, unlike the empty LocationConstraint
+	w.Header().Set("x-amz-bucket-region", DefaultRegion)
 	return nil
 }
 
