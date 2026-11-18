@@ -345,10 +345,10 @@ requires a `Filter`, and when both are given a version expires only once it is
 both old enough and behind enough newer versions. Noncurrent age is counted from
 the moment a version was superseded, which is when its successor was written.
 
-Rules may filter by prefix and by object size with `ObjectSizeGreaterThan` and
-`ObjectSizeLessThan`, which exclude their own values. A filter combining a
-non-empty prefix with size bounds must wrap them in `And`. Tag filters and
-storage class transitions are rejected.
+Rules may filter by prefix, by tag and by object size with
+`ObjectSizeGreaterThan` and `ObjectSizeLessThan`, which exclude their own
+values. A filter combining more than one predicate must wrap them in `And`.
+Storage class transitions are rejected.
 
 Object Lock is supported in both `GOVERNANCE` and `COMPLIANCE` mode, with
 retention periods, legal holds and bucket default retention rules. Creating a
@@ -465,7 +465,7 @@ data.
 | GetBucketAcl | ✗ | |
 | PutBucketAcl | ✗ | |
 | GetBucketPolicy | ✓ | |
-| PutBucketPolicy | ◐ | `Allow` only, principal `*` only, and only the four read actions listed above |
+| PutBucketPolicy | ◐ | Only the bucket owner may set a policy, and IAM users, roles and service principals are not supported |
 | DeleteBucketPolicy | ✓ | |
 | GetBucketPolicyStatus | ✓ | |
 | GetBucketLifecycle | ✓ | |
@@ -473,8 +473,9 @@ data.
 | DeleteBucketLifecycle | ✓ | |
 | GetBucketCors | ✗ | |
 | PutBucketCors | ✗ | |
-| GetBucketTagging | ✗ | |
-| PutBucketTagging | ✗ | |
+| GetBucketTagging | ✓ | |
+| PutBucketTagging | ✓ | |
+| DeleteBucketTagging | ✓ | |
 | GetBucketEncryption | ✗ | |
 | PutBucketEncryption | ✗ | |
 | PublicAccessBlock | ✗ | |
@@ -494,8 +495,9 @@ data.
 | ListObjectVersions | ✓ | |
 | GetObjectAcl | ✗ | |
 | PutObjectAcl | ✗ | |
-| GetObjectTagging | ✗ | |
-| PutObjectTagging | ✗ | |
+| GetObjectTagging | ✓ | |
+| PutObjectTagging | ✓ | |
+| DeleteObjectTagging | ✓ | |
 | GetObjectRetention | ✓ | |
 | PutObjectRetention | ◐ | `EventHold` and `EventHoldDuration` are rejected |
 | GetObjectLegalHold | ✓ | |
