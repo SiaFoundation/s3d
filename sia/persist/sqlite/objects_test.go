@@ -2099,6 +2099,7 @@ func TestObjectsForPinning(t *testing.T) {
 		return sealed
 	}
 
+	beforeUpload := time.Now().Add(-time.Second)
 	sealedA := upload("a")
 	sealedB := upload("b")
 	sealedC := upload("c")
@@ -2110,7 +2111,7 @@ func TestObjectsForPinning(t *testing.T) {
 	} else if len(due) != 3 {
 		t.Fatalf("expected 3 due rows, got %d", len(due))
 	}
-	due, err = store.ObjectsForPinning(time.Now().Add(-time.Second), 10)
+	due, err = store.ObjectsForPinning(beforeUpload, 10)
 	if err != nil {
 		t.Fatal(err)
 	} else if len(due) != 0 {
