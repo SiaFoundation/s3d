@@ -21,18 +21,13 @@ type (
 	Store struct {
 		db      *sql.DB
 		readers *sql.DB
-		path    string
 		log     *zap.Logger
 	}
 )
 
 // Close closes the underlying database.
 func (s *Store) Close() error {
-	var err error
-	if s.readers != nil {
-		err = s.readers.Close()
-	}
-	return errors.Join(err, s.db.Close())
+	return errors.Join(s.readers.Close(), s.db.Close())
 }
 
 // DBVersion returns the current database schema version.
@@ -161,10 +156,20 @@ func OpenDatabase(fp string, log *zap.Logger) (_ *Store, err error) {
 	// errors
 	db.SetMaxOpenConns(1)
 
+	// WAL readers never conflict with the writer, so reads get their own pool
+	// instead of queueing behind the single write connection
+	readers, err := sql.Open("sqlite3", readerFilepath(fp))
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to open reader pool: %w", err)
+	}
+	readers.SetMaxOpenConns(runtime.NumCPU())
+	readers.SetMaxIdleConns(runtime.NumCPU())
+
 	store := &Store{
-		db:   db,
-		path: fp,
-		log:  log,
+		db:      db,
+		readers: readers,
+		log:     log,
 	}
 	// a caller that gets an error gets no store to close, and an sql.DB that is
 	// never closed is never collected
@@ -177,18 +182,6 @@ func OpenDatabase(fp string, log *zap.Logger) (_ *Store, err error) {
 		return nil, err
 	}
 
-	// WAL readers never conflict with the writer, so reads get their own pool
-	// instead of queueing behind the single write connection
-	readers, err := sql.Open("sqlite3", readerFilepath(fp))
-	if err != nil {
-		return nil, fmt.Errorf("failed to open reader pool: %w", err)
-	}
-	readers.SetMaxOpenConns(runtime.NumCPU())
-	readers.SetMaxIdleConns(runtime.NumCPU())
-	store.readers = readers
-	if err := readers.Ping(); err != nil {
-		return nil, fmt.Errorf("failed to connect to reader pool: %w", err)
-	}
 	sqliteVersion, _, _ := sqlite3.Version()
 	log.Debug("database initialized", zap.String("sqliteVersion", sqliteVersion), zap.Int("schemaVersion", len(migrations)+1), zap.String("path", fp))
 	return store, nil
