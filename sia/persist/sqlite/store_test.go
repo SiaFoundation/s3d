@@ -4,6 +4,7 @@ import (
 	"crypto/md5"
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/SiaFoundation/s3d/s3"
@@ -90,4 +91,17 @@ func multipartMD5(parts ...[16]byte) (sum [16]byte) {
 	}
 	copy(sum[:], h.Sum(nil))
 	return sum
+}
+
+func TestReadTransactionRejectsWrites(t *testing.T) {
+	store := initTestDB(t, zap.NewNop())
+
+	err := store.readTransaction(func(tx *txn) error {
+		_, err := tx.Exec("INSERT INTO users (name) VALUES ('reader')")
+		return err
+	})
+	if err == nil || !strings.Contains(err.Error(), "readonly database") {
+		t.Fatalf("expected readonly error, got %v", err)
+	}
+	store.assertCount(1, "users")
 }
