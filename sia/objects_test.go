@@ -25,6 +25,7 @@ import (
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	service "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	stypes "go.sia.tech/core/types"
 	sdk "go.sia.tech/siastorage"
@@ -2041,5 +2042,80 @@ func TestPutObjectUndeclaredLength(t *testing.T) {
 		t.Fatal(err)
 	} else if obj.Size != 0 {
 		t.Fatalf("expected an empty object, got %d bytes", obj.Size)
+	}
+}
+
+// replaceOnFirstRead runs fn once, after the first object metadata read.
+type replaceOnFirstRead struct {
+	sia.Store
+	fired bool
+	fn    func()
+}
+
+func (s *replaceOnFirstRead) GetObjectWithTags(bucket s3.BucketID, object string, version s3.VersionRequest, partNumber *int32) (*objects.Object, error) {
+	obj, err := s.Store.GetObjectWithTags(bucket, object, version, partNumber)
+	if s.fn != nil && !s.fired {
+		s.fired = true
+		s.fn()
+	}
+	return obj, err
+}
+
+// TestGetObjectReplacedMidRead covers a write landing between the metadata read
+// and the upload file open. An unversioned bucket reuses the null version ID,
+// so retrying the open against the same version could serve the replacement's
+// bytes under the first version's ETag, size and range.
+func TestGetObjectReplacedMidRead(t *testing.T) {
+	log := zaptest.NewLogger(t)
+	dir := t.TempDir()
+
+	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	racer := &replaceOnFirstRead{Store: store}
+	s3Tester := testutil.NewCustomTester(t, dir, racer, testutil.NewMemorySDK(), log)
+
+	const bucket, key = "race", "obj"
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	first := []byte("aaaa")
+	second := []byte("bbbbbbbbbbbb")
+	if err := s3Tester.AddObject(bucket, key, first, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	racer.fn = func() {
+		if err := s3Tester.AddObject(bucket, key, second, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	resp, err := s3Tester.Client().GetObject(t.Context(), &service.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// whichever version is served, the metadata must describe the bytes
+	sum := md5.Sum(body)
+	if got := aws.ToInt64(resp.ContentLength); got != int64(len(body)) {
+		t.Fatal("content length mismatch", got, len(body))
+	} else if want := `"` + hex.EncodeToString(sum[:]) + `"`; aws.ToString(resp.ETag) != want {
+		t.Fatal("etag mismatch", aws.ToString(resp.ETag), want)
+	} else if !bytes.Equal(body, second) {
+		t.Fatal("expected the replacement body", len(body))
 	}
 }

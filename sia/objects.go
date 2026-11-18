@@ -344,7 +344,21 @@ func (s *Sia) HeadObject(ctx context.Context, bucket s3.BucketID, object string,
 	return s.headOrGetObject(ctx, bucket, object, version, rnge, partNumber, true)
 }
 
+// errPendingUploadVanished reports that an upload file was gone by the time it
+// was opened.
+var errPendingUploadVanished = errors.New("pending upload file vanished")
+
 func (s *Sia) headOrGetObject(ctx context.Context, bucket s3.BucketID, object string, version s3.VersionRequest, requestedRange *s3.ObjectRangeRequest, partNumber *int32, head bool) (*s3.Object, error) {
+	resp, err := s.readObject(ctx, bucket, object, version, requestedRange, partNumber, head, false)
+	if errors.Is(err, errPendingUploadVanished) {
+		resp, err = s.readObject(ctx, bucket, object, version, requestedRange, partNumber, head, true)
+	}
+	return resp, err
+}
+
+// readObject resolves an object into a response. final serves the object's Sia
+// data instead of reporting [errPendingUploadVanished].
+func (s *Sia) readObject(ctx context.Context, bucket s3.BucketID, object string, version s3.VersionRequest, requestedRange *s3.ObjectRangeRequest, partNumber *int32, head, final bool) (*s3.Object, error) {
 	obj, err := s.store.GetObjectWithTags(bucket, object, version, partNumber)
 	if err != nil {
 		return nil, err
@@ -399,16 +413,8 @@ func (s *Sia) headOrGetObject(ctx context.Context, bucket s3.BucketID, object st
 	// read from disk if the object hasn't been uploaded yet
 	if obj.FileName != nil {
 		rc, err := s.openUpload(bucket, object, obj.VersionID, obj.FileName, obj.IsMultipart(), resp.Range)
-		if errors.Is(err, fs.ErrNotExist) {
-			// the upload loop moved the file to Sia between our lookup and
-			// file open, re-fetch the same version to get the updated
-			// metadata and retry. resp already carries the tag set.
-			obj, err = s.store.GetObject(bucket, object, s3.SpecificVersion(obj.VersionID), partNumber)
-			if err != nil {
-				return nil, err
-			} else if obj.FileName != nil {
-				rc, err = s.openUpload(bucket, object, obj.VersionID, obj.FileName, obj.IsMultipart(), resp.Range)
-			}
+		if errors.Is(err, fs.ErrNotExist) && !final {
+			return nil, errPendingUploadVanished
 		}
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return nil, fmt.Errorf("failed to open pending upload file: %w", err)
