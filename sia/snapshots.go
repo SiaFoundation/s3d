@@ -231,7 +231,11 @@ func (s *Sia) runScheduledSnapshot(ctx context.Context, now time.Time) time.Time
 	}
 
 	_, err = s.createSnapshot(ctx, true)
-	if err != nil {
+	if isCancelled(ctx, err) {
+		// the schedule is not advanced, so the snapshot is taken after a
+		// restart
+		return time.Time{}
+	} else if err != nil {
 		s.logger.Error("failed to take scheduled snapshot", zap.Error(err))
 	} else if err = s.store.UpdateSnapshotScheduleSince(sched, now); err != nil {
 		s.logger.Error("failed to advance snapshot schedule", zap.Error(err))
@@ -266,7 +270,9 @@ func (s *Sia) pruneScheduledSnapshots(ctx context.Context, now time.Time) {
 	for _, snap := range expiredScheduledSnapshots(snapshots, sched, now.Location()) {
 		if ctx.Err() != nil {
 			return
-		} else if err := s.DeleteSnapshot(ctx, snap.SiaObjectID); err != nil {
+		} else if err := s.DeleteSnapshot(ctx, snap.SiaObjectID); isCancelled(ctx, err) {
+			return
+		} else if err != nil {
 			s.logger.Error("failed to prune scheduled snapshot", zap.Stringer("objectID", &snap.SiaObjectID), zap.Error(err))
 		}
 	}

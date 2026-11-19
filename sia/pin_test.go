@@ -2,6 +2,7 @@ package sia_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -99,6 +100,49 @@ func TestPinLoopRetriesOnFailure(t *testing.T) {
 		t.Fatal("expected sia_object to remain set after transient pin failure")
 	} else if obj.FileName == nil {
 		t.Fatal("expected filename to remain set until pinning succeeds")
+	}
+}
+
+// TestPinLoopCancelled verifies that a pin cancelled mid-call, as on shutdown,
+// is neither logged as a failure nor backed off, so the next pass retries it
+// right away.
+func TestPinLoopCancelled(t *testing.T) {
+	const (
+		bucket = "bucket"
+		name   = "obj"
+	)
+
+	log, logs := observedLogger(t)
+	memSDK := testutil.NewMemorySDK()
+	backend, store := testutil.NewBackend(t, testutil.WithSDK(memSDK), testutil.WithLogger(log))
+
+	if err := store.CreateBucket(testutil.AccessKeyID, bucket, false); err != nil {
+		t.Fatal(err)
+	}
+	stageUpload(t, memSDK, store, bucket, name, time.Now().Add(time.Hour))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	memSDK.SetPrePinHook(cancel)
+
+	if err := backend.PinObjects(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	assertNoWarnings(t, logs)
+
+	if due, err := store.ObjectsForPinning(time.Now(), 10); err != nil {
+		t.Fatal(err)
+	} else if len(due) != 1 {
+		t.Fatalf("expected the cancelled pin to stay due, got %d due rows", len(due))
+	}
+
+	memSDK.SetPrePinHook(nil)
+	if err := backend.PinObjects(t.Context()); err != nil {
+		t.Fatal(err)
+	} else if _, ok, err := store.NextPinningAttempt(); err != nil {
+		t.Fatal(err)
+	} else if ok {
+		t.Fatal("expected the object to be pinned")
 	}
 }
 

@@ -867,6 +867,7 @@ func (t *S3Tester) ListObjectVersionsPage(ctx context.Context, bucket string, in
 type testerCfg struct {
 	backend     s3.Backend
 	sdk         sia.SDK
+	logger      *zap.Logger
 	keyPairs    []keyPair
 	serviceOpts []func(*service.Options)
 	tls         bool
@@ -916,6 +917,14 @@ func WithSDK(sdk sia.SDK) TesterOption {
 	}
 }
 
+// WithLogger sets the logger used by NewBackend. It has no effect when an
+// explicit backend is passed via WithBackend.
+func WithLogger(log *zap.Logger) TesterOption {
+	return func(cfg *testerCfg) {
+		cfg.logger = log
+	}
+}
+
 // WithTLS configures the tester to use TLS.
 func WithTLS() TesterOption {
 	return func(cfg *testerCfg) {
@@ -949,7 +958,10 @@ func NewBackend(t testing.TB, opts ...TesterOption) (*Sia, *sqlite.Store) {
 		t.Fatal("WithBackend cannot be combined with NewBackend")
 	}
 
-	log := zaptest.NewLogger(t)
+	log := cfg.logger
+	if log == nil {
+		log = zaptest.NewLogger(t)
+	}
 	dir := t.TempDir()
 
 	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)

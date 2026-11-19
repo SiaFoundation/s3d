@@ -12,7 +12,10 @@ import (
 	"github.com/SiaFoundation/s3d/sia"
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest"
+	"go.uber.org/zap/zaptest/observer"
 	"lukechampine.com/frand"
 )
 
@@ -25,6 +28,20 @@ func bucketID(t *testing.T, store *sqlite.Store, name string) s3.BucketID {
 		t.Fatal(err)
 	}
 	return info.ID
+}
+
+// observedLogger returns a test logger that also records warnings and errors.
+func observedLogger(t *testing.T) (*zap.Logger, *observer.ObservedLogs) {
+	core, logs := observer.New(zapcore.WarnLevel)
+	return zap.New(zapcore.NewTee(zaptest.NewLogger(t).Core(), core)), logs
+}
+
+// assertNoWarnings fails on every warning or error the logger recorded.
+func assertNoWarnings(t *testing.T, logs *observer.ObservedLogs) {
+	t.Helper()
+	for _, entry := range logs.All() {
+		t.Errorf("unexpected %s log: %q %v", entry.Level, entry.Message, entry.ContextMap())
+	}
 }
 
 func TestDeleteOrphanedUploads(t *testing.T) {
