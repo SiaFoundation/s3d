@@ -474,7 +474,7 @@ data.
 | GetBucketCors | ✗ | |
 | PutBucketCors | ✗ | |
 | GetBucketTagging | ✓ | |
-| PutBucketTagging | ✓ | |
+| PutBucketTagging | ◐ | Tag keys differing only in case are rejected |
 | DeleteBucketTagging | ✓ | |
 | GetBucketEncryption | ✗ | |
 | PutBucketEncryption | ✗ | |
@@ -496,7 +496,7 @@ data.
 | GetObjectAcl | ✗ | |
 | PutObjectAcl | ✗ | |
 | GetObjectTagging | ✓ | |
-| PutObjectTagging | ✓ | |
+| PutObjectTagging | ◐ | Tag keys differing only in case are rejected |
 | DeleteObjectTagging | ✓ | |
 | GetObjectRetention | ✓ | |
 | PutObjectRetention | ◐ | `EventHold` and `EventHoldDuration` are rejected |
