@@ -104,7 +104,8 @@ func (s *Sia) pinLoop(ctx context.Context) {
 // Rows whose pin_before deadline has passed are scheduled for re-upload
 // instead. Unexpected database errors are returned so the pin loop can apply
 // a backoff before retrying; transient pin failures bump the row's
-// next_attempt_at so the rest of the queue keeps moving.
+// next_attempt_at so the rest of the queue keeps moving. A cancelled ctx
+// returns its error.
 func (s *Sia) performObjectPinning(ctx context.Context) error {
 	s.pinMu.Lock()
 	defer s.pinMu.Unlock()
@@ -127,7 +128,7 @@ func (s *Sia) performObjectPinning(ctx context.Context) error {
 			return nil
 		}
 	}
-	return nil
+	return ctx.Err()
 }
 
 func (s *Sia) pinBatch(ctx context.Context, now time.Time, toPin []objects.UnpinnedObject) error {
@@ -148,14 +149,20 @@ loop:
 			defer func() { <-sema }()
 
 			if err := s.pinObject(ctx, now, uo); err != nil {
-				s.logger.Error("failed to pin object", zap.Error(err))
+				// only the cancellation itself is quiet, other failures are
+				// still reported when they coincide with one
+				if !isCancelled(ctx, err) {
+					s.logger.Error("failed to pin object", zap.Error(err))
+				}
 				failed.Add(1)
 			}
 		})
 	}
 
 	wg.Wait()
-	if n := failed.Load(); n > 0 {
+	if err := ctx.Err(); err != nil {
+		return err
+	} else if n := failed.Load(); n > 0 {
 		return fmt.Errorf("failed to pin %d out of %d objects", n, len(toPin))
 	}
 	return nil
@@ -189,7 +196,11 @@ func (s *Sia) pinObject(ctx context.Context, now time.Time, uo objects.UnpinnedO
 		return s.reschedulePin(id)
 	}
 
-	if err := s.sdk.PinObject(ctx, sdkObj); err != nil {
+	if err := s.sdk.PinObject(ctx, sdkObj); isCancelled(ctx, err) {
+		// leave the row due so the next pass retries the pin right away, a
+		// pin that reached the indexer is still claimed by the row
+		return ctx.Err()
+	} else if err != nil {
 		s.logger.Warn("failed to pin object",
 			zap.Stringer("siaObjectID", &id),
 			zap.Error(err))

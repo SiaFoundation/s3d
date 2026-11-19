@@ -595,6 +595,13 @@ func isObjectNotFound(err error) bool {
 	return err != nil && strings.Contains(err.Error(), slabs.ErrObjectNotFound.Error())
 }
 
+// isCancelled reports whether err is ctx's own cancellation rather than an
+// independent failure that coincided with it. The SDK returns the context's
+// cause for a cancelled call.
+func isCancelled(ctx context.Context, err error) bool {
+	return err != nil && ctx.Err() != nil && (errors.Is(err, ctx.Err()) || errors.Is(err, context.Cause(ctx)))
+}
+
 // wakeOrphanLoop signals the orphan loop to run without waiting for its tick.
 func (s *Sia) wakeOrphanLoop() {
 	select {
@@ -674,7 +681,9 @@ func (s *Sia) pruneSlabsLoop(ctx context.Context) {
 		start := time.Now()
 		// slabs are pinned before their object, so anything newer than
 		// pinDeadline may still belong to an upload that is retrying its pin
-		if err := s.sdk.PruneSlabs(ctx, time.Now().Add(-pinDeadline)); err != nil {
+		if err := s.sdk.PruneSlabs(ctx, time.Now().Add(-pinDeadline)); isCancelled(ctx, err) {
+			return
+		} else if err != nil {
 			s.logger.Error("failed to prune slabs", zap.Error(err))
 		} else {
 			s.logger.Info("finished pruning orphaned slabs from Sia network", zap.Duration("elapsed", time.Since(start)))
@@ -709,7 +718,9 @@ func (s *Sia) processSnapshotDeletions(ctx context.Context, now time.Time) {
 		if ctx.Err() != nil {
 			return
 		}
-		if err := s.sdk.DeleteObject(ctx, id); err == nil {
+		if err := s.sdk.DeleteObject(ctx, id); isCancelled(ctx, err) {
+			return
+		} else if err == nil {
 			// unpinned now, a later pass or the sync loop confirms the deletion
 			s.logger.Info("unpinned snapshot object", zap.Stringer("objectID", &id))
 		} else if !isObjectNotFound(err) {
@@ -758,7 +769,9 @@ func (s *Sia) ProcessOrphans(ctx context.Context) {
 			default:
 			}
 
-			if err := s.sdk.DeleteObject(ctx, id); err != nil && !isObjectNotFound(err) {
+			if err := s.sdk.DeleteObject(ctx, id); isCancelled(ctx, err) {
+				return
+			} else if err != nil && !isObjectNotFound(err) {
 				s.logger.Error("failed to unpin object from indexer", zap.Error(err), zap.Stringer("objectID", &id))
 				return
 			}
@@ -883,7 +896,11 @@ func (s *Sia) syncBatch(ctx context.Context, cursor slabs.Cursor) (slabs.Cursor,
 	const batchSize = 100
 
 	events, err := s.sdk.ObjectEvents(ctx, cursor, batchSize)
-	if err != nil {
+	if isCancelled(ctx, err) {
+		// the sync stopped short of the end of the stream
+		s.synced.Store(false)
+		return cursor, 0, false
+	} else if err != nil {
 		s.syncFailed("failed to fetch object events", zap.Error(err))
 		return cursor, 0, false
 	}
