@@ -11,7 +11,7 @@ security:
   - basicAuth: []
 tags:
   - name: metrics
-    description: Background upload pipeline statistics for monitoring.
+    description: Background upload pipeline and snapshot statistics for monitoring.
   - name: uploads
     description: Background upload pipeline control.
   - name: system
@@ -23,9 +23,11 @@ paths:
     get:
       tags:
         - metrics
-      summary: Get upload metrics in Prometheus exposition format
+      summary: Get upload and snapshot metrics in Prometheus exposition format
       description: >
-        Returns metrics about the background upload pipeline in the Prometheus text exposition format. Pipeline and local buffer state is exposed under the s3d_upload_ prefix, transfer activity under s3d_transfer_. Rates are not exposed as series. Derive them from the byte totals, and read the progress of each upload from /stats/uploads.
+        Returns metrics about the background upload pipeline and the database snapshots in the Prometheus text exposition format. Pipeline and local buffer state is exposed under the s3d_upload_ prefix, transfer activity under s3d_transfer_. Rates are not exposed as series. Derive them from the byte totals, and read the progress of each upload from /stats/uploads.
+
+        Snapshot state is exposed under the s3d_snapshot prefix. The latest snapshot series are absent when there are no snapshots.
 
       operationId: getPrometheus
       responses:

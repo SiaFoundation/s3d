@@ -190,8 +190,8 @@ password can issue access keys for every user, so keep the address on loopback
 or put a reverse proxy that terminates TLS in front of it.
 
 The admin API is documented in [`openapi.yml`](openapi.yml) and rendered at
-[api.sia.tech/s3d](https://api.sia.tech/s3d). It serves upload pipeline metrics
-in the Prometheus text exposition format.
+[api.sia.tech/s3d](https://api.sia.tech/s3d). It serves upload pipeline and
+snapshot metrics in the Prometheus text exposition format.
 
 ```sh
 curl -u ":change-me" http://127.0.0.1:8001/prometheus
