@@ -55,7 +55,7 @@ func TestPrepareRestoreDir(t *testing.T) {
 
 	// a missing directory is created, parents included
 	dir := filepath.Join(root, "a", "b")
-	if err := prepareRestoreDir(dir); err != nil {
+	if _, err := prepareRestoreDir(dir); err != nil {
 		t.Fatal(err)
 	} else if info, err := os.Stat(dir); err != nil {
 		t.Fatal(err)
@@ -64,7 +64,7 @@ func TestPrepareRestoreDir(t *testing.T) {
 	}
 
 	// an empty directory is accepted, so making one first still works
-	if err := prepareRestoreDir(dir); err != nil {
+	if _, err := prepareRestoreDir(dir); err != nil {
 		t.Fatal(err)
 	}
 
@@ -73,7 +73,7 @@ func TestPrepareRestoreDir(t *testing.T) {
 	if err := os.WriteFile(dbPath, []byte("existing"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := prepareRestoreDir(dir); err == nil {
+	if _, err := prepareRestoreDir(dir); err == nil {
 		t.Fatal("expected an error")
 	} else if !strings.Contains(err.Error(), "not empty") {
 		t.Fatal("unexpected", err)
@@ -91,8 +91,20 @@ func TestPrepareRestoreDir(t *testing.T) {
 	if err := os.WriteFile(file, nil, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := prepareRestoreDir(file); err == nil {
+	if _, err := prepareRestoreDir(file); err == nil {
 		t.Fatal("expected an error")
+	}
+
+	// a relative destination is resolved against the working directory
+	t.Chdir(root)
+	if abs, err := prepareRestoreDir("rel"); err != nil {
+		t.Fatal(err)
+	} else if !filepath.IsAbs(abs) || filepath.Base(abs) != "rel" {
+		t.Fatal("unexpected", abs)
+	} else if info, err := os.Stat(abs); err != nil {
+		t.Fatal(err)
+	} else if !info.IsDir() {
+		t.Fatal("expected a directory")
 	}
 }
 

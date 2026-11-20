@@ -292,9 +292,13 @@ prompts.
 s3d snapshots restore --out /srv/s3d-restored 0d4f2c9a1b7e3568af0c21d9e4b85730c6a91f42db38e7051c9a6b24f80d3e17
 ```
 
-Run `s3d config` for the restored directory before starting `s3d`. On startup
-the instance reconciles the restored database against the network, adopting the
-snapshots it finds there.
+Start `s3d` with `S3D_DATA_DIR` set to the restored directory. The config file
+in use stays the same, only the database moves. On a machine without a config
+file, run `s3d config` and choose the restored directory instead. The Docker
+image already sets the variable to `/data`, so in a container restore into a new
+directory on the `/data` volume, such as `/data/restored`, and point the variable
+at it. On startup the instance reconciles the restored database against the
+network, adopting the snapshots it finds there.
 
 A restore brings back the database as it was when the snapshot was taken.
 Objects written after that are not recovered. Objects still buffered on disk at
