@@ -2947,3 +2947,35 @@ func BenchmarkOrphanedObjects(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkHeadObject(b *testing.B) {
+	const bucket = "bucket"
+	store := initTestDB(b, zap.NewNop())
+	if err := store.CreateBucket(testAccessKeyID, bucket, false); err != nil {
+		b.Fatal(err)
+	}
+	bid := store.bucketID(bucket)
+	if _, _, err := store.PutObject(bid, "a", objects.PutOptions{ContentMD5: frand.Entropy128(), Length: 100, FileName: new(string)}); err != nil {
+		b.Fatal(err)
+	}
+
+	b.SetParallelism(4)
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			if _, _, err := store.LoadSecret(testAccessKeyID); err != nil {
+				b.Error(err)
+				return
+			} else if _, err := store.BucketAccessInfo(bucket); err != nil {
+				b.Error(err)
+				return
+			} else if _, err := store.GetBucketLifecycleConfiguration(bid); err != nil && !errors.Is(err, s3errs.ErrNoSuchLifecycleConfiguration) {
+				b.Error(err)
+				return
+			} else if _, err := store.GetObjectWithTags(bid, "a", s3.NoVersion(), nil); err != nil {
+				b.Error(err)
+				return
+			}
+		}
+	})
+}
