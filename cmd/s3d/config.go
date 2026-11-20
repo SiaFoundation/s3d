@@ -355,6 +355,12 @@ func setDataDirectory() {
 	fmt.Println("This directory should be on a fast, reliable storage device, preferably an SSD.")
 	fmt.Println("")
 
+	if os.Getenv(dataDirEnvVar) != "" {
+		fmt.Println(ansiStyle("33", "The data directory is set to "+dir+" by "+dataDirEnvVar+"."))
+		fmt.Println(ansiStyle("33", "A directory in the config file is ignored while that variable is set."))
+		return
+	}
+
 	_, existsErr := os.Stat(filepath.Join(cfg.Directory, "s3d.db"))
 	dataExists := existsErr == nil
 	if dataExists {
