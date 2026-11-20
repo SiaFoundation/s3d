@@ -22,6 +22,7 @@ type (
 		db      *sql.DB
 		readers *sql.DB
 		log     *zap.Logger
+		cache   lookupCache
 	}
 )
 
@@ -53,6 +54,14 @@ func (s *Store) transaction(fn func(*txn) error) error {
 // fails on any write.
 func (s *Store) readTransaction(fn func(*txn) error) error {
 	return s.runTransaction(s.readers, fn)
+}
+
+// invalidatingTransaction runs fn like transaction and resets the lookup
+// cache once it returns. Every write to the users, access keys, buckets,
+// lifecycle and object lock tables goes through it.
+func (s *Store) invalidatingTransaction(fn func(*txn) error) error {
+	defer s.cache.reset()
+	return s.transaction(fn)
 }
 
 func (s *Store) runTransaction(db *sql.DB, fn func(*txn) error) error {

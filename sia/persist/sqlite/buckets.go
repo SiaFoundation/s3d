@@ -12,7 +12,7 @@ import (
 // CreateBucket creates a new bucket owned by the user associated with the
 // given access key. objectLock also enables versioning.
 func (s *Store) CreateBucket(accessKeyID, name string, objectLock bool) error {
-	return s.transaction(func(tx *txn) error {
+	return s.invalidatingTransaction(func(tx *txn) error {
 		uid, err := userIDForAccessKey(tx, accessKeyID)
 		if err != nil {
 			return err
@@ -48,7 +48,7 @@ func (s *Store) CreateBucket(accessKeyID, name string, objectLock bool) error {
 
 // DeleteBucket deletes a bucket if it is empty.
 func (s *Store) DeleteBucket(bucket s3.BucketID) error {
-	return s.transaction(func(tx *txn) error {
+	return s.invalidatingTransaction(func(tx *txn) error {
 		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
 			return err
@@ -118,7 +118,7 @@ func (s *Store) GetBucketVersioning(bucket s3.BucketID) (status string, err erro
 // PutBucketVersioning sets the versioning status of the bucket to status, which
 // must be "Enabled" or "Suspended".
 func (s *Store) PutBucketVersioning(bucket s3.BucketID, status string) error {
-	return s.transaction(func(tx *txn) error {
+	return s.invalidatingTransaction(func(tx *txn) error {
 		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
 			return err
@@ -150,7 +150,7 @@ func bucketIDAndVersioning(tx *txn, bucket s3.BucketID) (bid int64, status strin
 // PutBucketPolicy stores the bucket's policy document, replacing any existing
 // one.
 func (s *Store) PutBucketPolicy(bucket s3.BucketID, document string) error {
-	return s.transaction(func(tx *txn) error {
+	return s.invalidatingTransaction(func(tx *txn) error {
 		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
 			return err
@@ -163,7 +163,7 @@ func (s *Store) PutBucketPolicy(bucket s3.BucketID, document string) error {
 // DeleteBucketPolicy removes the bucket's policy. It is not an error if the
 // bucket has none.
 func (s *Store) DeleteBucketPolicy(bucket s3.BucketID) error {
-	return s.transaction(func(tx *txn) error {
+	return s.invalidatingTransaction(func(tx *txn) error {
 		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
 			return err
@@ -176,8 +176,16 @@ func (s *Store) DeleteBucketPolicy(bucket s3.BucketID) error {
 // BucketAccessInfo returns the ID, owner and stored policy document of the
 // bucket with the given name.
 func (s *Store) BucketAccessInfo(name string) (info s3.BucketAccessInfo, err error) {
+	v, gen, ok := s.cache.bucket(name)
+	if ok {
+		return s3.BucketAccessInfo{
+			ID:             v.id,
+			Owner:          &s3.UserInfo{ID: v.owner, DisplayName: v.owner},
+			PolicyDocument: v.policy,
+		}, nil
+	}
+	var owner string
 	err = s.readTransaction(func(tx *txn) error {
-		var owner string
 		err := tx.QueryRow(`
 			SELECT b.id, u.name, b.policy
 			FROM buckets b
@@ -191,6 +199,9 @@ func (s *Store) BucketAccessInfo(name string) (info s3.BucketAccessInfo, err err
 		info.Owner = &s3.UserInfo{ID: owner, DisplayName: owner}
 		return nil
 	})
+	if err == nil {
+		s.cache.putBucket(gen, name, cachedBucket{id: info.ID, owner: owner, policy: info.PolicyDocument})
+	}
 	return
 }
 

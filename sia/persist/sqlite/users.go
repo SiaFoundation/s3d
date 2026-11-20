@@ -28,7 +28,7 @@ func (s *Store) CreateUser(name string) error {
 	if strings.EqualFold(name, s3.AnonymousUserID) {
 		return s3.ErrReservedUserName
 	}
-	return s.transaction(func(tx *txn) error {
+	return s.invalidatingTransaction(func(tx *txn) error {
 		res, err := tx.Exec("INSERT INTO users (name) VALUES ($1) ON CONFLICT DO NOTHING", name)
 		if err != nil {
 			return err
@@ -47,7 +47,7 @@ func (s *Store) CreateUser(name string) error {
 // case. Access keys belonging to the user are deleted via cascade. Returns an
 // error if the user owns any buckets.
 func (s *Store) DeleteUser(name string) error {
-	return s.transaction(func(tx *txn) error {
+	return s.invalidatingTransaction(func(tx *txn) error {
 		var userID int64
 		err := tx.QueryRow("SELECT id FROM users WHERE name = $1 COLLATE NOCASE", name).Scan(&userID)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -93,7 +93,7 @@ func (s *Store) ListUsers() ([]string, error) {
 
 // CreateAccessKey creates a new access key for the given user.
 func (s *Store) CreateAccessKey(userName, accessKeyID, secretKey string) error {
-	return s.transaction(func(tx *txn) error {
+	return s.invalidatingTransaction(func(tx *txn) error {
 		var userID int64
 		err := tx.QueryRow("SELECT id FROM users WHERE name = $1 COLLATE NOCASE", userName).Scan(&userID)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -118,7 +118,7 @@ func (s *Store) CreateAccessKey(userName, accessKeyID, secretKey string) error {
 
 // DeleteAccessKey deletes the access key with the given ID.
 func (s *Store) DeleteAccessKey(accessKeyID string) error {
-	return s.transaction(func(tx *txn) error {
+	return s.invalidatingTransaction(func(tx *txn) error {
 		res, err := tx.Exec("DELETE FROM access_keys WHERE access_key_id = $1", accessKeyID)
 		if err != nil {
 			return err
@@ -176,6 +176,10 @@ func (s *Store) ListAccessKeys(userName *string) ([]s3.AccessKeyMetadata, error)
 // LoadSecret returns the secret key for the given access key ID and the name
 // of the user it belongs to.
 func (s *Store) LoadSecret(accessKeyID string) (secret, userName string, err error) {
+	v, gen, ok := s.cache.secret(accessKeyID)
+	if ok {
+		return v.secret, v.userName, nil
+	}
 	err = s.readTransaction(func(tx *txn) error {
 		return tx.QueryRow(`
 			SELECT ak.secret_key, u.name FROM access_keys ak
@@ -184,6 +188,8 @@ func (s *Store) LoadSecret(accessKeyID string) (secret, userName string, err err
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", "", s3errs.ErrInvalidAccessKeyId
+	} else if err == nil {
+		s.cache.putSecret(gen, accessKeyID, cachedSecret{secret: secret, userName: userName})
 	}
 	return
 }
