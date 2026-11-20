@@ -68,8 +68,8 @@ holds an authorized app key, without prompting. The object ID is printed when a
 snapshot is created and by 'snapshots list'.
 
 The destination must be empty or missing, so a restore can never overwrite an
-existing database. Start s3d with S3D_DATA_DIR set to the restored directory to
-run on it.`
+existing database. Start s3d with S3D_DATA_DIR set to the restored directory,
+or run 's3d config' for it on a machine that has no config file yet.`
 
 	snapshotsScheduleUsage = `Usage: s3d snapshots schedule [command]
 
@@ -241,7 +241,11 @@ func runSnapshotsRestore(ctx context.Context, cmd *flag.FlagSet, out string) {
 
 	fmt.Printf("Restored %d objects from the snapshot taken at %s.\n", snap.Metadata.ObjectCount, snap.Metadata.CreatedAt.Format(time.RFC3339))
 	fmt.Println("Database written to", dbPath)
-	fmt.Printf("Start s3d with %s=%s to reconcile the restored database with the network.\n", dataDirEnvVar, destDir)
+	if configFile == "" {
+		fmt.Println("Run 's3d config' for this directory, then start s3d to reconcile it with the network.")
+	} else {
+		fmt.Printf("Start s3d with %s=%s to reconcile the restored database with the network.\n", dataDirEnvVar, destDir)
+	}
 }
 
 func runSnapshotsSchedule(ctx context.Context, cmd *flag.FlagSet) {
