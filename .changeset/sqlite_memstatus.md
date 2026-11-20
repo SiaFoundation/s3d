@@ -2,4 +2,6 @@
 default: patch
 ---
 
-# Disable SQLite memory statistics
+# Improved concurrent database performance
+
+Disabled SQLite memory statistics tracking, which serialized concurrent queries on a global mutex.
