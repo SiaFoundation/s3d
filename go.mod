@@ -4,9 +4,9 @@ go 1.27.0
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.48.0
-	github.com/aws/aws-sdk-go-v2/config v1.33.18
-	github.com/aws/aws-sdk-go-v2/credentials v1.21.0
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.10
+	github.com/aws/aws-sdk-go-v2/config v1.33.19
+	github.com/aws/aws-sdk-go-v2/credentials v1.21.1
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.115.0
 	github.com/mattn/go-sqlite3 v1.14.53
 	github.com/minio/crc64nvme v1.1.1
 	github.com/minio/minio-go/v7 v7.4.1
@@ -18,7 +18,7 @@ require (
 	go.sia.tech/siastorage v0.2.2-0.20261112161720-8f9ee19ff0dc
 	go.uber.org/zap v1.28.0
 	golang.org/x/term v0.48.0
-	gopkg.in/ini.v1 v1.67.3
+	gopkg.in/ini.v1 v1.68.0
 	gopkg.in/yaml.v3 v3.0.1
 	lukechampine.com/flagg v1.1.1
 	lukechampine.com/frand v1.5.1
