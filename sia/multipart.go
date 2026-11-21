@@ -483,7 +483,7 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, bucket s3.BucketID, o
 			return nil, s3errs.ErrBadDigest
 		case opts.ChecksumValue != "" && opts.ChecksumAlgorithm != upload.Algorithm:
 			return nil, s3errs.ErrBadDigest
-		case opts.ChecksumValue != "" && opts.ChecksumValue != value:
+		case opts.ChecksumValue != "" && !checksumValueMatches(upload.Type, opts.ChecksumValue, value):
 			return nil, s3errs.ErrBadDigest
 		}
 	} else if opts.ChecksumValue != "" || opts.ChecksumType != "" {
@@ -537,6 +537,20 @@ func checkPartChecksum(upload objects.MultipartChecksum, requested s3.CompleteMu
 		return s3errs.ErrInvalidPart
 	}
 	return nil
+}
+
+// checksumValueMatches reports whether the checksum a completion request names
+// covers the object the completed parts make up. A composite request value may
+// drop the part count suffix the computed value carries, as minio-go sends it,
+// but one naming another part count does not match.
+func checksumValueMatches(checksumType s3.ChecksumType, requested, computed string) bool {
+	if requested == computed {
+		return true
+	} else if checksumType != s3.ChecksumTypeComposite {
+		return false
+	}
+	digest, _, ok := strings.Cut(computed, "-")
+	return ok && requested == digest
 }
 
 // objectChecksumValue returns the value the upload's algorithm takes over the
