@@ -482,7 +482,8 @@ func TestMultipartChecksum(t *testing.T) {
 	// a composite upload reports the digest over its part digests
 	const (
 		compositeKey    = "composite"
-		compositeSHA256 = "Ok6Cs5b96ux6+MWQkJO7UBT5sKPBeXBLwvj/hK89smg=-1"
+		compositeDigest = "Ok6Cs5b96ux6+MWQkJO7UBT5sKPBeXBLwvj/hK89smg="
+		compositeSHA256 = compositeDigest + "-1"
 	)
 	compositeID := createChecksumUpload(compositeKey, types.ChecksumAlgorithmSha256, "")
 	compositeETag := uploadChecksumPart(compositeKey, compositeID, 1, data, func(in *service.UploadPartInput) {
@@ -493,6 +494,12 @@ func TestMultipartChecksum(t *testing.T) {
 	// assert [s3errs.ErrBadDigest] for an object checksum the parts do not produce
 	_, err = completeChecksumUpload(compositeKey, compositeID, []types.CompletedPart{compositePart}, func(in *service.CompleteMultipartUploadInput) {
 		in.ChecksumSHA256 = aws.String("bad")
+	})
+	testutil.AssertS3Error(t, s3errs.ErrBadDigest, err)
+
+	// assert [s3errs.ErrBadDigest] for a suffix naming another part count
+	_, err = completeChecksumUpload(compositeKey, compositeID, []types.CompletedPart{compositePart}, func(in *service.CompleteMultipartUploadInput) {
+		in.ChecksumSHA256 = aws.String(compositeDigest + "-2")
 	})
 	testutil.AssertS3Error(t, s3errs.ErrBadDigest, err)
 
@@ -593,6 +600,27 @@ func TestMultipartChecksum(t *testing.T) {
 		t.Fatalf("expected checksum %s, got %s", compositeSHA256, got)
 	} else if bareComposite.ChecksumType != types.ChecksumTypeComposite {
 		t.Fatalf("expected type %q, got %q", types.ChecksumTypeComposite, bareComposite.ChecksumType)
+	}
+
+	// a composite upload completes with a value that omits the part count
+	// suffix and still reports it
+	suffixlessID := createChecksumUpload(compositeKey, types.ChecksumAlgorithmSha256, "")
+	suffixlessETag := uploadChecksumPart(compositeKey, suffixlessID, 1, data, func(in *service.UploadPartInput) {
+		in.ChecksumSHA256 = aws.String(partSHA256)
+	})
+	suffixless, err := completeChecksumUpload(compositeKey, suffixlessID, []types.CompletedPart{{
+		PartNumber:     aws.Int32(1),
+		ETag:           suffixlessETag,
+		ChecksumSHA256: aws.String(partSHA256),
+	}}, func(in *service.CompleteMultipartUploadInput) {
+		in.ChecksumSHA256 = aws.String(compositeDigest)
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if got := aws.ToString(suffixless.ChecksumSHA256); got != compositeSHA256 {
+		t.Fatalf("expected checksum %s, got %s", compositeSHA256, got)
+	} else if suffixless.ChecksumType != types.ChecksumTypeComposite {
+		t.Fatalf("expected type %q, got %q", types.ChecksumTypeComposite, suffixless.ChecksumType)
 	}
 
 	// a full object upload reports the digest over the parts' bytes
