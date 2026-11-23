@@ -307,7 +307,7 @@ func (s *Sia) UploadPartCopy(ctx context.Context, srcBucket s3.BucketID, srcObje
 	// open a reader for the requested range of the source object
 	var src io.ReadCloser
 	if obj.FileName != nil {
-		src, err = s.openUpload(srcBucket, srcObject, obj.VersionID, obj.FileName, obj.IsMultipart(), &objRange)
+		src, err = s.openUpload(obj.FileName, obj.IsMultipart(), obj.Parts, &objRange)
 		if err != nil {
 			return nil, fmt.Errorf("failed to open source upload: %w", err)
 		}

@@ -319,6 +319,19 @@ func (s *Sia) UploadStats(_ context.Context) (s3.UploadStats, error) {
 	return stats, nil
 }
 
+// openPendingObject opens the pending upload file, or the part files, of an
+// object queued for upload.
+func (s *Sia) openPendingObject(obj objects.ObjectForUpload) (io.ReadCloser, error) {
+	if !obj.Multipart {
+		return s.openUpload(&obj.Filename, false, nil, nil)
+	}
+	parts, err := s.store.ObjectPartsByName(obj.BucketID, obj.Name, obj.VersionID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get object parts: %w", err)
+	}
+	return s.openUpload(&obj.Filename, true, parts, nil)
+}
+
 func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 	upload, err := s.sdk.UploadPacked(ctx, sdk.WithUploadProgress(s.shardProgress))
 	if err != nil {
@@ -333,7 +346,7 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 	var objIdx []int
 	var errs []error
 	for i, obj := range group.objects {
-		rc, err := s.openUpload(obj.BucketID, obj.Name, obj.VersionID, &obj.Filename, obj.Multipart, nil)
+		rc, err := s.openPendingObject(obj)
 		if err != nil {
 			s.failedUploads.Add(1)
 			s.logger.Error("failed to open upload",

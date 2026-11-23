@@ -163,8 +163,11 @@ func (s *Sia) lockUpload(path string) func() {
 	}
 }
 
-func (s *Sia) openUpload(bucket s3.BucketID, name, versionID string, filename *string, multipart bool, r *s3.ObjectRange) (_ io.ReadCloser, err error) {
-	if filename == nil {
+// openUpload opens the pending upload file, or the part files of a pending
+// multipart object, for reading. A multipart object without parts is reported
+// as [os.ErrNotExist].
+func (s *Sia) openUpload(filename *string, multipart bool, parts []objects.Part, r *s3.ObjectRange) (_ io.ReadCloser, err error) {
+	if filename == nil || (multipart && len(parts) == 0) {
 		return nil, os.ErrNotExist
 	}
 	uploadPath := filepath.Join(s.uploadDir(), *filename)
@@ -183,10 +186,6 @@ func (s *Sia) openUpload(bucket s3.BucketID, name, versionID string, filename *s
 	var reader io.Reader
 	var closer io.Closer
 	if multipart {
-		parts, err := s.store.ObjectPartsByName(bucket, name, versionID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get object parts: %w", err)
-		}
 		r, err := objects.NewReader(uploadPath, parts, offset)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create multipart reader: %w", err)
@@ -412,7 +411,7 @@ func (s *Sia) readObject(ctx context.Context, bucket s3.BucketID, object string,
 
 	// read from disk if the object hasn't been uploaded yet
 	if obj.FileName != nil {
-		rc, err := s.openUpload(bucket, object, obj.VersionID, obj.FileName, obj.IsMultipart(), resp.Range)
+		rc, err := s.openUpload(obj.FileName, obj.IsMultipart(), obj.Parts, resp.Range)
 		if errors.Is(err, fs.ErrNotExist) && !final {
 			return nil, errPendingUploadVanished
 		}

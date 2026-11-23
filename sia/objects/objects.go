@@ -62,6 +62,10 @@ type Object struct {
 
 	// ObjectLock is the version's lock state, nil when it carries none.
 	ObjectLock *s3.ObjectLockState
+
+	// Parts are the parts of a pending multipart object, read in the same
+	// transaction as the rest of the object. nil otherwise.
+	Parts []Part
 }
 
 // SiaObject pairs a Sia object ID with its sealed metadata.

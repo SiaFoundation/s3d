@@ -2064,58 +2064,93 @@ func (s *replaceOnFirstRead) GetObjectWithTags(bucket s3.BucketID, object string
 // TestGetObjectReplacedMidRead covers a write landing between the metadata read
 // and the upload file open. An unversioned bucket reuses the null version ID,
 // so retrying the open against the same version could serve the replacement's
-// bytes under the first version's ETag, size and range.
+// bytes under the first version's ETag, size and range. Replacing a multipart
+// object also deletes its part rows, so they have to be read with the object.
 func TestGetObjectReplacedMidRead(t *testing.T) {
-	log := zaptest.NewLogger(t)
-	dir := t.TempDir()
-
-	store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { store.Close() })
-
-	racer := &replaceOnFirstRead{Store: store}
-	s3Tester := testutil.NewCustomTester(t, dir, racer, testutil.NewMemorySDK(), log)
-
 	const bucket, key = "race", "obj"
-	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
-		t.Fatal(err)
-	}
-
 	first := []byte("aaaa")
 	second := []byte("bbbbbbbbbbbb")
-	if err := s3Tester.AddObject(bucket, key, first, nil); err != nil {
-		t.Fatal(err)
-	}
 
-	racer.fn = func() {
-		if err := s3Tester.AddObject(bucket, key, second, nil); err != nil {
-			t.Fatal(err)
-		}
+	tests := []struct {
+		name  string
+		write func(*testing.T, *testutil.S3Tester)
+	}{
+		{
+			name: "SinglePart",
+			write: func(t *testing.T, s3Tester *testutil.S3Tester) {
+				if err := s3Tester.AddObject(bucket, key, first, nil); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "Multipart",
+			write: func(t *testing.T, s3Tester *testutil.S3Tester) {
+				mu, err := s3Tester.CreateMultipartUpload(t.Context(), bucket, key, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				uploadID := *mu.UploadId
+				up, err := s3Tester.UploadPart(t.Context(), bucket, key, uploadID, 1, first)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s3Tester.CompleteMultipartUpload(t.Context(), bucket, key, uploadID, []types.CompletedPart{
+					{PartNumber: aws.Int32(1), ETag: up.ETag},
+				}); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
 	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			log := zaptest.NewLogger(t)
+			dir := t.TempDir()
 
-	resp, err := s3Tester.Client().GetObject(t.Context(), &service.GetObjectInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(key),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
+			store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { store.Close() })
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
+			racer := &replaceOnFirstRead{Store: store}
+			s3Tester := testutil.NewCustomTester(t, dir, racer, testutil.NewMemorySDK(), log)
+			if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+				t.Fatal(err)
+			}
+			tc.write(t, s3Tester)
 
-	// whichever version is served, the metadata must describe the bytes
-	sum := md5.Sum(body)
-	if got := aws.ToInt64(resp.ContentLength); got != int64(len(body)) {
-		t.Fatal("content length mismatch", got, len(body))
-	} else if want := `"` + hex.EncodeToString(sum[:]) + `"`; aws.ToString(resp.ETag) != want {
-		t.Fatal("etag mismatch", aws.ToString(resp.ETag), want)
-	} else if !bytes.Equal(body, second) {
-		t.Fatal("expected the replacement body", len(body))
+			// fn runs on the request handler's goroutine
+			racer.fn = func() {
+				if err := s3Tester.AddObject(bucket, key, second, nil); err != nil {
+					t.Error(err)
+				}
+			}
+
+			resp, err := s3Tester.Client().GetObject(t.Context(), &service.GetObjectInput{
+				Bucket: aws.String(bucket),
+				Key:    aws.String(key),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// whichever version is served, the metadata must describe the bytes
+			sum := md5.Sum(body)
+			if got := aws.ToInt64(resp.ContentLength); got != int64(len(body)) {
+				t.Fatal("content length mismatch", got, len(body))
+			} else if want := `"` + hex.EncodeToString(sum[:]) + `"`; aws.ToString(resp.ETag) != want {
+				t.Fatal("etag mismatch", aws.ToString(resp.ETag), want)
+			} else if !bytes.Equal(body, second) {
+				t.Fatal("expected the replacement body", len(body))
+			}
+		})
 	}
 }

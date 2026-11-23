@@ -231,6 +231,13 @@ func (s *Store) resolveObject(bucket s3.BucketID, name string, version s3.Versio
 			return err
 		}
 		obj.Versioned = status != ""
+		if obj.FileName != nil && obj.IsMultipart() {
+			parts, err := objectParts(tx, bid, name, obj.VersionID)
+			if err != nil {
+				return err
+			}
+			obj.Parts = parts
+		}
 		if withTags && !obj.IsDeleteMarker {
 			tags, err := objectTags(tx, bid, name, obj.VersionID)
 			if err != nil {
@@ -912,35 +919,42 @@ func (s *Store) CopyObject(srcBucket s3.BucketID, srcName string, srcVersion s3.
 }
 
 // ObjectPartsByName returns the parts for a completed multipart object. It is
-// used by the upload loop and when reading completed multipart objects.
+// used by the upload loop.
 func (s *Store) ObjectPartsByName(bucket s3.BucketID, name, versionID string) ([]objects.Part, error) {
 	var parts []objects.Part
 	err := s.transaction(func(tx *txn) error {
-		parts = parts[:0] // reuse same slice if transaction retries
 		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
 			return err
 		}
-		rows, err := tx.Query(`
-			SELECT part_number, filename, content_length, content_md5
-			FROM object_parts
-			WHERE bucket_id = $1 AND name = $2 AND version_id = $3
-			ORDER BY part_number
-		`, bid, name, versionID)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var p objects.Part
-			if err := rows.Scan(&p.PartNumber, &p.Filename, &p.Size, (*sqlMD5)(&p.ContentMD5)); err != nil {
-				return err
-			}
-			parts = append(parts, p)
-		}
-		return rows.Err()
+		parts, err = objectParts(tx, bid, name, versionID)
+		return err
 	})
 	return parts, err
+}
+
+// objectParts returns the parts of a completed multipart object in part order.
+func objectParts(tx *txn, bid int64, name, versionID string) ([]objects.Part, error) {
+	rows, err := tx.Query(`
+		SELECT part_number, filename, content_length, content_md5
+		FROM object_parts
+		WHERE bucket_id = $1 AND name = $2 AND version_id = $3
+		ORDER BY part_number
+	`, bid, name, versionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var parts []objects.Part
+	for rows.Next() {
+		var p objects.Part
+		if err := rows.Scan(&p.PartNumber, &p.Filename, &p.Size, (*sqlMD5)(&p.ContentMD5)); err != nil {
+			return nil, err
+		}
+		parts = append(parts, p)
+	}
+	return parts, rows.Err()
 }
 
 // ObjectsCursor returns the cursor for resuming object event syncing.
