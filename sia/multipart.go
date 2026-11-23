@@ -477,13 +477,16 @@ func (s *Sia) CompleteMultipartUpload(ctx context.Context, bucket s3.BucketID, o
 			return nil, err
 		}
 		checksum = &s3.ObjectChecksum{Algorithm: upload.Algorithm, Type: upload.Type, Value: value}
+		digest, _, _ := strings.Cut(value, "-")
 
 		switch {
 		case opts.ChecksumType != "" && opts.ChecksumType != upload.Type:
 			return nil, s3errs.ErrBadDigest
 		case opts.ChecksumValue != "" && opts.ChecksumAlgorithm != upload.Algorithm:
 			return nil, s3errs.ErrBadDigest
-		case opts.ChecksumValue != "" && !checksumValueMatches(upload.Type, opts.ChecksumValue, value):
+		case opts.ChecksumValue != "" && opts.ChecksumValue != digest:
+			return nil, s3errs.ErrBadDigest
+		case opts.ChecksumPartCount != nil && (upload.Type != s3.ChecksumTypeComposite || *opts.ChecksumPartCount != uint(len(completed))):
 			return nil, s3errs.ErrBadDigest
 		}
 	} else if opts.ChecksumValue != "" || opts.ChecksumType != "" {
@@ -537,20 +540,6 @@ func checkPartChecksum(upload objects.MultipartChecksum, requested s3.CompleteMu
 		return s3errs.ErrInvalidPart
 	}
 	return nil
-}
-
-// checksumValueMatches reports whether the checksum a completion request names
-// covers the object the completed parts make up. A composite request value may
-// drop the part count suffix the computed value carries, but one naming another
-// part count does not match.
-func checksumValueMatches(checksumType s3.ChecksumType, requested, computed string) bool {
-	if requested == computed {
-		return true
-	} else if checksumType != s3.ChecksumTypeComposite {
-		return false
-	}
-	digest, _, ok := strings.Cut(computed, "-")
-	return ok && requested == digest
 }
 
 // objectChecksumValue returns the value the upload's algorithm takes over the

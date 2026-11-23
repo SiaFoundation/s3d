@@ -134,10 +134,11 @@ type CompleteMultipartUploadOptions struct {
 
 	// ChecksumAlgorithm and ChecksumValue are the object level checksum the
 	// client expects the completed object to have, both empty when it named
-	// none. The value is raw, so a composite one carries its part count
-	// suffix.
+	// none. ChecksumPartCount is the part count a composite value named, nil
+	// when it named none.
 	ChecksumAlgorithm ChecksumAlgorithm
 	ChecksumValue     string
+	ChecksumPartCount *uint
 
 	// ChecksumType is the type the client expects the object's checksum to
 	// have, empty when it named none.
@@ -678,19 +679,19 @@ func completeMultipartUploadOptions(headers http.Header) (CompleteMultipartUploa
 		opts.ObjectSize = &size
 	}
 
-	opts.ChecksumAlgorithm, opts.ChecksumValue, err = objectChecksumHeader(headers)
+	opts.ChecksumAlgorithm, opts.ChecksumValue, opts.ChecksumPartCount, err = objectChecksumHeader(headers)
 	if err != nil {
 		return opts, err
 	}
 	return opts, nil
 }
 
-// objectChecksumHeader reads the object level checksum a request carries, both
-// return values empty when it carries none. The value is returned as it
-// arrived, since a composite one may carry a part count suffix the backend
-// checks. More than one such header, and a suffix naming no
-// algorithm, wrap [s3errs.ErrInvalidRequest].
-func objectChecksumHeader(headers http.Header) (ChecksumAlgorithm, string, error) {
+// objectChecksumHeader reads the object level checksum a request carries, the
+// part count a composite value names split off, all return values empty when
+// it carries none. More than one such header, and a header naming no
+// algorithm, wrap [s3errs.ErrInvalidRequest]. An empty digest, and a part
+// count that is not a number, return [s3errs.ErrBadDigest].
+func objectChecksumHeader(headers http.Header) (ChecksumAlgorithm, string, *uint, error) {
 	var algorithm ChecksumAlgorithm
 	var value string
 	var count int
@@ -703,18 +704,30 @@ func objectChecksumHeader(headers http.Header) (ChecksumAlgorithm, string, error
 		}
 		parsed, ok := ChecksumAlgorithmFromSuffix(suffix)
 		if !ok {
-			return "", "", fmt.Errorf("%w: unknown checksum algorithm %q", s3errs.ErrInvalidRequest, suffix)
+			return "", "", nil, fmt.Errorf("%w: unknown checksum algorithm %q", s3errs.ErrInvalidRequest, suffix)
 		}
 		algorithm, value = parsed, headers.Get(name)
 		count++
 	}
 
 	if count > 1 {
-		return "", "", fmt.Errorf("%w: found %d checksums, expected at most one", s3errs.ErrInvalidRequest, count)
-	} else if count == 1 && value == "" {
-		return "", "", s3errs.ErrBadDigest
+		return "", "", nil, fmt.Errorf("%w: found %d checksums, expected at most one", s3errs.ErrInvalidRequest, count)
+	} else if count == 0 {
+		return "", "", nil, nil
 	}
-	return algorithm, value, nil
+
+	digest, suffix, hasSuffix := strings.Cut(value, "-")
+	if digest == "" {
+		return "", "", nil, s3errs.ErrBadDigest
+	} else if !hasSuffix {
+		return algorithm, digest, nil, nil
+	}
+	parts, err := strconv.ParseUint(suffix, 10, 0)
+	if err != nil {
+		return "", "", nil, s3errs.ErrBadDigest
+	}
+	partCount := uint(parts)
+	return algorithm, digest, &partCount, nil
 }
 
 // requestMultipartChecksum reads the additional checksum a multipart upload is
