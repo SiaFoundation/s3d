@@ -541,8 +541,8 @@ func checkPartChecksum(upload objects.MultipartChecksum, requested s3.CompleteMu
 
 // checksumValueMatches reports whether the checksum a completion request names
 // covers the object the completed parts make up. A composite request value may
-// drop the part count suffix the computed value carries, as minio-go sends it,
-// but one naming another part count does not match.
+// drop the part count suffix the computed value carries, but one naming another
+// part count does not match.
 func checksumValueMatches(checksumType s3.ChecksumType, requested, computed string) bool {
 	if requested == computed {
 		return true
