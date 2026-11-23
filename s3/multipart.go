@@ -687,8 +687,8 @@ func completeMultipartUploadOptions(headers http.Header) (CompleteMultipartUploa
 
 // objectChecksumHeader reads the object level checksum a request carries, both
 // return values empty when it carries none. The value is returned as it
-// arrived, since a composite one carries a part count suffix the backend
-// compares verbatim. More than one such header, and a suffix naming no
+// arrived, since a composite one may carry a part count suffix the backend
+// checks. More than one such header, and a suffix naming no
 // algorithm, wrap [s3errs.ErrInvalidRequest].
 func objectChecksumHeader(headers http.Header) (ChecksumAlgorithm, string, error) {
 	var algorithm ChecksumAlgorithm
