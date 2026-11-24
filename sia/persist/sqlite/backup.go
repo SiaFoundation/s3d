@@ -2,18 +2,16 @@ package sqlite
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/SiaFoundation/s3d/s3"
 )
 
 // Backup writes a consistent, compacted copy of the database to destPath
-// using VACUUM INTO on a dedicated readonly connection, so the store keeps
-// serving reads and writes while the backup runs. Objects whose data is still
+// using VACUUM INTO on a readonly connection, so the store keeps serving
+// reads and writes while the backup runs. Objects whose data is still
 // buffered on disk and multipart uploads in progress are removed from the copy,
 // which is verified with an integrity check before it is moved to destPath.
 // Returns the number of objects in the copy.
@@ -27,14 +25,6 @@ func (s *Store) Backup(ctx context.Context, destPath string) (objectCount int64,
 		return 0, fmt.Errorf("failed to stat destination file: %w", err)
 	}
 
-	// a dedicated readonly connection leaves the store's connection free, a
-	// reader never blocks the writer in WAL mode
-	src, err := sql.Open("sqlite3", fmt.Sprintf("file:%s?mode=ro&_busy_timeout=%d", s.path, time.Minute.Milliseconds()))
-	if err != nil {
-		return 0, fmt.Errorf("failed to open source database: %w", err)
-	}
-	defer src.Close()
-
 	// vacuum into a temporary file so destPath only ever holds a verified copy
 	tmpPath := destPath + ".tmp"
 	defer func() {
@@ -42,7 +32,9 @@ func (s *Store) Backup(ctx context.Context, destPath string) (objectCount int64,
 			_ = os.Remove(tmpPath)
 		}
 	}()
-	if _, err := src.ExecContext(ctx, "VACUUM INTO ?", tmpPath); err != nil {
+	// the reader pool leaves the store's write connection free, a reader never
+	// blocks the writer in WAL mode
+	if _, err := s.readers.ExecContext(ctx, "VACUUM INTO ?", tmpPath); err != nil {
 		return 0, fmt.Errorf("failed to vacuum into backup: %w", err)
 	}
 

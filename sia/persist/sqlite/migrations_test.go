@@ -122,17 +122,11 @@ INSERT INTO object_parts (bucket_id, name, part_number, filename, content_md5, c
     (1, 'obj', 1, 'part1.dat', x'01', 5, 0),
     (1, 'obj', 2, 'part2.dat', x'02', 5, 5);`
 
-func initDBVersion(tb testing.TB, fp string, target int64, log *zap.Logger) *Store {
+// openV1Store opens a store at fp with the v1 schema applied and no migrations
+// run.
+func openV1Store(tb testing.TB, fp string, log *zap.Logger) *Store {
 	db, err := sql.Open("sqlite3", sqliteFilepath(fp))
 	if err != nil {
-		tb.Fatal(err)
-	}
-	tb.Cleanup(func() {
-		if err := db.Close(); err != nil {
-			tb.Fatal(err)
-		}
-	})
-	if _, err := db.Exec(initialSchema); err != nil {
 		tb.Fatal(err)
 	}
 
@@ -140,9 +134,15 @@ func initDBVersion(tb testing.TB, fp string, target int64, log *zap.Logger) *Sto
 	// errors
 	db.SetMaxOpenConns(1)
 
+	readers, err := sql.Open("sqlite3", readerFilepath(fp))
+	if err != nil {
+		tb.Fatal(err)
+	}
+
 	store := &Store{
-		db:  db,
-		log: log,
+		db:      db,
+		readers: readers,
+		log:     log,
 	}
 	tb.Cleanup(func() {
 		if err := store.Close(); err != nil {
@@ -150,6 +150,14 @@ func initDBVersion(tb testing.TB, fp string, target int64, log *zap.Logger) *Sto
 		}
 	})
 
+	if _, err := db.Exec(initialSchema); err != nil {
+		tb.Fatal(err)
+	}
+	return store
+}
+
+func initDBVersion(tb testing.TB, fp string, target int64, log *zap.Logger) *Store {
+	store := openV1Store(tb, fp, log)
 	if err := store.init(target); err != nil {
 		tb.Fatal(err)
 	}
@@ -163,14 +171,8 @@ func TestMigrationSiaObjectNormalization(t *testing.T) {
 	log := zaptest.NewLogger(t)
 	fp := filepath.Join(t.TempDir(), "s3d.sqlite3")
 
-	db, err := sql.Open("sqlite3", sqliteFilepath(fp))
-	if err != nil {
-		t.Fatal(err)
-	}
-	db.SetMaxOpenConns(1)
-	if _, err := db.Exec(initialSchema); err != nil {
-		t.Fatal(err)
-	}
+	store := openV1Store(t, fp, log)
+	db := store.db
 
 	// the v1 database predates the versioned slab encoding, so the seeded
 	// blobs use the legacy encoding the normalization migration decodes
@@ -237,12 +239,6 @@ func TestMigrationSiaObjectNormalization(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store := &Store{db: db, log: log}
-	t.Cleanup(func() {
-		if err := store.Close(); err != nil {
-			t.Fatal(err)
-		}
-	})
 	if err := store.init(int64(len(migrations) + 1)); err != nil {
 		t.Fatal(err)
 	}

@@ -242,7 +242,7 @@ func setAdvancedConfig() {
 
 func setAdminAPI() {
 	fmt.Println("")
-	fmt.Println("The admin API serves Prometheus metrics about the upload pipeline on a separate HTTP address.")
+	fmt.Println("The admin API serves Prometheus metrics about the upload pipeline and snapshots on a separate HTTP address.")
 
 	if cfg.AdminAddress == "" {
 		cfg.AdminAddress = "127.0.0.1:8001"

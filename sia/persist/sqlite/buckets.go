@@ -72,7 +72,7 @@ func (s *Store) DeleteBucket(bucket s3.BucketID) error {
 // access key.
 func (s *Store) ListBuckets(accessKeyID string) ([]s3.BucketInfo, error) {
 	var buckets []s3.BucketInfo
-	err := s.transaction(func(tx *txn) error {
+	err := s.readTransaction(func(tx *txn) error {
 		buckets = buckets[:0] // reuse same slice if transaction retries
 
 		uid, err := userIDForAccessKey(tx, accessKeyID)
@@ -105,7 +105,7 @@ func (s *Store) ListBuckets(accessKeyID string) ([]s3.BucketInfo, error) {
 // GetBucketVersioning returns the versioning status of the bucket. The status
 // is one of "" (never configured), "Enabled" or "Suspended".
 func (s *Store) GetBucketVersioning(bucket s3.BucketID) (status string, err error) {
-	err = s.transaction(func(tx *txn) error {
+	err = s.readTransaction(func(tx *txn) error {
 		_, status, err = bucketIDAndVersioning(tx, bucket)
 		if err != nil {
 			return err
@@ -176,7 +176,7 @@ func (s *Store) DeleteBucketPolicy(bucket s3.BucketID) error {
 // BucketAccessInfo returns the ID, owner and stored policy document of the
 // bucket with the given name.
 func (s *Store) BucketAccessInfo(name string) (info s3.BucketAccessInfo, err error) {
-	err = s.transaction(func(tx *txn) error {
+	err = s.readTransaction(func(tx *txn) error {
 		var owner string
 		err := tx.QueryRow(`
 			SELECT b.id, u.name, b.policy

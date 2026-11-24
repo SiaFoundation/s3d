@@ -578,6 +578,65 @@ func TestFlushObjects(t *testing.T) {
 	}
 }
 
+// TestFlushObjectsCancelled verifies that a flush cancelled mid-upload, as on
+// shutdown, stops at the cancelled add instead of failing the rest of the
+// group against the closed packed upload, logs no warnings, and leaves the
+// objects pending for a later flush.
+func TestFlushObjectsCancelled(t *testing.T) {
+	const (
+		bucket  = "bucket"
+		objects = 5
+	)
+
+	log, logs := observedLogger(t)
+	memSDK := testutil.NewMemorySDK()
+	backend, store := testutil.NewBackend(t, testutil.WithSDK(memSDK), testutil.WithLogger(log))
+	s3Tester := testutil.NewTester(t, testutil.WithBackend(backend))
+
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+	for i := range objects {
+		if _, err := s3Tester.PutObject(t.Context(), bucket, fmt.Sprintf("obj%d", i), bytes.NewReader(frand.Bytes(64)), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var adds int
+	memSDK.SetAddHook(func() {
+		adds++
+		cancel()
+	})
+
+	if err := backend.FlushObjects(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	} else if adds != 1 {
+		t.Fatalf("expected the upload to stop after the cancelled add, got %d adds", adds)
+	}
+	assertNoWarnings(t, logs)
+
+	// FailedUploads is kept by the backend, not the store
+	if stats, err := backend.UploadStats(t.Context()); err != nil {
+		t.Fatal(err)
+	} else if stats.FailedUploads != 0 {
+		t.Fatalf("expected no failed uploads, got %d", stats.FailedUploads)
+	} else if stats.PendingObjects != objects {
+		t.Fatalf("expected %d pending objects, got %d", objects, stats.PendingObjects)
+	}
+
+	// a later flush uploads and pins them
+	memSDK.SetAddHook(nil)
+	if err := backend.FlushObjects(t.Context()); err != nil {
+		t.Fatal(err)
+	} else if stats, err := store.UploadStats(); err != nil {
+		t.Fatal(err)
+	} else if stats.PendingObjects != 0 || stats.UnpinnedObjects != 0 {
+		t.Fatalf("expected every object pinned, got %d pending and %d unpinned", stats.PendingObjects, stats.UnpinnedObjects)
+	}
+}
+
 func TestCopyObject(t *testing.T) {
 	s3Tester := testutil.NewTester(t)
 	data := frand.Bytes(100)

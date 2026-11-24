@@ -252,7 +252,9 @@ func (s *Sia) uploadObjects(ctx context.Context, flush bool) error { //nolint:re
 
 	// fetch the remaining storage
 	remaining := uint64(math.MaxUint64)
-	if account, err := s.sdk.Account(ctx); err != nil {
+	if account, err := s.sdk.Account(ctx); isCancelled(ctx, err) {
+		return ctx.Err()
+	} else if err != nil {
 		s.logger.Warn("failed to fetch account info, proceeding without remaining storage check", zap.Error(err))
 	} else {
 		remaining = account.RemainingStorage
@@ -266,6 +268,10 @@ func (s *Sia) uploadObjects(ctx context.Context, flush bool) error { //nolint:re
 	for i := range s.uploadThreads {
 		wg.Go(func() {
 			for g := range uploadsCh {
+				// drain the groups queued before the cancellation
+				if ctx.Err() != nil {
+					continue
+				}
 				s.logger.Info("uploading object group",
 					zap.Int64("size", g.totalSize),
 					zap.Int64("slabs", g.slabs()),
@@ -284,6 +290,7 @@ func (s *Sia) uploadObjects(ctx context.Context, flush bool) error { //nolint:re
 	// storage space to avoid failed pin attempts after upload
 	var skippedGroups int
 	var skippedSize int64
+dispatch:
 	for _, g := range groups {
 		if uint64(g.totalSize) > remaining {
 			skippedGroups++
@@ -291,7 +298,11 @@ func (s *Sia) uploadObjects(ctx context.Context, flush bool) error { //nolint:re
 			continue
 		}
 		remaining -= uint64(g.totalSize)
-		uploadsCh <- g
+		select {
+		case <-ctx.Done():
+			break dispatch
+		case uploadsCh <- g:
+		}
 	}
 	close(uploadsCh)
 
@@ -304,7 +315,8 @@ func (s *Sia) uploadObjects(ctx context.Context, flush bool) error { //nolint:re
 
 	wg.Wait()
 
-	return errors.Join(errs...)
+	// interrupted groups leave the cancellation to be reported once here
+	return errors.Join(append(errs, ctx.Err())...)
 }
 
 // UploadStats returns statistics about the background upload pipeline.
@@ -317,6 +329,16 @@ func (s *Sia) UploadStats(_ context.Context) (s3.UploadStats, error) {
 	stats.BufferUsed, stats.BufferLimit = s.bufferUsage()
 	stats.Transfer = s.transfer.snapshot()
 	return stats, nil
+}
+
+// uploadInterrupted returns the failures of the objects before a group's
+// cancelled upload. A cancelled add closes the packed upload, so the rest of
+// the group is left pending for a later cycle rather than failed against it.
+func (s *Sia) uploadInterrupted(group uploadGroup, errs []error) error {
+	s.logger.Debug("upload interrupted",
+		zap.Int("objects", len(group.objects)),
+		zap.Int64("size", group.totalSize))
+	return errors.Join(errs...)
 }
 
 // openPendingObject opens the pending upload file, or the part files, of an
@@ -332,12 +354,18 @@ func (s *Sia) openPendingObject(obj objects.ObjectForUpload) (io.ReadCloser, err
 	return s.openUpload(&obj.Filename, true, parts, nil)
 }
 
+// uploadObjectGroup uploads a group of objects and queues them for pinning.
+// A cancelled upload is not an error, uploadObjects reports the cancellation.
 func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 	upload, err := s.sdk.UploadPacked(ctx, sdk.WithUploadProgress(s.shardProgress))
-	if err != nil {
+	if isCancelled(ctx, err) {
+		return nil
+	} else if err != nil {
 		s.logger.Error("failed to create packed upload", zap.Error(err))
 		return fmt.Errorf("failed to create packed upload: %w", err)
 	}
+	// closing an unfinalized upload abandons it, its objects stay pending and
+	// the prune loop releases any slabs it pinned
 	defer upload.Close()
 
 	active := s.transfer.beginUpload(group)
@@ -346,6 +374,9 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 	var objIdx []int
 	var errs []error
 	for i, obj := range group.objects {
+		if ctx.Err() != nil {
+			return s.uploadInterrupted(group, errs)
+		}
 		rc, err := s.openPendingObject(obj)
 		if err != nil {
 			s.failedUploads.Add(1)
@@ -358,7 +389,10 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 			continue
 		}
 		n, err := upload.Add(s.transfer.trackUpload(rc, active))
-		if err != nil {
+		if isCancelled(ctx, err) {
+			rc.Close()
+			return s.uploadInterrupted(group, errs)
+		} else if err != nil {
 			s.failedUploads.Add(1)
 			s.logger.Error("failed to add object to upload",
 				zap.String("bucket", obj.Bucket),
@@ -386,7 +420,9 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 	// finalize upload
 	active.finalize()
 	results, err := upload.Finalize()
-	if err != nil {
+	if isCancelled(ctx, err) {
+		return s.uploadInterrupted(group, errs)
+	} else if err != nil {
 		s.failedUploads.Add(int64(len(objIdx)))
 		s.logger.Error("failed to finalize upload", zap.Error(err))
 		return err

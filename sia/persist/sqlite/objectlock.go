@@ -17,7 +17,7 @@ var errObjectLockNotEnabled = fmt.Errorf("bucket does not have object lock enabl
 // GetBucketObjectLockConfiguration returns the object lock configuration of the
 // bucket.
 func (s *Store) GetBucketObjectLockConfiguration(bucket s3.BucketID) (config s3.ObjectLockConfiguration, err error) {
-	err = s.transaction(func(tx *txn) error {
+	err = s.readTransaction(func(tx *txn) error {
 		config = s3.ObjectLockConfiguration{} // reset if the transaction retries
 
 		bid, err := existingBucketID(tx, bucket)
@@ -248,7 +248,7 @@ func (s *Store) PutObjectRetention(bucket s3.BucketID, name string, version s3.V
 
 // GetObjectRetention returns the retention on the addressed version.
 func (s *Store) GetObjectRetention(bucket s3.BucketID, name string, version s3.VersionRequest) (state s3.ObjectLockState, err error) {
-	err = s.transaction(func(tx *txn) error {
+	err = s.readTransaction(func(tx *txn) error {
 		state = s3.ObjectLockState{} // reset if the transaction retries
 
 		bid, err := lockedBucketID(tx, bucket)
@@ -290,7 +290,7 @@ func (s *Store) PutObjectLegalHold(bucket s3.BucketID, name string, version s3.V
 // GetObjectLegalHold returns the legal hold on the addressed version, or "" when
 // none was ever applied.
 func (s *Store) GetObjectLegalHold(bucket s3.BucketID, name string, version s3.VersionRequest) (status string, err error) {
-	err = s.transaction(func(tx *txn) error {
+	err = s.readTransaction(func(tx *txn) error {
 		status = "" // reset if the transaction retries
 
 		bid, err := lockedBucketID(tx, bucket)

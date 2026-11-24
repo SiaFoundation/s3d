@@ -40,6 +40,7 @@ type (
 		deleteErr   error // when set, DeleteObject returns this error
 		slabSize    int64
 		failUploads bool
+		addHook     func() // when non-nil, every packed upload Add runs this first
 
 		accountErr       error
 		pruneSlabsCalls  int
@@ -47,6 +48,7 @@ type (
 
 		pinErr      error                 // when non-nil, PinObject returns this error
 		pinAttempts int                   // number of PinObject calls observed
+		prePinHook  func()                // when non-nil, PinObject runs this first
 		pinHook     func(obj *sdk.Object) // when non-nil, PinObject runs this after a successful pin
 
 		objectEventCalls int // number of ObjectEvents calls observed
@@ -63,15 +65,23 @@ type (
 
 	memoryPackedUpload struct {
 		sdk *MemorySDK
+		ctx context.Context
 
 		// guarded by sdk.mu
 		objects []*uploadedObject
 		length  int64
+		closed  bool
 	}
 )
 
-// errObjectNotFound stands in for the indexer not knowing an object.
-var errObjectNotFound = errors.New("object not found")
+var (
+	// errObjectNotFound stands in for the indexer not knowing an object.
+	errObjectNotFound = errors.New("object not found")
+
+	// errClosed stands in for the SDK's error for a packed upload used after
+	// a cancelled call closed it.
+	errClosed = errors.New("handle is closed")
+)
 
 // NewMemorySDK creates a new in-memory SDK for testing.
 func NewMemorySDK() *MemorySDK {
@@ -397,21 +407,49 @@ func (s *MemorySDK) SetFailUploads(fail bool) {
 	s.failUploads = fail
 }
 
-// UploadPacked creates a new packed upload.
-func (s *MemorySDK) UploadPacked(_ context.Context, _ ...sdk.UploadOption) (sia.PackedUpload, error) {
+// SetAddHook configures a callback every packed upload Add runs before adding
+// its object. Pass nil to remove it.
+func (s *MemorySDK) SetAddHook(fn func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.addHook = fn
+}
+
+// UploadPacked creates a new packed upload. Like the SDK's, it is closed by
+// an Add made after ctx is cancelled.
+func (s *MemorySDK) UploadPacked(ctx context.Context, _ ...sdk.UploadOption) (sia.PackedUpload, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.failUploads {
 		return nil, errors.New("upload failed")
 	}
-	return &memoryPackedUpload{sdk: s}, nil
+	return &memoryPackedUpload{sdk: s, ctx: ctx}, nil
 }
 
-// PinObject pins the given object.
-func (s *MemorySDK) PinObject(_ context.Context, obj *sdk.Object) error {
+// SetPrePinHook configures a callback PinObject runs before pinning. Pass nil
+// to remove it.
+func (s *MemorySDK) SetPrePinHook(fn func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.prePinHook = fn
+}
+
+// PinObject pins the given object. Like the SDK, it returns the context's
+// cause once ctx is cancelled.
+func (s *MemorySDK) PinObject(ctx context.Context, obj *sdk.Object) error {
+	s.mu.Lock()
+	before := s.prePinHook
+	s.mu.Unlock()
+	if before != nil {
+		before()
+	}
+
 	s.mu.Lock()
 	s.pinAttempts++
-	if err := s.pinErr; err != nil {
+	if err := context.Cause(ctx); err != nil {
+		s.mu.Unlock()
+		return err
+	} else if err := s.pinErr; err != nil {
 		s.mu.Unlock()
 		return err
 	}
@@ -496,6 +534,25 @@ func (s *MemorySDK) UnsealObject(sealed sdk.SealedObject) (*sdk.Object, error) {
 }
 
 func (u *memoryPackedUpload) Add(r io.Reader) (int64, error) {
+	u.sdk.mu.Lock()
+	hook := u.sdk.addHook
+	u.sdk.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+
+	u.sdk.mu.Lock()
+	if u.closed {
+		u.sdk.mu.Unlock()
+		return 0, errClosed
+	} else if err := context.Cause(u.ctx); err != nil {
+		// a cancelled add closes the whole packed upload
+		u.closed = true
+		u.sdk.mu.Unlock()
+		return 0, err
+	}
+	u.sdk.mu.Unlock()
+
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return 0, err
@@ -525,6 +582,9 @@ func (u *memoryPackedUpload) Remaining() int64 {
 func (u *memoryPackedUpload) Finalize() ([]*sdk.Object, error) {
 	u.sdk.mu.Lock()
 	defer u.sdk.mu.Unlock()
+	if u.closed {
+		return nil, errClosed
+	}
 
 	var results []*sdk.Object
 	for _, obj := range u.objects {

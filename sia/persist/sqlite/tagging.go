@@ -10,7 +10,7 @@ import (
 // GetBucketTagging returns the tag set of the bucket, or
 // [s3errs.ErrNoSuchTagSet] when it has none.
 func (s *Store) GetBucketTagging(bucket s3.BucketID) (tags s3.TagSet, err error) {
-	err = s.transaction(func(tx *txn) error {
+	err = s.readTransaction(func(tx *txn) error {
 		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
 			return err
@@ -50,7 +50,7 @@ func (s *Store) DeleteBucketTagging(bucket s3.BucketID) error {
 
 // GetObjectTagging returns the tag set of the addressed version.
 func (s *Store) GetObjectTagging(bucket s3.BucketID, name string, version s3.VersionRequest) (tagging s3.ObjectTagging, err error) {
-	err = s.transaction(func(tx *txn) error {
+	err = s.readTransaction(func(tx *txn) error {
 		tagging = s3.ObjectTagging{} // reset if the transaction retries
 
 		bid, status, err := bucketIDAndVersioning(tx, bucket)

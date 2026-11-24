@@ -221,7 +221,7 @@ func (s *Store) GetObjectWithTags(bucket s3.BucketID, name string, version s3.Ve
 // resolveObject implements GetObject and GetObjectWithTags.
 func (s *Store) resolveObject(bucket s3.BucketID, name string, version s3.VersionRequest, partNumber *int32, withTags bool) (*objects.Object, error) {
 	var obj objects.Object
-	err := s.transaction(func(tx *txn) error {
+	err := s.readTransaction(func(tx *txn) error {
 		obj = objects.Object{} // reset if the transaction retries
 		bid, status, err := bucketIDAndVersioning(tx, bucket)
 		if err != nil {
@@ -922,7 +922,7 @@ func (s *Store) CopyObject(srcBucket s3.BucketID, srcName string, srcVersion s3.
 // used by the upload loop.
 func (s *Store) ObjectPartsByName(bucket s3.BucketID, name, versionID string) ([]objects.Part, error) {
 	var parts []objects.Part
-	err := s.transaction(func(tx *txn) error {
+	err := s.readTransaction(func(tx *txn) error {
 		bid, err := existingBucketID(tx, bucket)
 		if err != nil {
 			return err
@@ -1338,7 +1338,7 @@ func (s *Store) ListObjects(bucket s3.BucketID, prefix s3.Prefix, page s3.ListOb
 	}
 
 	const maxObjsPerQuery = 100
-	err = s.transaction(func(tx *txn) error {
+	err = s.readTransaction(func(tx *txn) error {
 		*result = *s3.NewObjectsListResult(page.MaxKeys) // reset per transaction attempt
 
 		bid, err := existingBucketID(tx, bucket)
@@ -1504,7 +1504,7 @@ func (s *Store) ListObjectVersions(bucket s3.BucketID, prefix s3.Prefix, page s3
 	result := s3.NewObjectVersionsListResult(page.MaxKeys)
 
 	const maxRowsPerQuery = 100
-	err := s.transaction(func(tx *txn) error {
+	err := s.readTransaction(func(tx *txn) error {
 		*result = *s3.NewObjectVersionsListResult(page.MaxKeys) // reset per attempt
 
 		bid, err := existingBucketID(tx, bucket)
