@@ -25,6 +25,7 @@ import (
 	"github.com/SiaFoundation/s3d/sia/objects"
 	"github.com/SiaFoundation/s3d/sia/persist/sqlite"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	service "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	stypes "go.sia.tech/core/types"
 	sdk "go.sia.tech/siastorage"
@@ -2100,5 +2101,115 @@ func TestPutObjectUndeclaredLength(t *testing.T) {
 		t.Fatal(err)
 	} else if obj.Size != 0 {
 		t.Fatalf("expected an empty object, got %d bytes", obj.Size)
+	}
+}
+
+// replaceOnFirstRead runs fn once, after the first object metadata read.
+type replaceOnFirstRead struct {
+	sia.Store
+	fired bool
+	fn    func()
+}
+
+func (s *replaceOnFirstRead) GetObjectWithTags(bucket s3.BucketID, object string, version s3.VersionRequest, partNumber *int32) (*objects.Object, error) {
+	obj, err := s.Store.GetObjectWithTags(bucket, object, version, partNumber)
+	if s.fn != nil && !s.fired {
+		s.fired = true
+		s.fn()
+	}
+	return obj, err
+}
+
+// TestGetObjectReplacedMidRead covers a write landing between the metadata read
+// and the upload file open. An unversioned bucket reuses the null version ID,
+// so retrying the open against the same version could serve the replacement's
+// bytes under the first version's ETag, size and range. Replacing a multipart
+// object also deletes its part rows, so they have to be read with the object.
+func TestGetObjectReplacedMidRead(t *testing.T) {
+	const bucket, key = "race", "obj"
+	first := []byte("aaaa")
+	second := []byte("bbbbbbbbbbbb")
+
+	tests := []struct {
+		name  string
+		write func(*testing.T, *testutil.S3Tester)
+	}{
+		{
+			name: "SinglePart",
+			write: func(t *testing.T, s3Tester *testutil.S3Tester) {
+				if err := s3Tester.AddObject(bucket, key, first, nil); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "Multipart",
+			write: func(t *testing.T, s3Tester *testutil.S3Tester) {
+				mu, err := s3Tester.CreateMultipartUpload(t.Context(), bucket, key, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				uploadID := *mu.UploadId
+				up, err := s3Tester.UploadPart(t.Context(), bucket, key, uploadID, 1, first)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s3Tester.CompleteMultipartUpload(t.Context(), bucket, key, uploadID, []types.CompletedPart{
+					{PartNumber: aws.Int32(1), ETag: up.ETag},
+				}); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			log := zaptest.NewLogger(t)
+			dir := t.TempDir()
+
+			store, err := sqlite.OpenDatabase(filepath.Join(dir, "s3d.sqlite"), log)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { store.Close() })
+
+			racer := &replaceOnFirstRead{Store: store}
+			s3Tester := testutil.NewCustomTester(t, dir, racer, testutil.NewMemorySDK(), log)
+			if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+				t.Fatal(err)
+			}
+			tc.write(t, s3Tester)
+
+			// fn runs on the request handler's goroutine
+			racer.fn = func() {
+				if err := s3Tester.AddObject(bucket, key, second, nil); err != nil {
+					t.Error(err)
+				}
+			}
+
+			resp, err := s3Tester.Client().GetObject(t.Context(), &service.GetObjectInput{
+				Bucket: aws.String(bucket),
+				Key:    aws.String(key),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// whichever version is served, the metadata must describe the bytes
+			sum := md5.Sum(body)
+			if got := aws.ToInt64(resp.ContentLength); got != int64(len(body)) {
+				t.Fatal("content length mismatch", got, len(body))
+			} else if want := `"` + hex.EncodeToString(sum[:]) + `"`; aws.ToString(resp.ETag) != want {
+				t.Fatal("etag mismatch", aws.ToString(resp.ETag), want)
+			} else if !bytes.Equal(body, second) {
+				t.Fatal("expected the replacement body", len(body))
+			}
+		})
 	}
 }

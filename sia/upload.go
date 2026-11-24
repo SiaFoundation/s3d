@@ -341,6 +341,19 @@ func (s *Sia) uploadInterrupted(group uploadGroup, errs []error) error {
 	return errors.Join(errs...)
 }
 
+// openPendingObject opens the pending upload file, or the part files, of an
+// object queued for upload.
+func (s *Sia) openPendingObject(obj objects.ObjectForUpload) (io.ReadCloser, error) {
+	if !obj.Multipart {
+		return s.openUpload(&obj.Filename, false, nil, nil)
+	}
+	parts, err := s.store.ObjectPartsByName(obj.BucketID, obj.Name, obj.VersionID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get object parts: %w", err)
+	}
+	return s.openUpload(&obj.Filename, true, parts, nil)
+}
+
 // uploadObjectGroup uploads a group of objects and queues them for pinning.
 // A cancelled upload is not an error, uploadObjects reports the cancellation.
 func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
@@ -364,7 +377,7 @@ func (s *Sia) uploadObjectGroup(ctx context.Context, group uploadGroup) error {
 		if ctx.Err() != nil {
 			return s.uploadInterrupted(group, errs)
 		}
-		rc, err := s.openUpload(obj.BucketID, obj.Name, obj.VersionID, &obj.Filename, obj.Multipart, nil)
+		rc, err := s.openPendingObject(obj)
 		if err != nil {
 			s.failedUploads.Add(1)
 			s.logger.Error("failed to open upload",

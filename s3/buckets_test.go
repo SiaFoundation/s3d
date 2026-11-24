@@ -218,3 +218,22 @@ func TestCreateBucketObjectLockHeader(t *testing.T) {
 		t.Fatal("unexpected", rec.Code, rec.Body)
 	}
 }
+
+func TestHeadBucketRegion(t *testing.T) {
+	const bucket = "region"
+
+	s3Tester := testutil.NewTester(t)
+	if err := s3Tester.CreateBucket(t.Context(), bucket); err != nil {
+		t.Fatal(err)
+	}
+
+	// named here, unlike the empty LocationConstraint
+	resp, err := s3Tester.Client().HeadBucket(t.Context(), &service.HeadBucketInput{
+		Bucket: aws.String(bucket),
+	})
+	if err != nil {
+		t.Fatal(err)
+	} else if aws.ToString(resp.BucketRegion) != s3.DefaultRegion {
+		t.Fatal("unexpected", aws.ToString(resp.BucketRegion))
+	}
+}

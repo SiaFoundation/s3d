@@ -163,8 +163,11 @@ func (s *Sia) lockUpload(path string) func() {
 	}
 }
 
-func (s *Sia) openUpload(bucket s3.BucketID, name, versionID string, filename *string, multipart bool, r *s3.ObjectRange) (_ io.ReadCloser, err error) {
-	if filename == nil {
+// openUpload opens the pending upload file, or the part files of a pending
+// multipart object, for reading. A multipart object without parts is reported
+// as [os.ErrNotExist].
+func (s *Sia) openUpload(filename *string, multipart bool, parts []objects.Part, r *s3.ObjectRange) (_ io.ReadCloser, err error) {
+	if filename == nil || (multipart && len(parts) == 0) {
 		return nil, os.ErrNotExist
 	}
 	uploadPath := filepath.Join(s.uploadDir(), *filename)
@@ -183,10 +186,6 @@ func (s *Sia) openUpload(bucket s3.BucketID, name, versionID string, filename *s
 	var reader io.Reader
 	var closer io.Closer
 	if multipart {
-		parts, err := s.store.ObjectPartsByName(bucket, name, versionID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get object parts: %w", err)
-		}
 		r, err := objects.NewReader(uploadPath, parts, offset)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create multipart reader: %w", err)
@@ -345,6 +344,16 @@ func (s *Sia) HeadObject(ctx context.Context, bucket s3.BucketID, object string,
 }
 
 func (s *Sia) headOrGetObject(ctx context.Context, bucket s3.BucketID, object string, version s3.VersionRequest, requestedRange *s3.ObjectRangeRequest, partNumber *int32, head bool) (*s3.Object, error) {
+	resp, err := s.readObject(ctx, bucket, object, version, requestedRange, partNumber, head, false)
+	if errors.Is(err, fs.ErrNotExist) {
+		resp, err = s.readObject(ctx, bucket, object, version, requestedRange, partNumber, head, true)
+	}
+	return resp, err
+}
+
+// readObject resolves an object into a response. final serves the object's Sia
+// data instead of reporting a vanished upload file as [fs.ErrNotExist].
+func (s *Sia) readObject(ctx context.Context, bucket s3.BucketID, object string, version s3.VersionRequest, requestedRange *s3.ObjectRangeRequest, partNumber *int32, head, final bool) (*s3.Object, error) {
 	obj, err := s.store.GetObjectWithTags(bucket, object, version, partNumber)
 	if err != nil {
 		return nil, err
@@ -398,17 +407,9 @@ func (s *Sia) headOrGetObject(ctx context.Context, bucket s3.BucketID, object st
 
 	// read from disk if the object hasn't been uploaded yet
 	if obj.FileName != nil {
-		rc, err := s.openUpload(bucket, object, obj.VersionID, obj.FileName, obj.IsMultipart(), resp.Range)
-		if errors.Is(err, fs.ErrNotExist) {
-			// the upload loop moved the file to Sia between our lookup and
-			// file open, re-fetch the same version to get the updated
-			// metadata and retry. resp already carries the tag set.
-			obj, err = s.store.GetObject(bucket, object, s3.SpecificVersion(obj.VersionID), partNumber)
-			if err != nil {
-				return nil, err
-			} else if obj.FileName != nil {
-				rc, err = s.openUpload(bucket, object, obj.VersionID, obj.FileName, obj.IsMultipart(), resp.Range)
-			}
+		rc, err := s.openUpload(obj.FileName, obj.IsMultipart(), obj.Parts, resp.Range)
+		if errors.Is(err, fs.ErrNotExist) && !final {
+			return nil, err
 		}
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return nil, fmt.Errorf("failed to open pending upload file: %w", err)
