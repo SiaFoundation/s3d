@@ -269,37 +269,98 @@ s3d snapshots delete 0d4f2c9a1b7e3568af0c21d9e4b85730c6a91f42db38e7051c9a6b24f80
 
 ### Restoring
 
-Restoring writes a snapshot's database into a new data directory. The
-destination must be empty or missing, so a restore can never overwrite an
-existing database.
+s3d needs a config file, `s3d.yml`, for server settings such as the admin
+password, and a database, `s3d.db`, for buckets, object metadata, and S3
+credentials. A snapshot restores the database. Reuse your config file or
+create one if you are restoring to a fresh install.
+
+To restore the newest snapshot, choose the newest entry by `CREATED` date.
+The snapshot reflects the database at that point. Later writes, uploads
+still buffered on disk, and unfinished multipart uploads are outside it.
+
+If you try the restored database before switching, stop the original instance
+and pause applications that write to it. s3d still runs background jobs, which
+can change data on Sia.
+
+#### Running s3d directly
+
+Run the restore command and choose a snapshot and an empty or new folder when
+prompted.
 
 ```sh
 s3d snapshots restore
 ```
 
-With no arguments the command walks the whole recovery. When the machine has no
-app key it asks for the recovery phrase of the account holding the snapshots and
-registers in memory, leaving no database behind. It then lists the snapshots
-stored on the network, asks which one to restore and where to put it. Listing
-enumerates every object in the account, so it takes longer the more you have
-stored.
-
-Given a Sia object ID the snapshot is fetched in a single request instead, with
-no enumeration and, on a machine that already holds an authorized app key, no
-prompts.
+**Inspect before switching.** On Linux or macOS, start s3d for one run with
+your existing config file and the restored folder. Replace both paths below.
 
 ```sh
-s3d snapshots restore --out /srv/s3d-restored 0d4f2c9a1b7e3568af0c21d9e4b85730c6a91f42db38e7051c9a6b24f80d3e17
+S3D_CONFIG_FILE='/etc/s3d/s3d.yml' S3D_DATA_DIR='/srv/s3d-restored' s3d
 ```
 
-Run `s3d config` for the restored directory before starting `s3d`. On startup
-the instance reconciles the restored database against the network, adopting the
-snapshots it finds there.
+List your buckets and download a known object with your S3 client. Press
+Ctrl+C to stop s3d. To return to the original database, start s3d as
+you normally do.
 
-A restore brings back the database as it was when the snapshot was taken.
-Objects written after that are not recovered. Objects still buffered on disk at
-the time had not reached Sia and are not part of the snapshot, nor are
-multipart uploads still in progress.
+**Switch permanently.** Follow the instructions printed by the restore
+command. To keep the original path, you can swap the folders if they sit
+beside each other and the config file is stored elsewhere. With s3d stopped,
+rename the old folder to keep it as a backup, then give the restored folder
+the old name. Start s3d as usual and check the database path in the
+`server started` log.
+
+Scheduled snapshots are disabled in restored databases. If you used them
+before, [reconfigure your schedule and retention settings](#scheduling)
+after switching permanently.
+
+#### Running s3d with Docker Compose
+
+In the [Compose setup above](#docker), `/data` is the folder inside the
+container where s3d keeps its files. Compose preserves it when the container
+is replaced. By default, the config is `/data/s3d.yml` and the database is
+`/data/s3d.db`. The command below saves the restored database in a separate
+folder, `/data/restored`, so you can keep both databases.
+
+Run this from the folder containing `docker-compose.yml` and choose a snapshot
+when prompted.
+
+```sh
+docker compose run --rm s3d snapshots restore --out /data/restored
+```
+
+**Inspect before switching.** If you already have a config file, run these
+commands to use the restored database for one run.
+
+```sh
+docker compose stop s3d
+docker compose run --rm --service-ports -e S3D_DATA_DIR=/data/restored s3d
+```
+
+List your buckets and download a known object with your S3 client. Press
+Ctrl+C to stop s3d. To return to the original database, run
+`docker compose up -d` with your existing Compose file.
+
+**Switch permanently.** Open `docker-compose.yml` and add this under the `s3d`
+service. If it already has an `environment` section, add just the
+`S3D_DATA_DIR` line there. s3d will still load its config from `/data/s3d.yml`.
+
+```yaml
+environment:
+  S3D_DATA_DIR: /data/restored
+```
+
+If this is your first time setting up s3d, run
+`docker compose run --rm s3d config` to set an admin password. Then run
+`docker compose up -d` to start the service with the saved setting.
+
+Run `docker compose logs s3d` and look for `/data/restored/s3d.db` in the
+latest `server started` message.
+
+Scheduled snapshots are disabled in restored databases. If you used them
+before, [reconfigure your schedule and retention settings](#scheduling)
+after switching permanently. Run the scheduling commands inside the
+container using `docker compose exec s3d s3d snapshots schedule set`
+with your schedule and retention options.
 
 ## HTTPS
 

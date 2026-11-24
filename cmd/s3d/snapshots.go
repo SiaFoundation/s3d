@@ -67,9 +67,8 @@ to the --out directory, without enumerating and, on a machine that already
 holds an authorized app key, without prompting. The object ID is printed when a
 snapshot is created and by 'snapshots list'.
 
-The destination must be empty or missing, so a restore can never overwrite an
-existing database. Run 's3d config' for the restored directory before starting
-s3d.`
+Choose an empty folder or a path for a new folder. After saving the snapshot,
+s3d prints how to use the restored database on every restart.`
 
 	snapshotsScheduleUsage = `Usage: s3d snapshots schedule [command]
 
@@ -186,14 +185,16 @@ func runSnapshotsRestore(ctx context.Context, cmd *flag.FlagSet, out string) {
 
 	destDir := out
 	if destDir != "" {
-		checkFatalError("invalid destination", prepareRestoreDir(destDir))
+		var err error
+		destDir, err = prepareRestoreDir(destDir)
+		checkFatalError("invalid destination", err)
 	}
 
 	sdkClient := openRestoreSDK(ctx)
 
 	var snap sia.RemoteSnapshot
 	if interactive {
-		fmt.Println("Enumerating snapshots on the Sia network. This may take a while...")
+		fmt.Println("Looking for snapshots on Sia. This may take a while...")
 		snapshots, err := sia.ListRemoteSnapshots(ctx, sdkClient)
 		checkFatalError("failed to list remote snapshots", err)
 		snap = promptSnapshot(snapshots)
@@ -237,9 +238,39 @@ func runSnapshotsRestore(ctx context.Context, cmd *flag.FlagSet, out string) {
 	checkFatalRestoreError("failed to write database", os.Rename(tmp.Name(), dbPath))
 	checkFatalError("failed to sync the destination", syncDir(destDir))
 
-	fmt.Printf("Restored %d objects from the snapshot taken at %s.\n", snap.Metadata.ObjectCount, snap.Metadata.CreatedAt.Format(time.RFC3339))
-	fmt.Println("Database written to", dbPath)
-	fmt.Println("Run 's3d config' for this directory, then start s3d to reconcile it with the network.")
+	fmt.Printf("Saved the %s snapshot with %d objects to %s.\n", snap.Metadata.CreatedAt.Format(time.RFC3339), snap.Metadata.ObjectCount, strconv.Quote(dbPath))
+	fmt.Println()
+
+	if configFile == "" {
+		fmt.Println("Create a config file and set an admin password.")
+		if runtime.GOOS == "windows" {
+			fmt.Println("Run these commands in PowerShell.")
+			fmt.Printf("  $env:%s = '%s'\n", dataDirEnvVar, strings.ReplaceAll(destDir, "'", "''"))
+			fmt.Println("  s3d config")
+		} else {
+			fmt.Printf("  %s='%s' s3d config\n", dataDirEnvVar, strings.ReplaceAll(destDir, "'", "'\"'\"'"))
+		}
+		fmt.Println()
+	}
+
+	dir := os.Getenv(dataDirEnvVar)
+	if dir != "" {
+		fmt.Println("Save this environment variable where you start s3d so it applies on every restart.")
+		fmt.Printf("  %s: %s\n", dataDirEnvVar, strconv.Quote(destDir))
+		if oldConfig, err := filepath.Abs(filepath.Join(dir, "s3d.yml")); err == nil && configFile == oldConfig && os.Getenv(configFileEnvVar) == "" {
+			fmt.Println("Set this too to keep using your existing config file.")
+			fmt.Printf("  %s: %s\n", configFileEnvVar, strconv.Quote(configFile))
+		}
+	} else if configFile != "" {
+		fmt.Printf("Set the data folder in the config file %s.\n", strconv.Quote(configFile))
+		fmt.Printf("  directory: %s\n", strconv.Quote(destDir))
+	}
+
+	if configFile == "" && dir == "" {
+		fmt.Println("Then run 's3d' and check the database path in the startup log.")
+	} else {
+		fmt.Println("Start s3d as usual and check the database path in the startup log.")
+	}
 }
 
 func runSnapshotsSchedule(ctx context.Context, cmd *flag.FlagSet) {
@@ -369,11 +400,13 @@ func promptRestoreDir() string {
 		dir := readInput("Directory to restore into")
 		if dir == "" {
 			continue
-		} else if err := prepareRestoreDir(dir); err != nil {
+		}
+		abs, err := prepareRestoreDir(dir)
+		if err != nil {
 			fmt.Println(ansiStyle("31", err.Error()))
 			continue
 		}
-		return dir
+		return abs
 	}
 }
 
@@ -389,18 +422,22 @@ func syncDir(path string) error {
 	return errors.Join(dir.Sync(), dir.Close())
 }
 
-// prepareRestoreDir creates dir when it is missing and reports an error when it
-// already holds anything.
-func prepareRestoreDir(dir string) error {
-	entries, err := os.ReadDir(dir)
-	if errors.Is(err, os.ErrNotExist) {
-		return os.MkdirAll(dir, 0700)
-	} else if err != nil {
-		return err
-	} else if len(entries) != 0 {
-		return fmt.Errorf("%s is not empty, restore into a new directory", dir)
+// prepareRestoreDir creates dir when it is missing, reports an error when it
+// already holds anything and returns its absolute path.
+func prepareRestoreDir(dir string) (string, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
 	}
-	return nil
+	entries, err := os.ReadDir(abs)
+	if errors.Is(err, os.ErrNotExist) {
+		return abs, os.MkdirAll(abs, 0700)
+	} else if err != nil {
+		return "", err
+	} else if len(entries) != 0 {
+		return "", fmt.Errorf("%s is not empty, restore into a new directory", abs)
+	}
+	return abs, nil
 }
 
 // checkSnapshotVersion reports whether this build can read the snapshot's

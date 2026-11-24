@@ -472,7 +472,7 @@ func main() {
 		}
 	}()
 
-	log.Info("server started", zap.Stringer("admin", adminListener.Addr()), zap.Stringer("application", adminAPIListener.Addr()))
+	log.Info("server started", zap.Stringer("admin", adminListener.Addr()), zap.Stringer("application", adminAPIListener.Addr()), zap.String("database", filepath.Join(cfg.Directory, "s3d.db")))
 	<-ctx.Done()
 	log.Info("shutdown signal received...attempting graceful shutdown...")
 
