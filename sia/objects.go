@@ -343,20 +343,16 @@ func (s *Sia) HeadObject(ctx context.Context, bucket s3.BucketID, object string,
 	return s.headOrGetObject(ctx, bucket, object, version, rnge, partNumber, true)
 }
 
-// errPendingUploadVanished reports that an upload file was gone by the time it
-// was opened.
-var errPendingUploadVanished = errors.New("pending upload file vanished")
-
 func (s *Sia) headOrGetObject(ctx context.Context, bucket s3.BucketID, object string, version s3.VersionRequest, requestedRange *s3.ObjectRangeRequest, partNumber *int32, head bool) (*s3.Object, error) {
 	resp, err := s.readObject(ctx, bucket, object, version, requestedRange, partNumber, head, false)
-	if errors.Is(err, errPendingUploadVanished) {
+	if errors.Is(err, fs.ErrNotExist) {
 		resp, err = s.readObject(ctx, bucket, object, version, requestedRange, partNumber, head, true)
 	}
 	return resp, err
 }
 
 // readObject resolves an object into a response. final serves the object's Sia
-// data instead of reporting [errPendingUploadVanished].
+// data instead of reporting a vanished upload file as [fs.ErrNotExist].
 func (s *Sia) readObject(ctx context.Context, bucket s3.BucketID, object string, version s3.VersionRequest, requestedRange *s3.ObjectRangeRequest, partNumber *int32, head, final bool) (*s3.Object, error) {
 	obj, err := s.store.GetObjectWithTags(bucket, object, version, partNumber)
 	if err != nil {
@@ -413,7 +409,7 @@ func (s *Sia) readObject(ctx context.Context, bucket s3.BucketID, object string,
 	if obj.FileName != nil {
 		rc, err := s.openUpload(obj.FileName, obj.IsMultipart(), obj.Parts, resp.Range)
 		if errors.Is(err, fs.ErrNotExist) && !final {
-			return nil, errPendingUploadVanished
+			return nil, err
 		}
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return nil, fmt.Errorf("failed to open pending upload file: %w", err)
