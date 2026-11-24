@@ -164,7 +164,11 @@ func (s *s3) deleteBucket(w http.ResponseWriter, r *http.Request, access *bucket
 func (s *s3) headBucket(w http.ResponseWriter, r *http.Request, access *bucketAccess) error {
 	s.logger.Debug("heading bucket", zap.String("bucket", access.bucket))
 	// named here, unlike the empty LocationConstraint
-	w.Header().Set("x-amz-bucket-region", DefaultRegion)
+	region := s.region
+	if region == "" {
+		region = DefaultRegion
+	}
+	w.Header().Set("x-amz-bucket-region", region)
 	return nil
 }
 
