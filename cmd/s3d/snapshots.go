@@ -194,7 +194,7 @@ func runSnapshotsRestore(ctx context.Context, cmd *flag.FlagSet, out string) {
 
 	var snap sia.RemoteSnapshot
 	if interactive {
-		fmt.Println("Enumerating snapshots on the Sia network. This may take a while...")
+		fmt.Println("Looking for snapshots on Sia. This may take a while...")
 		snapshots, err := sia.ListRemoteSnapshots(ctx, sdkClient)
 		checkFatalError("failed to list remote snapshots", err)
 		snap = promptSnapshot(snapshots)
@@ -240,16 +240,14 @@ func runSnapshotsRestore(ctx context.Context, cmd *flag.FlagSet, out string) {
 
 	fmt.Printf("Saved the %s snapshot with %d objects to %s.\n", snap.Metadata.CreatedAt.Format(time.RFC3339), snap.Metadata.ObjectCount, strconv.Quote(dbPath))
 	fmt.Println()
-	fmt.Println("To use this database on every restart, update how you start s3d.")
 
 	if configFile == "" {
-		fmt.Println("Create a config file. The wizard saves the restored folder and asks for an admin password.")
+		fmt.Println("Create a config file and set an admin password.")
 		if runtime.GOOS == "windows" {
 			fmt.Println("Run these commands in PowerShell.")
 			fmt.Printf("  $env:%s = '%s'\n", dataDirEnvVar, strings.ReplaceAll(destDir, "'", "''"))
 			fmt.Println("  s3d config")
 		} else {
-			fmt.Println("Run this command.")
 			fmt.Printf("  %s='%s' s3d config\n", dataDirEnvVar, strings.ReplaceAll(destDir, "'", "'\"'\"'"))
 		}
 		fmt.Println()
@@ -257,24 +255,22 @@ func runSnapshotsRestore(ctx context.Context, cmd *flag.FlagSet, out string) {
 
 	dir := os.Getenv(dataDirEnvVar)
 	if dir != "" {
-		fmt.Printf("%s controls the data folder. Save this value in the settings you use to start s3d.\n", dataDirEnvVar)
+		fmt.Println("To use the restored folder on every restart, save this in your launch settings.")
 		fmt.Printf("  %s: %s\n", dataDirEnvVar, strconv.Quote(destDir))
 		if oldConfig, err := filepath.Abs(filepath.Join(dir, "s3d.yml")); err == nil && configFile == oldConfig && os.Getenv(configFileEnvVar) == "" {
 			fmt.Println("Save this setting too so s3d keeps using your existing config file.")
 			fmt.Printf("  %s: %s\n", configFileEnvVar, strconv.Quote(configFile))
 		}
 	} else if configFile != "" {
-		fmt.Printf("Open %s and update the directory setting.\n", strconv.Quote(configFile))
+		fmt.Printf("Set the data folder in %s.\n", strconv.Quote(configFile))
 		fmt.Printf("  directory: %s\n", strconv.Quote(destDir))
 	}
 
 	if configFile == "" && dir == "" {
-		fmt.Println("Then start s3d.")
-		fmt.Println("  s3d")
+		fmt.Println("Then run 's3d' and check the database path in the startup log.")
 	} else {
-		fmt.Println("Then start or restart s3d as usual.")
+		fmt.Println("Start s3d as usual and check the database path in the startup log.")
 	}
-	fmt.Println("Check the database field in the server started log for the restored path.")
 }
 
 func runSnapshotsSchedule(ctx context.Context, cmd *flag.FlagSet) {
