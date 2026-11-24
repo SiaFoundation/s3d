@@ -255,14 +255,14 @@ func runSnapshotsRestore(ctx context.Context, cmd *flag.FlagSet, out string) {
 
 	dir := os.Getenv(dataDirEnvVar)
 	if dir != "" {
-		fmt.Println("To use the restored folder on every restart, save this in your launch settings.")
+		fmt.Println("Save this environment variable where you start s3d so it applies on every restart.")
 		fmt.Printf("  %s: %s\n", dataDirEnvVar, strconv.Quote(destDir))
 		if oldConfig, err := filepath.Abs(filepath.Join(dir, "s3d.yml")); err == nil && configFile == oldConfig && os.Getenv(configFileEnvVar) == "" {
-			fmt.Println("Save this setting too so s3d keeps using your existing config file.")
+			fmt.Println("Set this too to keep using your existing config file.")
 			fmt.Printf("  %s: %s\n", configFileEnvVar, strconv.Quote(configFile))
 		}
 	} else if configFile != "" {
-		fmt.Printf("Set the data folder in %s.\n", strconv.Quote(configFile))
+		fmt.Printf("Set the data folder in the config file %s.\n", strconv.Quote(configFile))
 		fmt.Printf("  directory: %s\n", strconv.Quote(destDir))
 	}
 
