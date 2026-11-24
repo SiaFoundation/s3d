@@ -309,6 +309,10 @@ rename the old folder to keep it as a backup, then give the restored folder
 the old name. Start s3d as usual and check the database path in the
 `server started` log.
 
+Scheduled snapshots are disabled in restored databases. If you used them
+before, [reconfigure your schedule and retention settings](#scheduling)
+after switching permanently.
+
 #### Running s3d with Docker Compose
 
 In the [Compose setup above](#docker), `/data` is the folder inside the
@@ -351,6 +355,12 @@ If this is your first time setting up s3d, run
 
 Run `docker compose logs s3d` and look for `/data/restored/s3d.db` in the
 latest `server started` message.
+
+Scheduled snapshots are disabled in restored databases. If you used them
+before, [reconfigure your schedule and retention settings](#scheduling)
+after switching permanently. Run the scheduling commands inside the
+container using `docker compose exec s3d s3d snapshots schedule set`
+with your schedule and retention options.
 
 ## HTTPS
 
